@@ -38,12 +38,15 @@ sub start_sidecar {
   my $bun = require_executable("HARNEXUS_BUN_PATH");
   pipe(my $from_server, my $server_stdout) or fail("cannot create a pipe: $!");
   pipe(my $server_stdin, my $to_server) or fail("cannot create a pipe: $!");
+  # This process becomes Codex, so its pid is fixed here; the bridge cannot tell it from getppid if Codex exits before the bridge starts.
+  my $server_pid = $$;
   my $pid = fork // fail("cannot fork: $!");
   if ($pid == 0) {
     close $server_stdout;
     close $server_stdin;
     place_fds([$from_server, 3], [$to_server, 4]);
     $ENV{DO_NOT_TRACK} = "1";
+    $ENV{HARNEXUS_SERVER_PID} = $server_pid;
     exec { $bun } bun_command($bun) or do {
       print STDERR "harnexus: cannot start $bun: $!\n";
       POSIX::_exit(1);

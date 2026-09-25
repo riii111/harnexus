@@ -1,16 +1,12 @@
 import type { Readable, Writable } from "node:stream";
-import {
-  openServerPipes,
-  type Signals,
-  signalProcess,
-} from "../boundary/process.ts";
+import { openServerPipes, type Signals } from "../boundary/process.ts";
 import { createLineInjector, createOwnResponseFilter } from "../rpc/inject.ts";
 import { createObserver, type Direction } from "../rpc/observe.ts";
 import { type RelayObserver, relayStreams } from "../rpc/relay.ts";
 import { loadShutdownGraceMs } from "../shared/config.ts";
 import { startAppToolsProbe } from "./app-tools-probe.ts";
 import { createBridgeLogger } from "./logging.ts";
-import { stopLingeringServer } from "./supervise.ts";
+import { stopLingeringServer, watchServer } from "./supervise.ts";
 import { createToolCallProbe } from "./tool-call-probe.ts";
 
 // Must match bin/harnexus-codex.
@@ -19,7 +15,7 @@ const SERVER_INPUT_FD = 4;
 
 // Codex is not a child of this process, so its exit status goes to the app and is not observable here.
 const logger = createBridgeLogger(process.env);
-const serverPid = process.ppid;
+const server = watchServer(process.env);
 
 const pipes = openServerPipes(SERVER_OUTPUT_FD, SERVER_INPUT_FD);
 if (pipes.isErr()) {
@@ -40,18 +36,14 @@ await relayStreams({
 logger.log({ event: "server_closed" });
 pipes.value.serverInput.destroy();
 await stopLingeringServer({
-  isRunning: () => process.ppid === serverPid,
+  isRunning: server.isRunning,
   signal: signalServer,
   graceMs: shutdownGraceMs,
 });
 process.exit(0);
 
-// The parent is Codex until it exits; checking it first keeps a reused pid from being signaled.
 function signalServer(signal: Signals) {
-  if (process.ppid !== serverPid) return;
-  if (signalProcess(serverPid, signal).isOk()) {
-    logger.log({ event: "server_signaled", signal });
-  }
+  if (server.signal(signal)) logger.log({ event: "server_signaled", signal });
 }
 
 function withToolCallProbe(

@@ -1,4 +1,26 @@
-import type { Signals } from "../boundary/process.ts";
+import { type Signals, signalProcess } from "../boundary/process.ts";
+
+export const SERVER_PID_ENV = "HARNEXUS_SERVER_PID";
+
+// Codex is alive only while it is still this process's parent; without a pid from the launcher nothing is ever signaled, so a reparented bridge cannot mistake launchd or a reused pid for Codex.
+export const watchServer = (
+  env: NodeJS.ProcessEnv,
+  {
+    parentPid = () => process.ppid,
+    send = signalProcess,
+  }: {
+    parentPid?: () => number;
+    send?: typeof signalProcess;
+  } = {},
+) => {
+  const pid = Number(env[SERVER_PID_ENV]);
+  const known = Number.isInteger(pid) && pid > 1;
+  const isRunning = () => known && parentPid() === pid;
+  return {
+    isRunning,
+    signal: (signal: Signals) => isRunning() && send(pid, signal).isOk(),
+  };
+};
 
 // Codex can close stdout and keep running, and once the relay ends the bridge is the only process left to stop it.
 export const stopLingeringServer = async ({
