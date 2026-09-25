@@ -82,6 +82,30 @@ describe("runRelay", () => {
     expect(isAlive(await readPid(pidFile))).toBe(false);
   });
 
+  test("stops a server that closes stdout while the app stays connected", async () => {
+    // Bun keeps fd 1 open on closeSync(1), so a shell closes it; exec keeps the pid and ignores stdin EOF until SIGTERM.
+    const server = join(dir, "close-stdout");
+    await writeFile(
+      server,
+      '#!/bin/sh\nexec 1>&-\necho $$ > "$1"\nexec sleep 60\n',
+    );
+    await chmod(server, 0o755);
+    const pidFile = nextPidFile();
+    const pending = runRelay(server, [pidFile], process.env, {
+      input: new Readable({ read() {} }),
+      output: collector().stream,
+      shutdownGraceMs: 100,
+    });
+    const pid = await readPid(pidFile);
+
+    const result = await pending;
+    expect(result.isOk() && result.value).toEqual({
+      code: null,
+      signal: "SIGTERM",
+    });
+    expect(isAlive(pid)).toBe(false);
+  });
+
   for (const [mode, signal] of [
     ["ignore-eof", "SIGTERM"],
     ["ignore-term", "SIGKILL"],

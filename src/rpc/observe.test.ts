@@ -60,8 +60,8 @@ describe("createObserver", () => {
     expect(records[1]).toMatchObject({ kind: "response", method: null });
   });
 
-  test("records tool names and input schemas without descriptions", () => {
-    const { records } = observe([
+  test("records tool names and the structure of their input schemas", () => {
+    const { log, records } = observe([
       toServer({
         id: 2,
         method: "thread/start",
@@ -73,12 +73,16 @@ describe("createObserver", () => {
               description: PROMPT,
               inputSchema: {
                 type: "object",
+                title: PROMPT,
                 description: PROMPT,
                 properties: {
-                  prompt: { type: "string", default: SECRET },
-                  mode: { enum: ["worker", "reviewer"] },
+                  prompt: { type: "string", default: SECRET, pattern: SECRET },
+                  mode: { enum: ["worker", SECRET] },
+                  token: { const: SECRET, examples: [SECRET] },
+                  kind: { $ref: "#/$defs/Kind", format: SECRET },
                 },
                 required: ["prompt"],
+                $defs: { Kind: { type: ["string", "null"] } },
               },
             },
             {
@@ -99,13 +103,71 @@ describe("createObserver", () => {
           type: "object",
           properties: {
             prompt: { type: "string" },
-            mode: { enum: ["worker", "reviewer"] },
+            mode: { enum: "<redacted>" },
+            token: { const: "<redacted>" },
+            kind: { $ref: "#/$defs/Kind" },
           },
           required: ["prompt"],
+          $defs: { Kind: { type: ["string", "null"] } },
         },
       },
       { name: "codex_app.list_projects", inputSchema: true },
     ]);
+    expect(log).not.toContain(SECRET);
+    expect(log).not.toContain(PROMPT);
+  });
+
+  test("records MCP tools from the server status list response", () => {
+    const { records } = observe([
+      toServer({ id: 9, method: "mcpServerStatus/list", params: {} }),
+      toApp({
+        id: 9,
+        result: {
+          data: [
+            {
+              name: "docs",
+              tools: {
+                search: {
+                  name: "search",
+                  description: PROMPT,
+                  inputSchema: { type: "object" },
+                },
+              },
+            },
+          ],
+        },
+      }),
+    ]);
+
+    expect(records[1].tools).toEqual([
+      { name: "docs.search", inputSchema: { type: "object" } },
+    ]);
+  });
+
+  test("ignores tool-shaped objects outside tool definition fields", () => {
+    const toolShaped = { name: SECRET, inputSchema: { const: PROMPT } };
+    const { log, records } = observe([
+      toServer({ id: 1, method: "turn/start", params: { input: toolShaped } }),
+      toApp({
+        id: "x",
+        method: "item/tool/call",
+        params: { arguments: { tools: [toolShaped] } },
+      }),
+      toServer({ id: "x", result: { contentItems: [toolShaped] } }),
+      toApp({
+        method: "thread/started",
+        params: { dynamicTools: [toolShaped] },
+      }),
+    ]);
+
+    expect(records.map((record) => record.tools)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(log).not.toContain(SECRET);
+    expect(log).not.toContain(PROMPT);
   });
 
   test("keeps params, results and errors out of the log", () => {
@@ -134,8 +196,8 @@ describe("createObserver", () => {
       toServer({ id: PROMPT, method: `${PROMPT} ${SECRET}` }),
       toServer({
         id: 5,
-        method: "m",
-        params: { name: PROMPT, inputSchema: {} },
+        method: "thread/start",
+        params: { dynamicTools: [{ name: PROMPT, inputSchema: {} }] },
       }),
     ]);
 

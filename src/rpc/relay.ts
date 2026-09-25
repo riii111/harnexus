@@ -98,7 +98,8 @@ export const runRelay = (
     output.on("error", stopChild);
 
     pump(input, child.stdin, "app_to_server", observer, stopChild, ignore);
-    pump(child.stdout, output, "server_to_app", observer, ignore, stopChild);
+    // The child closing stdout ends the conversation even if it keeps running, so it is stopped like an app disconnect.
+    pump(child.stdout, output, "server_to_app", observer, stopChild, stopChild);
 
     // "close" follows the end of the child's stdout, so everything it wrote has been handed to output.
     child.once("close", (code, signal) => {

@@ -68,8 +68,7 @@ export const createObserver = (
         ? requests.answer(direction, id)
         : identifier(String(message.method));
     if (kind === "request") requests.remember(direction, id, method);
-    const tools: ToolDefinition[] = [];
-    collectTools(message, null, 0, tools);
+    const tools = toolDefinitions(kind, method, message);
     record({ event: "rpc_message", direction, kind, method, id, tools });
   };
 
@@ -134,58 +133,127 @@ const classify = (message: JsonObject): MessageKind | null => {
   return null;
 };
 
-// Tools grouped under a namespace ({ name, tools: [...] }) are recorded as "namespace.tool".
-const collectTools = (
-  value: Json,
+// Only the fields the app-server protocol defines for tool definitions are read, so a { name, inputSchema } inside arguments or other bodies is never recorded.
+const toolDefinitions = (
+  kind: MessageKind,
+  method: string | null,
+  message: JsonObject,
+): ToolDefinition[] => {
+  if (kind === "request" && method === "thread/start") {
+    const params = asObject(message.params);
+    return dynamicTools(asArray(params?.dynamicTools), null);
+  }
+  if (kind === "response" && method === "mcpServerStatus/list") {
+    const servers = asArray(asObject(message.result)?.data);
+    return servers.flatMap((server) => mcpServerTools(asObject(server)));
+  }
+  return [];
+};
+
+// A namespace spec ({ name, tools: [...] }) prefixes its tools as "namespace.tool".
+const dynamicTools = (
+  specs: Json[],
   namespace: string | null,
+): ToolDefinition[] =>
+  specs.flatMap((value) => {
+    const spec = asObject(value);
+    if (typeof spec?.name !== "string") return [];
+    const name = namespace === null ? spec.name : `${namespace}.${spec.name}`;
+    if (Array.isArray(spec.tools)) return dynamicTools(spec.tools, name);
+    return [toolDefinition(name, spec.inputSchema)];
+  });
+
+const mcpServerTools = (server: JsonObject | null): ToolDefinition[] => {
+  const tools = asObject(server?.tools);
+  if (tools === null || typeof server?.name !== "string") return [];
+  const serverName = server.name;
+  return Object.values(tools).flatMap((value) => {
+    const tool = asObject(value);
+    if (typeof tool?.name !== "string") return [];
+    return [toolDefinition(`${serverName}.${tool.name}`, tool.inputSchema)];
+  });
+};
+
+const toolDefinition = (
+  name: string,
+  inputSchema: Json | undefined,
+): ToolDefinition => ({
+  name: identifier(name),
+  inputSchema: sanitizeSchema(inputSchema ?? null, 0),
+});
+
+// Only structural keywords are kept: literal values (enum, const, default, examples) and free text (description, title, pattern) can carry arbitrary data even in a legitimate tool definition.
+const sanitizeSchema = (value: Json, depth: number): SchemaShape => {
+  if (typeof value === "boolean") return value;
+  if (!isObject(value) || depth > MAX_DEPTH) return REDACTED;
+  const shape: { [key: string]: SchemaShape } = {};
+  for (const [key, child] of Object.entries(value)) {
+    const kept = sanitizeKeyword(key, child, depth + 1);
+    if (kept !== undefined) shape[key] = kept;
+  }
+  return shape;
+};
+
+const sanitizeKeyword = (
+  key: string,
+  value: Json,
   depth: number,
-  found: ToolDefinition[],
-) => {
-  if (depth > MAX_DEPTH) return;
-  if (Array.isArray(value)) {
-    for (const item of value) collectTools(item, namespace, depth + 1, found);
-    return;
-  }
-  if (!isObject(value)) return;
-  const name = typeof value.name === "string" ? value.name : null;
-  if (name !== null && "inputSchema" in value) {
-    const qualified = namespace === null ? name : `${namespace}.${name}`;
-    found.push({
-      name: identifier(qualified),
-      inputSchema: sanitizeSchema(value.inputSchema ?? null, 0),
-    });
-    return;
-  }
-  const inner = name !== null && Array.isArray(value.tools) ? name : namespace;
-  for (const child of Object.values(value)) {
-    collectTools(child, inner, depth + 1, found);
+): SchemaShape | undefined => {
+  switch (key) {
+    case "type":
+      return schemaTypes(value);
+    case "required":
+      return asArray(value).filter(
+        (name): name is string =>
+          typeof name === "string" && IDENTIFIER.test(name),
+      );
+    case "$ref":
+      return typeof value === "string" && LOCAL_REF.test(value)
+        ? value
+        : undefined;
+    case "nullable":
+      return typeof value === "boolean" ? value : undefined;
+    case "enum":
+    case "const":
+      return REDACTED;
+    case "properties":
+    case "definitions":
+    case "$defs":
+      return schemaMap(value, depth);
+    case "items":
+    case "additionalProperties":
+    case "not":
+      return Array.isArray(value)
+        ? value.map((item) => sanitizeSchema(item, depth))
+        : sanitizeSchema(value, depth);
+    case "prefixItems":
+    case "anyOf":
+    case "oneOf":
+    case "allOf":
+      return asArray(value).map((item) => sanitizeSchema(item, depth));
+    default:
+      return undefined;
   }
 };
 
-// Descriptions, defaults and examples are dropped because they can carry arbitrary text.
-const sanitizeSchema = (value: Json, depth: number): SchemaShape => {
-  if (depth > MAX_DEPTH) return REDACTED;
-  if (typeof value === "string") return identifier(value);
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeSchema(item, depth + 1));
+const schemaTypes = (value: Json): SchemaShape | undefined => {
+  if (typeof value === "string") {
+    return SCHEMA_TYPES.has(value) ? value : undefined;
   }
-  if (!isObject(value)) return value;
-  const shape: { [key: string]: SchemaShape } = {};
-  for (const [key, child] of Object.entries(value)) {
-    if (!SCHEMA_KEYS.has(key)) continue;
-    if (SCHEMA_MAP_KEYS.has(key) && isObject(child)) {
-      const entries: { [key: string]: SchemaShape } = {};
-      for (const [name, schema] of Object.entries(child)) {
-        if (IDENTIFIER.test(name)) {
-          entries[name] = sanitizeSchema(schema, depth + 1);
-        }
-      }
-      shape[key] = entries;
-    } else {
-      shape[key] = sanitizeSchema(child, depth + 1);
-    }
+  if (!Array.isArray(value)) return undefined;
+  return value.filter(
+    (type): type is string =>
+      typeof type === "string" && SCHEMA_TYPES.has(type),
+  );
+};
+
+const schemaMap = (value: Json, depth: number): SchemaShape | undefined => {
+  if (!isObject(value)) return undefined;
+  const entries: { [key: string]: SchemaShape } = {};
+  for (const [name, schema] of Object.entries(value)) {
+    if (IDENTIFIER.test(name)) entries[name] = sanitizeSchema(schema, depth);
   }
-  return shape;
+  return entries;
 };
 
 const requestId = (value: Json | undefined): RequestId | null => {
@@ -203,6 +271,11 @@ const opposite = (direction: Direction): Direction =>
 const isObject = (value: Json | undefined): value is JsonObject =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+const asObject = (value: Json | undefined) => (isObject(value) ? value : null);
+
+const asArray = (value: Json | undefined) =>
+  Array.isArray(value) ? value : [];
+
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type JsonObject = { [key: string]: Json };
 
@@ -212,32 +285,13 @@ const REDACTED = "<redacted>";
 const MAX_DEPTH = 32;
 const MAX_PENDING_REQUESTS = 10_000;
 
-const SCHEMA_MAP_KEYS = new Set([
-  "properties",
-  "patternProperties",
-  "definitions",
-  "$defs",
-]);
-const SCHEMA_KEYS = new Set([
-  ...SCHEMA_MAP_KEYS,
-  "type",
-  "required",
-  "items",
-  "prefixItems",
-  "additionalProperties",
-  "anyOf",
-  "oneOf",
-  "allOf",
-  "not",
-  "enum",
-  "const",
-  "format",
-  "$ref",
-  "nullable",
-  "minimum",
-  "maximum",
-  "minItems",
-  "maxItems",
-  "minLength",
-  "maxLength",
+const LOCAL_REF = /^#\/(definitions|\$defs)\/[A-Za-z0-9_$.:-]{1,128}$/;
+const SCHEMA_TYPES = new Set([
+  "string",
+  "number",
+  "integer",
+  "boolean",
+  "object",
+  "array",
+  "null",
 ]);

@@ -33,8 +33,8 @@ export const createLineSplitter = (
           reset();
           onLine({ kind: "oversized" });
         } else if (end > start) {
-          // Copied because the caller may reuse the chunk before the line completes.
-          pending.push(chunk.slice(start, end));
+          // Buffer#slice shares memory, so the bytes are copied explicitly in case the caller reuses the chunk before the line completes.
+          pending.push(new Uint8Array(chunk.subarray(start, end)));
           pendingBytes += end - start;
         }
       }
