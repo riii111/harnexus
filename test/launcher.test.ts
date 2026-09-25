@@ -99,6 +99,57 @@ describe("app-server", () => {
   );
 
   test(
+    "finds app-server after global options, as the app starts it",
+    async () => {
+      const { env, reportPath } = setup();
+      const args = [
+        "-c",
+        "features.code_mode_host=true",
+        "app-server",
+        "--analytics-default-enabled",
+        "-c",
+        "plugins.x.enabled=true",
+      ];
+
+      const result = await finish(launch(args, env));
+      const report = await readReport(reportPath);
+
+      expect(result.exitCode).toBe(0);
+      expect(report.argv).toEqual(args);
+      expect(report.env.DO_NOT_TRACK).toBe("1");
+      expect(result.stderr).toContain('"event":"bridge_started"');
+    },
+    TIMEOUT,
+  );
+
+  const delegated = [
+    ["app-server", "generate-ts", "--out", "x"],
+    ["-c", "a=b", "app-server", "-c", "c=d", "daemon"],
+    ["app-server", "--listen", "unix://"],
+    ["app-server", "--listen=ws://127.0.0.1:1"],
+    ["exec", "app-server"],
+    ["-c", "app-server"],
+  ];
+  for (const args of delegated) {
+    test(
+      `hands ${args.join(" ")} to Codex without the bridge`,
+      async () => {
+        const { env, reportPath } = setup();
+
+        const proc = launch(args, env);
+        const result = await finish(proc);
+        const report = await readReport(reportPath);
+
+        expect(result.exitCode).toBe(0);
+        expect(report.pid).toBe(proc.pid);
+        expect(report.argv).toEqual(args);
+        expect(result.stderr).not.toContain("bridge_started");
+      },
+      TIMEOUT,
+    );
+  }
+
+  test(
     "ignores .env and bunfig.toml in the working directory",
     async () => {
       const cwd = join(dir, "project");
