@@ -1,0 +1,51 @@
+#!/bin/sh
+# Entry point for CODEX_CLI_PATH. `app-server` goes to the bridge; every other
+# invocation execs the standard Codex so arguments, cwd, environment, stdio,
+# exit status and signals stay with the same process.
+# Never write to stdout: it carries the app-server protocol.
+
+set -u
+
+fail() {
+  printf 'harnexus: %s\n' "$1" >&2
+  exit 1
+}
+
+# Set on every launch, so a descendant that reaches this script again stops here.
+if [ -n "${HARNEXUS_LAUNCHER_ACTIVE-}" ]; then
+  fail "recursive launch detected (HARNEXUS_LAUNCHER_ACTIVE is set)"
+fi
+
+require_executable() {
+  case $2 in
+    "") fail "$1 is not set" ;;
+    /*) ;;
+    *) fail "$1 must be an absolute path" ;;
+  esac
+  if [ ! -f "$2" ] || [ ! -x "$2" ]; then
+    fail "$1 is not an executable file"
+  fi
+}
+
+self=$(realpath "$0") || fail "cannot resolve the launcher path"
+codex=${HARNEXUS_CODEX_PATH-}
+require_executable HARNEXUS_CODEX_PATH "$codex"
+if [ "$(realpath "$codex")" = "$self" ]; then
+  fail "HARNEXUS_CODEX_PATH points to the launcher itself"
+fi
+
+HARNEXUS_LAUNCHER_ACTIVE=1
+export HARNEXUS_LAUNCHER_ACTIVE
+
+if [ "${1-}" = app-server ]; then
+  bun=${HARNEXUS_BUN_PATH-}
+  require_executable HARNEXUS_BUN_PATH "$bun"
+  root=$(dirname "$(dirname "$self")")
+  # DO_NOT_TRACK disables crash reports. --no-env-file and --config=/dev/null
+  # keep .env files and bunfig.toml preloads in the caller's cwd out of the bridge.
+  DO_NOT_TRACK=1
+  export DO_NOT_TRACK
+  exec "$bun" --no-env-file --config=/dev/null "$root/src/bridge/main.ts" "$@"
+fi
+
+exec "$codex" "$@"
