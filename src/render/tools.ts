@@ -199,11 +199,19 @@ const formatHunk = (hunk: unknown) => {
   return `@@ -${oldStart},${oldLines} +${newStart},${newLines} @@\n${body.join("")}`;
 };
 
-const replacementDiff = (oldText: string, newText: string) =>
-  [
-    ...oldText.split("\n").map((line) => `-${line}\n`),
-    ...newText.split("\n").map((line) => `+${line}\n`),
+// The proposed edit has no line numbers, so the hunk starts at line 1 until the applied hunks replace it.
+const replacementDiff = (oldText: string, newText: string) => {
+  const removed = diffLines(oldText);
+  const added = diffLines(newText);
+  return [
+    `@@ -1,${removed.length} +1,${added.length} @@\n`,
+    ...removed.map((line) => `-${line}\n`),
+    ...added.map((line) => `+${line}\n`),
   ].join("");
+};
+
+const diffLines = (text: string) =>
+  text === "" ? [] : text.replace(/\n$/, "").split("\n");
 
 // Claude Code reports a non-zero exit only in the result text.
 const exitCodeOf = (text: string) => {

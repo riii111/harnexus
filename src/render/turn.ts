@@ -26,6 +26,12 @@ export type TurnOutcome =
   | { status: "failed"; message: string }
   | { status: "interrupted" };
 
+// An interrupted SDK query still ends with a result, which must close the turn as interrupted rather than failed.
+export const markInterrupting = (state: TurnState): TurnState => ({
+  ...state,
+  interrupting: true,
+});
+
 export const startTurn = (params: {
   threadId: string;
   turnId: string;
@@ -40,9 +46,12 @@ export const startTurn = (params: {
     nextItem: 1,
     blocks: {},
     pending: [],
-    streamedMessageIds: [],
+    streamingMessageId: null,
+    messages: {},
     tools: {},
+    toolUseIds: [],
     finalMessage: null,
+    interrupting: false,
     finished: false,
   });
   const turn: Turn = {
@@ -119,7 +128,11 @@ export const renderSdkMessage = (
       }
       break;
     case "result":
-      finish(draft, outcomeOf(message), now);
+      finish(
+        draft,
+        draft.interrupting ? { status: "interrupted" } : outcomeOf(message),
+        now,
+      );
       break;
   }
   return seal(draft);
@@ -140,7 +153,9 @@ export const finishTurn = (
 const renderStreamEvent = (draft: Draft, event: StreamEvent, now: number) => {
   switch (event.type) {
     case "message_start":
-      draft.streamedMessageIds.push(event.message.id);
+      closeBlocks(draft, now);
+      flushPending(draft, null, now);
+      draft.streamingMessageId = event.message.id;
       break;
     case "content_block_start":
       startBlock(draft, event.index, event.content_block.type, now);
@@ -157,17 +172,22 @@ const renderStreamEvent = (draft: Draft, event: StreamEvent, now: number) => {
       }
       break;
     case "message_stop":
+      closeBlocks(draft, now);
       flushPending(draft, null, now);
+      draft.streamingMessageId = null;
       break;
   }
 };
 
 const startBlock = (draft: Draft, index: number, type: string, now: number) => {
+  if (type !== "text" && type !== "thinking") return;
+  stopBlock(draft, index, now);
+  countStreamedBlock(draft);
   if (type === "text") {
     const block: OpenBlock = { kind: "text", id: nextItemId(draft), text: "" };
     draft.blocks[index] = block;
     itemStarted(draft, agentMessage(block.id, "", null), now);
-  } else if (type === "thinking") {
+  } else {
     const block: OpenBlock = {
       kind: "reasoning",
       id: nextItemId(draft),
@@ -213,6 +233,20 @@ const stopBlock = (draft: Draft, index: number, now: number) => {
   else itemCompleted(draft, reasoning(block.id, block.text), now);
 };
 
+// A retried or abandoned message may never send its block stops, so its blocks close when the next message starts.
+const closeBlocks = (draft: Draft, now: number) => {
+  for (const index of Object.keys(draft.blocks)) {
+    stopBlock(draft, Number(index), now);
+  }
+};
+
+const countStreamedBlock = (draft: Draft) => {
+  const id = draft.streamingMessageId;
+  if (id === null) return;
+  const counts = draft.messages[id] ?? { streamed: 0, seen: 0 };
+  draft.messages[id] = { ...counts, streamed: counts.streamed + 1 };
+};
+
 const flushPending = (
   draft: Draft,
   phase: AgentMessageItem["phase"],
@@ -223,29 +257,51 @@ const flushPending = (
   }
 };
 
-// Without partial messages, or for a block the stream did not carry, the whole block arrives here at once.
+// Without partial messages, or for a block the stream did not carry, the whole block arrives here at once; an SDK-made API error message is skipped because the result reports the same error.
 const renderAssistant = (
   draft: Draft,
   message: SDKAssistantMessage,
   now: number,
 ) => {
-  const streamed = draft.streamedMessageIds.includes(message.message.id);
+  if (message.error !== undefined) return;
   const phase = message.message.stop_reason
     ? phaseOf(message.message.stop_reason)
     : null;
   for (const block of message.message.content) {
     if (block.type === "tool_use") {
       startTool(draft, block, now);
-    } else if (streamed) {
-    } else if (block.type === "text") {
-      const item = agentMessage(nextItemId(draft), block.text, phase);
-      itemStarted(draft, { ...item, text: "" }, now);
-      completeMessage(draft, item, now);
-    } else if (block.type === "thinking") {
-      const item = reasoning(nextItemId(draft), block.thinking);
-      itemStarted(draft, reasoning(item.id, ""), now);
-      itemCompleted(draft, item, now);
+    } else if (
+      (block.type === "text" || block.type === "thinking") &&
+      !consumeStreamedBlock(draft, message.message.id)
+    ) {
+      renderWholeBlock(draft, block, now);
     }
+  }
+  if (phase !== null) flushPending(draft, phase, now);
+};
+
+// Streamed text and thinking blocks arrive again in order as assistant messages, so only those beyond the streamed count are new.
+const consumeStreamedBlock = (draft: Draft, messageId: string) => {
+  const counts = draft.messages[messageId] ?? { streamed: 0, seen: 0 };
+  draft.messages[messageId] = { ...counts, seen: counts.seen + 1 };
+  return counts.seen < counts.streamed;
+};
+
+const renderWholeBlock = (
+  draft: Draft,
+  block:
+    | { type: "text"; text: string }
+    | { type: "thinking"; thinking: string },
+  now: number,
+) => {
+  if (block.type === "text") {
+    const id = nextItemId(draft);
+    itemStarted(draft, agentMessage(id, "", null), now);
+    draft.pending.push({ kind: "text", id, text: block.text });
+  } else {
+    const item = reasoning(nextItemId(draft), block.thinking);
+    itemStarted(draft, reasoning(item.id, ""), now);
+    itemCompleted(draft, item, now);
   }
 };
 
@@ -255,7 +311,8 @@ const startTool = (
   block: { id: string; name: string; input: unknown },
   now: number,
 ) => {
-  if (draft.tools[block.id] !== undefined) return;
+  if (draft.toolUseIds.includes(block.id)) return;
+  draft.toolUseIds.push(block.id);
   flushPending(draft, "commentary", now);
   const item = startToolItem(nextItemId(draft), block, draft.cwd);
   draft.tools[block.id] = { item, startedAtMs: now, declined: false };
@@ -269,6 +326,9 @@ const renderToolResults = (
 ) => {
   const { content } = message.message;
   if (typeof content === "string") return;
+  // The structured output belongs to a single tool, so it is used only when the message answers one call.
+  const single =
+    content.filter((block) => block.type === "tool_result").length === 1;
   for (const block of content) {
     if (block.type !== "tool_result") continue;
     const tool = draft.tools[block.tool_use_id];
@@ -278,7 +338,7 @@ const renderToolResults = (
       content: block.content,
       isError: block.is_error === true,
       declined: tool.declined,
-      output: message.tool_use_result,
+      output: single ? message.tool_use_result : undefined,
       durationMs: now - tool.startedAtMs,
     });
     itemCompleted(draft, item, now);
@@ -305,11 +365,7 @@ const outcomeOf = (result: SDKResultMessage): TurnOutcome => {
 
 const finish = (draft: Draft, outcome: TurnOutcome, now: number) => {
   const completed = outcome.status === "completed";
-  for (const block of Object.values(draft.blocks)) {
-    if (block.kind === "text") draft.pending.push(block);
-    else itemCompleted(draft, reasoning(block.id, block.text), now);
-  }
-  draft.blocks = {};
+  closeBlocks(draft, now);
   flushPending(draft, completed ? "final_answer" : null, now);
   for (const tool of Object.values(draft.tools)) {
     itemCompleted(draft, abandonToolItem(tool.item), now);
@@ -321,6 +377,7 @@ const finish = (draft: Draft, outcome: TurnOutcome, now: number) => {
           message: outcome.message,
           codexErrorInfo: null,
           additionalDetails: null,
+          misalignment: null,
         }
       : null;
   if (error !== null) {
@@ -433,8 +490,9 @@ const open = (state: TurnState): Draft => ({
   ...state,
   blocks: { ...state.blocks },
   pending: [...state.pending],
-  streamedMessageIds: [...state.streamedMessageIds],
+  messages: { ...state.messages },
   tools: { ...state.tools },
+  toolUseIds: [...state.toolUseIds],
   notifications: [],
 });
 
@@ -455,9 +513,12 @@ type Draft = {
   nextItem: number;
   blocks: Record<number, OpenBlock>;
   pending: OpenBlock[];
-  streamedMessageIds: string[];
+  streamingMessageId: string | null;
+  messages: Record<string, { streamed: number; seen: number }>;
   tools: Record<string, OpenTool>;
+  toolUseIds: string[];
   finalMessage: AgentMessageItem | null;
+  interrupting: boolean;
   finished: boolean;
   notifications: AppNotification[];
 };

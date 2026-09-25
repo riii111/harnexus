@@ -31,6 +31,7 @@ export type TurnError = {
   message: string;
   codexErrorInfo: null;
   additionalDetails: string | null;
+  misalignment: null;
 };
 
 // App input is passed back unchanged, so only the discriminator is typed.
