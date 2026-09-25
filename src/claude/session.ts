@@ -99,6 +99,8 @@ async function* readMessages(
       // A read pending across close ends or fails depending on the SDK cleanup, and either is the end of the stream.
       if (isClosed()) return;
       if (next.isErr()) {
+        // Closed before the consumer sees the failure, so a send made while handling it is refused rather than lost.
+        close();
         yield Result.err(next.error);
         return;
       }

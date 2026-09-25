@@ -191,6 +191,19 @@ describe("ClaudeSession", () => {
     expect(claude.closes()).toBe(1);
   });
 
+  test("refuses input while the consumer handles a stream failure", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const session = await startedSession(claude);
+
+    expect.assertions(3);
+    claude.fail(new Error("Claude Code process exited with code 1"));
+    for await (const item of session.messages) {
+      expect(item.isErr()).toBe(true);
+      expect(claude.closes()).toBe(1);
+      expect(session.send("steer").isErr()).toBe(true);
+    }
+  });
+
   test("ends the stream with an error when the SDK throws", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const session = await startedSession(claude);
