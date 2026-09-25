@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
   chmod,
+  mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   stat,
@@ -9,7 +11,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openAppendSink } from "./fs.ts";
+import { openAppendSink, readTextFileIfExists, writeFileAtomic } from "./fs.ts";
 
 let dir: string;
 
@@ -50,5 +52,40 @@ describe("openAppendSink", () => {
     const sink = openAppendSink(join(dir, "absent", "x.log"));
 
     expect(sink.isErr() && sink.error._tag).toBe("LogFileOpenFailed");
+  });
+});
+
+describe("readTextFileIfExists", () => {
+  test("returns null for a missing file", async () => {
+    const read = await readTextFileIfExists(join(dir, "missing.json"));
+
+    expect(read.isOk() && read.value).toBeNull();
+  });
+
+  test("returns an error for a path that cannot be read", async () => {
+    const read = await readTextFileIfExists(dir);
+
+    expect(read.isErr() && read.error._tag).toBe("FileReadFailed");
+  });
+});
+
+describe("writeFileAtomic", () => {
+  test("replaces the content and leaves no temporary file", async () => {
+    const target = join(dir, "atomic", "state.json");
+    await mkdir(join(dir, "atomic"));
+    await writeFile(target, "old");
+
+    const written = await writeFileAtomic(target, "new");
+
+    expect(written.isOk()).toBe(true);
+    expect(await readFile(target, "utf8")).toBe("new");
+    expect((await stat(target)).mode & 0o777).toBe(0o600);
+    expect(await readdir(join(dir, "atomic"))).toEqual(["state.json"]);
+  });
+
+  test("returns an error when the directory is missing", async () => {
+    const written = await writeFileAtomic(join(dir, "absent", "x.json"), "new");
+
+    expect(written.isErr() && written.error._tag).toBe("FileWriteFailed");
   });
 });

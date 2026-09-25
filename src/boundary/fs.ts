@@ -1,5 +1,6 @@
 import { closeSync, fchmodSync, openSync, writeSync } from "node:fs";
-import { access, constants } from "node:fs/promises";
+import { access, constants, open, readFile, rename } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { Result, TaggedError } from "better-result";
 
 export class FileNotExecutable extends TaggedError("FileNotExecutable")<{
@@ -9,6 +10,18 @@ export class FileNotExecutable extends TaggedError("FileNotExecutable")<{
 }> {}
 
 class LogFileOpenFailed extends TaggedError("LogFileOpenFailed")<{
+  path: string;
+  cause: unknown;
+  message: string;
+}> {}
+
+class FileReadFailed extends TaggedError("FileReadFailed")<{
+  path: string;
+  cause: unknown;
+  message: string;
+}> {}
+
+export class FileWriteFailed extends TaggedError("FileWriteFailed")<{
   path: string;
   cause: unknown;
   message: string;
@@ -45,5 +58,55 @@ export const openAppendSink = (path: string) =>
     catch: (cause) =>
       new LogFileOpenFailed({ path, cause, message: `cannot open ${path}` }),
   });
+
+// A missing file is not an error, so a first start can begin from an empty state.
+export const readTextFileIfExists = (path: string) =>
+  Result.tryPromise({
+    try: async () => {
+      try {
+        return await readFile(path, "utf8");
+      } catch (cause) {
+        if (isMissingFile(cause)) return null;
+        throw cause;
+      }
+    },
+    catch: (cause) =>
+      new FileReadFailed({ path, cause, message: `cannot read ${path}` }),
+  });
+
+// Readers see either the previous or the new content, because the rename happens only after the temporary file is flushed to disk.
+export const writeFileAtomic = (path: string, content: string) =>
+  Result.tryPromise({
+    try: async () => {
+      const temporary = join(
+        dirname(path),
+        `.${basename(path)}.${process.pid}.tmp`,
+      );
+      const file = await open(temporary, "w", OWNER_ONLY);
+      try {
+        await file.chmod(OWNER_ONLY);
+        await file.writeFile(content, "utf8");
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      await rename(temporary, path);
+      await syncDirectory(dirname(path));
+    },
+    catch: (cause) =>
+      new FileWriteFailed({ path, cause, message: `cannot write ${path}` }),
+  });
+
+const syncDirectory = async (path: string) => {
+  const directory = await open(path, "r");
+  try {
+    await directory.sync();
+  } finally {
+    await directory.close();
+  }
+};
+
+const isMissingFile = (cause: unknown) =>
+  cause instanceof Error && "code" in cause && cause.code === "ENOENT";
 
 const OWNER_ONLY = 0o600;
