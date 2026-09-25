@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { closeSync, fchmodSync, openSync, writeSync } from "node:fs";
 import {
-  access,
-  constants,
   mkdir,
   open,
   readdir,
@@ -13,12 +11,6 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { Result, TaggedError } from "better-result";
-
-export class FileNotExecutable extends TaggedError("FileNotExecutable")<{
-  path: string;
-  cause: unknown;
-  message: string;
-}> {}
 
 class LogFileOpenFailed extends TaggedError("LogFileOpenFailed")<{
   path: string;
@@ -55,17 +47,6 @@ class DirectoryPrepareFailed extends TaggedError("DirectoryPrepareFailed")<{
   cause: unknown;
   message: string;
 }> {}
-
-export const checkExecutable = (path: string) =>
-  Result.tryPromise({
-    try: () => access(path, constants.X_OK),
-    catch: (cause) =>
-      new FileNotExecutable({
-        path,
-        cause,
-        message: `${path} is not an executable file`,
-      }),
-  });
 
 // The open mode applies only to a new file, so an existing one is narrowed too; a failed write is dropped because logging must never stop the relay.
 export const openAppendSink = (path: string) =>

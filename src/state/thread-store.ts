@@ -11,7 +11,7 @@ import {
   removeFile,
   writeFileAtomic,
 } from "../boundary/fs.ts";
-import { type JsonParseFailed, parseJson } from "../boundary/json.ts";
+import { parseJson } from "../boundary/json.ts";
 import { createSerialQueue } from "./serial-queue.ts";
 
 // Only identifiers are kept, so the file never holds conversation text.
@@ -85,7 +85,7 @@ class StateStoreHalted extends TaggedError("StateStoreHalted")<{
 
 class StateFileCorrupt extends TaggedError("StateFileCorrupt")<{
   path: string;
-  cause?: JsonParseFailed;
+  cause?: unknown;
   message: string;
 }> {}
 

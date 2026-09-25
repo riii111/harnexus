@@ -1,38 +1,21 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { readdirSync, readFileSync } from "node:fs";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { createLogger } from "../shared/logger.ts";
 import { createObserver } from "./observe.ts";
-import { runRelay } from "./relay.ts";
-
-let dir: string;
-let replayServer: string;
-
-beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), "harnexus-fixtures-"));
-  replayServer = join(dir, "codex");
-  await writeFile(
-    replayServer,
-    `#!/bin/sh\nexec "${process.execPath}" "${REPLAY_SERVER}" "$@"\n`,
-  );
-  await chmod(replayServer, 0o755);
-});
-
-afterAll(async () => {
-  await rm(dir, { recursive: true, force: true });
-});
+import { relayStreams } from "./relay.ts";
 
 describe("relay over recorded app-server shapes", () => {
   for (const name of FIXTURES) {
     test(`${name} passes both directions unchanged and logs every message`, async () => {
       const path = join(FIXTURE_DIR, name);
       const records = readFixture(path);
-      const { result, output, log } = await replay(path, records);
+      const { exitCode, output, log } = await replay(path, records);
 
-      expect(result.isOk() && result.value).toEqual({ code: 0, signal: null });
+      expect(exitCode).toBe(0);
       expect(output).toBe(wire(records, "server_to_app"));
       for (const direction of DIRECTIONS) {
         expect(
@@ -88,9 +71,15 @@ const replay = async (path: string, records: FixtureRecord[]) => {
   const log: string[] = [];
   const output = collector();
   const input = new PassThrough();
-  const relaying = runRelay(replayServer, [path], process.env, {
+  const server = spawn(process.execPath, [REPLAY_SERVER, path], {
+    stdio: ["pipe", "pipe", "inherit"],
+  });
+  const exited = once(server, "close");
+  const relaying = relayStreams({
     input,
     output: output.stream,
+    serverInput: server.stdin,
+    serverOutput: server.stdout,
     observer: createObserver(createLogger((line) => log.push(line)).log),
   });
   let expectedBytes = 0;
@@ -104,8 +93,9 @@ const replay = async (path: string, records: FixtureRecord[]) => {
     for (const chunk of split(line, CHUNK_BYTES)) input.write(chunk);
   }
   input.end();
-  const result = await relaying;
-  return { result, output: output.text(), log };
+  await relaying;
+  const [exitCode] = await exited;
+  return { exitCode, output: output.text(), log };
 };
 
 // Bytes are kept until the end so a multi-byte character split across writes decodes correctly.
