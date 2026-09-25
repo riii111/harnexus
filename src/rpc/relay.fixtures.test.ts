@@ -83,7 +83,7 @@ const REPLAY_SERVER = join(import.meta.dir, "testing", "replay-app-server.ts");
 const SECRET_MARKER = "sk-fixture-secret";
 const CHUNK_BYTES = 7;
 
-// Like the app, each app line is sent only after the server lines before it have come out, and it is cut into small chunks so it crosses read boundaries in the relay.
+// Like the app, each app line is sent only after the server lines before it have come out, and it is cut into small chunks so it crosses read boundaries in the relay; a server that exits early ends the wait so the exit code reports the mismatch.
 const replay = async (path: string, records: FixtureRecord[]) => {
   const log: string[] = [];
   const output = collector();
@@ -93,39 +93,44 @@ const replay = async (path: string, records: FixtureRecord[]) => {
     output: output.stream,
     observer: createObserver(createLogger((line) => log.push(line)).log),
   });
-  let expected = "";
+  let expectedBytes = 0;
   for (const record of records) {
-    const line = `${JSON.stringify(record.message)}\n`;
+    const line = Buffer.from(`${JSON.stringify(record.message)}\n`);
     if (record.direction === "server_to_app") {
-      expected += line;
+      expectedBytes += line.length;
       continue;
     }
-    await output.reached(expected.length);
-    for (const chunk of split(Buffer.from(line), CHUNK_BYTES)) {
-      input.write(chunk);
-    }
+    await Promise.race([output.reached(expectedBytes), relaying]);
+    for (const chunk of split(line, CHUNK_BYTES)) input.write(chunk);
   }
   input.end();
   const result = await relaying;
   return { result, output: output.text(), log };
 };
 
+// Bytes are kept until the end so a multi-byte character split across writes still decodes correctly.
 const collector = () => {
-  let text = "";
+  const chunks: Buffer[] = [];
+  let bytes = 0;
   const waiters: (() => void)[] = [];
   const stream = new Writable({
     write(chunk, _encoding, callback) {
-      text += Buffer.from(chunk).toString();
+      chunks.push(Buffer.from(chunk));
+      bytes += chunk.length;
       for (const wake of waiters.splice(0)) wake();
       callback();
     },
   });
   const reached = async (length: number) => {
-    while (text.length < length) {
+    while (bytes < length) {
       await new Promise<void>((resolve) => waiters.push(resolve));
     }
   };
-  return { stream, reached, text: () => text };
+  return {
+    stream,
+    reached,
+    text: () => Buffer.concat(chunks).toString(),
+  };
 };
 
 const readFixture = (path: string): FixtureRecord[] =>
