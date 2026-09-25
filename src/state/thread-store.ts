@@ -149,13 +149,14 @@ const createThreadStore = (
       return Result.ok(changed.value);
     });
 
-  // An unsaved finish leaves "running" in the file, which reloads as outcome unknown, so memory is set the same way to refuse a repeat before restart.
+  // An unconfirmed finish is marked outcome unknown in memory and, bypassing the halt, in the file, since a rename may already have left "idle" that a restart would trust.
   const finishWrite = (threadId: string, runState: RunState) =>
     fileQueue.run(path, async () => {
       records = withRunState(records, threadId, runState);
       const saved = await save(records);
       if (saved.isErr()) {
         records = withRunState(records, threadId, "outcomeUnknown");
+        await write(path, serializeState(records));
       }
       return saved;
     });

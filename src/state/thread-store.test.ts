@@ -336,6 +336,36 @@ describe("ThreadStore.runWrite", () => {
     expect(retried.isOk() && retried.value).toBe("sent");
   });
 
+  test("keeps an unconfirmed finish as outcome unknown after a restart", async () => {
+    const switchable = switchableWrite();
+    const store = await openStore(switchable.write);
+    await store.register(ENTRY);
+
+    const result = await store.runWrite(
+      "thread-1",
+      async () => {
+        switchable.failNext("sync");
+        return Result.ok("sent");
+      },
+      never,
+    );
+    const reopened = await openStore();
+    let repeated = false;
+    const again = await reopened.runWrite(
+      "thread-1",
+      async () => {
+        repeated = true;
+        return Result.ok("sent");
+      },
+      never,
+    );
+
+    expect(result.isErr() && result.error._tag).toBe("RunStateNotSaved");
+    expect(store.get("thread-1")?.runState).toBe("outcomeUnknown");
+    expect(again.isErr() && again.error._tag).toBe("WriteOutcomeUnknown");
+    expect(repeated).toBe(false);
+  });
+
   test("reports a finished write whose state could not be saved", async () => {
     const switchable = switchableWrite();
     const store = await openStore(switchable.write);
@@ -344,7 +374,7 @@ describe("ThreadStore.runWrite", () => {
     const result = await store.runWrite(
       "thread-1",
       async () => {
-        switchable.failNext();
+        switchable.failNext("write");
         return Result.ok("sent");
       },
       never,
@@ -538,15 +568,17 @@ const writeThenFailSync = async (target: string, content: string) => {
 };
 
 const switchableWrite = () => {
-  let fail = false;
+  let fail: "write" | "sync" | null = null;
   return {
     write: (target: string, content: string) => {
-      if (!fail) return writeFileAtomic(target, content);
-      fail = false;
-      return failingWrite(target);
+      const current = fail;
+      fail = null;
+      if (current === "write") return failingWrite(target);
+      if (current === "sync") return writeThenFailSync(target, content);
+      return writeFileAtomic(target, content);
     },
-    failNext: () => {
-      fail = true;
+    failNext: (kind: "write" | "sync") => {
+      fail = kind;
     },
   };
 };
