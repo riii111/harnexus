@@ -7,13 +7,41 @@ class ClaudeNotSubscription extends TaggedError("ClaudeNotSubscription")<{
   message: string;
 }> {}
 
+class ClaudeSettingsOverrideAuth extends TaggedError(
+  "ClaudeSettingsOverrideAuth",
+)<{
+  names: string[];
+  message: string;
+}> {}
+
 export type Env = Record<string, string | undefined>;
 
 // Removing these keeps Claude Code on the claude.ai login; checkSubscription still rejects a key the CLI finds elsewhere, such as an apiKeyHelper.
-export const withoutApiBilling = (env: Env): Env =>
-  Object.fromEntries(
-    Object.entries(env).filter(([name]) => !API_BILLING_ENV.has(name)),
+export const withoutApiBilling = (env: Env): Env => {
+  const kept = Object.fromEntries(
+    Object.entries(env).filter(
+      ([name]) => !API_BILLING_ENV.has(name) && name !== CUSTOM_HEADERS_ENV,
+    ),
   );
+  const headers = withoutAuthHeaders(env[CUSTOM_HEADERS_ENV] ?? "");
+  return headers === "" ? kept : { ...kept, [CUSTOM_HEADERS_ENV]: headers };
+};
+
+// The CLI copies the settings env into its own environment after launch, so a billing variable or an auth header found there is refused rather than removed; accountInfo does not report a header that replaces the OAuth token.
+export const checkSettingsEnv = (env: Record<string, string>) => {
+  const names = Object.keys(env).filter(
+    (name) =>
+      API_BILLING_ENV.has(name) ||
+      (name === CUSTOM_HEADERS_ENV && hasAuthHeader(env[name] ?? "")),
+  );
+  if (names.length === 0) return Result.ok();
+  return Result.err(
+    new ClaudeSettingsOverrideAuth({
+      names,
+      message: `Claude settings must not set ${names.join(", ")}, which would bypass the subscription login`,
+    }),
+  );
+};
 
 // The CLI reports a subscription even while an API key is in use, so the key source decides who is billed; a setup-token login reports its token source instead of the subscription.
 export const checkSubscription = (account: AccountInfo) => {
@@ -37,6 +65,29 @@ export const checkSubscription = (account: AccountInfo) => {
     }),
   );
 };
+
+const withoutAuthHeaders = (headers: string) =>
+  headerLines(headers)
+    .filter((line) => !isAuthHeader(line))
+    .join("\n")
+    .trim();
+
+const hasAuthHeader = (headers: string) =>
+  headerLines(headers).some(isAuthHeader);
+
+// Split the way the CLI reads the variable: one "Name: value" per line.
+const headerLines = (headers: string) => headers.split(/\n|\r\n/);
+
+const isAuthHeader = (line: string) => AUTH_HEADERS.has(headerName(line));
+
+const headerName = (line: string) => {
+  const colon = line.indexOf(":");
+  return colon === -1 ? "" : line.slice(0, colon).trim().toLowerCase();
+};
+
+const CUSTOM_HEADERS_ENV = "ANTHROPIC_CUSTOM_HEADERS";
+
+const AUTH_HEADERS = new Set(["authorization", "x-api-key"]);
 
 const SUBSCRIPTION_TOKEN_SOURCES = new Set([
   "CLAUDE_CODE_OAUTH_TOKEN",

@@ -4,7 +4,12 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { ClaudeQuery, RunQuery } from "../claude-sdk.ts";
+import type {
+  ClaudeQuery,
+  ClaudeSdk,
+  ResolveSettings,
+  RunQuery,
+} from "../claude-sdk.ts";
 
 type Delivery = IteratorResult<SDKMessage, void> | Error;
 
@@ -15,10 +20,12 @@ export const fakeClaude = (
     interruptError,
     stillQueued,
     closeEnding = { done: true, value: undefined },
+    settingsEnv = {},
   }: {
     interruptError?: Error;
     stillQueued?: string[];
     closeEnding?: Delivery;
+    settingsEnv?: Record<string, string> | Error;
   } = {},
 ) => {
   const queued: Delivery[] = [];
@@ -59,12 +66,18 @@ export const fakeClaude = (
       deliver(closeEnding);
     },
   };
+  const resolveSettings: ResolveSettings = async () => {
+    if (settingsEnv instanceof Error) throw settingsEnv;
+    return { effective: { env: settingsEnv } };
+  };
+  const run: RunQuery = (params) => {
+    options = params.options;
+    prompt = params.prompt;
+    return claude;
+  };
   return {
-    run: ((params) => {
-      options = params.options;
-      prompt = params.prompt;
-      return claude;
-    }) satisfies RunQuery,
+    sdk: { query: run, resolveSettings } satisfies ClaudeSdk,
+    started: () => options !== null,
     options: () => options ?? {},
     prompt: () => prompt,
     prompts: async () => {
@@ -81,7 +94,7 @@ export const fakeClaude = (
   };
 };
 
-export const failingRun =
+export const failingQuery =
   (error: Error): RunQuery =>
   () => {
     throw error;

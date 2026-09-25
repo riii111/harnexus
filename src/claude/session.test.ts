@@ -6,14 +6,14 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { failingRun, fakeClaude } from "../boundary/testing/fake-claude.ts";
+import { failingQuery, fakeClaude } from "../boundary/testing/fake-claude.ts";
 import { type ClaudeSessionSettings, startClaudeSession } from "./session.ts";
 
 describe("startClaudeSession options", () => {
   test("loads every settings source with the Claude Code preset in the worktree", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
 
-    await startClaudeSession(SETTINGS, claude.run);
+    await startClaudeSession(SETTINGS, claude.sdk);
 
     expect(claude.options()).toMatchObject({
       cwd: "/work/tree",
@@ -30,7 +30,7 @@ describe("startClaudeSession options", () => {
   test("appends nothing to the preset system prompt", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
 
-    await startClaudeSession(SETTINGS, claude.run);
+    await startClaudeSession(SETTINGS, claude.sdk);
 
     expect(claude.options().systemPrompt).toEqual({
       type: "preset",
@@ -44,7 +44,7 @@ describe("startClaudeSession options", () => {
 
     await startClaudeSession(
       { ...SETTINGS, resume: "session-1", mcpServers },
-      claude.run,
+      claude.sdk,
     );
 
     expect(claude.options()).toMatchObject({ resume: "session-1", mcpServers });
@@ -65,7 +65,7 @@ describe("startClaudeSession options", () => {
           CLAUDE_CODE_USE_BEDROCK: "1",
         },
       },
-      claude.run,
+      claude.sdk,
     );
 
     expect(claude.options().env).toEqual({
@@ -75,10 +75,46 @@ describe("startClaudeSession options", () => {
     });
   });
 
+  test("keeps custom headers that cannot replace the login", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+
+    await startClaudeSession(
+      {
+        ...SETTINGS,
+        env: {
+          ANTHROPIC_CUSTOM_HEADERS:
+            "Authorization: Bearer other\r\nX-Trace: 1\nx-api-key: key",
+        },
+      },
+      claude.sdk,
+    );
+
+    expect(claude.options().env).toEqual({
+      ANTHROPIC_CUSTOM_HEADERS: "X-Trace: 1",
+    });
+  });
+
+  test("drops custom headers made only of auth headers", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+
+    await startClaudeSession(
+      {
+        ...SETTINGS,
+        env: {
+          PATH: "/usr/bin",
+          ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer other",
+        },
+      },
+      claude.sdk,
+    );
+
+    expect(claude.options().env).toEqual({ PATH: "/usr/bin" });
+  });
+
   test("denies every tool that asks for approval", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
 
-    await startClaudeSession(SETTINGS, claude.run);
+    await startClaudeSession(SETTINGS, claude.sdk);
     const canUseTool = claude.options().canUseTool as CanUseTool;
     const decision = await canUseTool(
       "Bash",
@@ -101,7 +137,7 @@ describe("startClaudeSession authentication", () => {
   test("starts on a claude.ai subscription login", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
 
-    const started = await startClaudeSession(SETTINGS, claude.run);
+    const started = await startClaudeSession(SETTINGS, claude.sdk);
 
     expect(started.isOk()).toBe(true);
     expect(claude.closes()).toBe(0);
@@ -115,7 +151,7 @@ describe("startClaudeSession authentication", () => {
   ])("stops before any prompt on %s", async (_label, account: AccountInfo) => {
     const claude = fakeClaude(account);
 
-    const started = await startClaudeSession(SETTINGS, claude.run);
+    const started = await startClaudeSession(SETTINGS, claude.sdk);
 
     expect(started.isErr() && started.error._tag).toBe("ClaudeNotSubscription");
     expect(claude.closes()).toBe(1);
@@ -125,7 +161,7 @@ describe("startClaudeSession authentication", () => {
   test("stops when the account cannot be read", async () => {
     const claude = fakeClaude(new Error("initialize timed out"));
 
-    const started = await startClaudeSession(SETTINGS, claude.run);
+    const started = await startClaudeSession(SETTINGS, claude.sdk);
 
     expect(started.isErr() && started.error._tag).toBe(
       "ClaudeAccountUnavailable",
@@ -133,11 +169,71 @@ describe("startClaudeSession authentication", () => {
     expect(claude.closes()).toBe(1);
   });
 
-  test("reports an SDK that fails to start", async () => {
-    const started = await startClaudeSession(
-      SETTINGS,
-      failingRun(new Error("claude executable not found")),
+  test.each([
+    [
+      "an Authorization header",
+      { ANTHROPIC_CUSTOM_HEADERS: "X-Trace: 1\nauthorization: Bearer other" },
+      "ANTHROPIC_CUSTOM_HEADERS",
+    ],
+    [
+      "an x-api-key header",
+      { ANTHROPIC_CUSTOM_HEADERS: "X-Api-Key: other" },
+      "ANTHROPIC_CUSTOM_HEADERS",
+    ],
+    ["an API key", { ANTHROPIC_API_KEY: "api-key" }, "ANTHROPIC_API_KEY"],
+    [
+      "a gateway URL",
+      { ANTHROPIC_BASE_URL: "https://gateway.example" },
+      "ANTHROPIC_BASE_URL",
+    ],
+  ])("stops before starting Claude when settings set %s", async (_label, settingsEnv: Record<
+    string,
+    string
+  >, name) => {
+    const claude = fakeClaude(SUBSCRIPTION, { settingsEnv });
+
+    const started = await startClaudeSession(SETTINGS, claude.sdk);
+
+    expect(started.isErr() && started.error._tag).toBe(
+      "ClaudeSettingsOverrideAuth",
     );
+    expect(
+      started.isErr() && "names" in started.error && started.error.names,
+    ).toEqual([name]);
+    expect(claude.started()).toBe(false);
+  });
+
+  test("starts when settings set only unrelated custom headers", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      settingsEnv: {
+        ANTHROPIC_CUSTOM_HEADERS: "X-Trace: 1\r\nX-Team: core \n",
+        FOO: "bar",
+      },
+    });
+
+    const started = await startClaudeSession(SETTINGS, claude.sdk);
+
+    expect(started.isOk()).toBe(true);
+  });
+
+  test("stops when the settings cannot be read", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      settingsEnv: new Error("invalid settings"),
+    });
+
+    const started = await startClaudeSession(SETTINGS, claude.sdk);
+
+    expect(started.isErr() && started.error._tag).toBe(
+      "ClaudeSettingsUnavailable",
+    );
+    expect(claude.started()).toBe(false);
+  });
+
+  test("reports an SDK that fails to start", async () => {
+    const started = await startClaudeSession(SETTINGS, {
+      ...fakeClaude(SUBSCRIPTION).sdk,
+      query: failingQuery(new Error("claude executable not found")),
+    });
 
     expect(started.isErr() && started.error._tag).toBe("ClaudeStartFailed");
   });
@@ -320,7 +416,7 @@ const SUBSCRIPTION: AccountInfo = {
 };
 
 const startedSession = async (claude: ReturnType<typeof fakeClaude>) =>
-  (await startClaudeSession(SETTINGS, claude.run)).unwrap();
+  (await startClaudeSession(SETTINGS, claude.sdk)).unwrap();
 
 const collect = async <T>(items: AsyncIterable<T>) => {
   const collected: T[] = [];

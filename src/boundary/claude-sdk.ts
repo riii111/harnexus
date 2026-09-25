@@ -2,6 +2,8 @@ import type {
   Options,
   Query,
   SDKUserMessage,
+  SettingSource,
+  Settings,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result, TaggedError } from "better-result";
 
@@ -14,6 +16,23 @@ export type RunQuery = (params: {
   prompt: AsyncIterable<SDKUserMessage>;
   options: Options;
 }) => ClaudeQuery;
+
+export type ResolveSettings = (options: {
+  cwd: string;
+  settingSources: SettingSource[];
+}) => Promise<{ effective: Pick<Settings, "env"> }>;
+
+export type ClaudeSdk = {
+  query: RunQuery;
+  resolveSettings: ResolveSettings;
+};
+
+class ClaudeSettingsUnavailable extends TaggedError(
+  "ClaudeSettingsUnavailable",
+)<{
+  cause: unknown;
+  message: string;
+}> {}
 
 class ClaudeStartFailed extends TaggedError("ClaudeStartFailed")<{
   cause: unknown;
@@ -34,6 +53,22 @@ class ClaudeInterruptFailed extends TaggedError("ClaudeInterruptFailed")<{
   cause: unknown;
   message: string;
 }> {}
+
+// resolveSettings merges the same files as the CLI without starting it, but skips an admin policyHelper.
+export const readSettingsEnv = (
+  resolve: ResolveSettings,
+  cwd: string,
+  settingSources: SettingSource[],
+) =>
+  Result.tryPromise({
+    try: async () =>
+      (await resolve({ cwd, settingSources })).effective.env ?? {},
+    catch: (cause) =>
+      new ClaudeSettingsUnavailable({
+        cause,
+        message: "cannot read the Claude settings",
+      }),
+  });
 
 export const openQuery = (
   run: RunQuery,
