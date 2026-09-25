@@ -7,6 +7,13 @@ use warnings;
 use Cwd qw(abs_path);
 use File::Basename qw(dirname);
 
+# Options of `codex` and `codex app-server` whose value is the next argument (codex-cli 0.155).
+my %VALUE_OPTIONS = map { $_ => 1 } qw(
+  -c --config --enable --disable --remote --remote-auth-token-env -i --image
+  -m --model --local-provider -p --profile -s --sandbox -C --cd --add-dir
+  -a --ask-for-approval --code-mode-host --listen
+);
+
 # Set on every launch, so a descendant that reaches this script again stops here.
 if (length($ENV{HARNEXUS_LAUNCHER_ACTIVE} // "")) {
   fail("recursive launch detected (HARNEXUS_LAUNCHER_ACTIVE is set)");
@@ -20,7 +27,7 @@ if ((abs_path($codex) // "") eq $self) {
 
 $ENV{HARNEXUS_LAUNCHER_ACTIVE} = "1";
 
-if (@ARGV && $ARGV[0] eq "app-server") {
+if (runs_app_server(@ARGV)) {
   my $bun = require_executable("HARNEXUS_BUN_PATH");
   my $bridge = dirname(dirname($self)) . "/src/bridge/main.ts";
   # DO_NOT_TRACK disables crash reports; the flags keep .env and bunfig.toml preloads in the caller's cwd out of the bridge.
@@ -30,6 +37,39 @@ if (@ARGV && $ARGV[0] eq "app-server") {
 }
 
 exec { $codex } $codex, @ARGV or fail("cannot start $codex: $!");
+
+# The app puts global options before `app-server`; helper subcommands such as generate-ts and non-stdio listeners carry no app traffic, so they go straight to Codex.
+sub runs_app_server {
+  my @args = @_;
+  my $at = first_positional(0, @args);
+  return 0 unless defined $at && $args[$at] eq "app-server";
+  return 0 if defined first_positional($at + 1, @args);
+  my $listen = option_value("--listen", @args[$at + 1 .. $#args]);
+  return !defined $listen || $listen eq "stdio://";
+}
+
+sub first_positional {
+  my ($from, @args) = @_;
+  for (my $i = $from; $i <= $#args; $i++) {
+    my $arg = $args[$i];
+    return $i + 1 <= $#args ? $i + 1 : undef if $arg eq "--";
+    if ($arg =~ /^-./) {
+      $i++ if $VALUE_OPTIONS{$arg};
+      next;
+    }
+    return $i;
+  }
+  return undef;
+}
+
+sub option_value {
+  my ($name, @args) = @_;
+  for (my $i = 0; $i <= $#args; $i++) {
+    return $args[$i + 1] if $args[$i] eq $name;
+    return $1 if $args[$i] =~ /^\Q$name\E=(.*)$/s;
+  }
+  return undef;
+}
 
 sub require_executable {
   my ($name) = @_;

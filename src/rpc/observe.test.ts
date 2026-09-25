@@ -3,6 +3,39 @@ import { createLogger } from "../shared/logger.ts";
 import { createObserver, type Direction } from "./observe.ts";
 
 describe("createObserver", () => {
+  test("names the MCP startup state and failure without the error text", () => {
+    const status = (name: string, state: string, message?: string) =>
+      toApp({
+        method: "mcpServer/startupStatus/updated",
+        params: {
+          threadId: "th",
+          name,
+          status: state,
+          error: message ?? null,
+          failureReason: null,
+        },
+      });
+    const { log, records } = observe([
+      status("codex_app", "starting"),
+      status("codex_app", "failed", "MCP error: Codex app tools pipe closed"),
+      status(
+        "codex_app",
+        "failed",
+        "did not provide CODEX_APP_TOOLS_PIPE_PATH",
+      ),
+      status("other server", "failed", "sk-secret-token at /private/path"),
+    ]);
+
+    expect(records.map((record) => record.mcpStartup)).toEqual([
+      { server: "codex_app", status: "starting", failure: null },
+      { server: "codex_app", status: "failed", failure: "pipe_closed" },
+      { server: "codex_app", status: "failed", failure: "pipe_missing" },
+      { server: "<redacted>", status: "failed", failure: "other" },
+    ]);
+    expect(log).not.toContain("sk-secret-token");
+    expect(log).not.toContain("/private/path");
+  });
+
   test("records direction, kind, method and id of each message", () => {
     const { records } = observe([
       toServer({ id: 1, method: "thread/start", params: { cwd: "/w" } }),

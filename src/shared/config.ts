@@ -11,7 +11,13 @@ export class CodexPathNotAbsolute extends TaggedError("CodexPathNotAbsolute")<{
   message: string;
 }> {}
 
+class LogPathNotAbsolute extends TaggedError("LogPathNotAbsolute")<{
+  path: string;
+  message: string;
+}> {}
+
 export const CODEX_PATH_ENV = "HARNEXUS_CODEX_PATH";
+export const LOG_PATH_ENV = "HARNEXUS_LOG_PATH";
 
 export const loadCodexPath = (env: Record<string, string | undefined>) =>
   Result.gen(async function* () {
@@ -32,3 +38,17 @@ export const loadCodexPath = (env: Record<string, string | undefined>) =>
     yield* Result.await(checkExecutable(path));
     return Result.ok(path);
   });
+
+export const loadLogPath = (env: Record<string, string | undefined>) => {
+  const path = env[LOG_PATH_ENV];
+  if (path === undefined || path === "") return Result.ok(null);
+  if (!isAbsolute(path)) {
+    return Result.err(
+      new LogPathNotAbsolute({
+        path,
+        message: `${LOG_PATH_ENV} must be an absolute path`,
+      }),
+    );
+  }
+  return Result.ok(path);
+};

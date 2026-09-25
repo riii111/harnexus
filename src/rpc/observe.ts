@@ -12,6 +12,7 @@ export type ObservationEvent =
       method: string | null;
       id: RequestId | null;
       tools: readonly ToolDefinition[];
+      mcpStartup: McpStartup | null;
     }
   | { event: "rpc_unobserved"; direction: Direction; reason: UnobservedReason };
 
@@ -26,6 +27,13 @@ type UnobservedReason =
 type RequestId = string | number;
 
 type ToolDefinition = { name: string; inputSchema: SchemaShape };
+
+// The error text is free-form, so only the failures the codex_app diagnosis needs are named.
+type McpStartup = {
+  server: string;
+  status: "starting" | "ready" | "failed" | "cancelled" | "<redacted>";
+  failure: "pipe_closed" | "pipe_missing" | "other" | null;
+};
 
 type SchemaShape =
   | boolean
@@ -70,7 +78,16 @@ export const createObserver = (
         : identifier(String(message.method));
     if (kind === "request") requests.remember(direction, id, method);
     const tools = toolDefinitions(kind, method, message);
-    record({ event: "rpc_message", direction, kind, method, id, tools });
+    const mcpStartup = mcpStartupStatus(kind, method, message);
+    record({
+      event: "rpc_message",
+      direction,
+      kind,
+      method,
+      id,
+      tools,
+      mcpStartup,
+    });
   };
 
   const splitterFor = (direction: Direction) =>
@@ -149,6 +166,39 @@ const toolDefinitions = (
     return servers.flatMap((server) => mcpServerTools(asObject(server)));
   }
   return [];
+};
+
+const mcpStartupStatus = (
+  kind: MessageKind,
+  method: string | null,
+  message: JsonObject,
+): McpStartup | null => {
+  if (kind !== "notification" || method !== "mcpServer/startupStatus/updated") {
+    return null;
+  }
+  const params = asObject(message.params);
+  const status = params?.status;
+  const error = params?.error;
+  return {
+    server:
+      typeof params?.name === "string" ? identifier(params.name) : REDACTED,
+    status:
+      typeof status === "string" && STARTUP_STATES.has(status)
+        ? (status as McpStartup["status"])
+        : REDACTED,
+    failure: startupFailure(error),
+  };
+};
+
+// The protocol types the error as `string | null`.
+const startupFailure = (error: Json | undefined): McpStartup["failure"] => {
+  if (error === undefined || error === null) return null;
+  if (typeof error !== "string") return "other";
+  if (error.includes("pipe closed")) return "pipe_closed";
+  if (error.includes("did not provide CODEX_APP_TOOLS_PIPE_PATH")) {
+    return "pipe_missing";
+  }
+  return "other";
 };
 
 // A namespace spec ({ name, tools: [...] }) prefixes its tools as "namespace.tool"; nesting beyond MAX_DEPTH is not followed, because observation runs before each chunk is relayed and must not overflow the stack.
@@ -292,6 +342,7 @@ const MAX_DEPTH = 32;
 const MAX_PENDING_REQUESTS = 10_000;
 
 const LOCAL_REF = /^#\/(definitions|\$defs)\/[A-Za-z0-9_$.:-]{1,128}$/;
+const STARTUP_STATES = new Set(["starting", "ready", "failed", "cancelled"]);
 const SCHEMA_TYPES = new Set([
   "string",
   "number",

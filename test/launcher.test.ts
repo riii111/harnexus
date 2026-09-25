@@ -6,6 +6,7 @@ import {
   mkdtemp,
   realpath,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -94,6 +95,97 @@ describe("app-server", () => {
       expect(result.stderr).toContain('"event":"bridge_started"');
       expect(result.stderr).toContain('"event":"codex_exited"');
       expect(result.stderr).toContain('"event":"rpc_unobserved"');
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "finds app-server after global options, as the app starts it",
+    async () => {
+      const { env, reportPath } = setup();
+      const args = [
+        "-c",
+        "features.code_mode_host=true",
+        "app-server",
+        "--analytics-default-enabled",
+        "-c",
+        "plugins.x.enabled=true",
+      ];
+
+      const result = await finish(launch(args, env));
+      const report = await readReport(reportPath);
+
+      expect(result.exitCode).toBe(0);
+      expect(report.argv).toEqual(args);
+      expect(report.env.DO_NOT_TRACK).toBe("1");
+      expect(result.stderr).toContain('"event":"bridge_started"');
+    },
+    TIMEOUT,
+  );
+
+  const delegated = [
+    ["app-server", "generate-ts", "--out", "x"],
+    ["-c", "a=b", "app-server", "-c", "c=d", "daemon"],
+    ["app-server", "--listen", "unix://"],
+    ["app-server", "--listen=ws://127.0.0.1:1"],
+    ["exec", "app-server"],
+    ["-c", "app-server"],
+  ];
+  for (const args of delegated) {
+    test(
+      `hands ${args.join(" ")} to Codex without the bridge`,
+      async () => {
+        const { env, reportPath } = setup();
+
+        const proc = launch(args, env);
+        const result = await finish(proc);
+        const report = await readReport(reportPath);
+
+        expect(result.exitCode).toBe(0);
+        expect(report.pid).toBe(proc.pid);
+        expect(report.argv).toEqual(args);
+        expect(result.stderr).not.toContain("bridge_started");
+      },
+      TIMEOUT,
+    );
+  }
+
+  test(
+    "also appends the log to HARNEXUS_LOG_PATH, readable only by the owner",
+    async () => {
+      const logPath = join(dir, "owner-only.log");
+      const { env } = setup({ HARNEXUS_LOG_PATH: logPath });
+
+      const result = await finish(
+        launch(["app-server"], env, { stdin: '{"id":1,"method":"m"}\n' }),
+      );
+      const logged = await Bun.file(logPath).text();
+
+      expect(result.exitCode).toBe(0);
+      expect(logged).toContain('"event":"bridge_started"');
+      expect(logged).toContain('"method":"m"');
+      expect(logged).toContain('"event":"codex_exited"');
+      expect((await stat(logPath)).mode & 0o777).toBe(0o600);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "keeps relaying with the log on stderr when the log file is unusable",
+    async () => {
+      const { env: relative } = setup({ HARNEXUS_LOG_PATH: "bridge.log" });
+      const { env: missing } = setup({
+        HARNEXUS_LOG_PATH: join(dir, "absent", "bridge.log"),
+      });
+
+      const first = await finish(launch(["app-server"], relative));
+      const second = await finish(launch(["app-server"], missing));
+
+      expect(first.exitCode).toBe(0);
+      expect(first.stderr).toContain('"reason":"LogPathNotAbsolute"');
+      expect(second.exitCode).toBe(0);
+      expect(second.stderr).toContain('"reason":"LogFileOpenFailed"');
+      expect(existsSync(join(dir, "bridge.log"))).toBe(false);
     },
     TIMEOUT,
   );
