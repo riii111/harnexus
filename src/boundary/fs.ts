@@ -159,19 +159,12 @@ export const listFileNames = (path: string) =>
       new FileReadFailed({ path, cause, message: `cannot list ${path}` }),
   });
 
-// FileSyncFailed means the file exists but may not survive a crash; an existing file is never reused.
+// Only a failed open means nothing was created; any later failure is FileSyncFailed, because the file already exists and must be cleaned up by the caller.
 export const createEmptyFile = (path: string) =>
   Result.gen(async function* () {
-    yield* Result.await(
+    const file = yield* Result.await(
       Result.tryPromise({
-        try: async () => {
-          const file = await open(path, "wx", OWNER_ONLY);
-          try {
-            await file.sync();
-          } finally {
-            await file.close();
-          }
-        },
+        try: () => open(path, "wx", OWNER_ONLY),
         catch: (cause) =>
           new FileWriteFailed({
             path,
@@ -180,7 +173,24 @@ export const createEmptyFile = (path: string) =>
           }),
       }),
     );
-    yield* Result.await(syncParent(path, "created"));
+    yield* Result.await(
+      Result.tryPromise({
+        try: async () => {
+          try {
+            await file.sync();
+          } finally {
+            await file.close();
+          }
+          await syncDirectory(dirname(path));
+        },
+        catch: (cause) =>
+          new FileSyncFailed({
+            path,
+            cause,
+            message: `created ${path} but cannot sync it`,
+          }),
+      }),
+    );
     return Result.ok();
   });
 

@@ -447,6 +447,39 @@ describe("ThreadStore.runWrite", () => {
     expect(store.get("thread-1")?.runState).toBe("idle");
   });
 
+  test("recovers when an unconfirmed marker cannot be withdrawn", async () => {
+    let removals = 0;
+    const store = await openStore({
+      createMarker: createThenFailSync,
+      removeMarker: (target) => {
+        removals += 1;
+        return removals === 1 ? failingRemove(target) : removeFile(target);
+      },
+    });
+    await store.register(ENTRY);
+    let called = false;
+
+    const result = await store.runWrite(
+      "thread-1",
+      async () => {
+        called = true;
+        return Result.ok(null);
+      },
+      never,
+    );
+    const stuck = store.get("thread-1")?.runState;
+    const afterRestart = (await openStore()).get("thread-1")?.runState;
+    const resolved = await store.resolveOutcomeUnknown("thread-1");
+
+    expect(result.isErr() && result.error._tag).toBe("WriteNotStarted");
+    expect(called).toBe(false);
+    expect(stuck).toBe("outcomeUnknown");
+    expect(afterRestart).toBe("outcomeUnknown");
+    expect(resolved.isOk()).toBe(true);
+    expect(store.get("thread-1")?.runState).toBe("idle");
+    expect(await readdir(`${path}.writes`)).toEqual([]);
+  });
+
   test("withdraws an unconfirmed marker without running the write", async () => {
     const store = await openStore({ createMarker: createThenFailSync });
     await store.register(ENTRY);
