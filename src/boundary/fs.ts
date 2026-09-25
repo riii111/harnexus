@@ -8,7 +8,7 @@ export class FileNotExecutable extends TaggedError("FileNotExecutable")<{
   message: string;
 }> {}
 
-export class LogFileOpenFailed extends TaggedError("LogFileOpenFailed")<{
+class LogFileOpenFailed extends TaggedError("LogFileOpenFailed")<{
   path: string;
   cause: unknown;
   message: string;

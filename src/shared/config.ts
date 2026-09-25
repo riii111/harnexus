@@ -11,7 +11,7 @@ export class CodexPathNotAbsolute extends TaggedError("CodexPathNotAbsolute")<{
   message: string;
 }> {}
 
-export class LogPathNotAbsolute extends TaggedError("LogPathNotAbsolute")<{
+class LogPathNotAbsolute extends TaggedError("LogPathNotAbsolute")<{
   path: string;
   message: string;
 }> {}
