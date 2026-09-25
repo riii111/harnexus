@@ -515,7 +515,11 @@ type RecordedRequest = {
 };
 
 const CALLER = "thread-caller";
-const TARGET = { type: "project", projectId: "project-1" };
+const TARGET = {
+  type: "project",
+  projectId: "project-1",
+  environment: { type: "local" },
+};
 const UUID_CALLER = "019a0000-0000-7000-8000-0000000000aa";
 const OTHER_UUID = "019a0000-0000-7000-8000-0000000000bb";
 const REVIEWER = "019a0000-0000-7000-8000-000000000001";

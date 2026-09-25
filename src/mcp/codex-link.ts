@@ -319,7 +319,7 @@ const CALL_TIMEOUT_MS = 60_000;
 const WRITE_TIMEOUT_MS = 120_000;
 const MAX_WAIT_MS = 600_000;
 const WAIT_MARGIN_MS = 30_000;
-// The three forms the app's create_thread schema defines; the allowed type values were not recorded, so they are left for the app to check.
+// TODO: replace each type with z.literal once P8b records the enum values on the app; until then the three forms the app defines are kept and the app checks the values.
 const CREATE_TARGET = z
   .union([
     z.strictObject({
@@ -344,5 +344,5 @@ const CREATE_TARGET = z
     z.strictObject({ type: z.string(), projectId: z.string() }),
   ])
   .describe(
-    "Where the thread runs: a project with an environment ({ type, projectId, environment }), a directory ({ type, directoryName }), or a project ({ type, projectId }). Use list_projects for project ids.",
+    "Where the thread runs: a project with an environment ({ type, projectId, environment: { type } or { type, startingState } }), a directory ({ type, directoryName }), or a project ({ type, projectId }). To run a reviewer in a project's worktree, give the environment. Use list_projects for project ids; if the app rejects a type value, its error lists the accepted ones.",
   );
