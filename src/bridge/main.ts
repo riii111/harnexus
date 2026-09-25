@@ -1,34 +1,79 @@
-import { exitLike } from "../boundary/process.ts";
-import { createObserver } from "../rpc/observe.ts";
-import { runRelay } from "../rpc/relay.ts";
-import { loadCodexPath } from "../shared/config.ts";
+import type { Readable, Writable } from "node:stream";
+import { openServerPipes, type Signals } from "../boundary/process.ts";
+import { createLineInjector, createOwnResponseFilter } from "../rpc/inject.ts";
+import { createObserver, type Direction } from "../rpc/observe.ts";
+import { type RelayObserver, relayStreams } from "../rpc/relay.ts";
+import { loadShutdownGraceMs } from "../shared/config.ts";
 import { startAppToolsProbe } from "./app-tools-probe.ts";
 import { createBridgeLogger } from "./logging.ts";
+import { stopLingeringServer, watchServer } from "./supervise.ts";
+import { createToolCallProbe } from "./tool-call-probe.ts";
 
+// Must match bin/harnexus-codex.
+const SERVER_OUTPUT_FD = 3;
+const SERVER_INPUT_FD = 4;
+
+// Codex is not a child of this process, so its exit status goes to the app and is not observable here.
 const logger = createBridgeLogger(process.env);
+const server = watchServer(process.env);
 
-const codexPath = await loadCodexPath(process.env);
-if (codexPath.isErr()) {
-  logger.log({ event: "bridge_startup_failed", reason: codexPath.error._tag });
+const pipes = openServerPipes(SERVER_OUTPUT_FD, SERVER_INPUT_FD);
+if (pipes.isErr()) {
+  logger.log({ event: "bridge_startup_failed", reason: pipes.error._tag });
   process.exit(1);
 }
 
 logger.log({ event: "bridge_started" });
 void startAppToolsProbe(process.env, logger.log);
-const exit = await runRelay(
-  codexPath.value,
-  process.argv.slice(2),
-  process.env,
-  {
-    input: process.stdin,
-    output: process.stdout,
-    observer: createObserver(logger.log),
-  },
-);
-if (exit.isErr()) {
-  logger.log({ event: "bridge_startup_failed", reason: exit.error._tag });
-  process.exit(1);
+const shutdownGraceMs = loadShutdownGraceMs(process.env);
+await relayStreams({
+  input: process.stdin,
+  output: process.stdout,
+  ...withToolCallProbe(pipes.value, createObserver(logger.log)),
+  signalServer,
+  shutdownGraceMs,
+});
+logger.log({ event: "server_closed" });
+pipes.value.serverInput.destroy();
+await stopLingeringServer({
+  isRunning: server.isRunning,
+  signal: signalServer,
+  graceMs: shutdownGraceMs,
+});
+process.exit(0);
+
+function signalServer(signal: Signals) {
+  if (server.signal(signal)) logger.log({ event: "server_signaled", signal });
 }
 
-logger.log({ event: "codex_exited", ...exit.value });
-exitLike(exit.value);
+function withToolCallProbe(
+  {
+    serverInput,
+    serverOutput,
+  }: { serverInput: Writable; serverOutput: Readable },
+  observer: RelayObserver,
+) {
+  const probe = createToolCallProbe(process.env, logger.log);
+  if (probe === null) return { serverInput, serverOutput, observer };
+  const injector = createLineInjector(serverInput);
+  const filtered = createOwnResponseFilter(
+    probe.isOwnResponse,
+    probe.onOwnResponse,
+  );
+  serverOutput.on("error", () => filtered.end());
+  probe.attach(injector.inject);
+  return {
+    serverInput: injector.stream,
+    serverOutput: serverOutput.pipe(filtered),
+    observer: {
+      chunk: (direction: Direction, chunk: Uint8Array) => {
+        observer.chunk(direction, chunk);
+        probe.observer.chunk(direction, chunk);
+      },
+      end: (direction: Direction) => {
+        observer.end(direction);
+        probe.observer.end(direction);
+      },
+    },
+  };
+}

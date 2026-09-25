@@ -1,6 +1,6 @@
 import { Result, TaggedError } from "better-result";
 
-export class JsonParseFailed extends TaggedError("JsonParseFailed")<{
+class JsonParseFailed extends TaggedError("JsonParseFailed")<{
   cause: unknown;
   message: string;
 }> {}

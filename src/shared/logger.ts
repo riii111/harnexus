@@ -8,19 +8,13 @@ export type LogEvent =
   | { event: "bridge_started" }
   | { event: "bridge_startup_failed"; reason: StartupFailure }
   | { event: "log_file_unavailable"; reason: LogFileFailure }
-  | { event: "codex_exited"; code: number | null; signal: Signals | null }
   | { event: "server_closed" }
   | { event: "server_signaled"; signal: Signals }
   | AppToolsProbeEvent
   | ToolCallProbeEvent
   | ObservationEvent;
 
-type StartupFailure =
-  | "CodexPathMissing"
-  | "CodexPathNotAbsolute"
-  | "FileNotExecutable"
-  | "ChildSpawnFailed"
-  | "ServerPipesUnavailable";
+type StartupFailure = "ServerPipesUnavailable";
 
 type LogFileFailure = "LogPathNotAbsolute" | "LogFileOpenFailed";
 
@@ -43,8 +37,6 @@ const serialize = (entry: LogEvent) => {
       return { event: entry.event, reason: entry.reason };
     case "server_signaled":
       return { event: entry.event, signal: entry.signal };
-    case "codex_exited":
-      return { event: entry.event, code: entry.code, signal: entry.signal };
     case "rpc_message":
       return {
         event: entry.event,

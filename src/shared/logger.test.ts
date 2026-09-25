@@ -12,13 +12,12 @@ describe("createLogger", () => {
     const lines: string[] = [];
     const logger = createLogger((line) => lines.push(line));
 
-    logger.log({ event: "codex_exited", code: null, signal: "SIGTERM" });
+    logger.log({ event: "server_signaled", signal: "SIGTERM" });
 
     expect(lines).toHaveLength(1);
     expect(lines[0]?.endsWith("\n")).toBe(true);
     expect(JSON.parse(lines[0] ?? "")).toMatchObject({
-      event: "codex_exited",
-      code: null,
+      event: "server_signaled",
       signal: "SIGTERM",
     });
   });
