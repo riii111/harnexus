@@ -153,22 +153,25 @@ describe("ThreadStore", () => {
     });
   });
 
-  test("rejects values that could not be loaded again", async () => {
+  test("rejects an empty session id and keeps the saved one", async () => {
     const store = await openStore();
     await store.register(ENTRY);
 
     const updated = await store.setSession("thread-1", "");
-    const registered = await store.register({
-      ...ENTRY,
-      threadId: "thread-2",
-      model: "",
-    });
 
     expect(updated.isErr() && updated.error._tag).toBe("InvalidThreadRecord");
+    expect((await openStore()).get("thread-1")?.sessionId).toBeNull();
+  });
+
+  test("rejects registering a thread with an empty model", async () => {
+    const store = await openStore();
+
+    const registered = await store.register({ ...ENTRY, model: "" });
+
     expect(registered.isErr() && registered.error._tag).toBe(
       "InvalidThreadRecord",
     );
-    expect((await openStore()).get("thread-1")?.sessionId).toBeNull();
+    expect((await openStore()).get("thread-1")).toBeUndefined();
   });
 
   test("never stores fields outside the record", async () => {

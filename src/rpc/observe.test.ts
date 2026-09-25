@@ -259,64 +259,83 @@ describe("createObserver", () => {
     expect(log).not.toContain(PROMPT);
   });
 
-  test("counts lines it cannot observe without logging their content", () => {
-    const { log, records } = observe(
-      [
-        { direction: "app_to_server", line: `{"id":1,"method":"${SECRET}\n` },
-        { direction: "app_to_server", line: `["${SECRET}"]\n` },
-        { direction: "app_to_server", line: `{"secret":"${SECRET}"}\n` },
-        {
-          direction: "server_to_app",
-          line: `{"id":1,"result":"${SECRET}${SECRET}"}\n`,
-        },
-        { direction: "server_to_app", line: "\n" },
-      ],
-      { maxLineBytes: 48 },
-    );
+  test.each([
+    {
+      name: "invalid JSON",
+      direction: "app_to_server",
+      line: `{"id":1,"method":"${SECRET}\n`,
+      expected: "invalid_json",
+    },
+    {
+      name: "a JSON value that is not an object",
+      direction: "app_to_server",
+      line: `["${SECRET}"]\n`,
+      expected: "not_object",
+    },
+    {
+      name: "an object of unknown shape",
+      direction: "app_to_server",
+      line: `{"secret":"${SECRET}"}\n`,
+      expected: "unknown_shape",
+    },
+    {
+      name: "a line over the size limit",
+      direction: "server_to_app",
+      line: `{"id":1,"result":"${SECRET}${SECRET}"}\n`,
+      expected: "too_large",
+    },
+  ])("counts $name as unobserved without logging its content", ({
+    direction,
+    line,
+    expected,
+  }) => {
+    const { log, records } = observe([{ direction, line }], {
+      maxLineBytes: 48,
+    });
 
     expect(records).toEqual([
-      {
-        event: "rpc_unobserved",
-        direction: "app_to_server",
-        reason: "invalid_json",
-      },
-      {
-        event: "rpc_unobserved",
-        direction: "app_to_server",
-        reason: "not_object",
-      },
-      {
-        event: "rpc_unobserved",
-        direction: "app_to_server",
-        reason: "unknown_shape",
-      },
-      {
-        event: "rpc_unobserved",
-        direction: "server_to_app",
-        reason: "too_large",
-      },
+      { event: "rpc_unobserved", direction, reason: expected },
     ]);
     expect(log).not.toContain(SECRET);
   });
 
-  test("observes messages split across chunks and the final unterminated line", () => {
-    const methods: (string | null)[] = [];
-    const observer = createObserver((event) => {
-      if (event.event === "rpc_message") methods.push(event.method);
-    });
-    const encode = (text: string) => new TextEncoder().encode(text);
+  test("records nothing for an empty line", () => {
+    const { records } = observe([{ direction: "server_to_app", line: "\n" }]);
+
+    expect(records).toEqual([]);
+  });
+
+  test("observes a message split across chunks once its line ends", () => {
+    const { observer, methods } = watchMethods();
+
     observer.chunk("app_to_server", encode('{"id":1,"meth'));
     observer.chunk("app_to_server", encode('od":"a"}\n{"method":"b"}'));
+
     expect(methods).toEqual(["a"]);
+  });
+
+  test("observes the final unterminated line at the end", () => {
+    const { observer, methods } = watchMethods();
+    observer.chunk("app_to_server", encode('{"method":"b"}'));
 
     observer.end("app_to_server");
 
-    expect(methods).toEqual(["a", "b"]);
+    expect(methods).toEqual(["b"]);
   });
 });
 
 const SECRET = "sk-secret-token-0123";
 const PROMPT = "private conversation text";
+
+const encode = (text: string) => new TextEncoder().encode(text);
+
+const watchMethods = () => {
+  const methods: (string | null)[] = [];
+  const observer = createObserver((event) => {
+    if (event.event === "rpc_message") methods.push(event.method);
+  });
+  return { observer, methods };
+};
 
 const observe = (
   messages: { direction: Direction; line: string }[],
@@ -326,7 +345,7 @@ const observe = (
   const logger = createLogger((line) => lines.push(line));
   const observer = createObserver(logger.log, options);
   for (const { direction, line } of messages) {
-    observer.chunk(direction, new TextEncoder().encode(line));
+    observer.chunk(direction, encode(line));
   }
   observer.end("app_to_server");
   observer.end("server_to_app");

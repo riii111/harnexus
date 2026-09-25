@@ -201,12 +201,10 @@ describe("startClaudeSession authentication", () => {
 
     const started = await startClaudeSession(SETTINGS, claude.runtime);
 
-    expect(started.isErr() && started.error._tag).toBe(
-      "ClaudeSettingsOverrideAuth",
-    );
-    expect(
-      started.isErr() && "names" in started.error && started.error.names,
-    ).toEqual([expected]);
+    expect(started.isErr() && started.error).toMatchObject({
+      _tag: "ClaudeSettingsOverrideAuth",
+      names: [expected],
+    });
     expect(claude.started()).toBe(false);
   });
 
@@ -412,15 +410,15 @@ describe("ClaudeSession", () => {
   });
 
   test.each([
-    { name: "ends", closeEnding: undefined },
-    { name: "fails", closeEnding: new Error("Operation aborted") },
+    { name: "ends", options: {} },
+    {
+      name: "fails",
+      options: { closeEnding: new Error("Operation aborted") },
+    },
   ])("close ends the input and the stream when the pending read $name", async ({
-    closeEnding,
+    options,
   }) => {
-    const claude = fakeClaude(
-      SUBSCRIPTION,
-      closeEnding === undefined ? {} : { closeEnding },
-    );
+    const claude = fakeClaude(SUBSCRIPTION, options);
     const session = await startedSession(claude);
     const reading = collect(session.messages);
 

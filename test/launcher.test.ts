@@ -11,7 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 const LAUNCHER = join(import.meta.dir, "..", "bin", "harnexus-codex");
 const BUN = process.execPath;
@@ -133,7 +133,7 @@ describe("app-server", () => {
       args: ["app-server", "generate-ts", "--out", "x"],
     },
     {
-      name: "a subcommand after config overrides",
+      name: "the daemon subcommand after config overrides",
       args: ["-c", "a=b", "app-server", "-c", "c=d", "daemon"],
     },
     {
@@ -203,7 +203,7 @@ describe("app-server", () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toContain(`"reason":"${expected}"`);
-      expect(existsSync(resolve(dir, logPath()))).toBe(false);
+      expect(existsSync(join(dir, "bridge.log"))).toBe(false);
     },
     TIMEOUT,
   );
@@ -279,11 +279,15 @@ describe("app-server shutdown", () => {
   );
 
   test.each([
-    { mode: "wait", signal: "SIGTERM" },
-    { mode: "wait-ignore-term", signal: "SIGKILL" },
+    { name: "exits on SIGTERM", mode: "wait", expected: "SIGTERM" },
+    {
+      name: "also ignores SIGTERM",
+      mode: "wait-ignore-term",
+      expected: "SIGKILL",
+    },
   ])(
-    "stops a Codex that ignores the app disconnecting, with $signal",
-    async ({ mode, signal }) => {
+    "signals $expected to a Codex that ignores the app disconnecting and $name",
+    async ({ mode, expected }) => {
       const { env, reportPath } = setup({
         HARNEXUS_SHUTDOWN_GRACE_MS: "200",
         FAKE_CODEX_MODE: mode,
@@ -293,20 +297,24 @@ describe("app-server shutdown", () => {
       await readReport(reportPath);
       const result = await finish(proc);
 
-      expect(result).toMatchObject({ exitCode: null, signal });
+      expect(result).toMatchObject({ exitCode: null, signal: expected });
       expect(result.stderr).toContain(
-        `"event":"server_signaled","signal":"${signal}"`,
+        `"event":"server_signaled","signal":"${expected}"`,
       );
     },
     TIMEOUT,
   );
 
   test.each([
-    { mode: "close-stdout", signal: "SIGTERM" },
-    { mode: "close-stdout-ignore-term", signal: "SIGKILL" },
+    { name: "exits on SIGTERM", mode: "close-stdout", expected: "SIGTERM" },
+    {
+      name: "ignores SIGTERM",
+      mode: "close-stdout-ignore-term",
+      expected: "SIGKILL",
+    },
   ])(
-    "stops a Codex that closes stdout and keeps running, with $signal",
-    async ({ mode, signal }) => {
+    "signals $expected to a Codex that closes stdout, keeps running and $name",
+    async ({ mode, expected }) => {
       const { env, reportPath } = setup({
         HARNEXUS_SHUTDOWN_GRACE_MS: "100",
         FAKE_CODEX_MODE: mode,
@@ -316,10 +324,10 @@ describe("app-server shutdown", () => {
       const report = await readReport(reportPath);
       const result = await finish(proc);
 
-      expect(result).toMatchObject({ exitCode: null, signal });
+      expect(result).toMatchObject({ exitCode: null, signal: expected });
       expect(result.stderr).toContain('"event":"server_closed"');
       expect(result.stderr).toContain(
-        `"event":"server_signaled","signal":"${signal}"`,
+        `"event":"server_signaled","signal":"${expected}"`,
       );
       expect(await stopsRunning(report.pid)).toBe(true);
     },
@@ -397,17 +405,6 @@ describe("app-server output at exit", () => {
 });
 
 describe("refusals", () => {
-  const expectRefused = async (
-    args: string[],
-    env: Record<string, string>,
-    message: string,
-  ) => {
-    const result = await finish(launch(args, env));
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(message);
-  };
-
   test.each([
     {
       name: "unset",
@@ -472,6 +469,7 @@ describe("refusals", () => {
     await expectRefused(["exec"], env, "recursive launch detected");
   });
 });
+
 const setup = (overrides: Record<string, string | undefined> = {}) => {
   reports += 1;
   const reportPath = join(dir, `report-${reports}.json`);
@@ -487,6 +485,17 @@ const setup = (overrides: Record<string, string | undefined> = {}) => {
     if (value !== undefined) env[key] = value;
   }
   return { env, reportPath };
+};
+
+const expectRefused = async (
+  args: string[],
+  env: Record<string, string>,
+  message: string,
+) => {
+  const result = await finish(launch(args, env));
+  expect(result.exitCode).toBe(1);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toContain(message);
 };
 
 const launch = (

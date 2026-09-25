@@ -135,7 +135,7 @@ describe("createToolCallProbe", () => {
   test("matches no response before it sends a request", () => {
     const { probe } = start("read");
 
-    expect(own(probe, '{"id":"harnexus-probe-1","result":{}}')).toBe(false);
+    expect(own(probe, RESPONSE)).toBe(false);
   });
 
   test.each([
@@ -147,14 +147,19 @@ describe("createToolCallProbe", () => {
       name: "a request that reuses the request id",
       line: '{"id":"harnexus-probe-1","method":"x","params":{}}',
     },
-  ])("does not match $name", async ({ line }) => {
-    const probe = await sentRead();
+  ])("does not match $name and still matches the response after it", async ({
+    line,
+  }) => {
+    const { probe } = await sentRead();
 
-    expect(own(probe, line)).toBe(false);
+    const matched = own(probe, line);
+
+    expect(matched).toBe(false);
+    expect(own(probe, RESPONSE)).toBe(true);
   });
 
   test("matches the top-level response regardless of spacing or nested fields", async () => {
-    const probe = await sentRead();
+    const { probe } = await sentRead();
 
     expect(
       own(
@@ -165,11 +170,11 @@ describe("createToolCallProbe", () => {
   });
 
   test("stops matching once the response is handled", async () => {
-    const probe = await sentRead();
+    const { probe } = await sentRead();
 
-    probe.onOwnResponse(Buffer.alloc(0));
+    answerWith(probe, RESPONSE);
 
-    expect(own(probe, '{"id":"harnexus-probe-1","result":{}}')).toBe(false);
+    expect(own(probe, RESPONSE)).toBe(false);
   });
 
   test.each([
@@ -183,10 +188,8 @@ describe("createToolCallProbe", () => {
       response: '{"id":"harnexus-probe-1","result":{"isError":true}}',
       expected: "call_answered:A:tool_error",
     },
-  ])("reports $name", async ({ response, expected }) => {
-    const { probe, events } = start("read");
-    server(probe, { id: 1, result: { thread: { id: THREAD_A } } });
-    await Bun.sleep(QUIET_MS * 3);
+  ])("reports $name as its own outcome", async ({ response, expected }) => {
+    const { probe, events } = await sentRead();
 
     answerWith(probe, response);
 
@@ -200,6 +203,7 @@ const THREAD_B = "th-recipient-0002";
 const UNRELATED_1 = "th-unrelated-0003";
 const UNRELATED_2 = "th-unrelated-0004";
 const SECRET = "sk-probe-secret";
+const RESPONSE = '{"id":"harnexus-probe-1","result":{}}';
 
 type Probe = NonNullable<ReturnType<typeof createToolCallProbe>>;
 
@@ -222,10 +226,11 @@ const start = (mode: "read" | "send") => {
 };
 
 const sentRead = async () => {
-  const { probe } = start("read");
-  server(probe, { id: 1, result: { thread: { id: THREAD_A } } });
+  const started = start("read");
+  server(started.probe, { id: 1, result: { thread: { id: THREAD_A } } });
   await Bun.sleep(QUIET_MS * 3);
-  return probe;
+  expect(steps(started.events)).toContain("call_sent:A:list_projects");
+  return started;
 };
 
 const own = (probe: Probe, text: string) =>

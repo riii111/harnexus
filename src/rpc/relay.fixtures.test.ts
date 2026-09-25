@@ -11,7 +11,7 @@ import { relayStreams } from "./relay.ts";
 describe("relay over recorded app-server shapes", () => {
   test.each(
     FIXTURES,
-  )("$name passes both directions unchanged and logs every message", async ({
+  )("passes $name through both directions unchanged and logs every message", async ({
     name,
   }) => {
     const path = join(FIXTURE_DIR, name);
@@ -21,16 +21,8 @@ describe("relay over recorded app-server shapes", () => {
 
     expect(exitCode).toBe(0);
     expect(output).toBe(wire(records, "server_to_app"));
-    expect(
-      DIRECTIONS.map((direction) =>
-        log.map(summary).filter((entry) => entry.direction === direction),
-      ),
-    ).toEqual(
-      DIRECTIONS.map((direction) =>
-        records
-          .filter((record) => record.direction === direction)
-          .map(expectedSummary(records)),
-      ),
+    expect(byDirection(log.map(summary))).toEqual(
+      byDirection(records.map(expectedSummary(records))),
     );
     expect(log.join("")).not.toContain(SECRET_MARKER);
   });
@@ -146,6 +138,14 @@ const summary = (line: string) => {
 };
 
 // The two directions interleave by arrival time, so each is compared on its own.
+const byDirection = <T extends { direction: Direction }>(entries: T[]) =>
+  Object.fromEntries(
+    DIRECTIONS.map((direction) => [
+      direction,
+      entries.filter((entry) => entry.direction === direction),
+    ]),
+  );
+
 const expectedSummary =
   (records: FixtureRecord[]) =>
   ({ direction, message }: FixtureRecord) => {

@@ -21,6 +21,7 @@ afterAll(async () => {
 describe("startAppToolsProbe", () => {
   test("sends tools/list from the bridge, its child and its grandchild, twice", async () => {
     const socket = await fakeAppSocket("respond");
+
     const events = await probe({ CODEX_APP_TOOLS_PIPE_PATH: socket.path });
     socket.close();
 
@@ -59,6 +60,7 @@ describe("startAppToolsProbe", () => {
 
   test("records how far a hung-up socket got", async () => {
     const socket = await fakeAppSocket("close");
+
     const events = await probe({ CODEX_APP_TOOLS_PIPE_PATH: socket.path });
     socket.close();
 
@@ -117,6 +119,7 @@ describe("startAppToolsProbe", () => {
 
   test("keeps tool names that are not plain identifiers out of the log", async () => {
     const socket = await fakeAppSocket("respond", "name with spaces");
+
     const events = await probe({ CODEX_APP_TOOLS_PIPE_PATH: socket.path });
     socket.close();
 

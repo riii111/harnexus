@@ -76,7 +76,7 @@ describe("watchServer", () => {
     { name: "a negative pid", value: "-5" },
     { name: "a fractional pid", value: "12.5" },
     { name: "a non-numeric pid", value: "abc" },
-  ])("never signals with $name from the launcher", ({ value }) => {
+  ])("never signals when the launcher passes $name", ({ value }) => {
     const sent: [number, string][] = [];
     const server = watchServer(
       { [SERVER_PID_ENV]: value },

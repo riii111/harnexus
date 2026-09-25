@@ -130,11 +130,13 @@ describe("createEmptyFile", () => {
     const markers = join(dir, "existing-marker");
     await prepareDirectory(markers);
     const marker = join(markers, "a.running");
-    await createEmptyFile(marker);
+    const first = await createEmptyFile(marker);
 
     const again = await createEmptyFile(marker);
 
+    expect(first.isOk()).toBe(true);
     expect(again.isErr() && again.error._tag).toBe("FileWriteFailed");
+    expect(await readdir(markers)).toEqual(["a.running"]);
   });
 });
 
@@ -143,10 +145,11 @@ describe("removeFile", () => {
     const markers = join(dir, "removal");
     await prepareDirectory(markers);
     const marker = join(markers, "a.running");
-    await createEmptyFile(marker);
+    const created = await createEmptyFile(marker);
 
     const removed = await removeFile(marker);
 
+    expect(created.isOk()).toBe(true);
     expect(removed.isOk()).toBe(true);
     expect(await readdir(markers)).toEqual([]);
   });
