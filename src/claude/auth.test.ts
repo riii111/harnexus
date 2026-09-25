@@ -39,6 +39,24 @@ describe("checkSubscription", () => {
     ).toBe(true);
   });
 
+  test("accepts a setup-token login, which reports no subscription type", () => {
+    expect(
+      checkSubscription({
+        apiProvider: "firstParty",
+        tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
+      }).isOk(),
+    ).toBe(true);
+  });
+
+  test("rejects a bearer token that is not a subscription login", () => {
+    expect(
+      checkSubscription({
+        apiProvider: "firstParty",
+        tokenSource: "ANTHROPIC_AUTH_TOKEN",
+      }).isErr(),
+    ).toBe(true);
+  });
+
   test("rejects an API key even when a subscription is logged in", () => {
     const checked = checkSubscription({
       subscriptionType: "Claude Max",

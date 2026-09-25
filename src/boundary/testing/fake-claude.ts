@@ -8,10 +8,18 @@ import type { ClaudeQuery, RunQuery } from "../claude-sdk.ts";
 
 type Delivery = IteratorResult<SDKMessage, void> | Error;
 
-// Mirrors the SDK: reads wait for the next message, failures surface as thrown errors, and close rejects a pending read.
+// Mirrors the SDK: reads wait for the next message, failures surface as thrown errors, and close ends a pending read.
 export const fakeClaude = (
   account: AccountInfo | Error,
-  interruptError?: Error,
+  {
+    interruptError,
+    stillQueued,
+    closeEnding = { done: true, value: undefined },
+  }: {
+    interruptError?: Error;
+    stillQueued?: string[];
+    closeEnding?: Delivery;
+  } = {},
 ) => {
   const queued: Delivery[] = [];
   let waiting: ((item: Delivery) => void) | null = null;
@@ -38,7 +46,9 @@ export const fakeClaude = (
     interrupt: async () => {
       interrupts += 1;
       if (interruptError !== undefined) throw interruptError;
-      return undefined;
+      return stillQueued === undefined
+        ? undefined
+        : { still_queued: stillQueued };
     },
     accountInfo: async () => {
       if (account instanceof Error) throw account;
@@ -46,7 +56,7 @@ export const fakeClaude = (
     },
     close: () => {
       closes += 1;
-      deliver(new Error("Operation aborted"));
+      deliver(closeEnding);
     },
   };
   return {
@@ -56,6 +66,7 @@ export const fakeClaude = (
       return claude;
     }) satisfies RunQuery,
     options: () => options ?? {},
+    prompt: () => prompt,
     prompts: async () => {
       const sent: SDKUserMessage[] = [];
       if (prompt !== null)

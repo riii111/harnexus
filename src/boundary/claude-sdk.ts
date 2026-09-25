@@ -68,9 +68,8 @@ export const nextMessage = (query: ClaudeQuery) =>
 
 export const interruptQuery = (query: ClaudeQuery) =>
   Result.tryPromise({
-    try: async () => {
-      await query.interrupt();
-    },
+    // A missing receipt means an older CLI that cannot say which sends survive the interrupt.
+    try: async () => (await query.interrupt())?.still_queued ?? null,
     catch: (cause) =>
       new ClaudeInterruptFailed({
         cause,

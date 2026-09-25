@@ -15,12 +15,15 @@ export const withoutApiBilling = (env: Env): Env =>
     Object.entries(env).filter(([name]) => !API_BILLING_ENV.has(name)),
   );
 
-// The CLI reports a subscription even while an API key is in use, so the key source decides who is billed.
+// The CLI reports a subscription even while an API key is in use, so the key source decides who is billed; a setup-token login reports its token source instead of the subscription.
 export const checkSubscription = (account: AccountInfo) => {
   const apiKeySource = account.apiKeySource ?? "none";
+  const subscribed =
+    (account.subscriptionType ?? "") !== "" ||
+    SUBSCRIPTION_TOKEN_SOURCES.has(account.tokenSource ?? "");
   if (
     account.apiProvider === "firstParty" &&
-    (account.subscriptionType ?? "") !== "" &&
+    subscribed &&
     apiKeySource === "none"
   ) {
     return Result.ok();
@@ -34,6 +37,11 @@ export const checkSubscription = (account: AccountInfo) => {
     }),
   );
 };
+
+const SUBSCRIPTION_TOKEN_SOURCES = new Set([
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+]);
 
 const API_BILLING_ENV = new Set([
   "ANTHROPIC_API_KEY",

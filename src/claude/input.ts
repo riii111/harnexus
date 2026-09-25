@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
-// The SDK keeps reading this stream for the whole session, so a message pushed mid-turn reaches the running turn.
+// The SDK reads this stream for the whole session; a message pushed mid-turn joins the running turn at a tool boundary or queues a new turn, and its uuid is how an interrupt reports it as still queued.
 export const createInputQueue = () => {
   const queued: SDKUserMessage[] = [];
   let ended = false;
@@ -27,10 +28,11 @@ export const createInputQueue = () => {
       },
     } satisfies AsyncIterable<SDKUserMessage>,
     push: (text: string) => {
-      if (ended) return false;
-      queued.push(userMessage(text));
+      if (ended) return null;
+      const message = userMessage(text);
+      queued.push(message);
       notify();
-      return true;
+      return message.uuid;
     },
     end: () => {
       ended = true;
@@ -39,8 +41,10 @@ export const createInputQueue = () => {
   };
 };
 
-const userMessage = (text: string): SDKUserMessage => ({
-  type: "user",
-  message: { role: "user", content: text },
-  parent_tool_use_id: null,
-});
+const userMessage = (text: string) =>
+  ({
+    type: "user",
+    message: { role: "user", content: text },
+    parent_tool_use_id: null,
+    uuid: randomUUID(),
+  }) satisfies SDKUserMessage;

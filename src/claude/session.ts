@@ -77,8 +77,10 @@ const createSession = (
   };
   return {
     messages: readMessages(claude, () => closed, close),
-    send: (text: string) =>
-      !closed && input.push(text) ? Result.ok() : Result.err(sessionClosed()),
+    send: (text: string) => {
+      const uuid = closed ? null : input.push(text);
+      return uuid === null ? Result.err(sessionClosed()) : Result.ok(uuid);
+    },
     interrupt: async () =>
       closed ? Result.err(sessionClosed()) : interruptQuery(claude),
     close,
@@ -90,20 +92,21 @@ async function* readMessages(
   isClosed: () => boolean,
   close: () => void,
 ): AsyncGenerator<Result<SDKMessage, ClaudeStreamFailed>, void> {
-  while (!isClosed()) {
-    const next = await nextMessage(claude);
-    // Closing makes the SDK reject the pending read, which is the end of the stream rather than a failure.
-    if (isClosed()) return;
-    if (next.isErr()) {
-      close();
-      yield Result.err(next.error);
-      return;
+  // A consumer that stops reading early still stops Claude, since nobody would see its output.
+  try {
+    while (!isClosed()) {
+      const next = await nextMessage(claude);
+      // A read pending across close ends or fails depending on the SDK cleanup, and either is the end of the stream.
+      if (isClosed()) return;
+      if (next.isErr()) {
+        yield Result.err(next.error);
+        return;
+      }
+      if (next.value.done === true) return;
+      yield Result.ok(next.value.value);
     }
-    if (next.value.done === true) {
-      close();
-      return;
-    }
-    yield Result.ok(next.value.value);
+  } finally {
+    close();
   }
 }
 

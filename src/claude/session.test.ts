@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { UUID } from "node:crypto";
 import type {
   AccountInfo,
   CanUseTool,
@@ -143,18 +144,35 @@ describe("startClaudeSession authentication", () => {
 });
 
 describe("ClaudeSession", () => {
-  test("sends the prompt text as a user message", async () => {
+  test("sends the prompt text as a user message stamped with a returned uuid", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const session = await startedSession(claude);
 
-    expect(session.send("review the diff").isOk()).toBe(true);
-    expect(session.send("also run the tests").isOk()).toBe(true);
+    const first = session.send("review the diff").unwrap();
+    const second = session.send("also run the tests").unwrap();
     session.close();
 
+    expect(first).not.toBe(second);
     expect(await claude.prompts()).toEqual([
-      userMessage("review the diff"),
-      userMessage("also run the tests"),
+      userMessage("review the diff", first),
+      userMessage("also run the tests", second),
     ]);
+  });
+
+  test("wakes the SDK waiting for input when a message is sent", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const session = await startedSession(claude);
+    const input = claude.prompt()?.[Symbol.asyncIterator]();
+    const waiting = input?.next();
+
+    const uuid = session.send("steer to the failing test").unwrap();
+
+    expect(await waiting).toEqual({
+      done: false,
+      value: userMessage("steer to the failing test", uuid),
+    });
+    session.close();
+    expect(await input?.next()).toEqual({ done: true, value: undefined });
   });
 
   test("streams messages until the SDK ends", async () => {
@@ -199,8 +217,28 @@ describe("ClaudeSession", () => {
     expect(session.send("next turn").isOk()).toBe(true);
   });
 
+  test("reports the sends that survive an interrupt", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: ["uuid-1"] });
+    const session = await startedSession(claude);
+
+    const interrupted = await session.interrupt();
+
+    expect(interrupted.unwrap()).toEqual(["uuid-1"]);
+  });
+
+  test("reports no surviving sends when the CLI gives no receipt", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const session = await startedSession(claude);
+
+    const interrupted = await session.interrupt();
+
+    expect(interrupted.unwrap()).toBeNull();
+  });
+
   test("reports an interrupt the SDK rejects", async () => {
-    const claude = fakeClaude(SUBSCRIPTION, new Error("not streaming"));
+    const claude = fakeClaude(SUBSCRIPTION, {
+      interruptError: new Error("not streaming"),
+    });
     const session = await startedSession(claude);
 
     const interrupted = await session.interrupt();
@@ -210,8 +248,14 @@ describe("ClaudeSession", () => {
     );
   });
 
-  test("close ends the input and the stream without an error", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
+  test.each([
+    ["ends", undefined],
+    ["fails", new Error("Operation aborted")],
+  ])("close ends the input and the stream when the pending read %s", async (_label, closeEnding) => {
+    const claude = fakeClaude(
+      SUBSCRIPTION,
+      closeEnding === undefined ? {} : { closeEnding },
+    );
     const session = await startedSession(claude);
     const reading = collect(session.messages);
 
@@ -221,6 +265,18 @@ describe("ClaudeSession", () => {
     expect(await reading).toEqual([]);
     expect(claude.closes()).toBe(1);
     expect(await claude.prompts()).toEqual([]);
+  });
+
+  test("stops Claude when the consumer stops reading", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const session = await startedSession(claude);
+
+    claude.emit(sdkMessage("first"));
+    claude.emit(sdkMessage("second"));
+    for await (const _item of session.messages) break;
+
+    expect(claude.closes()).toBe(1);
+    expect(session.send("unheard").isErr()).toBe(true);
   });
 
   test("refuses input and interrupts after close", async () => {
@@ -259,10 +315,11 @@ const collect = async <T>(items: AsyncIterable<T>) => {
   return collected;
 };
 
-const userMessage = (text: string): SDKUserMessage => ({
+const userMessage = (text: string, uuid: UUID): SDKUserMessage => ({
   type: "user",
   message: { role: "user", content: text },
   parent_tool_use_id: null,
+  uuid,
 });
 
 const sdkMessage = (label: string) =>
