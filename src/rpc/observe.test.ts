@@ -11,7 +11,7 @@ describe("createObserver", () => {
           threadId: "th",
           name,
           status: state,
-          error: message === undefined ? null : { message },
+          error: message ?? null,
           failureReason: null,
         },
       });

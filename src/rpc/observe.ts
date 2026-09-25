@@ -178,9 +178,7 @@ const mcpStartupStatus = (
   }
   const params = asObject(message.params);
   const status = params?.status;
-  const error = asObject(params?.error);
-  const text =
-    typeof error?.message === "string" ? error.message : JSON.stringify(error);
+  const error = params?.error;
   return {
     server:
       typeof params?.name === "string" ? identifier(params.name) : REDACTED,
@@ -188,15 +186,19 @@ const mcpStartupStatus = (
       typeof status === "string" && STARTUP_STATES.has(status)
         ? (status as McpStartup["status"])
         : REDACTED,
-    failure:
-      error === null && params?.error == null
-        ? null
-        : text.includes("pipe closed")
-          ? "pipe_closed"
-          : text.includes("did not provide CODEX_APP_TOOLS_PIPE_PATH")
-            ? "pipe_missing"
-            : "other",
+    failure: startupFailure(error),
   };
+};
+
+// The protocol types the error as `string | null`.
+const startupFailure = (error: Json | undefined): McpStartup["failure"] => {
+  if (error === undefined || error === null) return null;
+  if (typeof error !== "string") return "other";
+  if (error.includes("pipe closed")) return "pipe_closed";
+  if (error.includes("did not provide CODEX_APP_TOOLS_PIPE_PATH")) {
+    return "pipe_missing";
+  }
+  return "other";
 };
 
 // A namespace spec ({ name, tools: [...] }) prefixes its tools as "namespace.tool"; nesting beyond MAX_DEPTH is not followed, because observation runs before each chunk is relayed and must not overflow the stack.
