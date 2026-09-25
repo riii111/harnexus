@@ -285,6 +285,7 @@ const isThreadRecord = (value: unknown): value is ThreadRecord =>
   value.reviewerThreadIds.every(isNonEmptyString) &&
   RUN_STATES.some((state) => state === value.runState);
 
+// A plain boolean check: the type guard would narrow the failing branch to never, hiding the thread ID for the error.
 const isStorable = (record: ThreadRecord) => isThreadRecord(record);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
