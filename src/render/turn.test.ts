@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AppNotification, ThreadItem } from "./protocol.ts";
 import {
-  finishTurn,
   markInterrupting,
+  markToolDeclined,
   type Rendered,
   renderSdkMessage,
   renderUserInput,
@@ -204,7 +204,17 @@ describe("tools", () => {
         toolUse("tool-1", "mcp__codex_link__read_thread", { threadId: "th-2" }),
         toolUse("tool-2", "Read", { file_path: "/a" }),
       ]),
-      toolResult("tool-1", [{ type: "text", text: "body" }], false),
+      toolResult(
+        "tool-1",
+        [
+          { type: "text", text: "body" },
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: "AAAA" },
+          },
+        ],
+        false,
+      ),
       toolResult("tool-2", "no such file", true),
       success(),
     ]);
@@ -214,7 +224,15 @@ describe("tools", () => {
         type: "mcpToolCall",
         server: "codex_link",
         tool: "read_thread",
+        arguments: { threadId: "th-2" },
         status: "completed",
+        result: {
+          content: [
+            { type: "text", text: "body" },
+            { type: "image", data: "AAAA", mimeType: "image/png" },
+          ],
+        },
+        error: null,
       },
       {
         type: "mcpToolCall",
@@ -226,20 +244,39 @@ describe("tools", () => {
     ]);
   });
 
-  test("marks a tool the permission check denied as declined", () => {
-    const out = run([
-      assistant("msg-1", [toolUse("tool-1", "Bash", { command: "rm -rf x" })]),
+  test("marks tools refused by the permission callback or the SDK as declined", () => {
+    let { state } = begin();
+    const all: AppNotification[] = [];
+    // The callback may refuse a tool before its item starts.
+    state = markToolDeclined(state, "tool-1");
+    for (const message of [
+      assistant("msg-1", [
+        toolUse("tool-1", "Bash", { command: "rm -rf x" }),
+        toolUse("tool-2", "Edit", {
+          file_path: "/a",
+          old_string: "o",
+          new_string: "n",
+        }),
+      ]),
       {
         type: "system",
         subtype: "permission_denied",
-        tool_name: "Bash",
-        tool_use_id: "tool-1",
+        tool_name: "Edit",
+        tool_use_id: "tool-2",
       },
       toolResult("tool-1", "denied", true),
-      success(),
-    ]);
+      toolResult("tool-2", "denied", true),
+    ]) {
+      const next = renderSdkMessage(state, sdk(message), NOW);
+      state = next.state;
+      all.push(...next.notifications);
+    }
 
-    expect(completedTool(out)).toMatchObject({ status: "declined" });
+    expect(
+      completedItems({ notifications: all }).map((item) =>
+        "status" in item ? item.status : null,
+      ),
+    ).toEqual(["declined", "declined"]);
   });
 
   test("renders a repeated tool call only once", () => {
@@ -358,70 +395,87 @@ describe("state", () => {
   });
 });
 
-describe("fixture shapes", () => {
-  test("every notification carries the fields and value types of the app-server fixtures", () => {
-    const samples = new Map<string, unknown>();
-    for (const name of readdirSync(FIXTURE_DIR).filter((file) =>
-      file.endsWith(".jsonl"),
-    )) {
-      for (const notification of fixtureNotifications(name)) {
-        samples.set(shapeKey(notification), notification);
-      }
-    }
-    const outputs = [
-      run([...streamedText("msg-1", ["a"], "end_turn"), success()]),
-      run([
-        streamEvent({ type: "message_start", message: { id: "msg-1" } }),
-        streamEvent({
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "thinking" },
-        }),
-        streamEvent({
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "thinking_delta", thinking: "t" },
-        }),
-        streamEvent({ type: "content_block_stop", index: 0 }),
-        assistant("msg-1", [
-          toolUse("tool-1", "Bash", { command: "ls" }),
-          toolUse("tool-2", "Edit", {
-            file_path: "/a",
-            old_string: "o",
-            new_string: "n",
-          }),
-          toolUse("tool-3", "mcp__s__t", {}),
-        ]),
-        toolResult("tool-1", "x", false),
-        toolResult("tool-2", "ok", false),
-        toolResult("tool-3", "bad", true),
-        result({
-          subtype: "error_during_execution",
-          is_error: true,
-          errors: ["e"],
+describe("recorded sessions", () => {
+  test("a failed turn with thinking, an edit and an MCP tool matches the recording", () => {
+    const out = runRecorded("tu-fixture-3", [
+      streamEvent({ type: "message_start", message: { id: "msg-1" } }),
+      streamEvent({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "thinking" },
+      }),
+      streamEvent({
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "thinking_delta", thinking: `${SECRET} thought` },
+      }),
+      streamEvent({ type: "content_block_stop", index: 0 }),
+      assistant("msg-1", [
+        toolUse("tool-1", "Edit", {
+          file_path: "/fixture/work/a.txt",
+          old_string: `${SECRET} old`,
+          new_string: `${SECRET} new`,
         }),
       ]),
-      finishTurn(begin().state, { status: "interrupted" }, NOW),
-    ];
+      toolResult("tool-1", "updated", false, {
+        filePath: "/fixture/work/a.txt",
+        structuredPatch: [
+          {
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 1,
+            lines: [`-${SECRET} old`, `+${SECRET} new`],
+          },
+        ],
+      }),
+      assistant("msg-1", [
+        toolUse("tool-2", "mcp__fixture__lookup", { query: SECRET }),
+      ]),
+      toolResult("tool-2", `${SECRET} tool error`, true),
+      result({
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: [`${SECRET} turn error`],
+      }),
+    ]);
 
-    const mismatches = outputs
-      .flatMap((out) => out.notifications)
-      .flatMap((notification) => {
-        const key = shapeKey(notification);
-        const sample = samples.get(key);
-        if (sample === undefined) return [`${key}: no fixture`];
-        return shapeMismatches(notification, sample)
-          .map((path) => `${key} ${path}`)
-          .filter(
-            (mismatch) => !NULLABLE_PATHS.has(mismatch.split(":")[0] ?? ""),
-          );
-      });
-    expect(mismatches).toEqual([]);
+    expect(normalize(out)).toEqual(
+      normalize(recordedNotifications("turn-failed-with-edits.jsonl")),
+    );
   });
 
-  test("an interrupted turn follows the recorded notification order", () => {
-    let rendered = begin();
-    const all = [...rendered.notifications];
+  test("a user message matches the recording", () => {
+    const { state } = startTurn({
+      threadId: "th-fixture-1",
+      turnId: "tu-fixture-1",
+      cwd: "/fixture/work",
+      now: NOW,
+    });
+    const out = renderUserInput(
+      state,
+      [{ type: "text", text: `${SECRET} prompt`, text_elements: [] }],
+      null,
+      NOW,
+    );
+
+    expect(normalize(out.notifications)).toEqual(
+      normalize(
+        recordedNotifications("turn-with-tools.jsonl").filter(
+          (n) => n.params.item?.type === "userMessage",
+        ),
+      ),
+    );
+  });
+
+  test("an interrupted turn matches the recording except for the message it closes", () => {
+    let { state, notifications } = startTurn({
+      threadId: "th-fixture-1",
+      turnId: "tu-fixture-2",
+      cwd: "/fixture/work",
+      now: NOW,
+    });
+    const all = [...notifications];
     for (const message of [
       streamEvent({ type: "message_start", message: { id: "msg-1" } }),
       streamEvent({
@@ -432,33 +486,48 @@ describe("fixture shapes", () => {
       streamEvent({
         type: "content_block_delta",
         index: 0,
-        delta: { type: "text_delta", text: "1" },
+        delta: { type: "text_delta", text: `${SECRET} 1` },
       }),
       streamEvent({
         type: "content_block_delta",
         index: 0,
-        delta: { type: "text_delta", text: "2" },
+        delta: { type: "text_delta", text: `${SECRET} 2` },
       }),
     ]) {
-      rendered = renderSdkMessage(rendered.state, sdk(message), NOW);
-      all.push(...rendered.notifications);
+      ({ state, notifications } = renderSdkMessage(state, sdk(message), NOW));
+      all.push(...notifications);
     }
     all.push(
-      ...finishTurn(rendered.state, { status: "interrupted" }, NOW)
-        .notifications,
+      ...renderSdkMessage(
+        markInterrupting(state),
+        sdk(result({ subtype: "error_during_execution", is_error: true })),
+        NOW,
+      ).notifications,
     );
 
-    // The recorded session has no user message item, and Codex leaves the interrupted message open where the bridge closes it.
-    const recorded = fixtureNotifications("steer-and-interrupt.jsonl").map(
-      shapeKey,
+    // The bridge learns the phase only after streaming, and closes the message Codex leaves open.
+    const recorded = recordedNotifications("steer-and-interrupt.jsonl");
+    const [active, started, message, ...rest] = recorded;
+    const item = { ...message?.params.item, phase: null };
+    expect(normalize(all)).toEqual(
+      normalize([
+        active,
+        started,
+        { ...message, params: { ...message?.params, item } },
+        ...rest.slice(0, 2),
+        {
+          method: "item/completed",
+          params: {
+            item: { ...item, text: `${SECRET} 1${SECRET} 2` },
+            threadId: "th-fixture-1",
+            turnId: "tu-fixture-2",
+            completedAtMs: 0,
+          },
+          emittedAtMs: 0,
+        },
+        ...rest.slice(2),
+      ]),
     );
-    expect(
-      all.map(shapeKey).filter((key) => !key.endsWith("userMessage")),
-    ).toEqual([
-      ...recorded.slice(0, 5),
-      "item/completed agentMessage",
-      ...recorded.slice(5),
-    ]);
   });
 });
 
@@ -471,14 +540,14 @@ const FIXTURE_DIR = join(
   "fixtures",
   "app-server",
 );
-// Tool arguments are whatever the model passed, so they have no fixed shape.
-const FREE_FORM_KEYS = new Set(["arguments"]);
-// The bridge learns a message's phase only after it finishes streaming, and the recorded command was declined, so these fixture values differ from a normal run.
-const NULLABLE_PATHS = new Set([
-  "item/started agentMessage $.params.item.phase",
-  "item/completed commandExecution $.params.item.aggregatedOutput",
-  "item/completed commandExecution $.params.item.exitCode",
-  "item/completed commandExecution $.params.item.durationMs",
+const SECRET = "sk-fixture-secret";
+const TIME_KEYS = new Set([
+  "emittedAtMs",
+  "startedAtMs",
+  "completedAtMs",
+  "startedAt",
+  "completedAt",
+  "durationMs",
 ]);
 
 const begin = (): Rendered => {
@@ -512,6 +581,21 @@ const run = (messages: object[]) => {
     all.push(...notifications);
   });
   return { state, notifications: all };
+};
+
+const runRecorded = (turnId: string, messages: object[]) => {
+  let { state, notifications } = startTurn({
+    threadId: "th-fixture-1",
+    turnId,
+    cwd: "/fixture/work",
+    now: NOW,
+  });
+  const all = [...notifications];
+  for (const message of messages) {
+    ({ state, notifications } = renderSdkMessage(state, sdk(message), NOW));
+    all.push(...notifications);
+  }
+  return all;
 };
 
 const sdk = (message: object) => message as SDKMessage;
@@ -651,7 +735,7 @@ const unpaired = (out: Output) => {
   ];
 };
 
-const fixtureNotifications = (name: string): Record<string, unknown>[] =>
+const recordedNotifications = (name: string): Recorded[] =>
   readFileSync(join(FIXTURE_DIR, name), "utf8")
     .split("\n")
     .filter((line) => line.trim() !== "")
@@ -659,61 +743,35 @@ const fixtureNotifications = (name: string): Record<string, unknown>[] =>
     .filter(
       (record) =>
         record.direction === "server_to_app" &&
-        record.message.method !== undefined,
+        record.message.method !== undefined &&
+        record.message.id === undefined,
     )
-    .filter((record) => record.message.id === undefined)
     .map((record) => record.message);
 
-// Notifications are grouped by method and the variant they carry, since each variant has its own fields.
-const shapeKey = (notification: object) => {
-  const { method, params } = notification as {
-    method: string;
-    params: Record<string, never>;
+// Times come from the clock and item ids from each side's numbering, so both are replaced in order of appearance.
+const normalize = (notifications: unknown[]) => {
+  const ids = new Map<string, string>();
+  const walk = (value: unknown, key: string | null): unknown => {
+    if (Array.isArray(value)) return value.map((entry) => walk(entry, null));
+    if (typeof value === "object" && value !== null) {
+      return Object.fromEntries(
+        Object.entries(value).map(([k, v]) => [k, walk(v, k)]),
+      );
+    }
+    if (key !== null && TIME_KEYS.has(key) && typeof value === "number") {
+      return 0;
+    }
+    if ((key === "id" || key === "itemId") && typeof value === "string") {
+      if (!ids.has(value)) ids.set(value, `id-${ids.size + 1}`);
+      return ids.get(value);
+    }
+    return value;
   };
-  const item = params.item as { type?: string } | undefined;
-  const status = params.status as { type?: string } | undefined;
-  const turn = params.turn as { status?: string } | undefined;
-  return [method, item?.type ?? status?.type ?? turn?.status]
-    .filter(Boolean)
-    .join(" ");
+  return notifications.map((notification) => walk(notification, null));
 };
 
-// Keys, value types and nulls must match; union variants with a different `type` are not compared.
-const shapeMismatches = (
-  actual: unknown,
-  expected: unknown,
-  path = "$",
-): string[] => {
-  if (Array.isArray(actual) && Array.isArray(expected)) {
-    return actual.length === 0 || expected.length === 0
-      ? []
-      : shapeMismatches(actual[0], expected[0], `${path}[0]`);
-  }
-  if (actual === null || expected === null) {
-    return actual === expected
-      ? []
-      : [`${path}: ${kindOf(actual)} vs ${kindOf(expected)}`];
-  }
-  if (typeof actual !== "object" || typeof expected !== "object") {
-    return typeof actual === typeof expected
-      ? []
-      : [`${path}: ${kindOf(actual)} vs ${kindOf(expected)}`];
-  }
-  const a = actual as Record<string, unknown>;
-  const e = expected as Record<string, unknown>;
-  if (
-    typeof a.type === "string" &&
-    typeof e.type === "string" &&
-    a.type !== e.type
-  )
-    return [];
-  const keys = new Set([...Object.keys(a), ...Object.keys(e)]);
-  return [...keys].flatMap((key) => {
-    if (FREE_FORM_KEYS.has(key)) return [];
-    if (!(key in a) || !(key in e))
-      return [`${path}.${key}: missing on ${key in a ? "fixture" : "render"}`];
-    return shapeMismatches(a[key], e[key], `${path}.${key}`);
-  });
+type Recorded = {
+  method: string;
+  params: { item?: Record<string, unknown> } & Record<string, unknown>;
+  emittedAtMs: number;
 };
-
-const kindOf = (value: unknown) => (value === null ? "null" : typeof value);

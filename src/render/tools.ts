@@ -228,7 +228,21 @@ const resultText = (content: unknown) =>
 
 const resultContent = (content: unknown): unknown[] => {
   if (typeof content === "string") return [{ type: "text", text: content }];
-  return Array.isArray(content) ? content : [];
+  return Array.isArray(content) ? content.map(toMcpContent) : [];
+};
+
+// Tool results use the Anthropic image block, while the app reads MCP content with the image data at the top level.
+const toMcpContent = (block: unknown) => {
+  const record = asRecord(block);
+  if (record.type !== "image") return block;
+  const source = asRecord(record.source);
+  if (source.type === "base64") {
+    return { type: "image", data: source.data, mimeType: source.media_type };
+  }
+  return {
+    type: "text",
+    text: `[image: ${String(source.url ?? source.type)}]`,
+  };
 };
 
 const asRecord = (value: unknown): Record<string, unknown> =>

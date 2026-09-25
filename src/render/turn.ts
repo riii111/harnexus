@@ -32,6 +32,18 @@ export const markInterrupting = (state: TurnState): TurnState => ({
   interrupting: true,
 });
 
+// The permission callback refuses a tool without any SDK message saying so, so it reports the refusal here; the call may come before or after the tool item starts.
+export const markToolDeclined = (
+  state: TurnState,
+  toolUseId: string,
+): TurnState =>
+  state.declinedToolUseIds.includes(toolUseId)
+    ? state
+    : {
+        ...state,
+        declinedToolUseIds: [...state.declinedToolUseIds, toolUseId],
+      };
+
 export const startTurn = (params: {
   threadId: string;
   turnId: string;
@@ -50,6 +62,7 @@ export const startTurn = (params: {
     messages: {},
     tools: {},
     toolUseIds: [],
+    declinedToolUseIds: [],
     finalMessage: null,
     interrupting: false,
     finished: false,
@@ -124,7 +137,7 @@ export const renderSdkMessage = (
       break;
     case "system":
       if (message.subtype === "permission_denied") {
-        markDeclined(draft, message.tool_use_id);
+        draft.declinedToolUseIds.push(message.tool_use_id);
       }
       break;
     case "result":
@@ -315,7 +328,7 @@ const startTool = (
   draft.toolUseIds.push(block.id);
   flushPending(draft, "commentary", now);
   const item = startToolItem(nextItemId(draft), block, draft.cwd);
-  draft.tools[block.id] = { item, startedAtMs: now, declined: false };
+  draft.tools[block.id] = { item, startedAtMs: now };
   itemStarted(draft, item, now);
 };
 
@@ -337,17 +350,12 @@ const renderToolResults = (
     const item = completeToolItem(tool.item, {
       content: block.content,
       isError: block.is_error === true,
-      declined: tool.declined,
+      declined: draft.declinedToolUseIds.includes(block.tool_use_id),
       output: single ? message.tool_use_result : undefined,
       durationMs: now - tool.startedAtMs,
     });
     itemCompleted(draft, item, now);
   }
-};
-
-const markDeclined = (draft: Draft, toolUseId: string) => {
-  const tool = draft.tools[toolUseId];
-  if (tool !== undefined) draft.tools[toolUseId] = { ...tool, declined: true };
 };
 
 const outcomeOf = (result: SDKResultMessage): TurnOutcome => {
@@ -493,6 +501,7 @@ const open = (state: TurnState): Draft => ({
   messages: { ...state.messages },
   tools: { ...state.tools },
   toolUseIds: [...state.toolUseIds],
+  declinedToolUseIds: [...state.declinedToolUseIds],
   notifications: [],
 });
 
@@ -517,6 +526,7 @@ type Draft = {
   messages: Record<string, { streamed: number; seen: number }>;
   tools: Record<string, OpenTool>;
   toolUseIds: string[];
+  declinedToolUseIds: string[];
   finalMessage: AgentMessageItem | null;
   interrupting: boolean;
   finished: boolean;
@@ -525,7 +535,7 @@ type Draft = {
 
 type OpenBlock = { kind: "text" | "reasoning"; id: string; text: string };
 
-type OpenTool = { item: ToolItem; startedAtMs: number; declined: boolean };
+type OpenTool = { item: ToolItem; startedAtMs: number };
 
 type StreamEvent = SDKPartialAssistantMessage["event"];
 
