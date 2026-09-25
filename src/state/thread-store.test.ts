@@ -350,11 +350,20 @@ describe("ThreadStore.runWrite", () => {
       never,
     );
 
-    expect(result.isErr() && result.error).toMatchObject({
-      _tag: "RunStateNotSaved",
-      runState: "idle",
-    });
-    expect(store.get("thread-1")?.runState).toBe("idle");
+    let repeated = false;
+    const again = await store.runWrite(
+      "thread-1",
+      async () => {
+        repeated = true;
+        return Result.ok("sent");
+      },
+      never,
+    );
+
+    expect(result.isErr() && result.error._tag).toBe("RunStateNotSaved");
+    expect(store.get("thread-1")?.runState).toBe("outcomeUnknown");
+    expect(again.isErr() && again.error._tag).toBe("WriteOutcomeUnknown");
+    expect(repeated).toBe(false);
     expect((await openStore()).get("thread-1")?.runState).toBe(
       "outcomeUnknown",
     );

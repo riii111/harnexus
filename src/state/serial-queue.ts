@@ -1,4 +1,4 @@
-export type SerialQueue = {
+type SerialQueue = {
   run: <T>(key: string, task: () => Promise<T>) => Promise<T>;
 };
 

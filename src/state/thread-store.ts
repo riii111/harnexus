@@ -5,7 +5,7 @@ import {
   readTextFileIfExists,
   writeFileAtomic,
 } from "../boundary/fs.ts";
-import { parseJson } from "../boundary/json.ts";
+import { type JsonParseFailed, parseJson } from "../boundary/json.ts";
 import { createSerialQueue } from "./serial-queue.ts";
 
 // Only identifiers and states are kept, so the file never holds conversation text.
@@ -53,13 +53,13 @@ class StateStoreHalted extends TaggedError("StateStoreHalted")<{
 
 class RunStateNotSaved extends TaggedError("RunStateNotSaved")<{
   threadId: string;
-  runState: RunState;
   cause: StatePersistFailed | StateStoreHalted;
   message: string;
 }> {}
 
 class StateFileCorrupt extends TaggedError("StateFileCorrupt")<{
   path: string;
+  cause?: JsonParseFailed;
   message: string;
 }> {}
 
@@ -124,7 +124,7 @@ const createThreadStore = (
   };
 
   // Every change to records happens inside the file queue, so a snapshot being written is never overtaken by another change.
-  // The change is kept in memory only after the file holds it, so a failed write leaves both unchanged.
+  // The change is kept in memory only after the file holds it, so a write that fails before the rename leaves both unchanged.
   const persistThenCommit = <E>(
     change: (
       current: ReadonlyMap<string, ThreadRecord>,
@@ -133,29 +133,31 @@ const createThreadStore = (
     fileQueue.run(path, async () => {
       const changed = change(records);
       if (changed.isErr()) return Result.err(changed.error);
-      if (!isStorable(changed.value)) {
+      const threadId = changed.value.threadId;
+      if (!isThreadRecord(changed.value)) {
         return Result.err(
           new InvalidThreadRecord({
-            threadId: changed.value.threadId,
+            threadId,
             message: "thread identifiers, model and worktree must not be empty",
           }),
         );
       }
-      const next = new Map(records).set(changed.value.threadId, changed.value);
+      const next = new Map(records).set(threadId, changed.value);
       const saved = await save(next);
       if (saved.isErr()) return Result.err(saved.error);
       records = next;
       return Result.ok(changed.value);
     });
 
-  // Used after a write has run: memory must reflect it even if the file lags, and a stale "running" entry reloads as outcome unknown.
+  // An unsaved finish leaves "running" in the file, which reloads as outcome unknown, so memory is set the same way to refuse a repeat before restart.
   const finishWrite = (threadId: string, runState: RunState) =>
-    fileQueue.run(path, () => {
-      const record = records.get(threadId);
-      if (record !== undefined) {
-        records = new Map(records).set(threadId, { ...record, runState });
+    fileQueue.run(path, async () => {
+      records = withRunState(records, threadId, runState);
+      const saved = await save(records);
+      if (saved.isErr()) {
+        records = withRunState(records, threadId, "outcomeUnknown");
       }
-      return save(records);
+      return saved;
     });
 
   const update = (
@@ -239,19 +241,29 @@ const createThreadStore = (
             return Result.err(
               new RunStateNotSaved({
                 threadId,
-                runState,
                 cause: saved.error,
-                message: `the write on thread ${threadId} finished but its state was not saved`,
+                message: `the write on thread ${threadId} finished but its state was not saved, so it is left as outcome unknown`,
               }),
             );
           }
           return result;
         } finally {
-          // A rejected operation may have sent its write; a save failure here is left to the stale "running" entry, which reloads as outcome unknown.
+          // A rejected operation may have sent its write, so the thread is left as outcome unknown before the rejection propagates.
           if (!finished) await finishWrite(threadId, "outcomeUnknown");
         }
       }),
   };
+};
+
+const withRunState = (
+  records: ReadonlyMap<string, ThreadRecord>,
+  threadId: string,
+  runState: RunState,
+) => {
+  const record = records.get(threadId);
+  return record === undefined
+    ? records
+    : new Map(records).set(threadId, { ...record, runState });
 };
 
 // "running" is refused as well: the queue never overlaps writes, so it can only remain from an operation that did not finish.
@@ -280,8 +292,12 @@ const notFound = (threadId: string) =>
 const parseStateFile = (path: string, text: string) =>
   parseJson(text)
     .mapError(
-      () =>
-        new StateFileCorrupt({ path, message: `${path} is not valid JSON` }),
+      (cause) =>
+        new StateFileCorrupt({
+          path,
+          cause,
+          message: `${path} is not valid JSON`,
+        }),
     )
     .andThen((value) => {
       const records = readState(value);
@@ -331,9 +347,6 @@ const isThreadRecord = (value: unknown): value is ThreadRecord =>
   Array.isArray(value.reviewerThreadIds) &&
   value.reviewerThreadIds.every(isNonEmptyString) &&
   RUN_STATES.some((state) => state === value.runState);
-
-// A plain boolean check: the type guard would narrow the failing branch to never, hiding the thread ID for the error.
-const isStorable = (record: ThreadRecord) => isThreadRecord(record);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
