@@ -3,10 +3,13 @@ import { closeSync, fchmodSync, openSync, writeSync } from "node:fs";
 import {
   access,
   constants,
+  mkdir,
   open,
+  readdir,
   readFile,
   rename,
   rm,
+  unlink,
 } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { Result, TaggedError } from "better-result";
@@ -36,6 +39,18 @@ export class FileWriteFailed extends TaggedError("FileWriteFailed")<{
 }> {}
 
 export class FileSyncFailed extends TaggedError("FileSyncFailed")<{
+  path: string;
+  cause: unknown;
+  message: string;
+}> {}
+
+export class FileRemoveFailed extends TaggedError("FileRemoveFailed")<{
+  path: string;
+  cause: unknown;
+  message: string;
+}> {}
+
+class DirectoryPrepareFailed extends TaggedError("DirectoryPrepareFailed")<{
   path: string;
   cause: unknown;
   message: string;
@@ -92,17 +107,7 @@ export const readTextFileIfExists = (path: string) =>
 export const writeFileAtomic = (path: string, content: string) =>
   Result.gen(async function* () {
     yield* Result.await(replaceFile(path, content));
-    yield* Result.await(
-      Result.tryPromise({
-        try: () => syncDirectory(dirname(path)),
-        catch: (cause) =>
-          new FileSyncFailed({
-            path,
-            cause,
-            message: `wrote ${path} but cannot sync its directory`,
-          }),
-      }),
-    );
+    yield* Result.await(syncParent(path, "wrote"));
     return Result.ok();
   });
 
@@ -132,6 +137,88 @@ const replaceFile = (path: string, content: string) =>
       new FileWriteFailed({ path, cause, message: `cannot write ${path}` }),
   });
 
+// The parent is synced too, so files created inside later cannot be lost with a directory entry that never reached the disk.
+export const prepareDirectory = (path: string) =>
+  Result.tryPromise({
+    try: async () => {
+      await mkdir(path, { recursive: true, mode: OWNER_ONLY_DIRECTORY });
+      await syncDirectory(dirname(path));
+    },
+    catch: (cause) =>
+      new DirectoryPrepareFailed({
+        path,
+        cause,
+        message: `cannot prepare directory ${path}`,
+      }),
+  });
+
+export const listFileNames = (path: string) =>
+  Result.tryPromise({
+    try: () => readdir(path),
+    catch: (cause) =>
+      new FileReadFailed({ path, cause, message: `cannot list ${path}` }),
+  });
+
+// FileSyncFailed means the file exists but may not survive a crash; an existing file is never reused.
+export const createEmptyFile = (path: string) =>
+  Result.gen(async function* () {
+    yield* Result.await(
+      Result.tryPromise({
+        try: async () => {
+          const file = await open(path, "wx", OWNER_ONLY);
+          try {
+            await file.sync();
+          } finally {
+            await file.close();
+          }
+        },
+        catch: (cause) =>
+          new FileWriteFailed({
+            path,
+            cause,
+            message: `cannot create ${path}`,
+          }),
+      }),
+    );
+    yield* Result.await(syncParent(path, "created"));
+    return Result.ok();
+  });
+
+// FileSyncFailed means the file is gone but may come back after a crash; a missing file counts as removed.
+export const removeFile = (path: string) =>
+  Result.gen(async function* () {
+    yield* Result.await(
+      Result.tryPromise({
+        try: async () => {
+          try {
+            await unlink(path);
+          } catch (cause) {
+            if (!isMissingFile(cause)) throw cause;
+          }
+        },
+        catch: (cause) =>
+          new FileRemoveFailed({
+            path,
+            cause,
+            message: `cannot remove ${path}`,
+          }),
+      }),
+    );
+    yield* Result.await(syncParent(path, "removed"));
+    return Result.ok();
+  });
+
+const syncParent = (path: string, action: string) =>
+  Result.tryPromise({
+    try: () => syncDirectory(dirname(path)),
+    catch: (cause) =>
+      new FileSyncFailed({
+        path,
+        cause,
+        message: `${action} ${path} but cannot sync its directory`,
+      }),
+  });
+
 const syncDirectory = async (path: string) => {
   const directory = await open(path, "r");
   try {
@@ -145,3 +232,5 @@ const isMissingFile = (cause: unknown) =>
   cause instanceof Error && "code" in cause && cause.code === "ENOENT";
 
 const OWNER_ONLY = 0o600;
+
+const OWNER_ONLY_DIRECTORY = 0o700;

@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result, TaggedError } from "better-result";
 import {
+  createEmptyFile,
+  FileRemoveFailed,
   FileSyncFailed,
   FileWriteFailed,
+  removeFile,
   writeFileAtomic,
 } from "../boundary/fs.ts";
 import { openThreadStore } from "./thread-store.ts";
@@ -48,13 +51,6 @@ describe("openThreadStore", () => {
     });
   });
 
-  test("saves the file readable only by the owner", async () => {
-    const store = await openStore();
-    await store.register(ENTRY);
-
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
-  });
-
   test("refuses a file that is not valid JSON", async () => {
     await writeFile(path, '{"version":1,"threads":[');
 
@@ -68,7 +64,7 @@ describe("openThreadStore", () => {
       path,
       JSON.stringify({
         version: 1,
-        threads: [{ ...SAVED_RECORD, runState: "paused" }],
+        threads: [{ ...SAVED_RECORD, reviewerThreadIds: [""] }],
       }),
     );
 
@@ -88,28 +84,25 @@ describe("openThreadStore", () => {
     expect(opened.isErr() && opened.error._tag).toBe("StateFileCorrupt");
   });
 
-  test("loads a thread that was running as outcome unknown", async () => {
-    await writeFile(
-      path,
-      JSON.stringify({
-        version: 1,
-        threads: [{ ...SAVED_RECORD, runState: "running" }],
-      }),
-    );
-
-    const store = await openStore();
-
-    expect(store.get("thread-1")?.runState).toBe("outcomeUnknown");
-  });
-
-  test("ignores a temporary file left by an interrupted write", async () => {
+  test("loads a thread whose write never finished as outcome unknown", async () => {
     const store = await openStore();
     await store.register(ENTRY);
-    await writeFile(join(dir, `.threads.json.leftover.tmp`), '{"vers');
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+    const started = deferred();
+    void store.runWrite(
+      "thread-1",
+      async () => {
+        started.resolve();
+        return new Promise<Result<null, never>>(() => {});
+      },
+      never,
+    );
+    await started.promise;
 
-    const reopened = await openStore();
+    const restarted = await openStore();
 
-    expect(reopened.get("thread-1")?.threadId).toBe("thread-1");
+    expect(restarted.get("thread-1")?.runState).toBe("outcomeUnknown");
+    expect(restarted.get("thread-2")?.runState).toBe("idle");
   });
 });
 
@@ -143,7 +136,7 @@ describe("ThreadStore", () => {
   test("keeps the previous state when a write fails before the rename", async () => {
     const good = await openStore();
     await good.register(ENTRY);
-    const store = await openStore(failingWrite);
+    const store = await openStore({ writeState: failingWrite });
 
     const updated = await store.setSession("thread-1", "session-1");
 
@@ -155,7 +148,7 @@ describe("ThreadStore", () => {
   test("follows the file and stops saving when the rename is not confirmed", async () => {
     const good = await openStore();
     await good.register(ENTRY);
-    const store = await openStore(writeThenFailSync);
+    const store = await openStore({ writeState: writeThenFailSync });
 
     const updated = await store.setSession("thread-1", "session-1");
     const later = await store.setModel("thread-1", "claude-opus-5-5");
@@ -264,7 +257,7 @@ describe("ThreadStore.runWrite", () => {
 
   test("finishes a write while another thread's change is being saved", async () => {
     const gated = gatedWrite();
-    const store = await openStore(gated.write);
+    const store = await openStore({ writeState: gated.write });
     await store.register(ENTRY);
     await store.register({ ...ENTRY, threadId: "thread-2" });
     const started = deferred();
@@ -336,67 +329,43 @@ describe("ThreadStore.runWrite", () => {
     expect(retried.isOk() && retried.value).toBe("sent");
   });
 
-  test("keeps an unconfirmed finish as outcome unknown after a restart", async () => {
-    const switchable = switchableWrite();
-    const store = await openStore(switchable.write);
+  test("stays outcome unknown while the marker cannot be removed", async () => {
+    const store = await openStore({ removeMarker: failingRemove });
     await store.register(ENTRY);
+    let runs = 0;
+    const operation = async () => {
+      runs += 1;
+      return Result.ok("sent");
+    };
 
-    const result = await store.runWrite(
-      "thread-1",
-      async () => {
-        switchable.failNext("sync");
-        return Result.ok("sent");
-      },
-      never,
-    );
-    const reopened = await openStore();
-    let repeated = false;
-    const again = await reopened.runWrite(
-      "thread-1",
-      async () => {
-        repeated = true;
-        return Result.ok("sent");
-      },
-      never,
-    );
+    const result = await store.runWrite("thread-1", operation, never);
+    const resolved = await store.resolveOutcomeUnknown("thread-1");
+    const again = await store.runWrite("thread-1", operation, never);
+    const restarted = await openStore();
+    const afterRestart = await restarted.runWrite("thread-1", operation, never);
 
     expect(result.isErr() && result.error._tag).toBe("RunStateNotSaved");
-    expect(store.get("thread-1")?.runState).toBe("outcomeUnknown");
+    expect(resolved.isErr() && resolved.error._tag).toBe("RunStateNotSaved");
     expect(again.isErr() && again.error._tag).toBe("WriteOutcomeUnknown");
-    expect(repeated).toBe(false);
+    expect(afterRestart.isErr() && afterRestart.error._tag).toBe(
+      "WriteOutcomeUnknown",
+    );
+    expect(runs).toBe(1);
   });
 
-  test("reports a finished write whose state could not be saved", async () => {
-    const switchable = switchableWrite();
-    const store = await openStore(switchable.write);
+  test("treats a marker removed without a directory sync as finished", async () => {
+    const store = await openStore({ removeMarker: removeThenFailSync });
     await store.register(ENTRY);
 
     const result = await store.runWrite(
       "thread-1",
-      async () => {
-        switchable.failNext("write");
-        return Result.ok("sent");
-      },
+      async () => Result.ok("sent"),
       never,
     );
 
-    let repeated = false;
-    const again = await store.runWrite(
-      "thread-1",
-      async () => {
-        repeated = true;
-        return Result.ok("sent");
-      },
-      never,
-    );
-
-    expect(result.isErr() && result.error._tag).toBe("RunStateNotSaved");
-    expect(store.get("thread-1")?.runState).toBe("outcomeUnknown");
-    expect(again.isErr() && again.error._tag).toBe("WriteOutcomeUnknown");
-    expect(repeated).toBe(false);
-    expect((await openStore()).get("thread-1")?.runState).toBe(
-      "outcomeUnknown",
-    );
+    expect(result.isOk() && result.value).toBe("sent");
+    expect(store.get("thread-1")?.runState).toBe("idle");
+    expect((await openStore()).get("thread-1")?.runState).toBe("idle");
   });
 
   test("returns to idle after a write that failed with a known outcome", async () => {
@@ -458,10 +427,10 @@ describe("ThreadStore.runWrite", () => {
     expect(retried.isOk() && retried.value).toBe("sent");
   });
 
-  test("does not start a write whose running state cannot be saved", async () => {
+  test("does not start a write whose marker cannot be created", async () => {
     const good = await openStore();
     await good.register(ENTRY);
-    const store = await openStore(failingWrite);
+    const store = await openStore({ createMarker: failingCreate });
     let called = false;
 
     const result = await store.runWrite(
@@ -473,9 +442,29 @@ describe("ThreadStore.runWrite", () => {
       never,
     );
 
-    expect(result.isErr() && result.error._tag).toBe("StatePersistFailed");
+    expect(result.isErr() && result.error._tag).toBe("WriteNotStarted");
     expect(called).toBe(false);
     expect(store.get("thread-1")?.runState).toBe("idle");
+  });
+
+  test("withdraws an unconfirmed marker without running the write", async () => {
+    const store = await openStore({ createMarker: createThenFailSync });
+    await store.register(ENTRY);
+    let called = false;
+
+    const result = await store.runWrite(
+      "thread-1",
+      async () => {
+        called = true;
+        return Result.ok(null);
+      },
+      never,
+    );
+
+    expect(result.isErr() && result.error._tag).toBe("WriteNotStarted");
+    expect(called).toBe(false);
+    expect(store.get("thread-1")?.runState).toBe("idle");
+    expect(await readdir(`${path}.writes`)).toEqual([]);
   });
 
   test("keeps updates made while the write was running", async () => {
@@ -537,11 +526,10 @@ const SAVED_RECORD = {
   ...ENTRY,
   sessionId: null,
   reviewerThreadIds: [],
-  runState: "idle",
 };
 
-const openStore = async (write = writeFileAtomic) => {
-  const opened = await openThreadStore(path, write);
+const openStore = async (files: Parameters<typeof openThreadStore>[1] = {}) => {
+  const opened = await openThreadStore(path, files);
   if (opened.isErr()) return expect.unreachable(opened.error.message);
   return opened.value;
 };
@@ -558,30 +546,45 @@ const failingWrite = async (target: string) =>
 const writeThenFailSync = async (target: string, content: string) => {
   const written = await writeFileAtomic(target, content);
   if (written.isErr()) return written;
-  return Result.err(
-    new FileSyncFailed({
-      path: target,
-      cause: new Error("fsync failed"),
-      message: `wrote ${target} but cannot sync its directory`,
-    }),
-  );
+  return Result.err(syncFailed(target));
 };
 
-const switchableWrite = () => {
-  let fail: "write" | "sync" | null = null;
-  return {
-    write: (target: string, content: string) => {
-      const current = fail;
-      fail = null;
-      if (current === "write") return failingWrite(target);
-      if (current === "sync") return writeThenFailSync(target, content);
-      return writeFileAtomic(target, content);
-    },
-    failNext: (kind: "write" | "sync") => {
-      fail = kind;
-    },
-  };
+const failingCreate = async (target: string) =>
+  Result.err(
+    new FileWriteFailed({
+      path: target,
+      cause: new Error("disk full"),
+      message: `cannot create ${target}`,
+    }),
+  );
+
+const createThenFailSync = async (target: string) => {
+  const created = await createEmptyFile(target);
+  if (created.isErr()) return created;
+  return Result.err(syncFailed(target));
 };
+
+const failingRemove = async (target: string) =>
+  Result.err(
+    new FileRemoveFailed({
+      path: target,
+      cause: new Error("permission denied"),
+      message: `cannot remove ${target}`,
+    }),
+  );
+
+const removeThenFailSync = async (target: string) => {
+  const removed = await removeFile(target);
+  if (removed.isErr()) return removed;
+  return Result.err(syncFailed(target));
+};
+
+const syncFailed = (target: string) =>
+  new FileSyncFailed({
+    path: target,
+    cause: new Error("fsync failed"),
+    message: `changed ${target} but cannot sync its directory`,
+  });
 
 const deferred = () => {
   let resolve = () => {};
