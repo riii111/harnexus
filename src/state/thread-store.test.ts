@@ -51,33 +51,24 @@ describe("openThreadStore", () => {
     });
   });
 
-  test("refuses a file that is not valid JSON", async () => {
-    await writeFile(path, '{"version":1,"threads":[');
-
-    const opened = await openThreadStore(path);
-
-    expect(opened.isErr() && opened.error._tag).toBe("StateFileCorrupt");
-  });
-
-  test("refuses a file whose records do not match the format", async () => {
-    await writeFile(
-      path,
-      JSON.stringify({
+  test.each([
+    { name: "is not valid JSON", content: '{"version":1,"threads":[' },
+    {
+      name: "has records that do not match the format",
+      content: JSON.stringify({
         version: 1,
         threads: [{ ...SAVED_RECORD, reviewerThreadIds: [""] }],
       }),
-    );
-
-    const opened = await openThreadStore(path);
-
-    expect(opened.isErr() && opened.error._tag).toBe("StateFileCorrupt");
-  });
-
-  test("refuses a file with the same thread twice", async () => {
-    await writeFile(
-      path,
-      JSON.stringify({ version: 1, threads: [SAVED_RECORD, SAVED_RECORD] }),
-    );
+    },
+    {
+      name: "has the same thread twice",
+      content: JSON.stringify({
+        version: 1,
+        threads: [SAVED_RECORD, SAVED_RECORD],
+      }),
+    },
+  ])("refuses a file that $name", async ({ content }) => {
+    await writeFile(path, content);
 
     const opened = await openThreadStore(path);
 

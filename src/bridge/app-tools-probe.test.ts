@@ -32,14 +32,16 @@ describe("startAppToolsProbe", () => {
       "child#2",
       "grandchild#2",
     ]);
-    for (const event of events) {
-      expect(event).toMatchObject({
-        connected: true,
-        sent: true,
-        stage: "responded",
-        tools: ["codex_app.create_thread"],
-      });
-    }
+    expect(events).toEqual(
+      Array(6).fill(
+        expect.objectContaining({
+          connected: true,
+          sent: true,
+          stage: "responded",
+          tools: ["codex_app.create_thread"],
+        }),
+      ),
+    );
     const [bridge, child, grandchild] = events;
     expect(bridge?.pid).toBe(process.pid);
     expect(child?.ppid).toBe(process.pid);
@@ -55,30 +57,39 @@ describe("startAppToolsProbe", () => {
     );
   });
 
-  test("records how far a hung-up or missing socket got", async () => {
+  test("records how far a hung-up socket got", async () => {
     const socket = await fakeAppSocket("close");
-    const closed = await probe({ CODEX_APP_TOOLS_PIPE_PATH: socket.path });
+    const events = await probe({ CODEX_APP_TOOLS_PIPE_PATH: socket.path });
     socket.close();
-    const absent = await probe({
+
+    expect(events).toEqual(
+      Array(6).fill(
+        expect.objectContaining({
+          socketExists: true,
+          stage: expect.stringMatching(
+            /^(closed_before_response|connect_failed)$/,
+          ),
+          tools: [],
+        }),
+      ),
+    );
+  });
+
+  test("records a connect failure for a missing socket", async () => {
+    const events = await probe({
       CODEX_APP_TOOLS_PIPE_PATH: join(dir, "absent.sock"),
     });
 
-    expect(closed).toHaveLength(6);
-    for (const event of closed) {
-      expect(event.socketExists).toBe(true);
-      expect(["closed_before_response", "connect_failed"]).toContain(
-        event.stage,
-      );
-      expect(event.tools).toEqual([]);
-    }
-    for (const event of absent) {
-      expect(event).toMatchObject({
-        socketExists: false,
-        connected: false,
-        stage: "connect_failed",
-        errorCode: "ENOENT",
-      });
-    }
+    expect(events).toEqual(
+      Array(6).fill(
+        expect.objectContaining({
+          socketExists: false,
+          connected: false,
+          stage: "connect_failed",
+          errorCode: "ENOENT",
+        }),
+      ),
+    );
   });
 
   test("keeps .env and bunfig.toml preloads out of descendants run by Bun", async () => {
@@ -112,15 +123,20 @@ describe("startAppToolsProbe", () => {
     expect(events[0]).toMatchObject({ stage: "responded", tools: [] });
   });
 
-  test("reports a missing socket and stays off unless enabled", async () => {
-    const missing = await probe({});
-    const off: LogEvent[] = [];
-    await startAppToolsProbe({ PATH: process.env.PATH }, (e) => off.push(e));
+  test("reports a missing pipe path from the bridge", async () => {
+    const events = await probe({});
 
-    expect(missing).toEqual([
+    expect(events).toEqual([
       expect.objectContaining({ via: "bridge", stage: "pipe_missing" }),
     ]);
-    expect(off).toEqual([]);
+  });
+
+  test("stays off unless enabled", async () => {
+    const events: LogEvent[] = [];
+
+    await startAppToolsProbe({ PATH: process.env.PATH }, (e) => events.push(e));
+
+    expect(events).toEqual([]);
   });
 });
 

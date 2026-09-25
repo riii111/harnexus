@@ -96,9 +96,7 @@ describe("writeFileAtomic", () => {
 
     expect(written.isErr() && written.error._tag).toBe("FileWriteFailed");
   });
-});
 
-describe("writeFileAtomic failures", () => {
   test("keeps the target and removes the temporary file when the rename fails", async () => {
     const parent = join(dir, "rename-fails");
     const target = join(parent, "state.json");
@@ -112,35 +110,51 @@ describe("writeFileAtomic failures", () => {
   });
 });
 
-describe("marker files", () => {
-  test("creates an empty owner-only file and refuses an existing one", async () => {
+describe("createEmptyFile", () => {
+  test("creates an empty owner-only file in a prepared directory", async () => {
     const markers = join(dir, "markers");
     const prepared = await prepareDirectory(markers);
     const marker = join(markers, "a.running");
 
     const created = await createEmptyFile(marker);
-    const again = await createEmptyFile(marker);
 
     expect(prepared.isOk()).toBe(true);
     expect(created.isOk()).toBe(true);
+    expect(await readFile(marker, "utf8")).toBe("");
     expect((await stat(marker)).mode & 0o777).toBe(0o600);
-    expect(again.isErr() && again.error._tag).toBe("FileWriteFailed");
     const names = await listFileNames(markers);
     expect(names.isOk() && names.value).toEqual(["a.running"]);
   });
 
-  test("removes a file and treats a missing one as removed", async () => {
+  test("refuses an existing file", async () => {
+    const markers = join(dir, "existing-marker");
+    await prepareDirectory(markers);
+    const marker = join(markers, "a.running");
+    await createEmptyFile(marker);
+
+    const again = await createEmptyFile(marker);
+
+    expect(again.isErr() && again.error._tag).toBe("FileWriteFailed");
+  });
+});
+
+describe("removeFile", () => {
+  test("removes a file", async () => {
     const markers = join(dir, "removal");
     await prepareDirectory(markers);
     const marker = join(markers, "a.running");
     await createEmptyFile(marker);
 
     const removed = await removeFile(marker);
-    const missing = await removeFile(marker);
 
     expect(removed.isOk()).toBe(true);
-    expect(missing.isOk()).toBe(true);
     expect(await readdir(markers)).toEqual([]);
+  });
+
+  test("treats a missing file as removed", async () => {
+    const removed = await removeFile(join(dir, "never-created"));
+
+    expect(removed.isOk()).toBe(true);
   });
 
   test("reports a file that cannot be removed", async () => {

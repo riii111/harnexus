@@ -20,41 +20,51 @@ describe("withoutApiBilling", () => {
 });
 
 describe("checkSubscription", () => {
-  test("accepts a first-party subscription login", () => {
-    expect(
-      checkSubscription({
-        subscriptionType: "Claude Max",
-        apiProvider: "firstParty",
-      }).isOk(),
-    ).toBe(true);
-  });
-
-  test("accepts a login that reports no API key", () => {
-    expect(
-      checkSubscription({
+  test.each([
+    {
+      name: "a first-party subscription login",
+      account: { subscriptionType: "Claude Max", apiProvider: "firstParty" },
+    },
+    {
+      name: "a login that reports no API key",
+      account: {
         subscriptionType: "Claude Pro",
         apiProvider: "firstParty",
         apiKeySource: "none",
-      }).isOk(),
-    ).toBe(true);
-  });
-
-  test("accepts a setup-token login, which reports no subscription type", () => {
-    expect(
-      checkSubscription({
+      },
+    },
+    {
+      name: "a setup-token login, which reports no subscription type",
+      account: {
         apiProvider: "firstParty",
         tokenSource: "CLAUDE_CODE_OAUTH_TOKEN",
-      }).isOk(),
-    ).toBe(true);
+      },
+    },
+  ])("accepts $name", ({ account }) => {
+    expect(checkSubscription(account).isOk()).toBe(true);
   });
 
-  test("rejects a bearer token that is not a subscription login", () => {
-    expect(
-      checkSubscription({
+  test.each([
+    {
+      name: "a bearer token that is not a subscription login",
+      account: {
         apiProvider: "firstParty",
         tokenSource: "ANTHROPIC_AUTH_TOKEN",
-      }).isErr(),
-    ).toBe(true);
+      },
+    },
+    { name: "a cloud provider", account: { apiProvider: "vertex" } },
+    {
+      name: "a gateway",
+      account: { subscriptionType: "Claude Max", apiProvider: "gateway" },
+    },
+    {
+      name: "an account that reports no provider",
+      account: { subscriptionType: "Claude Max" },
+    },
+  ])("rejects $name", ({ account }) => {
+    const checked = checkSubscription(account);
+
+    expect(checked.isErr() && checked.error._tag).toBe("ClaudeNotSubscription");
   });
 
   test("rejects an API key even when a subscription is logged in", () => {
@@ -66,22 +76,6 @@ describe("checkSubscription", () => {
 
     expect(checked.isErr() && checked.error.apiKeySource).toBe(
       "/login managed key",
-    );
-  });
-
-  test("rejects a cloud provider or a gateway", () => {
-    expect(checkSubscription({ apiProvider: "vertex" }).isErr()).toBe(true);
-    expect(
-      checkSubscription({
-        subscriptionType: "Claude Max",
-        apiProvider: "gateway",
-      }).isErr(),
-    ).toBe(true);
-  });
-
-  test("rejects an account that reports no provider", () => {
-    expect(checkSubscription({ subscriptionType: "Claude Max" }).isErr()).toBe(
-      true,
     );
   });
 });
