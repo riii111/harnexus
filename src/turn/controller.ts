@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { Result } from "better-result";
+import { Result, TaggedError } from "better-result";
 import type { ClaudeSessionSettings } from "../claude/session.ts";
 import type { UserInput } from "../render/protocol.ts";
 import {
@@ -17,14 +17,14 @@ import {
 import type { ThreadRecord, ThreadStore } from "../state/thread-store.ts";
 import { isClaudeModel } from "./models.ts";
 
-export type ClaudeSession = {
+type ClaudeSession = {
   messages: AsyncIterator<Result<SDKMessage, Failure>, void>;
   send: (text: string) => Result<string, Failure>;
   interrupt: () => Promise<Result<unknown, Failure>>;
   close: () => void;
 };
 
-export type StartSession = (
+type StartSession = (
   settings: ClaudeSessionSettings,
 ) => Promise<Result<ClaudeSession, Failure>>;
 
@@ -53,7 +53,15 @@ type Failure = { _tag: string; message: string };
 
 type Thread = { model: string; cwd: string };
 
-type Running = { turnId: string | null; state: TurnState | null };
+type Running = {
+  threadId: string;
+  turnId: string | null;
+  state: TurnState | null;
+};
+
+class BridgeClosing extends TaggedError("BridgeClosing")<{
+  message: string;
+}> {}
 
 // A thread keeps one Claude session across turns; a session that fails is dropped and the next turn resumes it from the stored session id.
 export const createTurnController = ({
@@ -89,8 +97,10 @@ export const createTurnController = ({
     log({ event: "claude_turn", step: "refused", detail: null });
   };
 
+  // The app may start the next turn as soon as it sees turn/completed, so the thread stops counting as running then; the store's per-thread queue still holds that turn until this one's marker is cleared.
   const apply = (entry: Running, rendered: Rendered) => {
     entry.state = rendered.state;
+    if (rendered.state.finished) release(entry);
     for (const notification of rendered.notifications) send(notification);
   };
 
@@ -98,6 +108,10 @@ export const createTurnController = ({
     if (entry.state === null || entry.state.finished) return;
     apply(entry, finishTurn(entry.state, outcome, now()));
     log({ event: "claude_turn", step: "finished", detail: outcome.status });
+  };
+
+  const release = (entry: Running) => {
+    if (running.get(entry.threadId) === entry) running.delete(entry.threadId);
   };
 
   const dropSession = (threadId: string, session: ClaudeSession) => {
@@ -108,6 +122,7 @@ export const createTurnController = ({
   const sessionFor = async (record: ThreadRecord) => {
     const existing = sessions.get(record.threadId);
     if (existing !== undefined) return Result.ok(existing);
+    // TODO: clear a stored session id that Claude can no longer resume in P11a, which decides how a missing session is shown; until then every turn of that thread fails the same way.
     const started = await startSession({
       cwd: record.worktree,
       model: record.model,
@@ -122,7 +137,7 @@ export const createTurnController = ({
     // Shutdown may have happened while Claude was starting.
     if (closed) {
       started.value.close();
-      return Result.err({ _tag: "BridgeClosing", message: BRIDGE_CLOSING });
+      return Result.err(new BridgeClosing({ message: BRIDGE_CLOSING }));
     }
     sessions.set(record.threadId, started.value);
     return started;
@@ -288,10 +303,10 @@ export const createTurnController = ({
         refuse(id, "a Claude turn is already running on this thread");
         return;
       }
-      const entry: Running = { turnId: null, state: null };
+      const entry: Running = { threadId, turnId: null, state: null };
       running.set(threadId, entry);
       void runTurn(id, threadId, thread, entry, input.items, input.text).then(
-        () => running.delete(threadId),
+        () => release(entry),
       );
     },
 
@@ -299,7 +314,11 @@ export const createTurnController = ({
     interruptTurn: ({ id, params }: AppRequest) => {
       const threadId = String(params.threadId);
       const entry = running.get(threadId);
-      if (entry?.state == null || entry.turnId !== params.turnId) {
+      if (
+        entry?.state == null ||
+        entry.state.finished ||
+        entry.turnId !== params.turnId
+      ) {
         refuse(id, "no running Claude turn matches turnId");
         return;
       }

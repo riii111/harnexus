@@ -60,6 +60,7 @@ export const createRouter = (
         if (!turns.isClaudeThread(params.threadId)) return line;
         turns.refuseSteer(request);
         return null;
+      // TODO: route the other thread requests of a Claude thread, such as review/start and thread/settings/update, in P10 and P11a; the server would run them on its own model.
       default:
         return line;
     }

@@ -68,6 +68,21 @@ describe("turn/start on a Claude thread", () => {
     expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
   });
 
+  test("accepts the next turn as soon as the previous one completes", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    claude.emit(sdk(answer("msg-1", "hi")));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+    turns.startTurn(turnStart(11, "again"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+
+    expect(responseTo(sent, 11)?.result.turn).toMatchObject({ id: "turn-2" });
+  });
+
   test("shows a tool that needed approval as declined", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
@@ -159,6 +174,21 @@ describe("turn/interrupt", () => {
 
     expect(turnCompleted(sent)).toMatchObject({ status: "interrupted" });
     expect(claude.closes()).toBe(1);
+  });
+
+  test("refuses a turn that already completed", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    claude.emit(sdk(answer("msg-1", "hi")));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+    turns.interruptTurn(interrupt(20, "turn-1"));
+
+    expect(responseTo(sent, 20)?.error).toBeDefined();
+    expect(claude.interrupts()).toBe(0);
   });
 
   test("refuses a turn id that is not running", async () => {
@@ -296,8 +326,6 @@ const completeTurn = async (
   claude.emit(sdk(answer(`msg-${id}`, "ok")));
   claude.emit(sdk(success()));
   await until(() => turnsCompleted(sent).length > before);
-  // The turn leaves the running set only after its marker is cleared.
-  await Bun.sleep(5);
 };
 
 const turnStart = (id: number, text: string) => ({
