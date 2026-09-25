@@ -101,7 +101,7 @@ describe("openThreadStore", () => {
   test("ignores a temporary file left by an interrupted write", async () => {
     const store = await openStore();
     await store.register(ENTRY);
-    await writeFile(join(dir, `.threads.json.${process.pid}.tmp`), '{"vers');
+    await writeFile(join(dir, `.threads.json.leftover.tmp`), '{"vers');
 
     const reopened = await openStore();
 
@@ -148,6 +148,24 @@ describe("ThreadStore", () => {
     expect((await openStore()).get("thread-1")?.sessionId).toBeNull();
   });
 
+  test("rejects values that could not be loaded again", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+
+    const updated = await store.setSession("thread-1", "");
+    const registered = await store.register({
+      ...ENTRY,
+      threadId: "thread-2",
+      model: "",
+    });
+
+    expect(updated.isErr() && updated.error._tag).toBe("InvalidThreadRecord");
+    expect(registered.isErr() && registered.error._tag).toBe(
+      "InvalidThreadRecord",
+    );
+    expect((await openStore()).get("thread-1")?.sessionId).toBeNull();
+  });
+
   test("never stores fields outside the record", async () => {
     const store = await openStore();
     await store.register({ ...ENTRY, prompt: "secret text" } as typeof ENTRY);
@@ -161,12 +179,14 @@ describe("ThreadStore.runWrite", () => {
     const store = await openStore();
     await store.register(ENTRY);
     const events: string[] = [];
+    const started = deferred();
     const blocker = deferred();
 
     const first = store.runWrite(
       "thread-1",
       async () => {
         events.push("first:start");
+        started.resolve();
         await blocker.promise;
         events.push("first:end");
         return Result.ok(1);
@@ -181,7 +201,7 @@ describe("ThreadStore.runWrite", () => {
       },
       never,
     );
-    await tick();
+    await started.promise;
     expect(events).toEqual(["first:start"]);
     expect(store.get("thread-1")?.runState).toBe("running");
 
@@ -219,6 +239,80 @@ describe("ThreadStore.runWrite", () => {
     expect(store.get("thread-1")?.runState).toBe("running");
     blocker.resolve();
     await first;
+  });
+
+  test("finishes a write while another thread's change is being saved", async () => {
+    const gated = gatedWrite();
+    const store = await openStore(gated.write);
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+    const started = deferred();
+    const blocker = deferred();
+    const first = store.runWrite(
+      "thread-1",
+      async () => {
+        started.resolve();
+        await blocker.promise;
+        return Result.ok(null);
+      },
+      never,
+    );
+    await started.promise;
+    const held = gated.hold();
+    const session = store.setSession("thread-2", "session-2");
+    await held.entered;
+
+    blocker.resolve();
+    held.release();
+    await Promise.all([first, session]);
+
+    expect(store.get("thread-1")?.runState).toBe("idle");
+    expect(store.get("thread-2")?.sessionId).toBe("session-2");
+    const reopened = await openStore();
+    expect(reopened.get("thread-1")?.runState).toBe("idle");
+    expect(reopened.get("thread-2")?.sessionId).toBe("session-2");
+  });
+
+  test("keeps an update the operation did not wait for", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    let saved: Promise<unknown> = Promise.resolve();
+
+    await store.runWrite(
+      "thread-1",
+      async () => {
+        saved = store.setSession("thread-1", "session-1");
+        return Result.ok(null);
+      },
+      never,
+    );
+    await saved;
+
+    expect(store.get("thread-1")).toMatchObject({
+      sessionId: "session-1",
+      runState: "idle",
+    });
+  });
+
+  test("treats a rejected operation as an unknown outcome", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+
+    const rejected = store.runWrite(
+      "thread-1",
+      () => Promise.reject(new Error("boom")),
+      never,
+    );
+
+    await expect(rejected).rejects.toThrow("boom");
+    expect(store.get("thread-1")?.runState).toBe("outcomeUnknown");
+    await store.resolveOutcomeUnknown("thread-1");
+    const retried = await store.runWrite(
+      "thread-1",
+      async () => Result.ok("sent"),
+      never,
+    );
+    expect(retried.isOk() && retried.value).toBe("sent");
   });
 
   test("returns to idle after a write that failed with a known outcome", async () => {
@@ -371,7 +465,7 @@ const openStore = async (write = writeFileAtomic) => {
 // Simulates a crash after part of the new content reached the temporary file.
 const writeHalfThenFail = async (target: string, content: string) => {
   await writeFile(
-    join(dir, `.threads.json.${process.pid}.tmp`),
+    join(dir, `.threads.json.leftover.tmp`),
     content.slice(0, content.length / 2),
   );
   return Result.err(
@@ -391,4 +485,23 @@ const deferred = () => {
   return { promise, resolve };
 };
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+// Holds the next file write until released, to line up a write with work on another thread.
+const gatedWrite = () => {
+  let gate: { entered: () => void; release: Promise<void> } | null = null;
+  const write = async (target: string, content: string) => {
+    const current = gate;
+    gate = null;
+    if (current !== null) {
+      current.entered();
+      await current.release;
+    }
+    return writeFileAtomic(target, content);
+  };
+  const hold = () => {
+    const entered = deferred();
+    const release = deferred();
+    gate = { entered: entered.resolve, release: release.promise };
+    return { entered: entered.promise, release: release.resolve };
+  };
+  return { write, hold };
+};

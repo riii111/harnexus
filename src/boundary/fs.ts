@@ -1,5 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { closeSync, fchmodSync, openSync, writeSync } from "node:fs";
-import { access, constants, open, readFile, rename } from "node:fs/promises";
+import {
+  access,
+  constants,
+  open,
+  readFile,
+  rename,
+  rm,
+} from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { Result, TaggedError } from "better-result";
 
@@ -80,17 +88,22 @@ export const writeFileAtomic = (path: string, content: string) =>
     try: async () => {
       const temporary = join(
         dirname(path),
-        `.${basename(path)}.${process.pid}.tmp`,
+        `.${basename(path)}.${randomUUID()}.tmp`,
       );
-      const file = await open(temporary, "w", OWNER_ONLY);
       try {
-        await file.chmod(OWNER_ONLY);
-        await file.writeFile(content, "utf8");
-        await file.sync();
-      } finally {
-        await file.close();
+        const file = await open(temporary, "wx", OWNER_ONLY);
+        try {
+          await file.chmod(OWNER_ONLY);
+          await file.writeFile(content, "utf8");
+          await file.sync();
+        } finally {
+          await file.close();
+        }
+        await rename(temporary, path);
+      } catch (cause) {
+        await rm(temporary, { force: true }).catch(() => {});
+        throw cause;
       }
-      await rename(temporary, path);
       await syncDirectory(dirname(path));
     },
     catch: (cause) =>

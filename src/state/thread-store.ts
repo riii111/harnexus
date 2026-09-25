@@ -34,6 +34,11 @@ class WriteOutcomeUnknown extends TaggedError("WriteOutcomeUnknown")<{
   message: string;
 }> {}
 
+class InvalidThreadRecord extends TaggedError("InvalidThreadRecord")<{
+  threadId: string;
+  message: string;
+}> {}
+
 class StatePersistFailed extends TaggedError("StatePersistFailed")<{
   path: string;
   cause: FileWriteFailed;
@@ -77,6 +82,7 @@ const createThreadStore = (
   const threadQueue = createSerialQueue();
   const fileQueue = createSerialQueue();
 
+  // Every change to records happens inside the file queue, so a snapshot being written is never overtaken by another change.
   // The change is kept in memory only after the file holds it, so a failed write leaves both unchanged.
   const persistThenCommit = <E>(
     change: (
@@ -86,6 +92,14 @@ const createThreadStore = (
     fileQueue.run(path, async () => {
       const changed = change(records);
       if (changed.isErr()) return Result.err(changed.error);
+      if (!isStorable(changed.value)) {
+        return Result.err(
+          new InvalidThreadRecord({
+            threadId: changed.value.threadId,
+            message: "thread identifiers, model and worktree must not be empty",
+          }),
+        );
+      }
       const next = new Map(records).set(changed.value.threadId, changed.value);
       const written = await write(path, serializeState(next));
       if (written.isErr()) {
@@ -102,10 +116,13 @@ const createThreadStore = (
     });
 
   // Used after a write has run: memory must reflect it even if the file lags, and a stale "running" entry reloads as outcome unknown.
-  const commitThenPersist = (record: ThreadRecord) => {
-    records = new Map(records).set(record.threadId, record);
-    return fileQueue.run(path, () => write(path, serializeState(records)));
-  };
+  const finishWrite = (threadId: string, runState: RunState) =>
+    fileQueue.run(path, async () => {
+      const record = records.get(threadId);
+      if (record === undefined) return;
+      records = new Map(records).set(threadId, { ...record, runState });
+      await write(path, serializeState(records));
+    });
 
   const update = (
     threadId: string,
@@ -175,14 +192,17 @@ const createThreadStore = (
           startWrite(current.get(threadId), threadId),
         );
         if (started.isErr()) return Result.err(started.error);
-        const result = await operation(started.value);
-        const runState: RunState =
-          result.isErr() && isOutcomeUnknown(result.error)
-            ? "outcomeUnknown"
-            : "idle";
-        const latest = records.get(threadId) ?? started.value;
-        await commitThenPersist({ ...latest, runState });
-        return result;
+        // A rejected operation may have sent its write, so the thread is left as outcome unknown before the rejection propagates.
+        let runState: RunState = "outcomeUnknown";
+        try {
+          const result = await operation(started.value);
+          if (result.isOk() || !isOutcomeUnknown(result.error)) {
+            runState = "idle";
+          }
+          return result;
+        } finally {
+          await finishWrite(threadId, runState);
+        }
       }),
   };
 };
@@ -264,6 +284,8 @@ const isThreadRecord = (value: unknown): value is ThreadRecord =>
   Array.isArray(value.reviewerThreadIds) &&
   value.reviewerThreadIds.every(isNonEmptyString) &&
   RUN_STATES.some((state) => state === value.runState);
+
+const isStorable = (record: ThreadRecord) => isThreadRecord(record);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
