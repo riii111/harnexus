@@ -38,7 +38,7 @@ if (runs_app_server(@ARGV)) {
 
 exec { $codex } $codex, @ARGV or fail("cannot start $codex: $!");
 
-# The app starts Codex as `codex -c key=value ... app-server ...`, so global options are skipped before the subcommand; helper subcommands such as generate-ts and non-stdio listeners carry no app traffic and go straight to Codex.
+# The app puts global options before `app-server`; helper subcommands such as generate-ts and non-stdio listeners carry no app traffic, so they go straight to Codex.
 sub runs_app_server {
   my @args = @_;
   my $at = first_positional(0, @args);

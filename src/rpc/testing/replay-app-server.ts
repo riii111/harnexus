@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
-// Stand-in for `codex app-server` taking `<fixture.jsonl>`: writes the server_to_app lines in order and exits 2 as soon as an app_to_server line differs from the fixture.
+// Stand-in for `codex app-server`; exiting on the first mismatch makes the test fail on the exit code instead of waiting for output that never comes.
 const [fixturePath = ""] = process.argv.slice(2);
 
 const records: FixtureRecord[] = readFileSync(fixturePath, "utf8")

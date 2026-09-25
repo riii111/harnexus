@@ -39,7 +39,6 @@ export const loadCodexPath = (env: Record<string, string | undefined>) =>
     return Result.ok(path);
   });
 
-// Unset means logging to stderr only.
 export const loadLogPath = (env: Record<string, string | undefined>) => {
   const path = env[LOG_PATH_ENV];
   if (path === undefined || path === "") return Result.ok(null);

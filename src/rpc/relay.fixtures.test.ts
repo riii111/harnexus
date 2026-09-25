@@ -83,7 +83,7 @@ const REPLAY_SERVER = join(import.meta.dir, "testing", "replay-app-server.ts");
 const SECRET_MARKER = "sk-fixture-secret";
 const CHUNK_BYTES = 7;
 
-// Like the app, each app line is sent only after the server lines before it have come out, and it is cut into small chunks so it crosses read boundaries in the relay; a server that exits early ends the wait so the exit code reports the mismatch.
+// The app answers a server request only after receiving it, so this order is kept; otherwise the observer could not pair a response with its request method.
 const replay = async (path: string, records: FixtureRecord[]) => {
   const log: string[] = [];
   const output = collector();
@@ -108,7 +108,7 @@ const replay = async (path: string, records: FixtureRecord[]) => {
   return { result, output: output.text(), log };
 };
 
-// Bytes are kept until the end so a multi-byte character split across writes still decodes correctly.
+// Bytes are kept until the end so a multi-byte character split across writes decodes correctly.
 const collector = () => {
   const chunks: Buffer[] = [];
   let bytes = 0;
@@ -150,7 +150,7 @@ const summary = (line: string) => {
   return { direction, kind, method, id };
 };
 
-// Log lines of the two directions interleave by arrival time, so each direction is compared on its own; a response is labeled with the method of the request it answers, which was sent in the other direction.
+// The two directions interleave by arrival time, so each is compared on its own.
 const expectedSummary =
   (records: FixtureRecord[]) =>
   ({ direction, message }: FixtureRecord) => {

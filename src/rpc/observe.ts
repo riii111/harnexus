@@ -28,7 +28,7 @@ type RequestId = string | number;
 
 type ToolDefinition = { name: string; inputSchema: SchemaShape };
 
-// The error text is free-form, so only the failures the codex_app diagnosis needs are named and the rest collapse to "other".
+// The error text is free-form, so only the failures the codex_app diagnosis needs are named.
 type McpStartup = {
   server: string;
   status: "starting" | "ready" | "failed" | "cancelled" | "<redacted>";

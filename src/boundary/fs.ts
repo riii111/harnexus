@@ -25,7 +25,7 @@ export const checkExecutable = (path: string) =>
       }),
   });
 
-// The open mode only applies to a new file, so an existing one is narrowed too and refused when that fails; a failed write is dropped because logging must never stop the relay.
+// The open mode applies only to a new file, so an existing one is narrowed too; a failed write is dropped because logging must never stop the relay.
 export const openAppendSink = (path: string) =>
   Result.try({
     try: () => {

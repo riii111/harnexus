@@ -47,7 +47,7 @@ export const startChild = (
     });
   });
 
-// Resolves with the first line the process writes to stdout, or null when it writes none before exiting or before timeoutMs; the process is killed once the line is read or the time runs out.
+// Kills the process once the first line arrives or timeoutMs passes.
 export const readFirstLine = (
   path: string,
   args: readonly string[],

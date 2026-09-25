@@ -1,11 +1,11 @@
 // Plain JS so the same code runs in the bridge (Bun) and under the Node the app gives MCP servers (CODEX_MCP_NODE_PATH).
-// Run as `<node> app-tools-probe.mjs <depth>`: depth 0 probes the app's tool socket and prints one JSON line; a larger depth probes from a descendant that many levels below.
+// A depth above 0 re-spawns this script to reproduce the process depth of codex_app.
 import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
 
-// Mirrors codex-app-tools 0.1.4: each frame is a 4-byte little-endian length followed by a JSON-RPC message.
+// Framing follows codex-app-tools 0.1.4.
 export const probeAppTools = (pipePath, timeoutMs = 5000) =>
   new Promise((resolve) => {
     const outcome = {
@@ -30,7 +30,7 @@ export const probeAppTools = (pipePath, timeoutMs = 5000) =>
       finish("connect_failed");
       return;
     }
-    // On macOS a peer that accepts and hangs up at once can fail the connect with ECONNREFUSED (Bun) or EINVAL (Node), so the raw code is kept instead of guessing a refusal; Bun reports a hang-up with "end" and may never emit "close".
+    // On macOS an accept-then-close peer yields ECONNREFUSED (Bun) or EINVAL (Node), so the raw code is kept; Bun may report a hang-up only with "end".
     const hungUp = () =>
       finish(outcome.connected ? "closed_before_response" : "connect_failed");
     socket.once("error", (error) => {

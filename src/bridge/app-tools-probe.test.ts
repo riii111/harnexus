@@ -7,6 +7,7 @@ import type { LogEvent } from "../shared/logger.ts";
 import { PROBE_ENV, startAppToolsProbe } from "./app-tools-probe.ts";
 
 let dir: string;
+let sockets = 0;
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "harnexus-probe-"));
@@ -111,9 +112,6 @@ const probe = async (env: Record<string, string>) => {
   );
 };
 
-let sockets = 0;
-
-// Speaks the app's tool socket framing: a 4-byte little-endian length, then JSON-RPC.
 const fakeAppSocket = async (
   mode: "respond" | "close",
   toolName = "create_thread",

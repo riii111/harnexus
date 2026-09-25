@@ -32,7 +32,7 @@ type ProbeStage =
 
 export const PROBE_ENV = "HARNEXUS_PROBE_APP_TOOLS";
 
-// Diagnoses why the app's tool socket rejects codex_app behind the bridge: the same tools/list is sent from the bridge, its child and its grandchild (the depth of codex_app behind the bridge), once at startup and once after the app has initialized.
+// Diagnoses why the app's tool socket rejects codex_app behind the bridge, from each process depth codex_app can run at; the delayed second attempt hints whether the rejection is limited to startup.
 export const startAppToolsProbe = (
   env: NodeJS.ProcessEnv,
   log: (entry: LogEvent) => void,

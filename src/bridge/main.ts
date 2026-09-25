@@ -38,7 +38,7 @@ if (exit.isErr()) {
 logger.log({ event: "codex_exited", ...exit.value });
 exitLike(exit.value);
 
-// The app may discard the server's stderr, so HARNEXUS_LOG_PATH also keeps the log in a file; without a usable file the log still reaches stderr.
+// The app may discard the server's stderr, so HARNEXUS_LOG_PATH keeps a copy in a file.
 function createBridgeLogger(env: NodeJS.ProcessEnv) {
   const file = loadLogPath(env).andThen((path) =>
     path === null ? Result.ok(null) : openAppendSink(path),
