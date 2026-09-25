@@ -329,7 +329,7 @@ describe("app-server modes", () => {
       const exitCode = await proc.exited;
 
       expect(exitCode).toBe(0);
-      expect(isAlive(bridge[0] ?? -1)).toBe(false);
+      expect(await stopsRunning(bridge[0] ?? -1)).toBe(true);
     },
     TIMEOUT,
   );
@@ -439,6 +439,18 @@ const childPids = (pid: number) =>
     .split("\n")
     .filter((line) => line !== "")
     .map(Number);
+
+// The killed bridge can linger as a zombie until it is reaped, which kill(pid, 0) still reports as alive.
+const stopsRunning = async (pid: number) => {
+  for (let i = 0; i < 200; i++) {
+    const state = Bun.spawnSync(["ps", "-o", "stat=", "-p", String(pid)])
+      .stdout.toString()
+      .trim();
+    if (state === "" || state.startsWith("Z")) return true;
+    await Bun.sleep(25);
+  }
+  return false;
+};
 
 const isAlive = (pid: number) => {
   try {
