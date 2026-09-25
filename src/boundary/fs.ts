@@ -1,4 +1,4 @@
-import { openSync, writeSync } from "node:fs";
+import { closeSync, fchmodSync, openSync, writeSync } from "node:fs";
 import { access, constants } from "node:fs/promises";
 import { Result, TaggedError } from "better-result";
 
@@ -25,11 +25,17 @@ export const checkExecutable = (path: string) =>
       }),
   });
 
-// A new file is readable only by the owner; a failed write is dropped because logging must never stop the relay.
+// The open mode only applies to a new file, so an existing one is narrowed too and refused when that fails; a failed write is dropped because logging must never stop the relay.
 export const openAppendSink = (path: string) =>
   Result.try({
     try: () => {
-      const fd = openSync(path, "a", 0o600);
+      const fd = openSync(path, "a", OWNER_ONLY);
+      try {
+        fchmodSync(fd, OWNER_ONLY);
+      } catch (cause) {
+        closeSync(fd);
+        throw cause;
+      }
       return (line: string) => {
         try {
           writeSync(fd, line);
@@ -39,3 +45,5 @@ export const openAppendSink = (path: string) =>
     catch: (cause) =>
       new LogFileOpenFailed({ path, cause, message: `cannot open ${path}` }),
   });
+
+const OWNER_ONLY = 0o600;
