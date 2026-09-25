@@ -10,6 +10,7 @@ export type LogEvent =
   | { event: "log_file_unavailable"; reason: LogFileFailure }
   | { event: "codex_exited"; code: number | null; signal: Signals | null }
   | { event: "server_closed" }
+  | { event: "server_signaled"; signal: Signals }
   | AppToolsProbeEvent
   | ToolCallProbeEvent
   | ObservationEvent;
@@ -40,6 +41,8 @@ const serialize = (entry: LogEvent) => {
     case "bridge_startup_failed":
     case "log_file_unavailable":
       return { event: entry.event, reason: entry.reason };
+    case "server_signaled":
+      return { event: entry.event, signal: entry.signal };
     case "codex_exited":
       return { event: entry.event, code: entry.code, signal: entry.signal };
     case "rpc_message":

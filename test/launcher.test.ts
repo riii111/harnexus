@@ -308,6 +308,32 @@ describe("app-server modes", () => {
     TIMEOUT,
   );
 
+  for (const [mode, signal] of [
+    ["wait", "SIGTERM"],
+    ["wait-ignore-term", "SIGKILL"],
+  ] as const) {
+    test(
+      `sidecar stops a Codex that ignores the app disconnecting, with ${signal}`,
+      async () => {
+        const { env, reportPath } = setup({
+          HARNEXUS_APP_SERVER_MODE: "sidecar",
+          HARNEXUS_SHUTDOWN_GRACE_MS: "200",
+          FAKE_CODEX_MODE: mode,
+        });
+
+        const proc = launch(["app-server"], env);
+        await readReport(reportPath);
+        const result = await finish(proc);
+
+        expect(result).toMatchObject({ exitCode: null, signal });
+        expect(result.stderr).toContain(
+          `"event":"server_signaled","signal":"${signal}"`,
+        );
+      },
+      TIMEOUT,
+    );
+  }
+
   test(
     "sidecar ends Codex when the bridge dies",
     async () => {
@@ -482,7 +508,8 @@ writeFileSync(
   }),
 );
 renameSync(report + ".tmp", report);
-if (process.env.FAKE_CODEX_MODE === "wait") {
+if (process.env.FAKE_CODEX_MODE === "wait" || process.env.FAKE_CODEX_MODE === "wait-ignore-term") {
+  if (process.env.FAKE_CODEX_MODE === "wait-ignore-term") process.on("SIGTERM", () => {});
   setInterval(() => {}, 1000);
 } else {
   process.stdout.write(await Bun.stdin.text());

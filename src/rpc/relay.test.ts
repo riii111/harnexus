@@ -184,6 +184,48 @@ describe("relayStreams", () => {
     expect(serverInput.stream.writableFinished).toBe(true);
   });
 
+  test("signals a server that outlives the app with SIGTERM, then SIGKILL", async () => {
+    const signals: string[] = [];
+    const serverOutput = new PassThrough();
+    const input = new PassThrough();
+
+    const relaying = relayStreams({
+      input,
+      output: collector().stream,
+      serverInput: collector().stream,
+      serverOutput,
+      signalServer: (signal) => signals.push(signal),
+      shutdownGraceMs: 20,
+    });
+    input.end();
+    await Bun.sleep(100);
+    serverOutput.end();
+    await relaying;
+
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  test("sends no signal when the server exits within the grace period", async () => {
+    const signals: string[] = [];
+    const serverOutput = new PassThrough();
+    const input = new PassThrough();
+
+    const relaying = relayStreams({
+      input,
+      output: collector().stream,
+      serverInput: collector().stream,
+      serverOutput,
+      signalServer: (signal) => signals.push(signal),
+      shutdownGraceMs: 50,
+    });
+    input.end();
+    serverOutput.end();
+    await relaying;
+    await Bun.sleep(150);
+
+    expect(signals).toEqual([]);
+  });
+
   test("ends the server input when the app stops reading output", async () => {
     const serverInput = collector();
     const serverOutput = new PassThrough();

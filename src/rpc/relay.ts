@@ -42,21 +42,39 @@ export const relayStreams = ({
   serverInput,
   serverOutput,
   observer,
+  signalServer,
+  shutdownGraceMs = DEFAULT_SHUTDOWN_GRACE_MS,
 }: {
   input: Readable;
   output: Writable;
   serverInput: Writable;
   serverOutput: Readable;
   observer?: RelayObserver;
+  signalServer?: (signal: Signals) => void;
+  shutdownGraceMs?: number;
 }) =>
   new Promise<void>((resolve) => {
+    const timers: ReturnType<typeof setTimeout>[] = [];
     let settled = false;
+    let stopping = false;
+    // A server that ignores EOF on stdin would otherwise keep running after the app has gone.
     const stopServer = () => {
       if (!serverInput.writableEnded) serverInput.end();
+      if (stopping || signalServer === undefined) return;
+      stopping = true;
+      timers.push(
+        setTimeout(() => {
+          signalServer("SIGTERM");
+          timers.push(
+            setTimeout(() => signalServer("SIGKILL"), shutdownGraceMs),
+          );
+        }, shutdownGraceMs),
+      );
     };
     const settle = () => {
       if (settled) return;
       settled = true;
+      for (const timer of timers) clearTimeout(timer);
       input.removeAllListeners("data");
       input.pause();
       resolve();

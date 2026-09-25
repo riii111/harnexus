@@ -103,6 +103,25 @@ export const openServerPipes = (
       }),
   });
 
+class ProcessSignalFailed extends TaggedError("ProcessSignalFailed")<{
+  pid: number;
+  cause: unknown;
+  message: string;
+}> {}
+
+export const signalProcess = (pid: number, signal: Signals) =>
+  Result.try({
+    try: () => {
+      process.kill(pid, signal);
+    },
+    catch: (cause) =>
+      new ProcessSignalFailed({
+        pid,
+        cause,
+        message: `cannot send ${signal} to ${pid}`,
+      }),
+  });
+
 // Re-raising lets the caller tell a signal from an exit code; process.exit is reached only when the signal is ignored.
 export const exitLike = (exit: ChildExit): never => {
   if (exit.signal !== null) {

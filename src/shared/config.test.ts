@@ -7,6 +7,8 @@ import {
   LOG_PATH_ENV,
   loadCodexPath,
   loadLogPath,
+  loadShutdownGraceMs,
+  SHUTDOWN_GRACE_ENV,
 } from "./config.ts";
 
 let dir: string;
@@ -75,5 +77,22 @@ describe("loadLogPath", () => {
 
     expect(absolute.isOk() && absolute.value).toBe("/var/log/x.log");
     expect(relative.isErr() && relative.error._tag).toBe("LogPathNotAbsolute");
+  });
+});
+
+describe("loadShutdownGraceMs", () => {
+  test("accepts a positive integer and falls back to 5000 otherwise", () => {
+    const grace = (value?: string) =>
+      loadShutdownGraceMs({ [SHUTDOWN_GRACE_ENV]: value });
+
+    expect(grace("200")).toBe(200);
+    expect([
+      grace(),
+      grace(""),
+      grace("0"),
+      grace("-1"),
+      grace("1.5"),
+      grace("x"),
+    ]).toEqual(Array(6).fill(5000));
   });
 });
