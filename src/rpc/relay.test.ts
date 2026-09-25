@@ -57,6 +57,22 @@ describe("runRelay", () => {
     expect(log.join("")).not.toContain(SECRET);
   });
 
+  test("hands every byte to a slow output before completing", async () => {
+    const chunks = Array.from({ length: 64 }, (_, i) =>
+      Buffer.alloc(16 * 1024, i),
+    );
+    // A high-water mark above the total lets the child finish while most writes are still pending.
+    const output = collector({ delayMs: 5, highWaterMark: 64 * 1024 * 1024 });
+
+    const result = await runRelay(fakeCodex, ["echo"], process.env, {
+      input: Readable.from(chunks),
+      output: output.stream,
+    });
+
+    expect(result.isOk() && result.value).toEqual({ code: 0, signal: null });
+    expect(output.bytes().equals(Buffer.concat(chunks))).toBe(true);
+  });
+
   test("returns an error when the server cannot be started", async () => {
     const result = await runRelay(join(dir, "missing"), [], process.env, {
       input: Readable.from([]),
@@ -196,12 +212,18 @@ const startBridge = (mode: string) => {
   return { bridge, serverPid: () => readPid(pidFile) };
 };
 
-const collector = () => {
+// Bytes are recorded only when a write completes, so a delayed output shows whether the relay finished before its data arrived.
+const collector = ({ delayMs = 0, highWaterMark = 16 * 1024 } = {}) => {
   const chunks: Uint8Array[] = [];
   const stream = new Writable({
+    highWaterMark,
     write(chunk: Uint8Array, _encoding, callback) {
-      chunks.push(chunk);
-      callback();
+      const complete = () => {
+        chunks.push(chunk);
+        callback();
+      };
+      if (delayMs === 0) complete();
+      else setTimeout(complete, delayMs);
     },
   });
   return { stream, bytes: () => Buffer.concat(chunks) };
