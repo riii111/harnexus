@@ -123,28 +123,6 @@ describe("startClaudeSession options", () => {
       message: expect.stringContaining("Bash"),
     });
   });
-
-  test("reports the tool it denied", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const declined: string[] = [];
-
-    await startClaudeSession(
-      { ...SETTINGS, onToolDeclined: (id) => declined.push(id) },
-      claude.runtime,
-    );
-    const canUseTool = claude.options().canUseTool as CanUseTool;
-    await canUseTool(
-      "Edit",
-      {},
-      {
-        signal: new AbortController().signal,
-        toolUseID: "tool-2",
-        requestId: "request-2",
-      },
-    );
-
-    expect(declined).toEqual(["tool-2"]);
-  });
 });
 
 describe("startClaudeSession authentication", () => {

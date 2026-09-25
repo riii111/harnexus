@@ -1,17 +1,24 @@
 import { parseJson } from "../boundary/json.ts";
 import type { AppRequest } from "../turn/controller.ts";
-import { isClaudeModel, withClaudeModels } from "../turn/models.ts";
+import {
+  isClaudeModel,
+  requestedModel,
+  requestsUnsupportedMode,
+  withClaudeModels,
+} from "../turn/models.ts";
 
 export type RouteEvent = { event: "model_id_collision"; model: string };
 
 type Turns = {
   isClaudeThread: (threadId: unknown) => boolean;
-  modelOf: (threadId: string) => string | undefined;
-  adopt: (threadId: string, thread: { model: string; cwd: string }) => void;
+  threadOf: (threadId: string) => Thread | undefined;
+  adopt: (threadId: string, thread: Thread) => void;
   startTurn: (request: AppRequest, cwd: string | undefined) => void;
   interruptTurn: (request: AppRequest) => void;
-  refuseSteer: (request: AppRequest) => void;
+  refuse: (request: AppRequest, message: string) => void;
 };
+
+type Thread = { model: string; cwd: string };
 
 type RequestId = string | number;
 
@@ -45,7 +52,7 @@ export const createRouter = (
         return routeThreadOpen(line, message, request);
       case "turn/start":
         if (
-          !isClaudeModel(params.model) &&
+          !isClaudeModel(requestedModel(params)) &&
           !turns.isClaudeThread(params.threadId)
         ) {
           return line;
@@ -56,11 +63,19 @@ export const createRouter = (
         if (!turns.isClaudeThread(params.threadId)) return line;
         turns.interruptTurn(request);
         return null;
+      case "thread/settings/update":
+        return routeSettingsUpdate(line, message, request);
+      // TODO: pass steers into the running Claude turn in P10.
       case "turn/steer":
+      // The server would run these on its own model with none of the Claude conversation.
+      case "review/start":
+      case "thread/compact/start":
         if (!turns.isClaudeThread(params.threadId)) return line;
-        turns.refuseSteer(request);
+        turns.refuse(
+          request,
+          `${message.method} is not supported on a Claude thread yet`,
+        );
         return null;
-      // TODO: route the other thread requests of a Claude thread, such as review/start and thread/settings/update, in P10 and P11a; the server would run them on its own model.
       default:
         return line;
     }
@@ -83,7 +98,46 @@ export const createRouter = (
     return encode({ ...message, params: rest });
   };
 
+  // Settings that do not reach Claude, such as the approval policy, still go to the server; only what Claude would have to follow is checked.
+  const routeSettingsUpdate = (
+    line: Buffer,
+    message: Record<string, unknown>,
+    request: AppRequest,
+  ) => {
+    const { params } = request;
+    const threadId = params.threadId;
+    if (typeof threadId !== "string") return line;
+    const model = requestedModel(params);
+    const known = turns.threadOf(threadId);
+    if (known === undefined && !isClaudeModel(model)) return line;
+    const cwd = cwdOf(params);
+    const thread =
+      known ?? (cwd === undefined ? undefined : { model: String(model), cwd });
+    if (thread === undefined) {
+      turns.refuse(request, "the working directory of this thread is unknown");
+      return null;
+    }
+    // TODO: accept a model or directory change in P10, which restarts the Claude session for it.
+    const refusal =
+      model !== undefined && model !== thread.model
+        ? "changing the model of a Claude thread is not supported yet"
+        : requestsUnsupportedMode(params)
+          ? "Claude threads do not support plan mode yet"
+          : typeof params.cwd === "string" && params.cwd !== thread.cwd
+            ? "changing the working directory of a Claude thread is not supported yet"
+            : null;
+    if (refusal !== null) {
+      turns.refuse(request, refusal);
+      return null;
+    }
+    if (known === undefined) turns.adopt(threadId, thread);
+    if (!("model" in params) && !("collaborationMode" in params)) return line;
+    const { model: _model, collaborationMode: _mode, ...rest } = params;
+    return encode({ ...message, params: rest });
+  };
+
   const fromServer = (line: Buffer): Buffer => {
+    if (line.includes(SETTINGS_UPDATED)) return rewriteSettingsUpdated(line);
     if (pending.size === 0) return line;
     const message = parseMessage(line);
     if (message === null || message.method !== undefined) return line;
@@ -108,7 +162,7 @@ export const createRouter = (
     if (request.createdModel !== null && typeof result.cwd === "string") {
       turns.adopt(threadId, { model: request.createdModel, cwd: result.cwd });
     }
-    const model = turns.modelOf(threadId);
+    const model = turns.threadOf(threadId)?.model;
     if (model === undefined) return line;
     return encode({
       ...message,
@@ -116,6 +170,37 @@ export const createRouter = (
         ...result,
         model,
         ...("model" in thread && { thread: { ...thread, model } }),
+      },
+    });
+  };
+
+  // The server keeps its own model for a Claude thread, so the app would otherwise show that model after any settings change.
+  const rewriteSettingsUpdated = (line: Buffer) => {
+    const message = parseMessage(line);
+    if (message?.method !== "thread/settings/updated") return line;
+    const params = isObject(message.params) ? message.params : {};
+    const model =
+      typeof params.threadId === "string"
+        ? turns.threadOf(params.threadId)?.model
+        : undefined;
+    const settings = params.threadSettings;
+    if (model === undefined || !isObject(settings)) return line;
+    const mode = settings.collaborationMode;
+    return encode({
+      ...message,
+      params: {
+        ...params,
+        threadSettings: {
+          ...settings,
+          model,
+          ...(isObject(mode) &&
+            isObject(mode.settings) && {
+              collaborationMode: {
+                ...mode,
+                settings: { ...mode.settings, model },
+              },
+            }),
+        },
       },
     });
   };
@@ -129,6 +214,8 @@ export const createRouter = (
 
   return { fromApp, fromServer };
 };
+
+const SETTINGS_UPDATED = "thread/settings/updated";
 
 const parseMessage = (line: Buffer) => {
   const parsed = parseJson(line.toString("utf8"));

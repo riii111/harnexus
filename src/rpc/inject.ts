@@ -12,8 +12,9 @@ export const createLineInjector = (target: Writable) => {
   const stream = new Writable({
     write(chunk: Uint8Array, _encoding, callback) {
       const bytes = Buffer.from(chunk);
+      // An empty write is how the relay waits for everything written so far, injected lines included, so it goes through the target too.
       if (bytes.length === 0) {
-        callback();
+        target.write(bytes, (error) => callback(error ?? null));
         return;
       }
       const lastNewline = bytes.lastIndexOf(NEWLINE);

@@ -32,6 +32,16 @@ describe("createLineInjector", () => {
     );
   });
 
+  test("completes an empty write only after injected lines reach a slow target", async () => {
+    const target = sink(10);
+    const injector = createLineInjector(target.stream);
+
+    injector.inject("own\n");
+    await write(injector.stream, "");
+
+    expect(target.text()).toBe("own\n");
+  });
+
   test("ends the target when the app ends", async () => {
     const target = sink();
     const injector = createLineInjector(target.stream);
@@ -102,12 +112,16 @@ describe("createLineRewriter", () => {
   });
 });
 
-const sink = () => {
+const sink = (delayMs = 0) => {
   const chunks: Buffer[] = [];
   const stream = new Writable({
     write(chunk, _encoding, callback) {
-      chunks.push(Buffer.from(chunk));
-      callback();
+      const store = () => {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      };
+      if (delayMs === 0) store();
+      else setTimeout(store, delayMs);
     },
   });
   return { stream, text: () => Buffer.concat(chunks).toString() };

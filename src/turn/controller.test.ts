@@ -8,6 +8,8 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { Result } from "better-result";
+import { FileWriteFailed, writeFileAtomic } from "../boundary/fs.ts";
 import { fakeClaude } from "../boundary/testing/fake-claude.ts";
 import {
   type ClaudeSessionSettings,
@@ -140,9 +142,37 @@ describe("turn/start on a Claude thread", () => {
   });
 });
 
+describe("session ids", () => {
+  test("resumes from the session id Claude reported even when saving it failed", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    let writes = 0;
+    const { turns, sent, settings, events } = await harness([first, second], {
+      files: {
+        writeState: async (target, content) =>
+          ++writes === 1 ? writeFileAtomic(target, content) : diskFull(target),
+      },
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => first.started());
+    first.emit(sdk(answer("msg-1", "partial")));
+    first.fail(new Error("socket closed"));
+    await until(() => turnCompleted(sent) !== undefined);
+    await completeTurn(turns, sent, second, 11);
+
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "session_not_saved",
+      detail: "StatePersistFailed",
+    });
+    expect(settings[1]).toMatchObject({ resume: "se-1" });
+  });
+});
+
 describe("turn/interrupt", () => {
   test("replies before the turn completes as interrupted", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
+    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
     const { turns, sent } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
@@ -159,6 +189,44 @@ describe("turn/interrupt", () => {
     const completed = sent.findIndex((m) => m.method === "turn/completed");
     expect(sent[reply]).toEqual({ id: 20, result: {} });
     expect(reply).toBeLessThan(completed);
+    expect(claude.closes()).toBe(0);
+  });
+
+  test.each([
+    ["a send still queued", ["uuid-queued"]],
+    ["no receipt from an older CLI", undefined],
+  ])("closes Claude when the interrupt leaves %s", async (_label, stillQueued) => {
+    const claude = fakeClaude(
+      SUBSCRIPTION,
+      stillQueued === undefined ? {} : { stillQueued },
+    );
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    turns.interruptTurn(interrupt(20, "turn-1"));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnCompleted(sent)).toMatchObject({ status: "interrupted" });
+    expect(claude.closes()).toBe(1);
+  });
+
+  test("keeps an interrupt accepted while Claude was starting", async () => {
+    const claude = fakeClaude({ apiProvider: "bedrock" });
+    let start = () => {};
+    const beforeStart = new Promise<void>((resolve) => {
+      start = resolve;
+    });
+    const { turns, sent } = await harness([claude], { beforeStart });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    turns.interruptTurn(interrupt(20, "turn-1"));
+    start();
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(responseTo(sent, 20)).toEqual({ id: 20, result: {} });
+    expect(turnCompleted(sent)).toMatchObject({ status: "interrupted" });
   });
 
   test("closes Claude when the interrupt fails", async () => {
@@ -209,6 +277,21 @@ describe("refused requests", () => {
     ["non-text input", { input: [{ type: "image", url: "x" }] }],
     ["a Codex model", { model: "gpt-fixture" }],
     ["another Claude model", { model: "claude-opus-5-5" }],
+    [
+      "another Claude model in the collaboration mode",
+      {
+        model: MODEL,
+        collaborationMode: {
+          mode: "default",
+          settings: { model: "claude-opus-5-5" },
+        },
+      },
+    ],
+    [
+      "plan mode",
+      { collaborationMode: { mode: "plan", settings: { model: MODEL } } },
+    ],
+    ["another working directory", { cwd: "/elsewhere" }],
   ])("refuses %s without starting Claude", async (_name, override) => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
@@ -233,17 +316,19 @@ describe("refused requests", () => {
     expect(responseTo(sent, 11)?.error).toBeDefined();
   });
 
-  test("refuses a steer until steering is supported", async () => {
+  test("answers a refused request with an error", async () => {
     const { turns, sent } = await harness([]);
 
-    turns.refuseSteer({ id: 12, params: { threadId: THREAD } });
+    turns.refuse({ id: 12, params: { threadId: THREAD } }, "not yet");
 
     expect(responseTo(sent, 12)?.error).toBeDefined();
   });
 
   test("switches a Codex thread to Claude only when its directory is known", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, settings } = await harness([claude], false);
+    const { turns, sent, settings } = await harness([claude], {
+      adopt: false,
+    });
     const request = turnStart(10, "hello");
     const withModel = {
       ...request,
@@ -276,6 +361,15 @@ describe("closeAll", () => {
   });
 });
 
+const diskFull = async (target: string) =>
+  Result.err(
+    new FileWriteFailed({
+      path: target,
+      cause: new Error("disk full"),
+      message: `cannot write ${target}`,
+    }),
+  );
+
 const THREAD = "th-fixture-1";
 const MODEL = "claude-sonnet-5";
 const SUBSCRIPTION: AccountInfo = {
@@ -288,9 +382,17 @@ type Sent = any;
 
 const harness = async (
   fakes: ReturnType<typeof fakeClaude>[],
-  adopt = true,
+  {
+    adopt = true,
+    files = {},
+    beforeStart = Promise.resolve(),
+  }: {
+    adopt?: boolean;
+    files?: Parameters<typeof openThreadStore>[1];
+    beforeStart?: Promise<void>;
+  } = {},
 ) => {
-  const opened = await openThreadStore(join(dir, "threads.json"));
+  const opened = await openThreadStore(join(dir, "threads.json"), files);
   if (opened.isErr()) return expect.unreachable(opened.error.message);
   const store = opened.value;
   const sent: Sent[] = [];
@@ -301,10 +403,11 @@ const harness = async (
     store,
     send: (message) => sent.push(message),
     log: (event) => events.push(event),
-    startSession: (session) => {
+    startSession: async (session) => {
       const fake = fakes[settings.length];
       settings.push(session);
       if (fake === undefined) return expect.unreachable("no fake Claude left");
+      await beforeStart;
       return startClaudeSession(session, fake.runtime);
     },
     now: () => 1_700_000_000_000,

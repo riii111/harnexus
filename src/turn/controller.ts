@@ -15,12 +15,16 @@ import {
   type TurnState,
 } from "../render/turn.ts";
 import type { ThreadRecord, ThreadStore } from "../state/thread-store.ts";
-import { isClaudeModel } from "./models.ts";
+import {
+  isClaudeModel,
+  requestedModel,
+  requestsUnsupportedMode,
+} from "./models.ts";
 
 type ClaudeSession = {
   messages: AsyncIterator<Result<SDKMessage, Failure>, void>;
   send: (text: string) => Result<string, Failure>;
-  interrupt: () => Promise<Result<unknown, Failure>>;
+  interrupt: () => Promise<Result<string[] | null, Failure>>;
   close: () => void;
 };
 
@@ -83,6 +87,8 @@ export const createTurnController = ({
   const adopted = new Map<string, Thread>();
   const sessions = new Map<string, ClaudeSession>();
   const running = new Map<string, Running>();
+  // A session id Claude reported but the store failed to save still resumes the conversation while the bridge runs.
+  const sessionIds = new Map<string, string>();
   let closed = false;
 
   const threadOf = (threadId: string): Thread | undefined => {
@@ -126,7 +132,7 @@ export const createTurnController = ({
     const started = await startSession({
       cwd: record.worktree,
       model: record.model,
-      ...(record.sessionId === null ? {} : { resume: record.sessionId }),
+      ...resumeFrom(sessionIds.get(record.threadId) ?? record.sessionId),
       onToolDeclined: (toolUseId) => {
         const entry = running.get(record.threadId);
         if (entry?.state)
@@ -165,7 +171,12 @@ export const createTurnController = ({
 
     const session = await sessionFor(record);
     if (session.isErr()) {
-      finish(entry, { status: "failed", message: session.error.message });
+      finish(
+        entry,
+        entry.state?.interrupting
+          ? { status: "interrupted" }
+          : { status: "failed", message: session.error.message },
+      );
       return;
     }
     if (entry.state?.interrupting) {
@@ -178,7 +189,7 @@ export const createTurnController = ({
       finish(entry, { status: "failed", message: sent.error.message });
       return;
     }
-    let sessionId = record.sessionId;
+    let sessionId = sessionIds.get(threadId) ?? record.sessionId;
     while (entry.state !== null && !entry.state.finished) {
       const next = await session.value.messages.next();
       const message = next.done === true ? STREAM_ENDED : next.value;
@@ -199,6 +210,7 @@ export const createTurnController = ({
       const current = message.value.session_id;
       if (current !== undefined && current !== sessionId) {
         sessionId = current;
+        sessionIds.set(threadId, current);
         const saved = await store.setSession(threadId, current);
         if (saved.isErr()) {
           log({
@@ -258,7 +270,7 @@ export const createTurnController = ({
     isClaudeThread: (threadId: unknown) =>
       typeof threadId === "string" && threadOf(threadId) !== undefined,
 
-    modelOf: (threadId: string) => threadOf(threadId)?.model,
+    threadOf,
 
     adopt: (threadId: string, thread: Thread) => {
       if (store.get(threadId) === undefined) adopted.set(threadId, thread);
@@ -272,7 +284,7 @@ export const createTurnController = ({
         return;
       }
       const known = threadOf(threadId);
-      const model = params.model ?? known?.model;
+      const model = requestedModel(params) ?? known?.model;
       if (!isClaudeModel(model)) {
         refuse(id, "a Claude thread cannot switch to a Codex model");
         return;
@@ -282,6 +294,22 @@ export const createTurnController = ({
         refuse(
           id,
           "changing the Claude model of a thread is not supported yet",
+        );
+        return;
+      }
+      if (requestsUnsupportedMode(params)) {
+        refuse(id, "Claude threads do not support plan mode yet");
+        return;
+      }
+      // TODO: follow a working directory change in P10 together with the model change, since both need a new session.
+      if (
+        known !== undefined &&
+        typeof params.cwd === "string" &&
+        params.cwd !== known.cwd
+      ) {
+        refuse(
+          id,
+          "changing the working directory of a Claude thread is not supported yet",
         );
         return;
       }
@@ -326,16 +354,19 @@ export const createTurnController = ({
       send({ id, result: {} });
       const session = sessions.get(threadId);
       if (session === undefined) return;
+      // A send still queued in Claude would run after the interrupt, and an old CLI cannot say whether one is, so either way the session is closed and the next turn resumes it.
       void session.interrupt().then((interrupted) => {
-        if (interrupted.isOk() || running.get(threadId) !== entry) return;
+        const stopped =
+          interrupted.isOk() &&
+          interrupted.value !== null &&
+          interrupted.value.length === 0;
+        if (stopped || running.get(threadId) !== entry) return;
         dropSession(threadId, session);
         finish(entry, { status: "interrupted" });
       });
     },
 
-    // TODO: pass steers into the running turn in P10.
-    refuseSteer: ({ id }: AppRequest) =>
-      refuse(id, "steering a Claude turn is not supported yet"),
+    refuse: ({ id }: AppRequest, message: string) => refuse(id, message),
 
     // Closing ends each running turn's message stream, so no Claude process outlives the bridge.
     closeAll: () => {
@@ -345,6 +376,9 @@ export const createTurnController = ({
     },
   };
 };
+
+const resumeFrom = (sessionId: string | null) =>
+  sessionId === null ? {} : { resume: sessionId };
 
 const textInput = (value: unknown) => {
   if (!Array.isArray(value) || value.length === 0) return null;

@@ -130,15 +130,40 @@ describe("threads with a Claude model", () => {
   test("hands turn requests of a Claude thread to the turn controller", () => {
     const { router, calls } = setup(["th-claude"]);
 
-    for (const method of ["turn/start", "turn/interrupt", "turn/steer"]) {
+    for (const method of [
+      "turn/start",
+      "turn/interrupt",
+      "turn/steer",
+      "review/start",
+      "thread/compact/start",
+    ]) {
       const line = encode({ id: 6, method, params: { threadId: "th-claude" } });
       expect(router.fromApp(line)).toBeNull();
     }
     expect(calls.map(([name]) => name)).toEqual([
       "startTurn",
       "interruptTurn",
-      "refuseSteer",
+      "refuse",
+      "refuse",
+      "refuse",
     ]);
+  });
+
+  test("reads the model of a turn from its collaboration mode first", () => {
+    const { router, calls } = setup();
+    const line = encode({
+      id: 7,
+      method: "turn/start",
+      params: {
+        threadId: "th-codex",
+        cwd: "/fixture/work",
+        model: "gpt-fixture",
+        collaborationMode: { mode: "default", settings: { model: CLAUDE } },
+      },
+    });
+
+    expect(router.fromApp(line)).toBeNull();
+    expect(calls.map(([name]) => name)).toEqual(["startTurn"]);
   });
 
   test("switches a Codex thread by turn/start with the directory the server reported", () => {
@@ -171,7 +196,102 @@ describe("threads with a Claude model", () => {
   });
 });
 
+describe("thread/settings/update", () => {
+  test("drops a Claude thread's own model before the server sees it", () => {
+    const { router, calls } = setup(["th-claude"]);
+
+    const forwarded = router.fromApp(
+      settingsUpdate({
+        model: CLAUDE,
+        collaborationMode: { mode: "default", settings: { model: CLAUDE } },
+        approvalPolicy: "never",
+      }),
+    );
+
+    expect(parse(forwarded).params).toEqual({
+      threadId: "th-claude",
+      approvalPolicy: "never",
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test.each([
+    ["another model", { model: "claude-opus-5-5" }],
+    [
+      "another model in the collaboration mode",
+      { collaborationMode: { mode: "default", settings: { model: "gpt-x" } } },
+    ],
+    [
+      "plan mode",
+      { collaborationMode: { mode: "plan", settings: { model: CLAUDE } } },
+    ],
+    ["another working directory", { cwd: "/elsewhere" }],
+  ])("refuses %s on a Claude thread", (_label, change) => {
+    const { router, calls } = setup(["th-claude"]);
+
+    expect(router.fromApp(settingsUpdate(change))).toBeNull();
+    expect(calls.map(([name]) => name)).toEqual(["refuse"]);
+  });
+
+  test("switches a Codex thread to Claude without telling the server", () => {
+    const { router, calls } = setup();
+
+    router.fromApp(
+      encode({
+        id: 3,
+        method: "thread/start",
+        params: { cwd: "/fixture/work" },
+      }),
+    );
+    router.fromServer(threadResponse(3, "th-claude"));
+    const forwarded = router.fromApp(settingsUpdate({ model: CLAUDE }));
+
+    expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
+    expect(calls).toEqual([
+      ["adopt", "th-claude", { model: CLAUDE, cwd: "/fixture/work" }],
+    ]);
+  });
+
+  test("leaves a Codex thread's settings to the server", () => {
+    const { router } = setup();
+    const line = settingsUpdate({ model: "gpt-fixture" });
+
+    expect(router.fromApp(line)).toEqual(line);
+  });
+
+  test("reports the Claude model in the server's settings notice", () => {
+    const { router } = setup(["th-claude"]);
+    const notice = encode({
+      method: "thread/settings/updated",
+      params: {
+        threadId: "th-claude",
+        threadSettings: {
+          model: "gpt-fixture",
+          collaborationMode: {
+            mode: "default",
+            settings: { model: "gpt-fixture" },
+          },
+        },
+      },
+    });
+
+    const out = parse(router.fromServer(notice));
+
+    expect(out.params.threadSettings.model).toBe(CLAUDE);
+    expect(out.params.threadSettings.collaborationMode.settings.model).toBe(
+      CLAUDE,
+    );
+  });
+});
+
 const CLAUDE = "claude-sonnet-5";
+
+const settingsUpdate = (change: object) =>
+  encode({
+    id: 8,
+    method: "thread/settings/update",
+    params: { threadId: "th-claude", ...change },
+  });
 
 const FIXTURES = [
   "handshake.jsonl",
@@ -183,20 +303,22 @@ const FIXTURES = [
 const setup = (claudeThreads: string[] = []) => {
   const calls: unknown[][] = [];
   const events: RouteEvent[] = [];
-  const models = new Map(claudeThreads.map((id) => [id, CLAUDE]));
+  const threads = new Map(
+    claudeThreads.map((id) => [id, { model: CLAUDE, cwd: "/fixture/work" }]),
+  );
   const router = createRouter(
     {
       isClaudeThread: (threadId) =>
-        typeof threadId === "string" && models.has(threadId),
-      modelOf: (threadId) => models.get(threadId),
+        typeof threadId === "string" && threads.has(threadId),
+      threadOf: (threadId) => threads.get(threadId),
       adopt: (threadId, thread) => {
         calls.push(["adopt", threadId, thread]);
-        models.set(threadId, thread.model);
+        threads.set(threadId, thread);
       },
       startTurn: (request: AppRequest, cwd) =>
         calls.push(["startTurn", request, cwd]),
       interruptTurn: (request) => calls.push(["interruptTurn", request]),
-      refuseSteer: (request) => calls.push(["refuseSteer", request]),
+      refuse: (request, message) => calls.push(["refuse", request, message]),
     },
     (event) => events.push(event),
   );
