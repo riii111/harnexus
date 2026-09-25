@@ -4,10 +4,10 @@ import { once } from "node:events";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable, Writable } from "node:stream";
+import { PassThrough, Readable, Writable } from "node:stream";
 import { createLogger } from "../shared/logger.ts";
 import { createObserver } from "./observe.ts";
-import { runRelay } from "./relay.ts";
+import { relayStreams, runRelay } from "./relay.ts";
 
 let dir: string;
 let fakeCodex: string;
@@ -142,6 +142,71 @@ describe("runRelay", () => {
       expect(isAlive(pid)).toBe(false);
     });
   }
+});
+
+describe("relayStreams", () => {
+  test("relays both ways and ends once the server output has reached the app", async () => {
+    const output = collector({ delayMs: 5 });
+    const serverInput = collector();
+    const serverOutput = new PassThrough();
+    const input = new PassThrough();
+
+    const relaying = relayStreams({
+      input,
+      output: output.stream,
+      serverInput: serverInput.stream,
+      serverOutput,
+    });
+    input.end("to server\n");
+    serverOutput.end("to app\n");
+    await relaying;
+
+    expect(output.bytes().toString()).toBe("to app\n");
+    expect(serverInput.bytes().toString()).toBe("to server\n");
+  });
+
+  test("ends the server input when the app disconnects", async () => {
+    const serverInput = collector();
+    const serverOutput = new PassThrough();
+    const input = new PassThrough();
+
+    const relaying = relayStreams({
+      input,
+      output: collector().stream,
+      serverInput: serverInput.stream,
+      serverOutput,
+    });
+    input.end();
+    await once(serverInput.stream, "finish");
+    serverOutput.end();
+    await relaying;
+
+    expect(serverInput.stream.writableFinished).toBe(true);
+  });
+
+  test("ends the server input when the app stops reading output", async () => {
+    const serverInput = collector();
+    const serverOutput = new PassThrough();
+    const broken = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback(new Error("EPIPE"));
+      },
+    });
+    broken.on("error", () => {});
+
+    const relaying = relayStreams({
+      input: new PassThrough(),
+      output: broken,
+      serverInput: serverInput.stream,
+      serverOutput,
+    });
+    serverOutput.write("lost\n");
+    await once(serverInput.stream, "finish");
+    serverOutput.end();
+    await relaying;
+
+    expect(serverInput.stream.writableFinished).toBe(true);
+  });
 });
 
 describe("bridge process", () => {

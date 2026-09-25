@@ -35,6 +35,55 @@ export const runRelay = (
     return Result.ok(await relayUntilExit(child, options));
   });
 
+// For a server this process did not start, so its exit is not observable here: the relay ends when the server closes its output and everything it wrote has been handed to the app.
+export const relayStreams = ({
+  input,
+  output,
+  serverInput,
+  serverOutput,
+  observer,
+}: {
+  input: Readable;
+  output: Writable;
+  serverInput: Writable;
+  serverOutput: Readable;
+  observer?: RelayObserver;
+}) =>
+  new Promise<void>((resolve) => {
+    let settled = false;
+    const stopServer = () => {
+      if (!serverInput.writableEnded) serverInput.end();
+    };
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      input.removeAllListeners("data");
+      input.pause();
+      resolve();
+    };
+    const finish = () => {
+      if (output.destroyed || output.writableEnded) {
+        settle();
+        return;
+      }
+      output.write(new Uint8Array(0), settle);
+    };
+
+    serverInput.on("error", () => {});
+    input.on("error", stopServer);
+    output.on("error", stopServer);
+    serverOutput.on("error", finish);
+
+    pump(input, serverInput, "app_to_server", observer, {
+      onEnd: stopServer,
+      onWriteError: () => {},
+    });
+    pump(serverOutput, output, "server_to_app", observer, {
+      onEnd: finish,
+      onWriteError: stopServer,
+    });
+  });
+
 // Never rejects: every stream failure is turned into stopping the child, and the child's exit is the only outcome.
 const relayUntilExit = (
   child: PipedChild,

@@ -8,6 +8,7 @@ export type LogEvent =
   | { event: "bridge_startup_failed"; reason: StartupFailure }
   | { event: "log_file_unavailable"; reason: LogFileFailure }
   | { event: "codex_exited"; code: number | null; signal: Signals | null }
+  | { event: "server_closed" }
   | AppToolsProbeEvent
   | ObservationEvent;
 
@@ -15,7 +16,8 @@ type StartupFailure =
   | "CodexPathMissing"
   | "CodexPathNotAbsolute"
   | "FileNotExecutable"
-  | "ChildSpawnFailed";
+  | "ChildSpawnFailed"
+  | "ServerPipesUnavailable";
 
 type LogFileFailure = "LogPathNotAbsolute" | "LogFileOpenFailed";
 
@@ -31,6 +33,7 @@ export const createLogger = (sink: LogSink = stderrSink) => ({
 const serialize = (entry: LogEvent) => {
   switch (entry.event) {
     case "bridge_started":
+    case "server_closed":
       return { event: entry.event };
     case "bridge_startup_failed":
     case "log_file_unavailable":

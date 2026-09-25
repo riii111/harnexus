@@ -5,7 +5,9 @@
 use strict;
 use warnings;
 use Cwd qw(abs_path);
+use Fcntl qw(F_DUPFD);
 use File::Basename qw(dirname);
+use POSIX ();
 
 # Options of `codex` and `codex app-server` whose value is the next argument (codex-cli 0.155).
 my %VALUE_OPTIONS = map { $_ => 1 } qw(
@@ -28,15 +30,61 @@ if ((abs_path($codex) // "") eq $self) {
 $ENV{HARNEXUS_LAUNCHER_ACTIVE} = "1";
 
 if (runs_app_server(@ARGV)) {
-  my $bun = require_executable("HARNEXUS_BUN_PATH");
-  my $bridge = dirname(dirname($self)) . "/src/bridge/main.ts";
-  # DO_NOT_TRACK disables crash reports; the flags keep .env and bunfig.toml preloads in the caller's cwd out of the bridge.
-  $ENV{DO_NOT_TRACK} = "1";
-  exec { $bun } $bun, "--no-env-file", "--config=/dev/null", $bridge, @ARGV
-    or fail("cannot start $bun: $!");
+  my $mode = $ENV{HARNEXUS_APP_SERVER_MODE} // "";
+  if ($mode eq "sidecar") {
+    start_sidecar();
+  } elsif ($mode ne "exec") {
+    my $bun = require_executable("HARNEXUS_BUN_PATH");
+    $ENV{DO_NOT_TRACK} = "1";
+    exec { $bun } bun_command($bun, "main.ts"), @ARGV
+      or fail("cannot start $bun: $!");
+  }
 }
 
 exec { $codex } $codex, @ARGV or fail("cannot start $codex: $!");
+
+# The app accepts codex_app only from the Codex process it started, so this process stays that Codex and the bridge runs beside it on fds 3 (Codex stdout) and 4 (Codex stdin), which must match src/bridge/sidecar.ts.
+sub start_sidecar {
+  my $bun = require_executable("HARNEXUS_BUN_PATH");
+  pipe(my $from_server, my $server_stdout) or fail("cannot create a pipe: $!");
+  pipe(my $server_stdin, my $to_server) or fail("cannot create a pipe: $!");
+  my $pid = fork // fail("cannot fork: $!");
+  if ($pid == 0) {
+    close $server_stdout;
+    close $server_stdin;
+    place_fds([$from_server, 3], [$to_server, 4]);
+    $ENV{DO_NOT_TRACK} = "1";
+    exec { $bun } bun_command($bun, "sidecar.ts") or do {
+      print STDERR "harnexus: cannot start $bun: $!\n";
+      POSIX::_exit(1);
+    };
+  }
+  close $from_server;
+  close $to_server;
+  POSIX::dup2(fileno($server_stdin), 0) // fail("cannot redirect stdin: $!");
+  POSIX::dup2(fileno($server_stdout), 1) // fail("cannot redirect stdout: $!");
+  close $server_stdin;
+  close $server_stdout;
+}
+
+# Moving every descriptor above the targets first keeps one dup2 from overwriting another's source; dup2 also clears close-on-exec, which Perl sets on its pipes.
+sub place_fds {
+  my @high = map {
+    my $fd = fcntl($_->[0], F_DUPFD, 10) // fail("cannot duplicate a pipe: $!");
+    [$fd + 0, $_->[1]];
+  } @_;
+  for (@high) {
+    POSIX::dup2($_->[0], $_->[1]) // fail("cannot place a pipe: $!");
+    POSIX::close($_->[0]);
+  }
+}
+
+# The flags keep .env and bunfig.toml preloads in the caller's cwd out of the bridge; DO_NOT_TRACK, set by the caller, disables crash reports.
+sub bun_command {
+  my ($bun, $entry) = @_;
+  return ($bun, "--no-env-file", "--config=/dev/null",
+    dirname(dirname($self)) . "/src/bridge/$entry");
+}
 
 # The app puts global options before `app-server`; helper subcommands such as generate-ts and non-stdio listeners carry no app traffic, so they go straight to Codex.
 sub runs_app_server {
