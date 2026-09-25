@@ -35,7 +35,7 @@ export const runRelay = (
     return Result.ok(await relayUntilExit(child, options));
   });
 
-// For a server this process did not start, so its exit is not observable here: the relay ends when the server closes its output and everything it wrote has been handed to the app.
+// The server is not a child here, so the relay ends on its output EOF instead of its exit.
 export const relayStreams = ({
   input,
   output,

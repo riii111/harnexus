@@ -87,7 +87,6 @@ export const readFirstLine = (
     child.once("close", () => finish(null));
   });
 
-// The launcher hands the server's stdout and stdin to the sidecar as these descriptors before it execs the server.
 export const openServerPipes = (
   serverOutputFd: number,
   serverInputFd: number,

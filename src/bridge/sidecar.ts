@@ -11,7 +11,7 @@ import { createToolCallProbe } from "./tool-call-probe.ts";
 const SERVER_OUTPUT_FD = 3;
 const SERVER_INPUT_FD = 4;
 
-// Started by the launcher, which then execs Codex in its own place so the app keeps Codex as the process it started; Codex's exit status therefore reaches the app directly and is not observable here.
+// Codex is not a child of this process, so its exit status goes to the app and is not observable here.
 const logger = createBridgeLogger(process.env);
 
 const pipes = openServerPipes(SERVER_OUTPUT_FD, SERVER_INPUT_FD);
@@ -30,7 +30,6 @@ await relayStreams({
 logger.log({ event: "server_closed" });
 process.exit(0);
 
-// Without HARNEXUS_PROBE_TOOL_CALL the server streams are relayed as they are.
 function withToolCallProbe(
   {
     serverInput,

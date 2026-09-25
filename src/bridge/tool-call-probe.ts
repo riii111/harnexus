@@ -20,12 +20,12 @@ type ProbeStep =
   | "approval_requested"
   | "approval_answered";
 
-// A is the first thread the app opens (the caller) and B the second (the recipient in send mode); ids stay in memory and only the role is logged.
+// A is the first thread the app opens and B the second; only the role reaches the log, never the thread id.
 type ThreadRole = "A" | "B";
 
 export const TOOL_CALL_PROBE_ENV = "HARNEXUS_PROBE_TOOL_CALL";
 
-// Checks that codex_app can be driven through the public mcpServer/tool/call from a thread with no running turn: "read" lists projects, "send" asks B to reply to A so the reply path and its approval can be watched.
+// Diagnostic only: the call is made while A has no running turn, the situation of a Claude thread.
 export const createToolCallProbe = (
   env: NodeJS.ProcessEnv,
   log: (entry: LogEvent) => void,

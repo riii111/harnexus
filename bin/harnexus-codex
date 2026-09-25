@@ -43,7 +43,7 @@ if (runs_app_server(@ARGV)) {
 
 exec { $codex } $codex, @ARGV or fail("cannot start $codex: $!");
 
-# The app accepts codex_app only from the Codex process it started, so this process stays that Codex and the bridge runs beside it on fds 3 (Codex stdout) and 4 (Codex stdin), which must match src/bridge/sidecar.ts.
+# codex_app works only while the process the app started is Codex itself, so this process becomes Codex; fds 3 (Codex stdout) and 4 (Codex stdin) must match src/bridge/sidecar.ts.
 sub start_sidecar {
   my $bun = require_executable("HARNEXUS_BUN_PATH");
   pipe(my $from_server, my $server_stdout) or fail("cannot create a pipe: $!");

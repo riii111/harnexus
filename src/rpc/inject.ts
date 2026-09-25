@@ -1,6 +1,6 @@
 import { Transform, Writable } from "node:stream";
 
-// The app may split a message across writes, so an injected line waits for the next line boundary and the app's bytes are never reordered.
+// The app may split a message across writes, so an injected line waits for a line boundary.
 export const createLineInjector = (target: Writable) => {
   let atBoundary = true;
   let pending: string[] = [];
@@ -41,7 +41,7 @@ export const createLineInjector = (target: Writable) => {
   };
 };
 
-// Responses to the bridge's own requests are handed to onOwn and never reach the app; every other line passes through unchanged.
+// The app must never see a response to a request it did not send.
 export const createOwnResponseFilter = (
   isOwn: (line: Buffer) => boolean,
   onOwn: (line: Buffer) => void,
