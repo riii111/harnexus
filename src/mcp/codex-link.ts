@@ -34,6 +34,7 @@ export const createCodexLink = ({
 }) => {
   const writes = createSerialQueue();
   let unknownWrite: string | null = null;
+  let writesInFlight = 0;
 
   const callApp = async (
     name: AppTool,
@@ -59,7 +60,7 @@ export const createCodexLink = ({
     targets: readonly string[],
     timeoutMs?: number,
   ) => {
-    const refusal = refuseTargets(targets);
+    const refusal = refuseTargets(targets, { allowSelf: true });
     if (refusal !== null) return failure(refusal);
     const called = await callApp(name, args, timeoutMs);
     return called.isOk() ? called.value : failure(called.error.message);
@@ -79,26 +80,31 @@ export const createCodexLink = ({
           `An earlier ${unknownWrite} call has an unknown outcome and is never repeated automatically. Stop sending or creating threads and ask the user to check the app.`,
         );
       }
-      const refusal = refuseTargets(targets);
+      const refusal = refuseTargets(targets, { allowSelf: false });
       if (refusal !== null) return failure(refusal);
-      const called = await callApp(name, args, WRITE_TIMEOUT_MS);
-      if (called.isErr()) {
-        if (called.error._tag === "ServerRequestNotSent") {
-          return failure(called.error.message);
+      writesInFlight += 1;
+      try {
+        const called = await callApp(name, args, WRITE_TIMEOUT_MS);
+        if (called.isErr()) {
+          if (called.error._tag === "ServerRequestNotSent") {
+            return failure(called.error.message);
+          }
+          unknownWrite = name;
+          return failure(
+            `${called.error.message}. The ${name} call may or may not have taken effect and will not be repeated; ask the user to check the app.`,
+          );
         }
-        unknownWrite = name;
-        return failure(
-          `${called.error.message}. The ${name} call may or may not have taken effect and will not be repeated; ask the user to check the app.`,
-        );
+        return called.value.isError === true
+          ? called.value
+          : await onSuccess(called.value);
+      } finally {
+        writesInFlight -= 1;
       }
-      return called.value.isError === true
-        ? called.value
-        : onSuccess(called.value);
     });
 
   // A created thread that cannot be named or saved as a reviewer is out of reach but real, so it is treated like an unknown outcome to prevent a duplicate.
   const recordReviewer = async (result: ToolResult) => {
-    const threadId = createdThreadId(result);
+    const threadId = createdThreadId(result, callerThreadId);
     if (threadId === null) {
       unknownWrite = "create_thread";
       return failure(
@@ -115,16 +121,23 @@ export const createCodexLink = ({
     return result;
   };
 
-  const refuseTargets = (targets: readonly string[]) => {
+  // Messaging this thread itself would start a turn behind the one making the call, so it may only be read and waited on.
+  const refuseTargets = (
+    targets: readonly string[],
+    { allowSelf }: { allowSelf: boolean },
+  ) => {
     const record = store.get(callerThreadId);
     if (record === undefined) {
       return "This conversation is not registered as a Claude thread, so it cannot use the Codex app threads.";
     }
-    const allowed = new Set([callerThreadId, ...record.reviewerThreadIds]);
+    const allowed = new Set([
+      ...(allowSelf ? [callerThreadId] : []),
+      ...record.reviewerThreadIds,
+    ]);
     const denied = targets.filter((threadId) => !allowed.has(threadId));
     return denied.length === 0
       ? null
-      : `Thread ${denied.join(", ")} is not one of your reviewers. Only reviewers created with create_thread from this thread, and this thread itself, can be used.`;
+      : `Thread ${denied.join(", ")} is not one of your reviewers. Only reviewers created with create_thread from this thread can be used, and this thread itself can only be read or waited on.`;
   };
 
   const tools = [
@@ -202,8 +215,8 @@ export const createCodexLink = ({
 
   return {
     server: createSdkMcpServer({ name: CODEX_LINK_SERVER, tools }),
-    // The turn runner turns this into the thread's outcome-unknown state so a restart does not repeat the turn either.
-    hasUnknownWrite: () => unknownWrite !== null,
+    // A turn that ends while a write is still waiting for its answer cannot know the outcome either, so both count; the turn runner turns this into the thread's outcome-unknown state so a restart does not repeat the turn.
+    hasUnsettledWrite: () => unknownWrite !== null || writesInFlight > 0,
   };
 };
 
@@ -224,7 +237,11 @@ class AppToolAnswerMalformed extends TaggedError("AppToolAnswerMalformed")<{
 
 // A malformed answer is still an answer to a call that ran, so for writes it counts as an unknown outcome like a lost one.
 const readToolResult = (value: unknown) => {
-  const answer = value as { content?: unknown; isError?: unknown } | null;
+  const answer = value as {
+    content?: unknown;
+    structuredContent?: unknown;
+    isError?: unknown;
+  } | null;
   if (
     typeof answer !== "object" ||
     answer === null ||
@@ -238,6 +255,9 @@ const readToolResult = (value: unknown) => {
   }
   const result: ToolResult = {
     content: answer.content.flatMap(toContentItem),
+    ...(isRecord(answer.structuredContent) && {
+      structuredContent: answer.structuredContent,
+    }),
     ...(answer.isError === true && { isError: true }),
   };
   return Result.ok(result);
@@ -260,8 +280,10 @@ const toContentItem = (item: unknown): ContentItem[] => {
   return [];
 };
 
-// The answer's format is not recorded yet, so only an explicit threadId field or a single distinct thread-like id in the text is accepted.
-const createdThreadId = (result: ToolResult) => {
+// TODO: read the id from the exact answer format once P8b records it on the app; until then only an explicit threadId field or a single thread-like id other than the caller is accepted.
+const createdThreadId = (result: ToolResult, callerThreadId: string) => {
+  const structured = findThreadIdField(result.structuredContent);
+  if (structured !== null) return structured;
   const texts = result.content.flatMap((item) =>
     item.type === "text" ? [item.text] : [],
   );
@@ -270,12 +292,17 @@ const createdThreadId = (result: ToolResult) => {
     const threadId = parsed.isOk() ? findThreadIdField(parsed.value) : null;
     if (threadId !== null) return threadId;
   }
-  const ids = new Set(texts.flatMap((text) => text.match(UUID_PATTERN) ?? []));
+  const ids = new Set(
+    texts
+      .flatMap((text) => text.match(UUID_PATTERN) ?? [])
+      .map((id) => id.toLowerCase())
+      .filter((id) => id !== callerThreadId.toLowerCase()),
+  );
   return ids.size === 1 ? ([...ids][0] ?? null) : null;
 };
 
 const findThreadIdField = (value: unknown): string | null => {
-  if (typeof value !== "object" || value === null) return null;
+  if (!isRecord(value)) return null;
   const record = value as { threadId?: unknown; thread?: { id?: unknown } };
   if (typeof record.threadId === "string" && record.threadId !== "") {
     return record.threadId;
@@ -283,6 +310,9 @@ const findThreadIdField = (value: unknown): string | null => {
   const nested = record.thread?.id;
   return typeof nested === "string" && nested !== "" ? nested : null;
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const failure = (text: string): ToolResult => ({
   content: [{ type: "text", text }],

@@ -23,7 +23,7 @@ describe("attachServerRequests", () => {
     );
   });
 
-  test("passes the app a response whose id this bridge is not waiting for", async () => {
+  test("passes the app a response to an id this bridge never issued", async () => {
     const server = fakeServer();
     const requests = attachServerRequests(server);
     const appOutput = collect(requests.serverOutput);
@@ -38,6 +38,19 @@ describe("attachServerRequests", () => {
     expect(await appOutput).toBe(
       '{"id":"harnexus-9","result":{}}\n{"id":"harnexus-1","method":"x","result":{}}\n',
     );
+  });
+
+  test("keeps a late answer to a timed-out request away from the app", async () => {
+    const server = fakeServer();
+    const requests = attachServerRequests(server);
+    const appOutput = collect(requests.serverOutput);
+
+    const result = await requests.request("list", {}, { timeoutMs: 10 });
+    server.output.write('{"id":"harnexus-1","result":{"late":true}}\n');
+    server.output.end('{"method":"turn/started"}\n');
+
+    expect(result.isErr() && result.error._tag).toBe("ServerRequestUnanswered");
+    expect(await appOutput).toBe('{"method":"turn/started"}\n');
   });
 
   test("returns an error response as a rejection with its code", async () => {

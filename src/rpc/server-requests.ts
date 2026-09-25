@@ -45,14 +45,20 @@ export const attachServerRequests = ({
   let matched: Response | null = null;
   let closed = false;
 
+  // A late answer to a request that already timed out is still dropped, since the app never sent that id.
   const isOwnResponse = (line: Buffer) => {
     matched = null;
-    if (pending.size === 0 || !line.includes(ID_PREFIX_BYTES)) return false;
+    if (sequence === 0 || !line.includes(ID_PREFIX_BYTES)) return false;
     const parsed = parseJson(line.toString());
     if (parsed.isErr() || !isResponse(parsed.value)) return false;
-    if (!pending.has(parsed.value.id)) return false;
+    if (!isIssued(parsed.value.id)) return false;
     matched = parsed.value;
     return true;
+  };
+
+  const isIssued = (id: string) => {
+    const number = id.startsWith(ID_PREFIX) ? id.slice(ID_PREFIX.length) : "";
+    return /^[1-9]\d*$/.test(number) && Number(number) <= sequence;
   };
 
   const onOwnResponse = () => {

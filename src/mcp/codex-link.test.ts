@@ -95,7 +95,7 @@ describe("createCodexLink tools", () => {
     expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
   });
 
-  test("allows reading, waiting on and replying to its own thread", async () => {
+  test("allows reading and waiting on its own thread but not messaging it", async () => {
     const { client, requests } = await connect({
       answer: () => Result.ok(textAnswer("ok")),
     });
@@ -108,14 +108,63 @@ describe("createCodexLink tools", () => {
       name: "wait_threads",
       arguments: { targets: [{ threadId: CALLER }], timeoutMs: 1_000 },
     });
-    await client.callTool({
+    const sent = await client.callTool({
       name: "send_message_to_thread",
       arguments: { threadId: CALLER, prompt: "note" },
     });
 
+    expect(sent.isError).toBe(true);
     expect(requests.map((request) => request.timeoutMs)).toEqual([
-      60_000, 31_000, 120_000,
+      60_000, 31_000,
     ]);
+  });
+
+  test("never forwards a host choice, even nested in wait targets", async () => {
+    const { client, requests } = await connect({
+      answer: () => Result.ok(textAnswer("ok")),
+    });
+
+    await client.callTool({
+      name: "wait_threads",
+      arguments: { targets: [{ threadId: CALLER, hostId: "remote" }] },
+    });
+
+    expect(requests[0]?.params.arguments).toEqual({
+      targets: [{ threadId: CALLER }],
+    });
+  });
+
+  test("prefers a thread id in the structured answer", async () => {
+    const { client, store } = await connect({
+      caller: UUID_CALLER,
+      answer: () =>
+        Result.ok({
+          ...textAnswer(`Created from ${OTHER_UUID}`),
+          structuredContent: { threadId: REVIEWER },
+        }),
+    });
+
+    await client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review", target: {} },
+    });
+
+    expect(store.reviewers(UUID_CALLER)).toEqual([REVIEWER]);
+  });
+
+  test("does not take the caller's own id for the created thread", async () => {
+    const { client, store } = await connect({
+      caller: UUID_CALLER,
+      answer: () =>
+        Result.ok(textAnswer(`Created ${REVIEWER} for ${UUID_CALLER}`)),
+    });
+
+    await client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review", target: {} },
+    });
+
+    expect(store.reviewers(UUID_CALLER)).toEqual([REVIEWER]);
   });
 });
 
@@ -186,7 +235,7 @@ describe("createCodexLink write outcomes", () => {
     expect(text(second)).toContain("unknown outcome");
     expect(created.isError).toBe(true);
     expect(requests).toHaveLength(1);
-    expect(link.hasUnknownWrite()).toBe(true);
+    expect(link.hasUnsettledWrite()).toBe(true);
   });
 
   test("still allows reads after an unknown outcome so the result can be checked", async () => {
@@ -219,7 +268,7 @@ describe("createCodexLink write outcomes", () => {
 
     await send(client);
 
-    expect(link.hasUnknownWrite()).toBe(true);
+    expect(link.hasUnsettledWrite()).toBe(true);
   });
 
   test("lets a write that was never sent, or that the app refused, be tried again", async () => {
@@ -245,7 +294,7 @@ describe("createCodexLink write outcomes", () => {
     ]);
     expect(text(second)).toBe("no such thread");
     expect(requests).toHaveLength(3);
-    expect(link.hasUnknownWrite()).toBe(false);
+    expect(link.hasUnsettledWrite()).toBe(false);
   });
 
   test("stops writing when a created thread cannot be identified", async () => {
@@ -260,7 +309,7 @@ describe("createCodexLink write outcomes", () => {
 
     expect(created.isError).toBe(true);
     expect(store.reviewers(CALLER)).toEqual([]);
-    expect(link.hasUnknownWrite()).toBe(true);
+    expect(link.hasUnsettledWrite()).toBe(true);
   });
 
   test("stops writing when a created thread cannot be saved as a reviewer", async () => {
@@ -277,7 +326,7 @@ describe("createCodexLink write outcomes", () => {
 
     expect(created.isError).toBe(true);
     expect(text(created)).toContain(REVIEWER);
-    expect(link.hasUnknownWrite()).toBe(true);
+    expect(link.hasUnsettledWrite()).toBe(true);
   });
 
   test("holds a second write until the first is decided and drops it when that was lost", async () => {
@@ -302,14 +351,37 @@ describe("createCodexLink write outcomes", () => {
     expect(text(await second)).toContain("unknown outcome");
     expect(requests).toHaveLength(1);
   });
+
+  test("reports a write still waiting for its answer as unsettled, as when a turn is stopped mid-call", async () => {
+    let release: (value: Result<unknown, ServerRequestError>) => void =
+      () => {};
+    const { client, link, requests } = await connect({
+      reviewers: { [CALLER]: [REVIEWER] },
+      answer: () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    });
+
+    const pending = send(client);
+    await waitUntil(() => requests.length === 1);
+    const whileWaiting = link.hasUnsettledWrite();
+    release(Result.ok(textAnswer("sent")));
+    await pending;
+
+    expect(whileWaiting).toBe(true);
+    expect(link.hasUnsettledWrite()).toBe(false);
+  });
 });
 
 const connect = async ({
+  caller = CALLER,
   reviewers = {},
   callerRegistered = true,
   addReviewerFails = false,
   answer = () => Result.ok(textAnswer("ok")),
 }: {
+  caller?: string;
   reviewers?: Record<string, string[]>;
   callerRegistered?: boolean;
   addReviewerFails?: boolean;
@@ -320,7 +392,7 @@ const connect = async ({
     | Promise<Result<unknown, ServerRequestError>>;
 } = {}) => {
   const store = fakeStore(
-    callerRegistered ? { [CALLER]: [], ...reviewers } : reviewers,
+    callerRegistered ? { [caller]: [], ...reviewers } : reviewers,
     addReviewerFails,
   );
   const requests: RecordedRequest[] = [];
@@ -329,7 +401,7 @@ const connect = async ({
     requests.push({ method, params: call, timeoutMs });
     return answer(call);
   };
-  const link = createCodexLink({ callerThreadId: CALLER, store, request });
+  const link = createCodexLink({ callerThreadId: caller, store, request });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   await link.server.instance.connect(serverTransport);
@@ -406,7 +478,11 @@ const notSent = () =>
   }) as ServerRequestError;
 
 const waitUntil = async (condition: () => boolean) => {
-  while (!condition()) await new Promise((resolve) => setTimeout(resolve, 1));
+  const deadline = Date.now() + 1_000;
+  while (!condition()) {
+    if (Date.now() > deadline) expect.unreachable("condition not met in time");
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
 };
 
 type CallParams = {
@@ -423,6 +499,8 @@ type RecordedRequest = {
 };
 
 const CALLER = "thread-caller";
+const UUID_CALLER = "019a0000-0000-7000-8000-0000000000aa";
+const OTHER_UUID = "019a0000-0000-7000-8000-0000000000bb";
 const REVIEWER = "019a0000-0000-7000-8000-000000000001";
 const OTHER_WORKER = "thread-other-worker";
 const OTHER_REVIEWER = "thread-other-reviewer";
