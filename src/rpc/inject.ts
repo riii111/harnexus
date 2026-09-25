@@ -3,6 +3,7 @@ import { Transform, Writable } from "node:stream";
 // The app may split a message across writes, so an injected line waits for a line boundary.
 export const createLineInjector = (target: Writable) => {
   let atBoundary = true;
+  let broken = false;
   let pending: string[] = [];
   const flushPending = () => {
     for (const line of pending) target.write(line);
@@ -32,9 +33,16 @@ export const createLineInjector = (target: Writable) => {
     },
   });
   stream.on("error", () => {});
+  // A server that exits while a line is being injected fails the write with EPIPE, which must stop the relay instead of crashing it.
+  target.on("error", (error) => {
+    broken = true;
+    pending = [];
+    stream.destroy(error);
+  });
   return {
     stream,
     inject: (line: string) => {
+      if (broken || target.writableEnded) return;
       if (atBoundary) target.write(line);
       else pending.push(line);
     },

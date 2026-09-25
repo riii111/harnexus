@@ -11,6 +11,7 @@ export type ToolCallProbeEvent = {
 };
 
 type ProbeStep =
+  | "refused"
   | "thread_seen"
   | "call_sent"
   | "call_answered"
@@ -20,10 +21,12 @@ type ProbeStep =
   | "approval_requested"
   | "approval_answered";
 
-// A is the first thread the app opens and B the second; only the role reaches the log, never the thread id.
+// A is the caller and B the recipient named by the environment; only the role reaches the log, never the thread id.
 type ThreadRole = "A" | "B";
 
 export const TOOL_CALL_PROBE_ENV = "HARNEXUS_PROBE_TOOL_CALL";
+export const CALLER_THREAD_ENV = "HARNEXUS_PROBE_CALLER_THREAD";
+export const TARGET_THREAD_ENV = "HARNEXUS_PROBE_TARGET_THREAD";
 
 // Diagnostic only: the call is made while A has no running turn, the situation of a Claude thread.
 export const createToolCallProbe = (
@@ -33,40 +36,55 @@ export const createToolCallProbe = (
 ) => {
   const mode = env[TOOL_CALL_PROBE_ENV];
   if (mode !== "read" && mode !== "send") return null;
-  const threads: string[] = [];
-  const active = new Set<string>();
-  const approvals = new Map<string | number, ThreadRole | null>();
-  let inject: ((line: string) => void) | null = null;
-  let fired = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-
-  const role = (threadId: unknown): ThreadRole | null =>
-    threadId === threads[0] ? "A" : threadId === threads[1] ? "B" : null;
   const record = (
     step: ProbeStep,
     threadRole: ThreadRole | null,
     detail: string | null = null,
   ) => log({ event: "tool_call_probe", step, role: threadRole, detail });
+  // Threads are never picked from what the app happens to open, since that once wrote to an unrelated thread of the user.
+  const caller = env[CALLER_THREAD_ENV] ?? "";
+  const target = mode === "send" ? (env[TARGET_THREAD_ENV] ?? "") : null;
+  const refusal =
+    caller === ""
+      ? "caller_missing"
+      : target === ""
+        ? "target_missing"
+        : target === caller
+          ? "same_thread"
+          : null;
+  if (refusal !== null) {
+    record("refused", null, refusal);
+    return null;
+  }
+  const seen = new Set<string>();
+  const active = new Set<string>();
+  const approvals = new Map<string | number, ThreadRole | null>();
+  let inject: ((line: string) => void) | null = null;
+  let fired = false;
+  let answered = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let ownResponse: Message | null = null;
 
+  const role = (threadId: unknown): ThreadRole | null =>
+    threadId === caller ? "A" : threadId === target ? "B" : null;
+
+  // Both threads must have been loaded by the app before anything is sent.
   const schedule = () => {
     if (fired || inject === null) return;
-    const caller = threads[0];
-    if (caller === undefined || threads.length < (mode === "send" ? 2 : 1)) {
-      return;
-    }
+    if (!seen.has(caller) || (target !== null && !seen.has(target))) return;
     clearTimeout(timer);
     if (active.has(caller)) return;
-    timer = setTimeout(() => fire(caller), quietMs);
+    timer = setTimeout(fire, quietMs);
   };
 
-  const fire = (caller: string) => {
+  const fire = () => {
     if (fired || inject === null || active.has(caller)) return;
     fired = true;
     const [tool, args] =
-      mode === "send"
+      target !== null
         ? [
             "send_message_to_thread",
-            { threadId: threads[1], prompt: replyPrompt(caller) },
+            { threadId: target, prompt: replyPrompt(caller) },
           ]
         : ["list_projects", {}];
     inject(
@@ -90,34 +108,30 @@ export const createToolCallProbe = (
       (message.method === "thread/started"
         ? message.params?.thread?.id
         : undefined);
-    if (
-      typeof threadId === "string" &&
-      threads.length < 2 &&
-      !threads.includes(threadId)
-    ) {
-      threads.push(threadId);
+    if (role(threadId) !== null && !seen.has(threadId as string)) {
+      seen.add(threadId as string);
       record("thread_seen", role(threadId));
     }
-    const target = message.params?.threadId;
-    if (message.method === "turn/started" && typeof target === "string") {
-      active.add(target);
-      if (role(target)) record("turn_started", role(target));
+    const subject = message.params?.threadId;
+    if (message.method === "turn/started" && typeof subject === "string") {
+      active.add(subject);
+      if (role(subject)) record("turn_started", role(subject));
     }
-    if (message.method === "turn/completed" && typeof target === "string") {
-      active.delete(target);
-      if (role(target)) record("turn_completed", role(target));
+    if (message.method === "turn/completed" && typeof subject === "string") {
+      active.delete(subject);
+      if (role(subject)) record("turn_completed", role(subject));
     }
     if (isApprovalRequest(message.method) && message.id !== undefined) {
-      approvals.set(message.id, role(target));
-      record("approval_requested", role(target), message.method ?? null);
+      approvals.set(message.id, role(subject));
+      record("approval_requested", role(subject), message.method ?? null);
     }
     schedule();
   };
 
   const onAppMessage = (message: Message) => {
-    const target = message.params?.threadId;
-    if (message.method === "turn/start" && role(target)) {
-      record("turn_start_requested", role(target));
+    const subject = message.params?.threadId;
+    if (message.method === "turn/start" && role(subject)) {
+      record("turn_start_requested", role(subject));
     }
     if (message.method === undefined && message.id !== undefined) {
       const approval = approvals.get(message.id);
@@ -143,11 +157,26 @@ export const createToolCallProbe = (
         splitters[direction].push(chunk),
       end: (direction: Direction) => splitters[direction].end(),
     },
-    isOwnResponse: (line: Buffer) =>
-      line.includes(CALL_ID_BYTES) && !line.includes(METHOD_KEY_BYTES),
-    onOwnResponse: (line: Buffer) => {
+    // The id is matched at the top level of a parsed response to the one request actually sent, so the same text nested in another message never matches.
+    isOwnResponse: (line: Buffer) => {
+      if (!fired || answered || !line.includes(CALL_ID_BYTES)) return false;
       const parsed = parseJson(line.toString());
-      const message = parsed.isOk() ? (parsed.value as Message) : {};
+      if (parsed.isErr()) return false;
+      const message = parsed.value as Message;
+      const own =
+        typeof message === "object" &&
+        message !== null &&
+        !Array.isArray(message) &&
+        message.id === CALL_ID &&
+        !("method" in message) &&
+        ("result" in message || "error" in message);
+      ownResponse = own ? message : null;
+      return own;
+    },
+    onOwnResponse: (_line: Buffer) => {
+      const message = ownResponse ?? {};
+      answered = true;
+      ownResponse = null;
       const outcome =
         message.error !== undefined
           ? "rpc_error"
@@ -195,8 +224,7 @@ type Message = {
 };
 
 const CALL_ID = "harnexus-probe-1";
-const CALL_ID_BYTES = Buffer.from(`"id":"${CALL_ID}"`);
-const METHOD_KEY_BYTES = Buffer.from('"method":');
+const CALL_ID_BYTES = Buffer.from(CALL_ID);
 const DECISIONS = new Set(["accept", "acceptForSession", "decline", "cancel"]);
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
 const QUIET_MS = 15_000;

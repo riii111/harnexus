@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { LogEvent } from "../shared/logger.ts";
-import { createToolCallProbe, TOOL_CALL_PROBE_ENV } from "./tool-call-probe.ts";
+import {
+  CALLER_THREAD_ENV,
+  createToolCallProbe,
+  TARGET_THREAD_ENV,
+  TOOL_CALL_PROBE_ENV,
+} from "./tool-call-probe.ts";
 
 describe("createToolCallProbe", () => {
   test("stays off unless a mode is set", () => {
@@ -10,7 +15,29 @@ describe("createToolCallProbe", () => {
     ).toBeNull();
   });
 
-  test("read lists projects from the first thread once it is idle", async () => {
+  test("refuses to run without explicitly named, distinct threads", () => {
+    const refusals = [
+      { [TOOL_CALL_PROBE_ENV]: "read" },
+      { [TOOL_CALL_PROBE_ENV]: "send", [CALLER_THREAD_ENV]: THREAD_A },
+      {
+        [TOOL_CALL_PROBE_ENV]: "send",
+        [CALLER_THREAD_ENV]: THREAD_A,
+        [TARGET_THREAD_ENV]: THREAD_A,
+      },
+    ].map((env) => {
+      const events: LogEvent[] = [];
+      const probe = createToolCallProbe(env, (entry) => events.push(entry));
+      return { probe, steps: steps(events) };
+    });
+
+    expect(refusals).toEqual([
+      { probe: null, steps: ["refused:caller_missing"] },
+      { probe: null, steps: ["refused:target_missing"] },
+      { probe: null, steps: ["refused:same_thread"] },
+    ]);
+  });
+
+  test("read lists projects from the named thread once it is idle", async () => {
     const { probe, injected, events } = start("read");
 
     server(probe, { id: 1, result: { thread: { id: THREAD_A } } });
@@ -40,9 +67,25 @@ describe("createToolCallProbe", () => {
     ]);
   });
 
-  test("send asks the second thread to reply to the first and follows both", async () => {
+  test("never sends to threads it was not given, and waits until both are loaded", async () => {
     const { probe, injected, events } = start("send");
 
+    server(probe, { id: 1, result: { thread: { id: UNRELATED_1 } } });
+    server(probe, { id: 2, result: { thread: { id: UNRELATED_2 } } });
+    server(probe, { id: 3, result: { thread: { id: THREAD_A } } });
+    await Bun.sleep(QUIET_MS * 3);
+
+    expect(injected).toEqual([]);
+    expect(steps(events)).toEqual(["thread_seen:A"]);
+  });
+
+  test("send asks the target to reply to the caller and follows both", async () => {
+    const { probe, injected, events } = start("send");
+
+    server(probe, {
+      method: "thread/started",
+      params: { thread: { id: UNRELATED_1 } },
+    });
     server(probe, {
       method: "thread/started",
       params: { thread: { id: THREAD_A } },
@@ -50,9 +93,7 @@ describe("createToolCallProbe", () => {
     server(probe, { id: 2, result: { thread: { id: THREAD_B } } });
     await Bun.sleep(QUIET_MS * 3);
     const call = JSON.parse(injected[0] ?? "");
-    probe.onOwnResponse(
-      Buffer.from('{"id":"harnexus-probe-1","result":{"content":[]}}\n'),
-    );
+    answerWith(probe, '{"id":"harnexus-probe-1","result":{"content":[]}}');
     server(probe, {
       id: 7,
       method: "mcpServer/elicitation/request",
@@ -80,52 +121,70 @@ describe("createToolCallProbe", () => {
     ]);
     const logged = JSON.stringify(events);
     expect(logged).not.toContain(THREAD_A);
+    expect(logged).not.toContain(THREAD_B);
     expect(logged).not.toContain(SECRET);
   });
 
-  test("reports an RPC error and a tool error apart", () => {
-    const { probe, events } = start("read");
+  test("matches only the top-level response to the request it sent", async () => {
+    const { probe } = start("read");
+    const own = (text: string) => probe.isOwnResponse(Buffer.from(text));
 
-    probe.onOwnResponse(
-      Buffer.from('{"id":"harnexus-probe-1","error":{"code":-1}}\n'),
-    );
-    probe.onOwnResponse(
-      Buffer.from('{"id":"harnexus-probe-1","result":{"isError":true}}\n'),
-    );
+    expect(own('{"id":"harnexus-probe-1","result":{}}')).toBe(false);
 
-    expect(steps(events)).toEqual([
+    server(probe, { id: 1, result: { thread: { id: THREAD_A } } });
+    await Bun.sleep(QUIET_MS * 3);
+
+    expect(own('{"id":12,"result":{"nested":{"id":"harnexus-probe-1"}}}')).toBe(
+      false,
+    );
+    expect(own('{"id":"harnexus-probe-1","method":"x","params":{}}')).toBe(
+      false,
+    );
+    expect(
+      own('{ "id" : "harnexus-probe-1", "result": {"method": "inside"} }'),
+    ).toBe(true);
+    probe.onOwnResponse(Buffer.alloc(0));
+    expect(own('{"id":"harnexus-probe-1","result":{}}')).toBe(false);
+  });
+
+  test("reports an RPC error and a tool error apart", async () => {
+    const outcomes: (string | undefined)[] = [];
+    for (const response of [
+      '{"id":"harnexus-probe-1","error":{"code":-1}}',
+      '{"id":"harnexus-probe-1","result":{"isError":true}}',
+    ]) {
+      const { probe, events } = start("read");
+      server(probe, { id: 1, result: { thread: { id: THREAD_A } } });
+      await Bun.sleep(QUIET_MS * 3);
+      answerWith(probe, response);
+      outcomes.push(steps(events).at(-1));
+    }
+
+    expect(outcomes).toEqual([
       "call_answered:A:rpc_error",
       "call_answered:A:tool_error",
     ]);
-  });
-
-  test("recognizes only its own responses", () => {
-    const { probe } = start("read");
-
-    expect(
-      probe.isOwnResponse(Buffer.from('{"id":"harnexus-probe-1","result":{}}')),
-    ).toBe(true);
-    expect(
-      probe.isOwnResponse(
-        Buffer.from('{"id":"harnexus-probe-1","method":"x","params":{}}'),
-      ),
-    ).toBe(false);
-    expect(probe.isOwnResponse(Buffer.from('{"id":1,"result":{}}'))).toBe(
-      false,
-    );
   });
 });
 
 const QUIET_MS = 20;
 const THREAD_A = "th-caller-0001";
 const THREAD_B = "th-recipient-0002";
+const UNRELATED_1 = "th-unrelated-0003";
+const UNRELATED_2 = "th-unrelated-0004";
 const SECRET = "sk-probe-secret";
 
-const start = (mode: string) => {
+type Probe = NonNullable<ReturnType<typeof createToolCallProbe>>;
+
+const start = (mode: "read" | "send") => {
   const events: LogEvent[] = [];
   const injected: string[] = [];
   const created = createToolCallProbe(
-    { [TOOL_CALL_PROBE_ENV]: mode },
+    {
+      [TOOL_CALL_PROBE_ENV]: mode,
+      [CALLER_THREAD_ENV]: THREAD_A,
+      [TARGET_THREAD_ENV]: THREAD_B,
+    },
     (entry) => events.push(entry),
     { quietMs: QUIET_MS },
   );
@@ -135,7 +194,11 @@ const start = (mode: string) => {
   return { probe, injected, events };
 };
 
-type Probe = NonNullable<ReturnType<typeof createToolCallProbe>>;
+const answerWith = (probe: Probe, text: string) => {
+  const line = Buffer.from(text);
+  expect(probe.isOwnResponse(line)).toBe(true);
+  probe.onOwnResponse(line);
+};
 
 const server = (probe: Probe, message: object) =>
   probe.observer.chunk(

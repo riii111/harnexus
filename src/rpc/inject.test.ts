@@ -39,6 +39,29 @@ describe("createLineInjector", () => {
   });
 });
 
+describe("createLineInjector on a broken target", () => {
+  test("passes a failed write to the relay and stops injecting", async () => {
+    let writes = 0;
+    const target = new Writable({
+      write(_chunk, _encoding, callback) {
+        writes += 1;
+        callback(Object.assign(new Error("EPIPE"), { code: "EPIPE" }));
+      },
+    });
+    const injector = createLineInjector(target);
+    const failed = new Promise((resolve) =>
+      injector.stream.once("close", resolve),
+    );
+
+    injector.inject("own 1\n");
+    await failed;
+    injector.inject("own 2\n");
+
+    expect(injector.stream.destroyed).toBe(true);
+    expect(writes).toBe(1);
+  });
+});
+
 describe("createOwnResponseFilter", () => {
   test("drops own lines split across chunks and keeps every other byte", async () => {
     const own: string[] = [];
