@@ -59,7 +59,9 @@ export const relayStreams = ({
     let stopping = false;
     // A server that ignores EOF on stdin would otherwise keep running after the app has gone.
     const stopServer = () => {
-      if (!serverInput.writableEnded) serverInput.end();
+      if (!serverInput.writableEnded && !serverInput.destroyed) {
+        serverInput.end();
+      }
       if (stopping || signalServer === undefined) return;
       stopping = true;
       timers.push(
@@ -87,14 +89,14 @@ export const relayStreams = ({
       output.write(new Uint8Array(0), settle);
     };
 
-    serverInput.on("error", () => {});
+    serverInput.on("error", stopServer);
     input.on("error", stopServer);
     output.on("error", stopServer);
     serverOutput.on("error", finish);
 
     pump(input, serverInput, "app_to_server", observer, {
       onEnd: stopServer,
-      onWriteError: () => {},
+      onWriteError: stopServer,
     });
     pump(serverOutput, output, "server_to_app", observer, {
       onEnd: finish,

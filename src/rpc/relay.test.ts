@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable, Writable } from "node:stream";
 import { createLogger } from "../shared/logger.ts";
+import { createLineInjector } from "./inject.ts";
 import { createObserver } from "./observe.ts";
 import { relayStreams, runRelay } from "./relay.ts";
 
@@ -199,6 +200,33 @@ describe("relayStreams", () => {
     });
     input.end();
     await Bun.sleep(100);
+    serverOutput.end();
+    await relaying;
+
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  test("starts stopping the server when an injected write fails while its output stays open", async () => {
+    const signals: string[] = [];
+    const serverOutput = new PassThrough();
+    const injector = createLineInjector(
+      new Writable({
+        write(_chunk, _encoding, callback) {
+          callback(Object.assign(new Error("EPIPE"), { code: "EPIPE" }));
+        },
+      }),
+    );
+
+    const relaying = relayStreams({
+      input: new PassThrough(),
+      output: collector().stream,
+      serverInput: injector.stream,
+      serverOutput,
+      signalServer: (signal) => signals.push(signal),
+      shutdownGraceMs: 20,
+    });
+    injector.inject("own\n");
+    await Bun.sleep(120);
     serverOutput.end();
     await relaying;
 
