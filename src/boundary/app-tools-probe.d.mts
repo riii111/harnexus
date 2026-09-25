@@ -19,3 +19,5 @@ export declare const probeAppTools: (
   pipePath: string,
   timeoutMs?: number,
 ) => Promise<AppToolsProbeOutcome>;
+
+export declare const RUNTIME_FLAGS: string[];
