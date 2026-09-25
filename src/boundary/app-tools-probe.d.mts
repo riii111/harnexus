@@ -1,4 +1,4 @@
-export type AppToolsProbeStage =
+type AppToolsProbeStage =
   | "connect_failed"
   | "closed_before_response"
   | "error_response"
@@ -6,7 +6,7 @@ export type AppToolsProbeStage =
   | "responded"
   | "timeout";
 
-export type AppToolsProbeOutcome = {
+type AppToolsProbeOutcome = {
   socketExists: boolean;
   connected: boolean;
   sent: boolean;
