@@ -1,0 +1,13 @@
+{"direction":"app_to_server","message":{"id":20,"method":"turn/start","params":{"threadId":"th-fixture-1","input":[{"type":"text","text":"sk-fixture-secret long task","text_elements":[]}]}}}
+{"direction":"server_to_app","message":{"method":"thread/status/changed","params":{"threadId":"th-fixture-1","status":{"type":"active","activeFlags":[]}},"emittedAtMs":1700000000030}}
+{"direction":"server_to_app","message":{"method":"turn/started","params":{"threadId":"th-fixture-1","turn":{"id":"tu-fixture-2","items":[],"itemsView":"full","status":"inProgress","error":null,"startedAt":1700000002,"completedAt":null,"durationMs":null}},"emittedAtMs":1700000000031}}
+{"direction":"server_to_app","message":{"id":20,"result":{"turn":{"id":"tu-fixture-2","items":[],"itemsView":"full","status":"inProgress","error":null,"startedAt":null,"completedAt":null,"durationMs":null}}}}
+{"direction":"server_to_app","message":{"method":"item/started","params":{"item":{"type":"agentMessage","id":"it-fixture-6","text":"","phase":"final_answer","memoryCitation":null,"delivery":null,"questions":null},"threadId":"th-fixture-1","turnId":"tu-fixture-2","startedAtMs":1700000000032},"emittedAtMs":1700000000032}}
+{"direction":"server_to_app","message":{"method":"item/agentMessage/delta","params":{"threadId":"th-fixture-1","turnId":"tu-fixture-2","itemId":"it-fixture-6","delta":"sk-fixture-secret 1"},"emittedAtMs":1700000000033}}
+{"direction":"app_to_server","message":{"id":21,"method":"turn/steer","params":{"threadId":"th-fixture-1","expectedTurnId":"tu-fixture-2","input":[{"type":"text","text":"sk-fixture-secret follow-up","text_elements":[]}]}}}
+{"direction":"server_to_app","message":{"id":21,"result":{"turnId":"tu-fixture-2"}}}
+{"direction":"server_to_app","message":{"method":"item/agentMessage/delta","params":{"threadId":"th-fixture-1","turnId":"tu-fixture-2","itemId":"it-fixture-6","delta":"sk-fixture-secret 2"},"emittedAtMs":1700000000034}}
+{"direction":"app_to_server","message":{"id":22,"method":"turn/interrupt","params":{"threadId":"th-fixture-1","turnId":"tu-fixture-2"}}}
+{"direction":"server_to_app","message":{"id":22,"result":{}}}
+{"direction":"server_to_app","message":{"method":"thread/status/changed","params":{"threadId":"th-fixture-1","status":{"type":"idle"}},"emittedAtMs":1700000000035}}
+{"direction":"server_to_app","message":{"method":"turn/completed","params":{"threadId":"th-fixture-1","turn":{"id":"tu-fixture-2","items":[],"itemsView":"summary","status":"interrupted","error":null,"startedAt":1700000002,"completedAt":1700000003,"durationMs":1000}},"emittedAtMs":1700000000036}}
