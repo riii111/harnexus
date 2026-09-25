@@ -16,34 +16,6 @@ const LAUNCHER = join(import.meta.dir, "..", "bin", "harnexus-codex");
 const BUN = process.execPath;
 const TIMEOUT = 20_000;
 
-// Records how it was started, then echoes stdin and exits with FAKE_CODEX_EXIT,
-// or waits for a signal when FAKE_CODEX_MODE=wait.
-const FAKE_CODEX = `#!/usr/bin/env -S ${BUN} --no-env-file --config=/dev/null
-import { writeFileSync } from "node:fs";
-writeFileSync(
-  process.env.FAKE_CODEX_REPORT,
-  JSON.stringify({
-    pid: process.pid,
-    argv: process.argv.slice(2),
-    cwd: process.cwd(),
-    env: process.env,
-  }),
-);
-if (process.env.FAKE_CODEX_MODE === "wait") {
-  setInterval(() => {}, 1000);
-} else {
-  process.stdout.write(await Bun.stdin.text());
-  process.exitCode = Number(process.env.FAKE_CODEX_EXIT ?? "0");
-}
-`;
-
-type Report = {
-  pid: number;
-  argv: string[];
-  cwd: string;
-  env: Record<string, string>;
-};
-
 let dir: string;
 let fakeCodex: string;
 let reports = 0;
@@ -58,59 +30,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
-
-const setup = (overrides: Record<string, string | undefined> = {}) => {
-  reports += 1;
-  const reportPath = join(dir, `report-${reports}.json`);
-  const env: Record<string, string> = {};
-  const entries = Object.entries({
-    PATH: "/usr/bin:/bin",
-    HARNEXUS_CODEX_PATH: fakeCodex,
-    HARNEXUS_BUN_PATH: BUN,
-    FAKE_CODEX_REPORT: reportPath,
-    ...overrides,
-  });
-  for (const [key, value] of entries) {
-    if (value !== undefined) env[key] = value;
-  }
-  return { env, reportPath };
-};
-
-const launch = (
-  args: string[],
-  env: Record<string, string>,
-  options: { cwd?: string; stdin?: string } = {},
-) =>
-  Bun.spawn([LAUNCHER, ...args], {
-    cwd: options.cwd ?? dir,
-    env,
-    stdin: new Blob([options.stdin ?? ""]),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-
-const finish = async (proc: ReturnType<typeof launch>) => {
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  await proc.exited;
-  return { stdout, stderr, exitCode: proc.exitCode, signal: proc.signalCode };
-};
-
-const readReport = async (path: string): Promise<Report> => {
-  for (let i = 0; i < 200 && !existsSync(path); i++) await Bun.sleep(25);
-  return JSON.parse(await Bun.file(path).text());
-};
-
-const isAlive = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
 
 describe("delegation to the standard Codex", () => {
   test(
@@ -285,3 +204,82 @@ describe("refusals", () => {
     TIMEOUT,
   );
 });
+const setup = (overrides: Record<string, string | undefined> = {}) => {
+  reports += 1;
+  const reportPath = join(dir, `report-${reports}.json`);
+  const env: Record<string, string> = {};
+  const entries = Object.entries({
+    PATH: "/usr/bin:/bin",
+    HARNEXUS_CODEX_PATH: fakeCodex,
+    HARNEXUS_BUN_PATH: BUN,
+    FAKE_CODEX_REPORT: reportPath,
+    ...overrides,
+  });
+  for (const [key, value] of entries) {
+    if (value !== undefined) env[key] = value;
+  }
+  return { env, reportPath };
+};
+
+const launch = (
+  args: string[],
+  env: Record<string, string>,
+  options: { cwd?: string; stdin?: string } = {},
+) =>
+  Bun.spawn([LAUNCHER, ...args], {
+    cwd: options.cwd ?? dir,
+    env,
+    stdin: new Blob([options.stdin ?? ""]),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+const finish = async (proc: ReturnType<typeof launch>) => {
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  await proc.exited;
+  return { stdout, stderr, exitCode: proc.exitCode, signal: proc.signalCode };
+};
+
+const readReport = async (path: string): Promise<Report> => {
+  for (let i = 0; i < 200 && !existsSync(path); i++) await Bun.sleep(25);
+  return JSON.parse(await Bun.file(path).text());
+};
+
+const isAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+type Report = {
+  pid: number;
+  argv: string[];
+  cwd: string;
+  env: Record<string, string>;
+};
+
+// Records how it was started, then echoes stdin and exits with FAKE_CODEX_EXIT, or waits for a signal when FAKE_CODEX_MODE=wait.
+const FAKE_CODEX = `#!/usr/bin/env -S ${BUN} --no-env-file --config=/dev/null
+import { writeFileSync } from "node:fs";
+writeFileSync(
+  process.env.FAKE_CODEX_REPORT,
+  JSON.stringify({
+    pid: process.pid,
+    argv: process.argv.slice(2),
+    cwd: process.cwd(),
+    env: process.env,
+  }),
+);
+if (process.env.FAKE_CODEX_MODE === "wait") {
+  setInterval(() => {}, 1000);
+} else {
+  process.stdout.write(await Bun.stdin.text());
+  process.exitCode = Number(process.env.FAKE_CODEX_EXIT ?? "0");
+}
+`;

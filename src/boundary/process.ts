@@ -8,7 +8,7 @@ export type ChildExit =
   | { code: number; signal: null }
   | { code: null; signal: Signals };
 
-export class ChildSpawnFailed extends TaggedError("ChildSpawnFailed")<{
+class ChildSpawnFailed extends TaggedError("ChildSpawnFailed")<{
   path: string;
   cause: unknown;
   message: string;
@@ -16,8 +16,6 @@ export class ChildSpawnFailed extends TaggedError("ChildSpawnFailed")<{
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
-// Runs a child sharing this process's stdio and forwards termination signals
-// to it until it exits.
 export const runInherited = (
   path: string,
   args: readonly string[],
@@ -56,8 +54,7 @@ export const runInherited = (
     });
   });
 
-// Ends this process the way the child ended, so the caller can tell a signal
-// from an exit code. Falls back to 128 + signal number if the signal is ignored.
+// Re-raising lets the caller tell a signal from an exit code; process.exit is reached only when the signal is ignored.
 export const exitLike = (exit: ChildExit): never => {
   if (exit.signal !== null) {
     process.kill(process.pid, exit.signal);

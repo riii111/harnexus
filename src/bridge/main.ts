@@ -2,8 +2,7 @@ import { exitLike, runInherited } from "../boundary/process.ts";
 import { loadCodexPath } from "../shared/config.ts";
 import { createLogger } from "../shared/logger.ts";
 
-// Started by bin/harnexus-codex for `app-server`. Until the relay exists, the
-// standard app-server runs on the same stdio.
+// TODO(P2): replace the inherited stdio with the relay and the observation filter.
 const logger = createLogger();
 
 const codexPath = await loadCodexPath(process.env);
