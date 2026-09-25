@@ -21,11 +21,13 @@ export const fakeClaude = (
     stillQueued,
     closeEnding = { done: true, value: undefined },
     settingsEnv = {},
+    env = { PATH: "/usr/bin" },
   }: {
     interruptError?: Error;
     stillQueued?: string[];
     closeEnding?: Delivery;
     settingsEnv?: Record<string, string> | Error;
+    env?: Record<string, string | undefined>;
   } = {},
 ) => {
   const queued: Delivery[] = [];
@@ -76,7 +78,11 @@ export const fakeClaude = (
     return claude;
   };
   return {
-    sdk: { query: run, resolveSettings } satisfies ClaudeSdk,
+    runtime: {
+      query: run,
+      resolveSettings,
+      env,
+    } satisfies ClaudeSdk & { env: Record<string, string | undefined> },
     started: () => options !== null,
     options: () => options ?? {},
     prompt: () => prompt,

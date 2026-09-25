@@ -44,7 +44,7 @@ class ClaudeAccountUnavailable extends TaggedError("ClaudeAccountUnavailable")<{
   message: string;
 }> {}
 
-export class ClaudeStreamFailed extends TaggedError("ClaudeStreamFailed")<{
+class ClaudeStreamFailed extends TaggedError("ClaudeStreamFailed")<{
   cause: unknown;
   message: string;
 }> {}
@@ -55,6 +55,8 @@ class ClaudeInterruptFailed extends TaggedError("ClaudeInterruptFailed")<{
 }> {}
 
 // resolveSettings merges the same files as the CLI without starting it, but skips an admin policyHelper.
+export type { ClaudeStreamFailed };
+
 export const readSettingsEnv = (
   resolve: ResolveSettings,
   cwd: string,

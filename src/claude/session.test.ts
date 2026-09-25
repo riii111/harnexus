@@ -1,10 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { UUID } from "node:crypto";
-import type {
-  AccountInfo,
-  CanUseTool,
-  SDKMessage,
-  SDKUserMessage,
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  type AccountInfo,
+  type CanUseTool,
+  resolveSettings,
+  type SDKMessage,
+  type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { failingQuery, fakeClaude } from "../boundary/testing/fake-claude.ts";
 import { type ClaudeSessionSettings, startClaudeSession } from "./session.ts";
@@ -13,7 +17,7 @@ describe("startClaudeSession options", () => {
   test("loads every settings source with the Claude Code preset in the worktree", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
 
-    await startClaudeSession(SETTINGS, claude.sdk);
+    await startClaudeSession(SETTINGS, claude.runtime);
 
     expect(claude.options()).toMatchObject({
       cwd: "/work/tree",
@@ -30,7 +34,7 @@ describe("startClaudeSession options", () => {
   test("appends nothing to the preset system prompt", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
 
-    await startClaudeSession(SETTINGS, claude.sdk);
+    await startClaudeSession(SETTINGS, claude.runtime);
 
     expect(claude.options().systemPrompt).toEqual({
       type: "preset",
@@ -44,29 +48,25 @@ describe("startClaudeSession options", () => {
 
     await startClaudeSession(
       { ...SETTINGS, resume: "session-1", mcpServers },
-      claude.sdk,
+      claude.runtime,
     );
 
     expect(claude.options()).toMatchObject({ resume: "session-1", mcpServers });
   });
 
   test("keeps API billing variables away from Claude", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-
-    await startClaudeSession(
-      {
-        ...SETTINGS,
-        env: {
-          PATH: "/usr/bin",
-          HOME: "/home/user",
-          CLAUDE_CODE_OAUTH_TOKEN: "subscription-token",
-          ANTHROPIC_API_KEY: "api-key",
-          ANTHROPIC_AUTH_TOKEN: "bearer",
-          CLAUDE_CODE_USE_BEDROCK: "1",
-        },
+    const claude = fakeClaude(SUBSCRIPTION, {
+      env: {
+        PATH: "/usr/bin",
+        HOME: "/home/user",
+        CLAUDE_CODE_OAUTH_TOKEN: "subscription-token",
+        ANTHROPIC_API_KEY: "api-key",
+        ANTHROPIC_AUTH_TOKEN: "bearer",
+        CLAUDE_CODE_USE_BEDROCK: "1",
       },
-      claude.sdk,
-    );
+    });
+
+    await startClaudeSession(SETTINGS, claude.runtime);
 
     expect(claude.options().env).toEqual({
       PATH: "/usr/bin",
@@ -76,18 +76,14 @@ describe("startClaudeSession options", () => {
   });
 
   test("keeps custom headers that cannot replace the login", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-
-    await startClaudeSession(
-      {
-        ...SETTINGS,
-        env: {
-          ANTHROPIC_CUSTOM_HEADERS:
-            "Authorization: Bearer other\r\nX-Trace: 1\nx-api-key: key",
-        },
+    const claude = fakeClaude(SUBSCRIPTION, {
+      env: {
+        ANTHROPIC_CUSTOM_HEADERS:
+          "Authorization: Bearer other\r\nX-Trace: 1\nx-api-key: key",
       },
-      claude.sdk,
-    );
+    });
+
+    await startClaudeSession(SETTINGS, claude.runtime);
 
     expect(claude.options().env).toEqual({
       ANTHROPIC_CUSTOM_HEADERS: "X-Trace: 1",
@@ -95,18 +91,14 @@ describe("startClaudeSession options", () => {
   });
 
   test("drops custom headers made only of auth headers", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-
-    await startClaudeSession(
-      {
-        ...SETTINGS,
-        env: {
-          PATH: "/usr/bin",
-          ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer other",
-        },
+    const claude = fakeClaude(SUBSCRIPTION, {
+      env: {
+        PATH: "/usr/bin",
+        ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer other",
       },
-      claude.sdk,
-    );
+    });
+
+    await startClaudeSession(SETTINGS, claude.runtime);
 
     expect(claude.options().env).toEqual({ PATH: "/usr/bin" });
   });
@@ -114,7 +106,7 @@ describe("startClaudeSession options", () => {
   test("denies every tool that asks for approval", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
 
-    await startClaudeSession(SETTINGS, claude.sdk);
+    await startClaudeSession(SETTINGS, claude.runtime);
     const canUseTool = claude.options().canUseTool as CanUseTool;
     const decision = await canUseTool(
       "Bash",
@@ -137,7 +129,7 @@ describe("startClaudeSession authentication", () => {
   test("starts on a claude.ai subscription login", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
 
-    const started = await startClaudeSession(SETTINGS, claude.sdk);
+    const started = await startClaudeSession(SETTINGS, claude.runtime);
 
     expect(started.isOk()).toBe(true);
     expect(claude.closes()).toBe(0);
@@ -151,7 +143,7 @@ describe("startClaudeSession authentication", () => {
   ])("stops before any prompt on %s", async (_label, account: AccountInfo) => {
     const claude = fakeClaude(account);
 
-    const started = await startClaudeSession(SETTINGS, claude.sdk);
+    const started = await startClaudeSession(SETTINGS, claude.runtime);
 
     expect(started.isErr() && started.error._tag).toBe("ClaudeNotSubscription");
     expect(claude.closes()).toBe(1);
@@ -161,7 +153,7 @@ describe("startClaudeSession authentication", () => {
   test("stops when the account cannot be read", async () => {
     const claude = fakeClaude(new Error("initialize timed out"));
 
-    const started = await startClaudeSession(SETTINGS, claude.sdk);
+    const started = await startClaudeSession(SETTINGS, claude.runtime);
 
     expect(started.isErr() && started.error._tag).toBe(
       "ClaudeAccountUnavailable",
@@ -192,7 +184,7 @@ describe("startClaudeSession authentication", () => {
   >, name) => {
     const claude = fakeClaude(SUBSCRIPTION, { settingsEnv });
 
-    const started = await startClaudeSession(SETTINGS, claude.sdk);
+    const started = await startClaudeSession(SETTINGS, claude.runtime);
 
     expect(started.isErr() && started.error._tag).toBe(
       "ClaudeSettingsOverrideAuth",
@@ -211,7 +203,7 @@ describe("startClaudeSession authentication", () => {
       },
     });
 
-    const started = await startClaudeSession(SETTINGS, claude.sdk);
+    const started = await startClaudeSession(SETTINGS, claude.runtime);
 
     expect(started.isOk()).toBe(true);
   });
@@ -221,7 +213,7 @@ describe("startClaudeSession authentication", () => {
       settingsEnv: new Error("invalid settings"),
     });
 
-    const started = await startClaudeSession(SETTINGS, claude.sdk);
+    const started = await startClaudeSession(SETTINGS, claude.runtime);
 
     expect(started.isErr() && started.error._tag).toBe(
       "ClaudeSettingsUnavailable",
@@ -231,11 +223,58 @@ describe("startClaudeSession authentication", () => {
 
   test("reports an SDK that fails to start", async () => {
     const started = await startClaudeSession(SETTINGS, {
-      ...fakeClaude(SUBSCRIPTION).sdk,
+      ...fakeClaude(SUBSCRIPTION).runtime,
       query: failingQuery(new Error("claude executable not found")),
     });
 
     expect(started.isErr() && started.error._tag).toBe("ClaudeStartFailed");
+  });
+});
+
+describe("startClaudeSession settings directory", () => {
+  let configDir = "";
+  let previous: string | undefined;
+
+  beforeEach(() => {
+    configDir = mkdtempSync(join(tmpdir(), "harnexus-claude-config-"));
+    previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+  });
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previous;
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  test("checks the settings Claude reads from its config directory", async () => {
+    writeUserSettings(configDir, {
+      ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer other",
+    });
+    const claude = fakeClaude(SUBSCRIPTION);
+
+    const started = await startClaudeSession(
+      { ...SETTINGS, cwd: configDir },
+      { ...claude.runtime, resolveSettings, env: process.env },
+    );
+
+    expect(started.isErr() && started.error._tag).toBe(
+      "ClaudeSettingsOverrideAuth",
+    );
+    expect(claude.started()).toBe(false);
+  });
+
+  test("gives Claude the config directory that was checked", async () => {
+    writeUserSettings(configDir, { ANTHROPIC_CUSTOM_HEADERS: "X-Trace: 1" });
+    const claude = fakeClaude(SUBSCRIPTION);
+
+    const started = await startClaudeSession(
+      { ...SETTINGS, cwd: configDir },
+      { ...claude.runtime, resolveSettings, env: process.env },
+    );
+
+    expect(started.isOk()).toBe(true);
+    expect(claude.options().env?.CLAUDE_CONFIG_DIR).toBe(configDir);
   });
 });
 
@@ -335,7 +374,7 @@ describe("ClaudeSession", () => {
     expect(interrupted.unwrap()).toEqual(["uuid-1"]);
   });
 
-  test("reports no surviving sends when the CLI gives no receipt", async () => {
+  test("reports unknown surviving sends when the CLI gives no receipt", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const session = await startedSession(claude);
 
@@ -407,7 +446,6 @@ describe("ClaudeSession", () => {
 const SETTINGS: ClaudeSessionSettings = {
   cwd: "/work/tree",
   model: "claude-sonnet-5",
-  env: { PATH: "/usr/bin" },
 };
 
 const SUBSCRIPTION: AccountInfo = {
@@ -415,8 +453,11 @@ const SUBSCRIPTION: AccountInfo = {
   apiProvider: "firstParty",
 };
 
+const writeUserSettings = (dir: string, env: Record<string, string>) =>
+  writeFileSync(join(dir, "settings.json"), JSON.stringify({ env }));
+
 const startedSession = async (claude: ReturnType<typeof fakeClaude>) =>
-  (await startClaudeSession(SETTINGS, claude.sdk)).unwrap();
+  (await startClaudeSession(SETTINGS, claude.runtime)).unwrap();
 
 const collect = async <T>(items: AsyncIterable<T>) => {
   const collected: T[] = [];

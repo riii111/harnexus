@@ -30,7 +30,6 @@ import { createInputQueue } from "./input.ts";
 export type ClaudeSessionSettings = {
   cwd: string;
   model: string;
-  env: Env;
   resume?: string;
   mcpServers?: Record<string, McpServerConfig>;
 };
@@ -39,17 +38,27 @@ class ClaudeSessionClosed extends TaggedError("ClaudeSessionClosed")<{
   message: string;
 }> {}
 
+type ClaudeRuntime = ClaudeSdk & { env: Env };
+
 // The settings and the account are checked before any prompt is sent, so a login that would bill the API never starts a conversation.
 export const startClaudeSession = async (
   settings: ClaudeSessionSettings,
-  sdk: ClaudeSdk = { query, resolveSettings },
+  runtime: ClaudeRuntime = PROCESS_RUNTIME,
 ) => {
   const settingsChecked = (
-    await readSettingsEnv(sdk.resolveSettings, settings.cwd, SETTING_SOURCES)
+    await readSettingsEnv(
+      runtime.resolveSettings,
+      settings.cwd,
+      SETTING_SOURCES,
+    )
   ).andThen(checkSettingsEnv);
   if (settingsChecked.isErr()) return Result.err(settingsChecked.error);
   const input = createInputQueue();
-  const opened = openQuery(sdk.query, input.stream, sessionOptions(settings));
+  const opened = openQuery(
+    runtime.query,
+    input.stream,
+    sessionOptions(settings, runtime.env),
+  );
   if (opened.isErr()) return Result.err(opened.error);
   const claude = opened.value;
   const checked = (await readAccount(claude)).andThen(checkSubscription);
@@ -62,15 +71,18 @@ export const startClaudeSession = async (
 };
 
 // Only the prompt text reaches Claude; Codex instructions and the app's history stay out of the preset system prompt.
-const sessionOptions = (settings: ClaudeSessionSettings): Options => ({
+const sessionOptions = (
+  settings: ClaudeSessionSettings,
+  env: Env,
+): Options => ({
   cwd: settings.cwd,
   model: settings.model,
-  env: withoutApiBilling(settings.env),
+  env: withoutApiBilling(env),
   settingSources: SETTING_SOURCES,
   systemPrompt: { type: "preset", preset: "claude_code" },
   // A user's default mode such as bypassPermissions would skip canUseTool, which is the only approval surface so far.
   permissionMode: "default",
-  canUseTool: denyAllTools,
+  canUseTool: denyToolApproval,
   includePartialMessages: true,
   mcpServers: settings.mcpServers ?? {},
   ...(settings.resume === undefined ? {} : { resume: settings.resume }),
@@ -125,12 +137,19 @@ async function* readMessages(
 }
 
 // TODO: replace with the approval relay to the app in P9.
-const denyAllTools: CanUseTool = async (toolName) => ({
+const denyToolApproval: CanUseTool = async (toolName) => ({
   behavior: "deny",
   message: `${toolName} needs approval, and this session cannot ask for it yet`,
 });
 
 const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
+
+// resolveSettings reads this process's environment, so Claude gets the same one and both resolve the same settings files, such as under CLAUDE_CONFIG_DIR.
+const PROCESS_RUNTIME: ClaudeRuntime = {
+  query,
+  resolveSettings,
+  env: process.env,
+};
 
 const sessionClosed = () =>
   new ClaudeSessionClosed({ message: "the Claude session is closed" });
