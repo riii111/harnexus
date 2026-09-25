@@ -259,6 +259,33 @@ describe("thread/settings/update", () => {
     expect(router.fromApp(line)).toEqual(line);
   });
 
+  test("still reads a response whose history mentions the settings notice", () => {
+    const { router } = setup(["th-claude"]);
+
+    router.fromApp(
+      encode({
+        id: 4,
+        method: "thread/resume",
+        params: { threadId: "th-claude" },
+      }),
+    );
+    const response = parse(threadResponse(4, "th-claude"));
+    response.result.thread.preview = "about thread/settings/updated";
+    const out = parse(router.fromServer(encode(response)));
+    const later = modelList(4, null);
+
+    expect(out.result.model).toBe(CLAUDE);
+    expect(router.fromServer(later)).toEqual(later);
+  });
+
+  test("accepts the same directory spelled with a trailing slash", () => {
+    const { router, calls } = setup(["th-claude"]);
+
+    router.fromApp(settingsUpdate({ cwd: "/fixture/work/" }));
+
+    expect(calls).toEqual([]);
+  });
+
   test("reports the Claude model in the server's settings notice", () => {
     const { router } = setup(["th-claude"]);
     const notice = encode({

@@ -15,6 +15,7 @@ import {
   type TurnState,
 } from "../render/turn.ts";
 import type { ThreadRecord, ThreadStore } from "../state/thread-store.ts";
+import { isSameDirectory } from "./directory.ts";
 import {
   isClaudeModel,
   requestedModel,
@@ -305,7 +306,7 @@ export const createTurnController = ({
       if (
         known !== undefined &&
         typeof params.cwd === "string" &&
-        params.cwd !== known.cwd
+        !isSameDirectory(params.cwd, known.cwd)
       ) {
         refuse(
           id,

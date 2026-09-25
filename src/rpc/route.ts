@@ -1,5 +1,6 @@
 import { parseJson } from "../boundary/json.ts";
 import type { AppRequest } from "../turn/controller.ts";
+import { isSameDirectory } from "../turn/directory.ts";
 import {
   isClaudeModel,
   requestedModel,
@@ -123,7 +124,8 @@ export const createRouter = (
         ? "changing the model of a Claude thread is not supported yet"
         : requestsUnsupportedMode(params)
           ? "Claude threads do not support plan mode yet"
-          : typeof params.cwd === "string" && params.cwd !== thread.cwd
+          : typeof params.cwd === "string" &&
+              !isSameDirectory(params.cwd, thread.cwd)
             ? "changing the working directory of a Claude thread is not supported yet"
             : null;
     if (refusal !== null) {
@@ -136,11 +138,15 @@ export const createRouter = (
     return encode({ ...message, params: rest });
   };
 
+  // The substring check only skips parsing; the method decides, since a response can carry the same text in its thread history.
   const fromServer = (line: Buffer): Buffer => {
-    if (line.includes(SETTINGS_UPDATED)) return rewriteSettingsUpdated(line);
-    if (pending.size === 0) return line;
+    if (pending.size === 0 && !line.includes(SETTINGS_UPDATED)) return line;
     const message = parseMessage(line);
-    if (message === null || message.method !== undefined) return line;
+    if (message === null) return line;
+    if (message.method === SETTINGS_UPDATED) {
+      return rewriteSettingsUpdated(message) ?? line;
+    }
+    if (message.method !== undefined) return line;
     const id = message.id;
     if (typeof id !== "string" && typeof id !== "number") return line;
     const request = pending.get(id);
@@ -175,16 +181,14 @@ export const createRouter = (
   };
 
   // The server keeps its own model for a Claude thread, so the app would otherwise show that model after any settings change.
-  const rewriteSettingsUpdated = (line: Buffer) => {
-    const message = parseMessage(line);
-    if (message?.method !== "thread/settings/updated") return line;
+  const rewriteSettingsUpdated = (message: Record<string, unknown>) => {
     const params = isObject(message.params) ? message.params : {};
     const model =
       typeof params.threadId === "string"
         ? turns.threadOf(params.threadId)?.model
         : undefined;
     const settings = params.threadSettings;
-    if (model === undefined || !isObject(settings)) return line;
+    if (model === undefined || !isObject(settings)) return null;
     const mode = settings.collaborationMode;
     return encode({
       ...message,
