@@ -38,6 +38,33 @@ describe("createLogger", () => {
     expect(lines.join("")).not.toContain("private text");
   });
 
+  test("keeps only the summary fields of an observed message", () => {
+    const lines: string[] = [];
+    const logger = createLogger((line) => lines.push(line));
+    const entry = {
+      event: "rpc_message",
+      direction: "app_to_server",
+      kind: "request",
+      method: "turn/start",
+      id: 1,
+      tools: [{ name: "t", inputSchema: true, description: "private text" }],
+      params: { token: "secret-token" },
+    } as const;
+    const widened: LogEvent = entry;
+
+    logger.log(widened);
+
+    const { time: _time, ...record } = JSON.parse(lines[0] ?? "");
+    expect(record).toEqual({
+      event: "rpc_message",
+      direction: "app_to_server",
+      kind: "request",
+      method: "turn/start",
+      id: 1,
+      tools: [{ name: "t", inputSchema: true }],
+    });
+  });
+
   test("defaults to stderr and never writes to stdout", () => {
     const stderrWrite = spyOn(process.stderr, "write").mockImplementation(
       () => true,

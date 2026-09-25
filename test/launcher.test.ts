@@ -74,7 +74,7 @@ describe("delegation to the standard Codex", () => {
 
 describe("app-server", () => {
   test(
-    "runs Codex app-server through the bridge on the same stdio",
+    "relays Codex app-server through the bridge and logs only a summary",
     async () => {
       const { env, reportPath } = setup({ FAKE_CODEX_EXIT: "3" });
       const args = ["app-server", "--listen", "stdio://"];
@@ -93,6 +93,7 @@ describe("app-server", () => {
       });
       expect(result.stderr).toContain('"event":"bridge_started"');
       expect(result.stderr).toContain('"event":"codex_exited"');
+      expect(result.stderr).toContain('"event":"rpc_unobserved"');
     },
     TIMEOUT,
   );

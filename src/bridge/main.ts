@@ -1,8 +1,9 @@
-import { exitLike, runInherited } from "../boundary/process.ts";
+import { exitLike } from "../boundary/process.ts";
+import { createObserver } from "../rpc/observe.ts";
+import { runRelay } from "../rpc/relay.ts";
 import { loadCodexPath } from "../shared/config.ts";
 import { createLogger } from "../shared/logger.ts";
 
-// TODO(P2): replace the inherited stdio with the relay and the observation filter.
 const logger = createLogger();
 
 const codexPath = await loadCodexPath(process.env);
@@ -12,10 +13,15 @@ if (codexPath.isErr()) {
 }
 
 logger.log({ event: "bridge_started" });
-const exit = await runInherited(
+const exit = await runRelay(
   codexPath.value,
   process.argv.slice(2),
   process.env,
+  {
+    input: process.stdin,
+    output: process.stdout,
+    observer: createObserver(logger.log),
+  },
 );
 if (exit.isErr()) {
   logger.log({ event: "bridge_startup_failed", reason: exit.error._tag });
