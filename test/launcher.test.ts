@@ -316,6 +316,54 @@ describe("app-server shutdown", () => {
   );
 });
 
+describe("app-server output at exit", () => {
+  for (const [label, overrides, expected] of [
+    ["a normal exit", {}, { exitCode: 0, signal: null }],
+    [
+      "a non-zero exit",
+      { FAKE_CODEX_EXIT: "3" },
+      { exitCode: 3, signal: null },
+    ],
+    [
+      "a signal",
+      { FAKE_BURST_SIGNAL: "SIGTERM" },
+      { exitCode: null, signal: "SIGTERM" },
+    ],
+  ] as const) {
+    test(
+      `delivers every byte Codex wrote before ${label} to an app that keeps reading slowly`,
+      async () => {
+        const { env } = setup({
+          FAKE_CODEX_MODE: "burst",
+          FAKE_BURST_LINES: String(BURST_LINES),
+          ...overrides,
+        });
+        const proc = Bun.spawn([LAUNCHER, "app-server"], {
+          cwd: dir,
+          env,
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "ignore",
+        });
+
+        const received = await readSlowly(proc.stdout);
+        await proc.exited;
+
+        expect({ exitCode: proc.exitCode, signal: proc.signalCode }).toEqual(
+          expected,
+        );
+        const lines = received.split("\n");
+        expect(lines.at(-2)).toBe("END");
+        expect(lines).toHaveLength(BURST_LINES + 2);
+        expect(lines[BURST_LINES - 1]?.startsWith(`${BURST_LINES - 1} `)).toBe(
+          true,
+        );
+      },
+      TIMEOUT,
+    );
+  }
+});
+
 describe("refusals", () => {
   const expectRefused = async (
     args: string[],
@@ -414,6 +462,18 @@ const readReport = async (path: string): Promise<Report> => {
   return JSON.parse(await Bun.file(path).text());
 };
 
+// About 4 MB, far above a pipe's capacity, so Codex exits while most of its output is still on the way.
+const BURST_LINES = 4000;
+
+const readSlowly = async (stream: ReadableStream<Uint8Array>) => {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+    await Bun.sleep(1);
+  }
+  return Buffer.concat(chunks).toString();
+};
+
 const childPids = (pid: number) =>
   Bun.spawnSync(["pgrep", "-P", String(pid)])
     .stdout.toString()
@@ -463,7 +523,17 @@ writeFileSync(
   }),
 );
 renameSync(report + ".tmp", report);
-if (process.env.FAKE_CODEX_MODE === "wait" || process.env.FAKE_CODEX_MODE === "wait-ignore-term") {
+if (process.env.FAKE_CODEX_MODE === "burst") {
+  const line = "x".repeat(1000);
+  for (let i = 0; i < Number(process.env.FAKE_BURST_LINES); i++) {
+    if (!process.stdout.write(i + " " + line + "\\n")) {
+      await new Promise((resolve) => process.stdout.once("drain", resolve));
+    }
+  }
+  await new Promise((resolve) => process.stdout.write("END\\n", resolve));
+  if (process.env.FAKE_BURST_SIGNAL) process.kill(process.pid, process.env.FAKE_BURST_SIGNAL);
+  process.exit(Number(process.env.FAKE_CODEX_EXIT ?? "0"));
+} else if (process.env.FAKE_CODEX_MODE === "wait" || process.env.FAKE_CODEX_MODE === "wait-ignore-term") {
   if (process.env.FAKE_CODEX_MODE === "wait-ignore-term") process.on("SIGTERM", () => {});
   setInterval(() => {}, 1000);
 } else {
