@@ -142,7 +142,7 @@ const toolDefinitions = (
 ): ToolDefinition[] => {
   if (kind === "request" && method === "thread/start") {
     const params = asObject(message.params);
-    return dynamicTools(asArray(params?.dynamicTools), null);
+    return dynamicTools(asArray(params?.dynamicTools), null, 0);
   }
   if (kind === "response" && method === "mcpServerStatus/list") {
     const servers = asArray(asObject(message.result)?.data);
@@ -151,18 +151,23 @@ const toolDefinitions = (
   return [];
 };
 
-// A namespace spec ({ name, tools: [...] }) prefixes its tools as "namespace.tool".
+// A namespace spec ({ name, tools: [...] }) prefixes its tools as "namespace.tool"; nesting beyond MAX_DEPTH is not followed, because observation runs before each chunk is relayed and must not overflow the stack.
 const dynamicTools = (
   specs: Json[],
   namespace: string | null,
-): ToolDefinition[] =>
-  specs.flatMap((value) => {
+  depth: number,
+): ToolDefinition[] => {
+  if (depth > MAX_DEPTH) return [];
+  return specs.flatMap((value) => {
     const spec = asObject(value);
     if (typeof spec?.name !== "string") return [];
     const name = namespace === null ? spec.name : `${namespace}.${spec.name}`;
-    if (Array.isArray(spec.tools)) return dynamicTools(spec.tools, name);
+    if (Array.isArray(spec.tools)) {
+      return dynamicTools(spec.tools, name, depth + 1);
+    }
     return [toolDefinition(name, spec.inputSchema)];
   });
+};
 
 const mcpServerTools = (server: JsonObject | null): ToolDefinition[] => {
   const tools = asObject(server?.tools);

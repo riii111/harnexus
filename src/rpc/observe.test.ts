@@ -117,6 +117,22 @@ describe("createObserver", () => {
     expect(log).not.toContain(PROMPT);
   });
 
+  test("stops following deeply nested namespaces without failing", () => {
+    // Built as text because JSON.stringify itself overflows at this depth.
+    const nest = (levels: number) =>
+      `${'{"name":"n","tools":['.repeat(levels)}{"name":"t","inputSchema":true}${"]}".repeat(levels)}`;
+    const line = `{"id":1,"method":"thread/start","params":{"dynamicTools":[${nest(2)},${nest(30_000)}]}}\n`;
+
+    const { records } = observe([
+      { direction: "app_to_server", line },
+      toServer({ id: 2, method: "initialize" }),
+    ]);
+
+    expect(records).toHaveLength(2);
+    expect(records[0].tools).toEqual([{ name: "n.n.t", inputSchema: true }]);
+    expect(records[1]).toMatchObject({ method: "initialize", id: 2 });
+  });
+
   test("records MCP tools from the server status list response", () => {
     const { records } = observe([
       toServer({ id: 9, method: "mcpServerStatus/list", params: {} }),
