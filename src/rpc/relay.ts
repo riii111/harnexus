@@ -16,7 +16,7 @@ type RelayOptions = {
   shutdownGraceMs?: number;
 };
 
-type RelayObserver = {
+export type RelayObserver = {
   chunk: (direction: Direction, chunk: Uint8Array) => void;
   end: (direction: Direction) => void;
 };
@@ -33,6 +33,75 @@ export const runRelay = (
   Result.gen(async function* () {
     const child = yield* Result.await(startChild(path, args, env));
     return Result.ok(await relayUntilExit(child, options));
+  });
+
+// The server is not a child here, so the relay ends on its output EOF instead of its exit.
+export const relayStreams = ({
+  input,
+  output,
+  serverInput,
+  serverOutput,
+  observer,
+  signalServer,
+  shutdownGraceMs = DEFAULT_SHUTDOWN_GRACE_MS,
+}: {
+  input: Readable;
+  output: Writable;
+  serverInput: Writable;
+  serverOutput: Readable;
+  observer?: RelayObserver;
+  signalServer?: (signal: Signals) => void;
+  shutdownGraceMs?: number;
+}) =>
+  new Promise<void>((resolve) => {
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    let settled = false;
+    let stopping = false;
+    // A server that ignores EOF on stdin would otherwise keep running after the app has gone.
+    const stopServer = () => {
+      if (!serverInput.writableEnded && !serverInput.destroyed) {
+        serverInput.end();
+      }
+      if (stopping || signalServer === undefined) return;
+      stopping = true;
+      timers.push(
+        setTimeout(() => {
+          signalServer("SIGTERM");
+          timers.push(
+            setTimeout(() => signalServer("SIGKILL"), shutdownGraceMs),
+          );
+        }, shutdownGraceMs),
+      );
+    };
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      for (const timer of timers) clearTimeout(timer);
+      input.removeAllListeners("data");
+      input.pause();
+      resolve();
+    };
+    const finish = () => {
+      if (output.destroyed || output.writableEnded) {
+        settle();
+        return;
+      }
+      output.write(new Uint8Array(0), settle);
+    };
+
+    serverInput.on("error", stopServer);
+    input.on("error", stopServer);
+    output.on("error", stopServer);
+    serverOutput.on("error", finish);
+
+    pump(input, serverInput, "app_to_server", observer, {
+      onEnd: stopServer,
+      onWriteError: stopServer,
+    });
+    pump(serverOutput, output, "server_to_app", observer, {
+      onEnd: finish,
+      onWriteError: stopServer,
+    });
   });
 
 // Never rejects: every stream failure is turned into stopping the child, and the child's exit is the only outcome.

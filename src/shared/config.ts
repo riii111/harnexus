@@ -52,3 +52,16 @@ export const loadLogPath = (env: Record<string, string | undefined>) => {
   }
   return Result.ok(path);
 };
+
+export const SHUTDOWN_GRACE_ENV = "HARNEXUS_SHUTDOWN_GRACE_MS";
+
+export const loadShutdownGraceMs = (
+  env: Record<string, string | undefined>,
+) => {
+  const value = Number(env[SHUTDOWN_GRACE_ENV]);
+  return Number.isInteger(value) && value > 0
+    ? value
+    : DEFAULT_SHUTDOWN_GRACE_MS;
+};
+
+const DEFAULT_SHUTDOWN_GRACE_MS = 5000;

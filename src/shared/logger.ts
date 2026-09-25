@@ -1,5 +1,6 @@
 import type { Signals } from "../boundary/process.ts";
 import type { AppToolsProbeEvent } from "../bridge/app-tools-probe.ts";
+import type { ToolCallProbeEvent } from "../bridge/tool-call-probe.ts";
 import type { ObservationEvent } from "../rpc/observe.ts";
 
 // serialize() copies only known fields, so request bodies, conversations, code and credentials cannot reach the log even through a widened object.
@@ -8,14 +9,18 @@ export type LogEvent =
   | { event: "bridge_startup_failed"; reason: StartupFailure }
   | { event: "log_file_unavailable"; reason: LogFileFailure }
   | { event: "codex_exited"; code: number | null; signal: Signals | null }
+  | { event: "server_closed" }
+  | { event: "server_signaled"; signal: Signals }
   | AppToolsProbeEvent
+  | ToolCallProbeEvent
   | ObservationEvent;
 
 type StartupFailure =
   | "CodexPathMissing"
   | "CodexPathNotAbsolute"
   | "FileNotExecutable"
-  | "ChildSpawnFailed";
+  | "ChildSpawnFailed"
+  | "ServerPipesUnavailable";
 
 type LogFileFailure = "LogPathNotAbsolute" | "LogFileOpenFailed";
 
@@ -31,10 +36,13 @@ export const createLogger = (sink: LogSink = stderrSink) => ({
 const serialize = (entry: LogEvent) => {
   switch (entry.event) {
     case "bridge_started":
+    case "server_closed":
       return { event: entry.event };
     case "bridge_startup_failed":
     case "log_file_unavailable":
       return { event: entry.event, reason: entry.reason };
+    case "server_signaled":
+      return { event: entry.event, signal: entry.signal };
     case "codex_exited":
       return { event: entry.event, code: entry.code, signal: entry.signal };
     case "rpc_message":
@@ -71,6 +79,13 @@ const serialize = (entry: LogEvent) => {
         stage: entry.stage,
         errorCode: entry.errorCode,
         tools: [...entry.tools],
+      };
+    case "tool_call_probe":
+      return {
+        event: entry.event,
+        step: entry.step,
+        role: entry.role,
+        detail: entry.detail,
       };
     case "rpc_unobserved":
       return {

@@ -241,6 +241,126 @@ describe("app-server", () => {
   }
 });
 
+describe("app-server modes", () => {
+  test(
+    "exec runs Codex in place without the bridge",
+    async () => {
+      const { env, reportPath } = setup({ HARNEXUS_APP_SERVER_MODE: "exec" });
+
+      const proc = launch(["app-server"], env, { stdin: '{"id":1}\n' });
+      const result = await finish(proc);
+      const report = await readReport(reportPath);
+
+      expect(result).toMatchObject({ stdout: '{"id":1}\n', exitCode: 0 });
+      expect(report.pid).toBe(proc.pid);
+      expect(report.env).toEqual({ ...env, HARNEXUS_LAUNCHER_ACTIVE: "1" });
+      expect(result.stderr).not.toContain("bridge_started");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "sidecar keeps Codex as the started process and relays through the bridge beside it",
+    async () => {
+      const { env, reportPath } = setup({
+        HARNEXUS_APP_SERVER_MODE: "sidecar",
+        FAKE_CODEX_EXIT: "3",
+      });
+      const args = ["-c", "a=b", "app-server"];
+      const line = '{"id":1,"method":"m"}\n';
+
+      const proc = launch(args, env, { stdin: line });
+      const result = await finish(proc);
+      const report = await readReport(reportPath);
+
+      expect(result).toMatchObject({ stdout: line, exitCode: 3 });
+      expect(report.pid).toBe(proc.pid);
+      expect(report.argv).toEqual(args);
+      expect(report.env).toEqual({ ...env, HARNEXUS_LAUNCHER_ACTIVE: "1" });
+      expect(result.stderr).toContain('"event":"bridge_started"');
+      expect(result.stderr).toContain(
+        '"direction":"app_to_server","kind":"request","method":"m"',
+      );
+      expect(result.stderr).toContain(
+        '"direction":"server_to_app","kind":"request","method":"m"',
+      );
+      expect(result.stderr).toContain('"event":"server_closed"');
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "sidecar lets the caller see the signal that ended Codex and then closes the output",
+    async () => {
+      const { env, reportPath } = setup({
+        HARNEXUS_APP_SERVER_MODE: "sidecar",
+        FAKE_CODEX_MODE: "wait",
+      });
+
+      const proc = launch(["app-server"], env);
+      await readReport(reportPath);
+      proc.kill("SIGTERM");
+      const result = await finish(proc);
+
+      expect(result).toMatchObject({ exitCode: null, signal: "SIGTERM" });
+      expect(result.stderr).toContain('"event":"server_closed"');
+    },
+    TIMEOUT,
+  );
+
+  for (const [mode, signal] of [
+    ["wait", "SIGTERM"],
+    ["wait-ignore-term", "SIGKILL"],
+  ] as const) {
+    test(
+      `sidecar stops a Codex that ignores the app disconnecting, with ${signal}`,
+      async () => {
+        const { env, reportPath } = setup({
+          HARNEXUS_APP_SERVER_MODE: "sidecar",
+          HARNEXUS_SHUTDOWN_GRACE_MS: "200",
+          FAKE_CODEX_MODE: mode,
+        });
+
+        const proc = launch(["app-server"], env);
+        await readReport(reportPath);
+        const result = await finish(proc);
+
+        expect(result).toMatchObject({ exitCode: null, signal });
+        expect(result.stderr).toContain(
+          `"event":"server_signaled","signal":"${signal}"`,
+        );
+      },
+      TIMEOUT,
+    );
+  }
+
+  test(
+    "sidecar ends Codex when the bridge dies",
+    async () => {
+      const { env, reportPath } = setup({
+        HARNEXUS_APP_SERVER_MODE: "sidecar",
+      });
+      const proc = Bun.spawn([LAUNCHER, "app-server"], {
+        cwd: dir,
+        env,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      await readReport(reportPath);
+      const bridge = childPids(proc.pid);
+
+      expect(bridge).toHaveLength(1);
+      process.kill(bridge[0] ?? -1, "SIGKILL");
+      const exitCode = await proc.exited;
+
+      expect(exitCode).toBe(0);
+      expect(await stopsRunning(bridge[0] ?? -1)).toBe(true);
+    },
+    TIMEOUT,
+  );
+});
+
 describe("refusals", () => {
   const expectRefused = async (
     args: string[],
@@ -339,6 +459,25 @@ const readReport = async (path: string): Promise<Report> => {
   return JSON.parse(await Bun.file(path).text());
 };
 
+const childPids = (pid: number) =>
+  Bun.spawnSync(["pgrep", "-P", String(pid)])
+    .stdout.toString()
+    .split("\n")
+    .filter((line) => line !== "")
+    .map(Number);
+
+// The killed bridge can linger as a zombie until it is reaped, which kill(pid, 0) still reports as alive.
+const stopsRunning = async (pid: number) => {
+  for (let i = 0; i < 200; i++) {
+    const state = Bun.spawnSync(["ps", "-o", "stat=", "-p", String(pid)])
+      .stdout.toString()
+      .trim();
+    if (state === "" || state.startsWith("Z")) return true;
+    await Bun.sleep(25);
+  }
+  return false;
+};
+
 const isAlive = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -369,7 +508,8 @@ writeFileSync(
   }),
 );
 renameSync(report + ".tmp", report);
-if (process.env.FAKE_CODEX_MODE === "wait") {
+if (process.env.FAKE_CODEX_MODE === "wait" || process.env.FAKE_CODEX_MODE === "wait-ignore-term") {
+  if (process.env.FAKE_CODEX_MODE === "wait-ignore-term") process.on("SIGTERM", () => {});
   setInterval(() => {}, 1000);
 } else {
   process.stdout.write(await Bun.stdin.text());

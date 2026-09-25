@@ -1,4 +1,5 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
+import { createReadStream, createWriteStream } from "node:fs";
 import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import { Result, TaggedError } from "better-result";
@@ -13,6 +14,11 @@ export type PipedChild = ChildProcessByStdio<Writable, Readable, null>;
 
 class ChildSpawnFailed extends TaggedError("ChildSpawnFailed")<{
   path: string;
+  cause: unknown;
+  message: string;
+}> {}
+
+class ServerPipesUnavailable extends TaggedError("ServerPipesUnavailable")<{
   cause: unknown;
   message: string;
 }> {}
@@ -79,6 +85,41 @@ export const readFirstLine = (
       if (end >= 0) finish(output.slice(0, end));
     });
     child.once("close", () => finish(null));
+  });
+
+export const openServerPipes = (
+  serverOutputFd: number,
+  serverInputFd: number,
+) =>
+  Result.try({
+    try: () => ({
+      serverOutput: createReadStream("", { fd: serverOutputFd }),
+      serverInput: createWriteStream("", { fd: serverInputFd }),
+    }),
+    catch: (cause) =>
+      new ServerPipesUnavailable({
+        cause,
+        message: "the server pipes were not inherited",
+      }),
+  });
+
+class ProcessSignalFailed extends TaggedError("ProcessSignalFailed")<{
+  pid: number;
+  cause: unknown;
+  message: string;
+}> {}
+
+export const signalProcess = (pid: number, signal: Signals) =>
+  Result.try({
+    try: () => {
+      process.kill(pid, signal);
+    },
+    catch: (cause) =>
+      new ProcessSignalFailed({
+        pid,
+        cause,
+        message: `cannot send ${signal} to ${pid}`,
+      }),
   });
 
 // Re-raising lets the caller tell a signal from an exit code; process.exit is reached only when the signal is ignored.
