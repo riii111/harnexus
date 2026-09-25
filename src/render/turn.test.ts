@@ -423,7 +423,7 @@ describe("state", () => {
 });
 
 describe("recorded sessions", () => {
-  test("a failed turn with thinking, an edit and an MCP tool matches the recording", () => {
+  test("renders a failed turn with thinking, an edit and an MCP tool as recorded", () => {
     const out = runRecorded("tu-fixture-3", [
       streamEvent({ type: "message_start", message: { id: "msg-1" } }),
       streamEvent({
@@ -472,7 +472,7 @@ describe("recorded sessions", () => {
     );
   });
 
-  test("a user message matches the recording", () => {
+  test("renders a user message as recorded", () => {
     const { state } = startTurn({
       threadId: "th-fixture-1",
       turnId: "tu-fixture-1",
@@ -495,7 +495,7 @@ describe("recorded sessions", () => {
     );
   });
 
-  test("an interrupted turn matches the recording except for the message it closes", () => {
+  test("renders an interrupted turn as recorded except for the message it closes", () => {
     let { state, notifications } = startTurn({
       threadId: "th-fixture-1",
       turnId: "tu-fixture-2",

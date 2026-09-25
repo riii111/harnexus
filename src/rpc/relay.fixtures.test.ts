@@ -9,26 +9,23 @@ import { createObserver } from "./observe.ts";
 import { relayStreams } from "./relay.ts";
 
 describe("relay over recorded app-server shapes", () => {
-  for (const name of FIXTURES) {
-    test(`${name} passes both directions unchanged and logs every message`, async () => {
-      const path = join(FIXTURE_DIR, name);
-      const records = readFixture(path);
-      const { exitCode, output, log } = await replay(path, records);
+  test.each(
+    FIXTURES,
+  )("passes $name through both directions unchanged and logs every message", async ({
+    name,
+  }) => {
+    const path = join(FIXTURE_DIR, name);
+    const records = readFixture(path);
 
-      expect(exitCode).toBe(0);
-      expect(output).toBe(wire(records, "server_to_app"));
-      for (const direction of DIRECTIONS) {
-        expect(
-          log.map(summary).filter((entry) => entry.direction === direction),
-        ).toEqual(
-          records
-            .filter((record) => record.direction === direction)
-            .map(expectedSummary(records)),
-        );
-      }
-      expect(log.join("")).not.toContain(SECRET_MARKER);
-    });
-  }
+    const { exitCode, output, log } = await replay(path, records);
+
+    expect(exitCode).toBe(0);
+    expect(output).toBe(wire(records, "server_to_app"));
+    expect(byDirection(log.map(summary))).toEqual(
+      byDirection(records.map(expectedSummary(records))),
+    );
+    expect(log.join("")).not.toContain(SECRET_MARKER);
+  });
 
   test("records the dynamic tools the app passes to thread/start", async () => {
     const path = join(FIXTURE_DIR, "handshake.jsonl");
@@ -58,9 +55,9 @@ const FIXTURE_DIR = join(
   "fixtures",
   "app-server",
 );
-const FIXTURES = readdirSync(FIXTURE_DIR).filter((name) =>
-  name.endsWith(".jsonl"),
-);
+const FIXTURES = readdirSync(FIXTURE_DIR)
+  .filter((name) => name.endsWith(".jsonl"))
+  .map((name) => ({ name }));
 const DIRECTIONS = ["app_to_server", "server_to_app"] as const;
 const REPLAY_SERVER = join(import.meta.dir, "testing", "replay-app-server.ts");
 const SECRET_MARKER = "sk-fixture-secret";
@@ -141,6 +138,14 @@ const summary = (line: string) => {
 };
 
 // The two directions interleave by arrival time, so each is compared on its own.
+const byDirection = <T extends { direction: Direction }>(entries: T[]) =>
+  Object.fromEntries(
+    DIRECTIONS.map((direction) => [
+      direction,
+      entries.filter((entry) => entry.direction === direction),
+    ]),
+  );
+
 const expectedSummary =
   (records: FixtureRecord[]) =>
   ({ direction, message }: FixtureRecord) => {

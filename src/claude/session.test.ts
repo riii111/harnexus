@@ -136,11 +136,20 @@ describe("startClaudeSession authentication", () => {
   });
 
   test.each([
-    ["an API key", { ...SUBSCRIPTION, apiKeySource: "ANTHROPIC_API_KEY" }],
-    ["an API key helper", { ...SUBSCRIPTION, apiKeySource: "apiKeyHelper" }],
-    ["a cloud provider", { apiProvider: "bedrock" as const }],
-    ["a login without a subscription", { apiProvider: "firstParty" as const }],
-  ])("stops before any prompt on %s", async (_label, account: AccountInfo) => {
+    {
+      name: "an API key",
+      account: { ...SUBSCRIPTION, apiKeySource: "ANTHROPIC_API_KEY" },
+    },
+    {
+      name: "an API key helper",
+      account: { ...SUBSCRIPTION, apiKeySource: "apiKeyHelper" },
+    },
+    { name: "a cloud provider", account: { apiProvider: "bedrock" } },
+    {
+      name: "a login without a subscription",
+      account: { apiProvider: "firstParty" },
+    },
+  ])("stops before any prompt on $name", async ({ account }) => {
     const claude = fakeClaude(account);
 
     const started = await startClaudeSession(SETTINGS, claude.runtime);
@@ -162,36 +171,40 @@ describe("startClaudeSession authentication", () => {
   });
 
   test.each([
-    [
-      "an Authorization header",
-      { ANTHROPIC_CUSTOM_HEADERS: "X-Trace: 1\nauthorization: Bearer other" },
-      "ANTHROPIC_CUSTOM_HEADERS",
-    ],
-    [
-      "an x-api-key header",
-      { ANTHROPIC_CUSTOM_HEADERS: "X-Api-Key: other" },
-      "ANTHROPIC_CUSTOM_HEADERS",
-    ],
-    ["an API key", { ANTHROPIC_API_KEY: "api-key" }, "ANTHROPIC_API_KEY"],
-    [
-      "a gateway URL",
-      { ANTHROPIC_BASE_URL: "https://gateway.example" },
-      "ANTHROPIC_BASE_URL",
-    ],
-  ])("stops before starting Claude when settings set %s", async (_label, settingsEnv: Record<
-    string,
-    string
-  >, name) => {
+    {
+      name: "an Authorization header",
+      settingsEnv: {
+        ANTHROPIC_CUSTOM_HEADERS: "X-Trace: 1\nauthorization: Bearer other",
+      },
+      expected: "ANTHROPIC_CUSTOM_HEADERS",
+    },
+    {
+      name: "an x-api-key header",
+      settingsEnv: { ANTHROPIC_CUSTOM_HEADERS: "X-Api-Key: other" },
+      expected: "ANTHROPIC_CUSTOM_HEADERS",
+    },
+    {
+      name: "an API key",
+      settingsEnv: { ANTHROPIC_API_KEY: "api-key" },
+      expected: "ANTHROPIC_API_KEY",
+    },
+    {
+      name: "a gateway URL",
+      settingsEnv: { ANTHROPIC_BASE_URL: "https://gateway.example" },
+      expected: "ANTHROPIC_BASE_URL",
+    },
+  ])("stops before starting Claude when settings set $name", async ({
+    settingsEnv,
+    expected,
+  }) => {
     const claude = fakeClaude(SUBSCRIPTION, { settingsEnv });
 
     const started = await startClaudeSession(SETTINGS, claude.runtime);
 
-    expect(started.isErr() && started.error._tag).toBe(
-      "ClaudeSettingsOverrideAuth",
-    );
-    expect(
-      started.isErr() && "names" in started.error && started.error.names,
-    ).toEqual([name]);
+    expect(started.isErr() && started.error).toMatchObject({
+      _tag: "ClaudeSettingsOverrideAuth",
+      names: [expected],
+    });
     expect(claude.started()).toBe(false);
   });
 
@@ -397,13 +410,15 @@ describe("ClaudeSession", () => {
   });
 
   test.each([
-    ["ends", undefined],
-    ["fails", new Error("Operation aborted")],
-  ])("close ends the input and the stream when the pending read %s", async (_label, closeEnding) => {
-    const claude = fakeClaude(
-      SUBSCRIPTION,
-      closeEnding === undefined ? {} : { closeEnding },
-    );
+    { name: "ends", options: {} },
+    {
+      name: "fails",
+      options: { closeEnding: new Error("Operation aborted") },
+    },
+  ])("close ends the input and the stream when the pending read $name", async ({
+    options,
+  }) => {
+    const claude = fakeClaude(SUBSCRIPTION, options);
     const session = await startedSession(claude);
     const reading = collect(session.messages);
 

@@ -37,9 +37,7 @@ describe("createLineInjector", () => {
 
     expect(target.text()).toBe("last\n");
   });
-});
 
-describe("createLineInjector on a broken target", () => {
   test("passes a failed write to the relay and stops injecting", async () => {
     let writes = 0;
     const target = new Writable({
