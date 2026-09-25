@@ -1,5 +1,6 @@
 import type { Signals } from "../boundary/process.ts";
 import type { AppToolsProbeEvent } from "../bridge/app-tools-probe.ts";
+import type { ToolCallProbeEvent } from "../bridge/tool-call-probe.ts";
 import type { ObservationEvent } from "../rpc/observe.ts";
 
 // serialize() copies only known fields, so request bodies, conversations, code and credentials cannot reach the log even through a widened object.
@@ -10,6 +11,7 @@ export type LogEvent =
   | { event: "codex_exited"; code: number | null; signal: Signals | null }
   | { event: "server_closed" }
   | AppToolsProbeEvent
+  | ToolCallProbeEvent
   | ObservationEvent;
 
 type StartupFailure =
@@ -74,6 +76,13 @@ const serialize = (entry: LogEvent) => {
         stage: entry.stage,
         errorCode: entry.errorCode,
         tools: [...entry.tools],
+      };
+    case "tool_call_probe":
+      return {
+        event: entry.event,
+        step: entry.step,
+        role: entry.role,
+        detail: entry.detail,
       };
     case "rpc_unobserved":
       return {

@@ -16,7 +16,7 @@ type RelayOptions = {
   shutdownGraceMs?: number;
 };
 
-type RelayObserver = {
+export type RelayObserver = {
   chunk: (direction: Direction, chunk: Uint8Array) => void;
   end: (direction: Direction) => void;
 };
