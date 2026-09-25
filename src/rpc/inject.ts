@@ -53,6 +53,16 @@ export const createLineInjector = (target: Writable) => {
 export const createOwnResponseFilter = (
   isOwn: (line: Buffer) => boolean,
   onOwn: (line: Buffer) => void,
+) =>
+  createLineRewriter((line) => {
+    if (!isOwn(line)) return line;
+    onOwn(line);
+    return null;
+  });
+
+// Each complete line is replaced by what rewrite returns, or dropped on null; a trailing partial line at the end passes unchanged.
+export const createLineRewriter = (
+  rewrite: (line: Buffer) => Buffer | null,
 ) => {
   let carry = Buffer.alloc(0);
   return new Transform({
@@ -65,9 +75,8 @@ export const createOwnResponseFilter = (
         newline !== -1;
         newline = bytes.indexOf(NEWLINE, start)
       ) {
-        const line = bytes.subarray(start, newline + 1);
-        if (isOwn(line)) onOwn(line);
-        else kept.push(line);
+        const line = rewrite(bytes.subarray(start, newline + 1));
+        if (line !== null) kept.push(line);
         start = newline + 1;
       }
       carry = Buffer.from(bytes.subarray(start));

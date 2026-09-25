@@ -2,6 +2,8 @@ import type { Signals } from "../boundary/process.ts";
 import type { AppToolsProbeEvent } from "../bridge/app-tools-probe.ts";
 import type { ToolCallProbeEvent } from "../bridge/tool-call-probe.ts";
 import type { ObservationEvent } from "../rpc/observe.ts";
+import type { RouteEvent } from "../rpc/route.ts";
+import type { TurnEvent } from "../turn/controller.ts";
 
 // serialize() copies only known fields, so request bodies, conversations, code and credentials cannot reach the log even through a widened object.
 export type LogEvent =
@@ -10,9 +12,13 @@ export type LogEvent =
   | { event: "log_file_unavailable"; reason: LogFileFailure }
   | { event: "server_closed" }
   | { event: "server_signaled"; signal: Signals }
+  | { event: "claude_unavailable"; reason: string }
+  | { event: "bridge_signaled"; signal: Signals }
   | AppToolsProbeEvent
   | ToolCallProbeEvent
-  | ObservationEvent;
+  | ObservationEvent
+  | TurnEvent
+  | RouteEvent;
 
 type StartupFailure = "ServerPipesUnavailable";
 
@@ -36,7 +42,14 @@ const serialize = (entry: LogEvent) => {
     case "log_file_unavailable":
       return { event: entry.event, reason: entry.reason };
     case "server_signaled":
+    case "bridge_signaled":
       return { event: entry.event, signal: entry.signal };
+    case "claude_unavailable":
+      return { event: entry.event, reason: entry.reason };
+    case "claude_turn":
+      return { event: entry.event, step: entry.step, detail: entry.detail };
+    case "model_id_collision":
+      return { event: entry.event, model: entry.model };
     case "rpc_message":
       return {
         event: entry.event,

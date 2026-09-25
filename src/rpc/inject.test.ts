@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { type PassThrough, Writable } from "node:stream";
-import { createLineInjector, createOwnResponseFilter } from "./inject.ts";
+import {
+  createLineInjector,
+  createLineRewriter,
+  createOwnResponseFilter,
+} from "./inject.ts";
 
 describe("createLineInjector", () => {
   test("writes an injected line at once on a line boundary", async () => {
@@ -78,6 +82,23 @@ describe("createOwnResponseFilter", () => {
 
     expect(text).toBe("keep 1\nkeep 2\npartial");
     expect(own).toEqual(["OWN reply\n"]);
+  });
+});
+
+describe("createLineRewriter", () => {
+  test("replaces or drops whole lines however the chunks split them", async () => {
+    const rewriter = createLineRewriter((line) => {
+      const text = line.toString();
+      if (text.startsWith("drop")) return null;
+      return Buffer.from(text.toUpperCase());
+    });
+    const output = collect(rewriter);
+
+    rewriter.write("keep\ndr");
+    rewriter.write("op me\nlast");
+    rewriter.end(" part");
+
+    expect(await output).toBe("KEEP\nlast part");
   });
 });
 

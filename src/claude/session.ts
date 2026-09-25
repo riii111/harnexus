@@ -32,6 +32,8 @@ export type ClaudeSessionSettings = {
   model: string;
   resume?: string;
   mcpServers?: Record<string, McpServerConfig>;
+  // The SDK reports no message when canUseTool refuses a tool, so the refusal is passed out here.
+  onToolDeclined?: (toolUseId: string) => void;
 };
 
 class ClaudeSessionClosed extends TaggedError("ClaudeSessionClosed")<{
@@ -82,7 +84,7 @@ const sessionOptions = (
   systemPrompt: { type: "preset", preset: "claude_code" },
   // A user's default mode such as bypassPermissions would skip canUseTool, which is the only approval surface so far.
   permissionMode: "default",
-  canUseTool: denyToolApproval,
+  canUseTool: denyToolApproval(settings.onToolDeclined),
   includePartialMessages: true,
   mcpServers: settings.mcpServers ?? {},
   ...(settings.resume === undefined ? {} : { resume: settings.resume }),
@@ -137,10 +139,15 @@ async function* readMessages(
 }
 
 // TODO: replace with the approval relay to the app in P9.
-const denyToolApproval: CanUseTool = async (toolName) => ({
-  behavior: "deny",
-  message: `${toolName} needs approval, and this session cannot ask for it yet`,
-});
+const denyToolApproval =
+  (onDeclined: (toolUseId: string) => void = () => {}): CanUseTool =>
+  async (toolName, _input, { toolUseID }) => {
+    onDeclined(toolUseID);
+    return {
+      behavior: "deny",
+      message: `${toolName} needs approval, and this session cannot ask for it yet`,
+    };
+  };
 
 const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
