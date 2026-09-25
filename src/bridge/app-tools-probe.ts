@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { probeAppTools } from "../boundary/app-tools-probe.mjs";
+import { probeAppTools, RUNTIME_FLAGS } from "../boundary/app-tools-probe.mjs";
 import { parseJson } from "../boundary/json.ts";
 import { readFirstLine } from "../boundary/process.ts";
 import type { LogEvent } from "../shared/logger.ts";
@@ -45,6 +45,7 @@ export const startAppToolsProbe = (
     return Promise.resolve();
   }
   const node = env.CODEX_MCP_NODE_PATH || process.execPath;
+  const flags = node === process.execPath ? RUNTIME_FLAGS : [];
   const attempt = async (count: number) => {
     const own = await probeAppTools(pipePath, TIMEOUT_MS);
     log(
@@ -53,7 +54,7 @@ export const startAppToolsProbe = (
     for (const [via, depth] of DESCENDANTS) {
       const line = await readFirstLine(
         node,
-        [PROBE_SCRIPT, String(depth)],
+        [...flags, PROBE_SCRIPT, String(depth)],
         env,
         TIMEOUT_MS * 2,
       );

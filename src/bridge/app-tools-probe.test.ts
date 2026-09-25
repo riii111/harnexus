@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -78,6 +79,29 @@ describe("startAppToolsProbe", () => {
         errorCode: "ENOENT",
       });
     }
+  });
+
+  test("keeps .env and bunfig.toml preloads out of descendants run by Bun", async () => {
+    const project = join(dir, "project");
+    const marker = join(dir, "preloaded");
+    await mkdir(project, { recursive: true });
+    await writeFile(join(project, "bunfig.toml"), 'preload = ["./pre.ts"]\n');
+    await writeFile(
+      join(project, "pre.ts"),
+      `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "");\n`,
+    );
+    const socket = await fakeAppSocket("respond");
+    const home = process.cwd();
+    process.chdir(project);
+    try {
+      const events = await probe({ CODEX_APP_TOOLS_PIPE_PATH: socket.path });
+      expect(events.map((event) => event.stage)).toContain("responded");
+    } finally {
+      process.chdir(home);
+      socket.close();
+    }
+
+    expect(existsSync(marker)).toBe(false);
   });
 
   test("keeps tool names that are not plain identifiers out of the log", async () => {

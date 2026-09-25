@@ -52,7 +52,11 @@ export const probeAppTools = (pipePath, timeoutMs = 5000) =>
       const frame = Buffer.alloc(4 + payload.length);
       frame.writeUInt32LE(payload.length, 0);
       payload.copy(frame, 4);
-      socket.write(frame, () => {
+      socket.write(frame, (error) => {
+        if (error) {
+          if (typeof error.code === "string") outcome.errorCode = error.code;
+          return;
+        }
         outcome.sent = true;
       });
     });
@@ -85,9 +89,13 @@ export const probeAppTools = (pipePath, timeoutMs = 5000) =>
 const runAsProbe = async (depth) => {
   const pipePath = process.env.CODEX_APP_TOOLS_PIPE_PATH ?? "";
   if (depth > 0) {
-    const child = spawn(process.execPath, [SELF, String(depth - 1)], {
-      stdio: ["ignore", "inherit", "ignore"],
-    });
+    const child = spawn(
+      process.execPath,
+      [...RUNTIME_FLAGS, SELF, String(depth - 1)],
+      {
+        stdio: ["ignore", "inherit", "ignore"],
+      },
+    );
     child.once("close", (code) => process.exit(code ?? 1));
     child.once("error", () => process.exit(1));
     return;
@@ -99,6 +107,11 @@ const runAsProbe = async (depth) => {
 };
 
 const SELF = fileURLToPath(import.meta.url);
+// A new Bun process does not inherit the parent's flags, so each one is told again to skip .env and bunfig.toml preloads in the working directory.
+export const RUNTIME_FLAGS =
+  typeof process.versions.bun === "string"
+    ? ["--no-env-file", "--config=/dev/null"]
+    : [];
 
 const isSocket = (path) => {
   try {
