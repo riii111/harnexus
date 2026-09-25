@@ -1,0 +1,46 @@
+#!/usr/bin/perl
+# Perl instead of sh: every POSIX shell adds or rewrites PWD (bash and zsh also SHLVL), which would alter the delegated environment.
+# Never write to stdout: it carries the app-server protocol.
+
+use strict;
+use warnings;
+use Cwd qw(abs_path);
+use File::Basename qw(dirname);
+
+# Set on every launch, so a descendant that reaches this script again stops here.
+if (length($ENV{HARNEXUS_LAUNCHER_ACTIVE} // "")) {
+  fail("recursive launch detected (HARNEXUS_LAUNCHER_ACTIVE is set)");
+}
+
+my $self = abs_path($0) // fail("cannot resolve the launcher path");
+my $codex = require_executable("HARNEXUS_CODEX_PATH");
+if ((abs_path($codex) // "") eq $self) {
+  fail("HARNEXUS_CODEX_PATH points to the launcher itself");
+}
+
+$ENV{HARNEXUS_LAUNCHER_ACTIVE} = "1";
+
+if (@ARGV && $ARGV[0] eq "app-server") {
+  my $bun = require_executable("HARNEXUS_BUN_PATH");
+  my $bridge = dirname(dirname($self)) . "/src/bridge/main.ts";
+  # DO_NOT_TRACK disables crash reports; the flags keep .env and bunfig.toml preloads in the caller's cwd out of the bridge.
+  $ENV{DO_NOT_TRACK} = "1";
+  exec { $bun } $bun, "--no-env-file", "--config=/dev/null", $bridge, @ARGV
+    or fail("cannot start $bun: $!");
+}
+
+exec { $codex } $codex, @ARGV or fail("cannot start $codex: $!");
+
+sub require_executable {
+  my ($name) = @_;
+  my $path = $ENV{$name} // "";
+  fail("$name is not set") if $path eq "";
+  fail("$name must be an absolute path") if $path !~ m{^/};
+  fail("$name is not an executable file") unless -f $path && -x _;
+  return $path;
+}
+
+sub fail {
+  print STDERR "harnexus: $_[0]\n";
+  exit 1;
+}
