@@ -2,7 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CODEX_PATH_ENV, loadCodexPath } from "./config.ts";
+import {
+  CODEX_PATH_ENV,
+  LOG_PATH_ENV,
+  loadCodexPath,
+  loadLogPath,
+} from "./config.ts";
 
 let dir: string;
 
@@ -52,5 +57,23 @@ describe("loadCodexPath", () => {
     expect(await errorTag({ [CODEX_PATH_ENV]: join(dir, "absent") })).toBe(
       "FileNotExecutable",
     );
+  });
+});
+
+describe("loadLogPath", () => {
+  test("returns null when the variable is unset or empty", () => {
+    const unset = loadLogPath({});
+    const empty = loadLogPath({ [LOG_PATH_ENV]: "" });
+
+    expect(unset.isOk() && unset.value).toBeNull();
+    expect(empty.isOk() && empty.value).toBeNull();
+  });
+
+  test("returns an absolute path and rejects a relative one", () => {
+    const absolute = loadLogPath({ [LOG_PATH_ENV]: "/var/log/x.log" });
+    const relative = loadLogPath({ [LOG_PATH_ENV]: "x.log" });
+
+    expect(absolute.isOk() && absolute.value).toBe("/var/log/x.log");
+    expect(relative.isErr() && relative.error._tag).toBe("LogPathNotAbsolute");
   });
 });

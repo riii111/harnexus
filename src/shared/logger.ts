@@ -5,6 +5,7 @@ import type { ObservationEvent } from "../rpc/observe.ts";
 export type LogEvent =
   | { event: "bridge_started" }
   | { event: "bridge_startup_failed"; reason: StartupFailure }
+  | { event: "log_file_unavailable"; reason: LogFileFailure }
   | { event: "codex_exited"; code: number | null; signal: Signals | null }
   | ObservationEvent;
 
@@ -13,6 +14,8 @@ type StartupFailure =
   | "CodexPathNotAbsolute"
   | "FileNotExecutable"
   | "ChildSpawnFailed";
+
+type LogFileFailure = "LogPathNotAbsolute" | "LogFileOpenFailed";
 
 export type LogSink = (line: string) => void;
 
@@ -28,6 +31,7 @@ const serialize = (entry: LogEvent) => {
     case "bridge_started":
       return { event: entry.event };
     case "bridge_startup_failed":
+    case "log_file_unavailable":
       return { event: entry.event, reason: entry.reason };
     case "codex_exited":
       return { event: entry.event, code: entry.code, signal: entry.signal };
