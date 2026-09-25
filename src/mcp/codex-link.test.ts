@@ -67,7 +67,7 @@ describe("createCodexLink tools", () => {
 
     await client.callTool({
       name: "create_thread",
-      arguments: { prompt: "review", target: { type: "project" } },
+      arguments: { prompt: "review", target: TARGET },
     });
     const sent = await client.callTool({
       name: "send_message_to_thread",
@@ -77,22 +77,9 @@ describe("createCodexLink tools", () => {
     expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
     expect(sent.isError).toBeFalsy();
     expect(requests.map((request) => request.params.arguments)).toEqual([
-      { prompt: "review", target: { type: "project" } },
+      { prompt: "review", target: TARGET },
       { threadId: REVIEWER, prompt: "again" },
     ]);
-  });
-
-  test("reads a created thread id from the only thread-like id in plain text", async () => {
-    const { client, store } = await connect({
-      answer: () => Result.ok(textAnswer(`Created thread ${REVIEWER}.`)),
-    });
-
-    await client.callTool({
-      name: "create_thread",
-      arguments: { prompt: "review", target: {} },
-    });
-
-    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
   });
 
   test("allows reading and waiting on its own thread but not messaging it", async () => {
@@ -146,25 +133,42 @@ describe("createCodexLink tools", () => {
 
     await client.callTool({
       name: "create_thread",
-      arguments: { prompt: "review", target: {} },
+      arguments: { prompt: "review", target: TARGET },
     });
 
     expect(store.reviewers(UUID_CALLER)).toEqual([REVIEWER]);
   });
 
-  test("does not take the caller's own id for the created thread", async () => {
-    const { client, store } = await connect({
-      caller: UUID_CALLER,
+  test("does not take a provisional id for the created thread", async () => {
+    const { client, link, store } = await connect({
       answer: () =>
-        Result.ok(textAnswer(`Created ${REVIEWER} for ${UUID_CALLER}`)),
+        Result.ok(
+          textAnswer(
+            JSON.stringify({ clientThreadId: REVIEWER, status: "queued" }),
+          ),
+        ),
     });
 
-    await client.callTool({
+    const created = await client.callTool({
       name: "create_thread",
-      arguments: { prompt: "review", target: {} },
+      arguments: { prompt: "review", target: TARGET },
     });
 
-    expect(store.reviewers(UUID_CALLER)).toEqual([REVIEWER]);
+    expect(created.isError).toBe(true);
+    expect(store.reviewers(CALLER)).toEqual([]);
+    expect(link.hasUnsettledWrite()).toBe(true);
+  });
+
+  test("refuses a target outside the forms the app defines without calling it", async () => {
+    const { client, requests } = await connect();
+
+    const created = await client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review", target: { type: "project", extra: 1 } },
+    });
+
+    expect(created.isError).toBe(true);
+    expect(requests).toEqual([]);
   });
 });
 
@@ -203,7 +207,7 @@ describe("createCodexLink target checks", () => {
 
     const created = await client.callTool({
       name: "create_thread",
-      arguments: { prompt: "review", target: {} },
+      arguments: { prompt: "review", target: TARGET },
     });
     const listed = await client.callTool({
       name: "list_projects",
@@ -227,7 +231,7 @@ describe("createCodexLink write outcomes", () => {
     const second = await send(client);
     const created = await client.callTool({
       name: "create_thread",
-      arguments: { prompt: "review", target: {} },
+      arguments: { prompt: "review", target: TARGET },
     });
 
     expect(first.isError).toBe(true);
@@ -258,6 +262,18 @@ describe("createCodexLink write outcomes", () => {
       "send_message_to_thread",
       "read_thread",
     ]);
+  });
+
+  test("treats an answer with an item missing its text as an unknown outcome", async () => {
+    const { client, link } = await connect({
+      reviewers: { [CALLER]: [REVIEWER] },
+      answer: () => Result.ok({ content: [{ type: "text" }] }),
+    });
+
+    const sent = await send(client);
+
+    expect(sent.isError).toBe(true);
+    expect(link.hasUnsettledWrite()).toBe(true);
   });
 
   test("treats a malformed answer to a write as an unknown outcome", async () => {
@@ -304,7 +320,7 @@ describe("createCodexLink write outcomes", () => {
 
     const created = await client.callTool({
       name: "create_thread",
-      arguments: { prompt: "review", target: {} },
+      arguments: { prompt: "review", target: TARGET },
     });
 
     expect(created.isError).toBe(true);
@@ -321,7 +337,7 @@ describe("createCodexLink write outcomes", () => {
 
     const created = await client.callTool({
       name: "create_thread",
-      arguments: { prompt: "review", target: {} },
+      arguments: { prompt: "review", target: TARGET },
     });
 
     expect(created.isError).toBe(true);
@@ -499,6 +515,7 @@ type RecordedRequest = {
 };
 
 const CALLER = "thread-caller";
+const TARGET = { type: "project", projectId: "project-1" };
 const UUID_CALLER = "019a0000-0000-7000-8000-0000000000aa";
 const OTHER_UUID = "019a0000-0000-7000-8000-0000000000bb";
 const REVIEWER = "019a0000-0000-7000-8000-000000000001";

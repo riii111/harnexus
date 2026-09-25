@@ -104,7 +104,7 @@ export const createCodexLink = ({
 
   // A created thread that cannot be named or saved as a reviewer is out of reach but real, so it is treated like an unknown outcome to prevent a duplicate.
   const recordReviewer = async (result: ToolResult) => {
-    const threadId = createdThreadId(result, callerThreadId);
+    const threadId = createdThreadId(result);
     if (threadId === null) {
       unknownWrite = "create_thread";
       return failure(
@@ -153,11 +153,7 @@ export const createCodexLink = ({
       "Start a new Codex app thread as your reviewer and send it the first prompt. Only threads created here can be read, waited on or messaged afterwards.",
       {
         prompt: z.string().min(1),
-        target: z
-          .record(z.string(), z.unknown())
-          .describe(
-            "Where the thread runs, in the object form the Codex app accepts: a project (type, projectId, environment), a directory (type, directoryName), or a project chat (type, projectId).",
-          ),
+        target: CREATE_TARGET,
         title: z.string().optional(),
         model: z.string().optional(),
         thinking: z.string().optional(),
@@ -253,17 +249,24 @@ const readToolResult = (value: unknown) => {
       }),
     );
   }
+  const content = answer.content.flatMap(toContentItem);
   const result: ToolResult = {
-    content: answer.content.flatMap(toContentItem),
+    content,
     ...(isRecord(answer.structuredContent) && {
       structuredContent: answer.structuredContent,
     }),
     ...(answer.isError === true && { isError: true }),
   };
-  return Result.ok(result);
+  return content.length === answer.content.length
+    ? Result.ok(result)
+    : Result.err(
+        new AppToolAnswerMalformed({
+          message: "the Codex app answered with content it does not define",
+        }),
+      );
 };
 
-// The app answers with text, image and audio items only, and anything else would be rejected by the MCP client.
+// The app answers with text, image and audio items only, so any other item makes the whole answer malformed rather than being dropped.
 const toContentItem = (item: unknown): ContentItem[] => {
   const value = item as Record<string, unknown> | null;
   if (typeof value !== "object" || value === null) return [];
@@ -280,25 +283,17 @@ const toContentItem = (item: unknown): ContentItem[] => {
   return [];
 };
 
-// TODO: read the id from the exact answer format once P8b records it on the app; until then only an explicit threadId field or a single thread-like id other than the caller is accepted.
-const createdThreadId = (result: ToolResult, callerThreadId: string) => {
+// A provisional id such as clientThreadId is not a thread id, so only an explicit threadId or thread.id counts; the exact format is still to be recorded on the app in P8b.
+const createdThreadId = (result: ToolResult) => {
   const structured = findThreadIdField(result.structuredContent);
   if (structured !== null) return structured;
-  const texts = result.content.flatMap((item) =>
-    item.type === "text" ? [item.text] : [],
-  );
-  for (const text of texts) {
-    const parsed = parseJson(text);
+  for (const item of result.content) {
+    if (item.type !== "text") continue;
+    const parsed = parseJson(item.text);
     const threadId = parsed.isOk() ? findThreadIdField(parsed.value) : null;
     if (threadId !== null) return threadId;
   }
-  const ids = new Set(
-    texts
-      .flatMap((text) => text.match(UUID_PATTERN) ?? [])
-      .map((id) => id.toLowerCase())
-      .filter((id) => id !== callerThreadId.toLowerCase()),
-  );
-  return ids.size === 1 ? ([...ids][0] ?? null) : null;
+  return null;
 };
 
 const findThreadIdField = (value: unknown): string | null => {
@@ -324,5 +319,30 @@ const CALL_TIMEOUT_MS = 60_000;
 const WRITE_TIMEOUT_MS = 120_000;
 const MAX_WAIT_MS = 600_000;
 const WAIT_MARGIN_MS = 30_000;
-const UUID_PATTERN =
-  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+// The three forms the app's create_thread schema defines; the allowed type values were not recorded, so they are left for the app to check.
+const CREATE_TARGET = z
+  .union([
+    z.strictObject({
+      type: z.string(),
+      projectId: z.string(),
+      environment: z.union([
+        z.strictObject({ type: z.string() }),
+        z.strictObject({
+          type: z.string(),
+          startingState: z.union([
+            z.strictObject({ type: z.string() }),
+            z.strictObject({
+              type: z.string(),
+              branchName: z.string(),
+              onMissing: z.string().optional(),
+            }),
+          ]),
+        }),
+      ]),
+    }),
+    z.strictObject({ type: z.string(), directoryName: z.string().optional() }),
+    z.strictObject({ type: z.string(), projectId: z.string() }),
+  ])
+  .describe(
+    "Where the thread runs: a project with an environment ({ type, projectId, environment }), a directory ({ type, directoryName }), or a project ({ type, projectId }). Use list_projects for project ids.",
+  );

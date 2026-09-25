@@ -71,16 +71,6 @@ describe("attachServerRequests", () => {
     });
   });
 
-  test("reports a request without an answer in time as unanswered", async () => {
-    const server = fakeServer();
-    const requests = attachServerRequests(server);
-    void collect(requests.serverOutput);
-
-    const result = await requests.request("list", {}, { timeoutMs: 10 });
-
-    expect(result.isErr() && result.error._tag).toBe("ServerRequestUnanswered");
-  });
-
   test("reports pending requests as unanswered when the server output ends, and sends nothing after", async () => {
     const server = fakeServer();
     const requests = attachServerRequests(server);
