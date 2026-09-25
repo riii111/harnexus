@@ -75,26 +75,29 @@ describe("delegation to the standard Codex", () => {
 
 describe("app-server", () => {
   test(
-    "relays Codex app-server through the bridge and logs only a summary",
+    "keeps Codex as the started process and relays through the bridge beside it",
     async () => {
       const { env, reportPath } = setup({ FAKE_CODEX_EXIT: "3" });
       const args = ["app-server", "--listen", "stdio://"];
+      const input = '{"id":1,"method":"m"}\nnot json\n';
 
-      const proc = launch(args, env, { stdin: '{"id":1}\n' });
+      const proc = launch(args, env, { stdin: input });
       const result = await finish(proc);
       const report = await readReport(reportPath);
 
-      expect(result).toMatchObject({ stdout: '{"id":1}\n', exitCode: 3 });
-      expect(report.pid).not.toBe(proc.pid);
+      expect(result).toMatchObject({ stdout: input, exitCode: 3 });
+      expect(report.pid).toBe(proc.pid);
       expect(report.argv).toEqual(args);
-      expect(report.env).toEqual({
-        ...env,
-        DO_NOT_TRACK: "1",
-        HARNEXUS_LAUNCHER_ACTIVE: "1",
-      });
+      expect(report.env).toEqual({ ...env, HARNEXUS_LAUNCHER_ACTIVE: "1" });
       expect(result.stderr).toContain('"event":"bridge_started"');
-      expect(result.stderr).toContain('"event":"codex_exited"');
+      expect(result.stderr).toContain(
+        '"direction":"app_to_server","kind":"request","method":"m"',
+      );
+      expect(result.stderr).toContain(
+        '"direction":"server_to_app","kind":"request","method":"m"',
+      );
       expect(result.stderr).toContain('"event":"rpc_unobserved"');
+      expect(result.stderr).toContain('"event":"server_closed"');
     },
     TIMEOUT,
   );
@@ -112,12 +115,13 @@ describe("app-server", () => {
         "plugins.x.enabled=true",
       ];
 
-      const result = await finish(launch(args, env));
+      const proc = launch(args, env);
+      const result = await finish(proc);
       const report = await readReport(reportPath);
 
       expect(result.exitCode).toBe(0);
+      expect(report.pid).toBe(proc.pid);
       expect(report.argv).toEqual(args);
-      expect(report.env.DO_NOT_TRACK).toBe("1");
       expect(result.stderr).toContain('"event":"bridge_started"');
     },
     TIMEOUT,
@@ -164,7 +168,7 @@ describe("app-server", () => {
       expect(result.exitCode).toBe(0);
       expect(logged).toContain('"event":"bridge_started"');
       expect(logged).toContain('"method":"m"');
-      expect(logged).toContain('"event":"codex_exited"');
+      expect(logged).toContain('"event":"server_closed"');
       expect((await stat(logPath)).mode & 0o777).toBe(0o600);
     },
     TIMEOUT,
@@ -195,28 +199,30 @@ describe("app-server", () => {
     async () => {
       const cwd = join(dir, "project");
       const preloaded = join(dir, "preloaded");
+      const leakedLog = join(dir, "dotenv.log");
       await mkdir(cwd, { recursive: true });
-      await writeFile(join(cwd, ".env"), "HARNEXUS_DOTENV_PROBE=leaked\n");
+      await writeFile(join(cwd, ".env"), `HARNEXUS_LOG_PATH=${leakedLog}\n`);
       await writeFile(join(cwd, "bunfig.toml"), 'preload = ["./pre.ts"]\n');
       await writeFile(
         join(cwd, "pre.ts"),
         `require("node:fs").writeFileSync(${JSON.stringify(preloaded)}, "");\n`,
       );
-      const { env, reportPath } = setup();
+      const { env } = setup();
 
       const result = await finish(launch(["app-server"], env, { cwd }));
-      const report = await readReport(reportPath);
 
+      // A bridge that loaded .env would also write its log to that path.
       expect(result.exitCode).toBe(0);
-      expect(report.env.HARNEXUS_DOTENV_PROBE).toBeUndefined();
+      expect(result.stderr).toContain('"event":"bridge_started"');
+      expect(existsSync(leakedLog)).toBe(false);
       expect(existsSync(preloaded)).toBe(false);
 
       // Without the launcher's flags, Bun does pick both files up.
       const control = Bun.spawnSync(
-        [BUN, "-e", "process.stdout.write(process.env.HARNEXUS_DOTENV_PROBE)"],
+        [BUN, "-e", "process.stdout.write(process.env.HARNEXUS_LOG_PATH)"],
         { cwd, env },
       );
-      expect(control.stdout.toString()).toBe("leaked");
+      expect(control.stdout.toString()).toBe(leakedLog);
       expect(existsSync(preloaded)).toBe(true);
     },
     TIMEOUT,
@@ -241,59 +247,11 @@ describe("app-server", () => {
   }
 });
 
-describe("app-server modes", () => {
+describe("app-server shutdown", () => {
   test(
-    "exec runs Codex in place without the bridge",
-    async () => {
-      const { env, reportPath } = setup({ HARNEXUS_APP_SERVER_MODE: "exec" });
-
-      const proc = launch(["app-server"], env, { stdin: '{"id":1}\n' });
-      const result = await finish(proc);
-      const report = await readReport(reportPath);
-
-      expect(result).toMatchObject({ stdout: '{"id":1}\n', exitCode: 0 });
-      expect(report.pid).toBe(proc.pid);
-      expect(report.env).toEqual({ ...env, HARNEXUS_LAUNCHER_ACTIVE: "1" });
-      expect(result.stderr).not.toContain("bridge_started");
-    },
-    TIMEOUT,
-  );
-
-  test(
-    "sidecar keeps Codex as the started process and relays through the bridge beside it",
+    "lets the caller see the signal that ended Codex and then closes the output",
     async () => {
       const { env, reportPath } = setup({
-        HARNEXUS_APP_SERVER_MODE: "sidecar",
-        FAKE_CODEX_EXIT: "3",
-      });
-      const args = ["-c", "a=b", "app-server"];
-      const line = '{"id":1,"method":"m"}\n';
-
-      const proc = launch(args, env, { stdin: line });
-      const result = await finish(proc);
-      const report = await readReport(reportPath);
-
-      expect(result).toMatchObject({ stdout: line, exitCode: 3 });
-      expect(report.pid).toBe(proc.pid);
-      expect(report.argv).toEqual(args);
-      expect(report.env).toEqual({ ...env, HARNEXUS_LAUNCHER_ACTIVE: "1" });
-      expect(result.stderr).toContain('"event":"bridge_started"');
-      expect(result.stderr).toContain(
-        '"direction":"app_to_server","kind":"request","method":"m"',
-      );
-      expect(result.stderr).toContain(
-        '"direction":"server_to_app","kind":"request","method":"m"',
-      );
-      expect(result.stderr).toContain('"event":"server_closed"');
-    },
-    TIMEOUT,
-  );
-
-  test(
-    "sidecar lets the caller see the signal that ended Codex and then closes the output",
-    async () => {
-      const { env, reportPath } = setup({
-        HARNEXUS_APP_SERVER_MODE: "sidecar",
         FAKE_CODEX_MODE: "wait",
       });
 
@@ -313,10 +271,9 @@ describe("app-server modes", () => {
     ["wait-ignore-term", "SIGKILL"],
   ] as const) {
     test(
-      `sidecar stops a Codex that ignores the app disconnecting, with ${signal}`,
+      `stops a Codex that ignores the app disconnecting, with ${signal}`,
       async () => {
         const { env, reportPath } = setup({
-          HARNEXUS_APP_SERVER_MODE: "sidecar",
           HARNEXUS_SHUTDOWN_GRACE_MS: "200",
           FAKE_CODEX_MODE: mode,
         });
@@ -335,11 +292,9 @@ describe("app-server modes", () => {
   }
 
   test(
-    "sidecar ends Codex when the bridge dies",
+    "ends Codex when the bridge dies",
     async () => {
-      const { env, reportPath } = setup({
-        HARNEXUS_APP_SERVER_MODE: "sidecar",
-      });
+      const { env, reportPath } = setup({});
       const proc = Bun.spawn([LAUNCHER, "app-server"], {
         cwd: dir,
         env,

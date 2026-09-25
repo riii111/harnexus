@@ -29,21 +29,11 @@ if ((abs_path($codex) // "") eq $self) {
 
 $ENV{HARNEXUS_LAUNCHER_ACTIVE} = "1";
 
-if (runs_app_server(@ARGV)) {
-  my $mode = $ENV{HARNEXUS_APP_SERVER_MODE} // "";
-  if ($mode eq "sidecar") {
-    start_sidecar();
-  } elsif ($mode ne "exec") {
-    my $bun = require_executable("HARNEXUS_BUN_PATH");
-    $ENV{DO_NOT_TRACK} = "1";
-    exec { $bun } bun_command($bun, "main.ts"), @ARGV
-      or fail("cannot start $bun: $!");
-  }
-}
+start_sidecar() if runs_app_server(@ARGV);
 
 exec { $codex } $codex, @ARGV or fail("cannot start $codex: $!");
 
-# codex_app works only while the process the app started is Codex itself, so this process becomes Codex; fds 3 (Codex stdout) and 4 (Codex stdin) must match src/bridge/sidecar.ts.
+# codex_app works only while the process the app started is Codex itself, so this process becomes Codex; fds 3 (Codex stdout) and 4 (Codex stdin) must match src/bridge/main.ts.
 sub start_sidecar {
   my $bun = require_executable("HARNEXUS_BUN_PATH");
   pipe(my $from_server, my $server_stdout) or fail("cannot create a pipe: $!");
@@ -54,7 +44,7 @@ sub start_sidecar {
     close $server_stdin;
     place_fds([$from_server, 3], [$to_server, 4]);
     $ENV{DO_NOT_TRACK} = "1";
-    exec { $bun } bun_command($bun, "sidecar.ts") or do {
+    exec { $bun } bun_command($bun) or do {
       print STDERR "harnexus: cannot start $bun: $!\n";
       POSIX::_exit(1);
     };
@@ -81,9 +71,9 @@ sub place_fds {
 
 # The flags keep .env and bunfig.toml preloads in the caller's cwd out of the bridge; DO_NOT_TRACK, set by the caller, disables crash reports.
 sub bun_command {
-  my ($bun, $entry) = @_;
+  my ($bun) = @_;
   return ($bun, "--no-env-file", "--config=/dev/null",
-    dirname(dirname($self)) . "/src/bridge/$entry");
+    dirname(dirname($self)) . "/src/bridge/main.ts");
 }
 
 # The app puts global options before `app-server`; helper subcommands such as generate-ts and non-stdio listeners carry no app traffic, so they go straight to Codex.
