@@ -1,4 +1,4 @@
-import { Result } from "better-result";
+import { parseJson } from "../boundary/json.ts";
 import { createLineSplitter } from "./line-splitter.ts";
 
 export type Direction = "app_to_server" | "server_to_app";
@@ -47,12 +47,13 @@ export const createObserver = (
   const observeLine = (direction: Direction, bytes: Uint8Array) => {
     const text = decoder.decode(bytes);
     if (text.trim() === "") return;
-    const parsed = Result.try(() => JSON.parse(text) as Json);
+    const parsed = parseJson(text);
     if (parsed.isErr()) {
       record({ event: "rpc_unobserved", direction, reason: "invalid_json" });
       return;
     }
-    const message = parsed.value;
+    // JSON.parse only produces JSON values.
+    const message = parsed.value as Json;
     if (!isObject(message)) {
       record({ event: "rpc_unobserved", direction, reason: "not_object" });
       return;

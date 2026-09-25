@@ -1,11 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
-import { Result } from "better-result";
 import { createLogger } from "../shared/logger.ts";
 import { createObserver } from "./observe.ts";
 import { runRelay } from "./relay.ts";
@@ -213,7 +212,8 @@ const nextPidFile = () => join(dir, `server-${pidFiles++}.pid`);
 const readPid = async (pidFile: string) => {
   let pid = 0;
   await waitFor(async () => {
-    pid = Number(await readFile(pidFile, "utf8").catch(() => ""));
+    const file = Bun.file(pidFile);
+    pid = (await file.exists()) ? Number(await file.text()) : 0;
     return pid > 0;
   });
   return pid;
@@ -227,7 +227,10 @@ const waitFor = async (check: () => Promise<boolean> | boolean) => {
   expect.unreachable("condition was not met in time");
 };
 
-const isAlive = (pid: number) => Result.try(() => process.kill(pid, 0)).isOk();
+// kill(1) reports a missing process through its exit status, where process.kill would throw.
+const isAlive = (pid: number) =>
+  Bun.spawnSync(["kill", "-0", String(pid)], { stderr: "ignore" }).exitCode ===
+  0;
 
 // Split and joined lines, invalid JSON, non-UTF-8 bytes, a line over the limit and a final line without a newline.
 const FIXED_CHUNKS = [

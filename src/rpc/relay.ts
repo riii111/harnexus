@@ -1,11 +1,11 @@
-import { spawn } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import { Result } from "better-result";
 import {
   type ChildExit,
-  ChildSpawnFailed,
   FORWARDED_SIGNALS,
+  type PipedChild,
   type Signals,
+  startChild,
 } from "../boundary/process.ts";
 import type { Direction } from "./observe.ts";
 
@@ -28,6 +28,16 @@ export const runRelay = (
   path: string,
   args: readonly string[],
   env: NodeJS.ProcessEnv,
+  options: RelayOptions,
+) =>
+  Result.gen(async function* () {
+    const child = yield* Result.await(startChild(path, args, env));
+    return Result.ok(await relayUntilExit(child, options));
+  });
+
+// Never rejects: every stream failure is turned into stopping the child, and the child's exit is the only outcome.
+const relayUntilExit = (
+  child: PipedChild,
   {
     input,
     output,
@@ -35,11 +45,7 @@ export const runRelay = (
     shutdownGraceMs = DEFAULT_SHUTDOWN_GRACE_MS,
   }: RelayOptions,
 ) =>
-  new Promise<Result<ChildExit, ChildSpawnFailed>>((resolve) => {
-    const child = spawn(path, args, {
-      stdio: ["pipe", "pipe", "inherit"],
-      env,
-    });
+  new Promise<ChildExit>((resolve) => {
     const timers: ReturnType<typeof setTimeout>[] = [];
     let settled = false;
     let stopping = false;
@@ -64,7 +70,7 @@ export const runRelay = (
       timers.push(setTimeout(() => child.kill("SIGKILL"), shutdownGraceMs));
     };
 
-    const settle = (result: Result<ChildExit, ChildSpawnFailed>) => {
+    const settle = (exit: ChildExit) => {
       if (settled) return;
       settled = true;
       for (const timer of timers) clearTimeout(timer);
@@ -73,24 +79,10 @@ export const runRelay = (
       }
       input.removeAllListeners("data");
       input.pause();
-      resolve(result);
+      resolve(exit);
     };
 
     for (const signal of FORWARDED_SIGNALS) process.on(signal, forwardSignal);
-
-    // An "error" after the child has a pid is a failed kill, which the exit that follows settles.
-    child.once("error", (cause) => {
-      if (child.pid !== undefined) return;
-      settle(
-        Result.err(
-          new ChildSpawnFailed({
-            path,
-            cause,
-            message: `failed to start ${path}`,
-          }),
-        ),
-      );
-    });
 
     const ignore = () => {};
     child.stdin.on("error", ignore);
@@ -108,10 +100,10 @@ export const runRelay = (
           ? { code: code ?? 1, signal: null }
           : { code: null, signal };
       if (output.destroyed || output.writableEnded) {
-        settle(Result.ok(exit));
+        settle(exit);
         return;
       }
-      output.write(new Uint8Array(0), () => settle(Result.ok(exit)));
+      output.write(new Uint8Array(0), () => settle(exit));
     });
   });
 
