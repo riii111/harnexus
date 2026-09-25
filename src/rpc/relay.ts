@@ -89,9 +89,16 @@ const relayUntilExit = (
     input.on("error", stopChild);
     output.on("error", stopChild);
 
-    pump(input, child.stdin, "app_to_server", observer, stopChild, ignore);
+    // A failed write to the child means it is gone, and its exit settles the relay.
+    pump(input, child.stdin, "app_to_server", observer, {
+      onEnd: stopChild,
+      onWriteError: ignore,
+    });
     // The child closing stdout ends the conversation even if it keeps running, so it is stopped like an app disconnect.
-    pump(child.stdout, output, "server_to_app", observer, stopChild, stopChild);
+    pump(child.stdout, output, "server_to_app", observer, {
+      onEnd: stopChild,
+      onWriteError: stopChild,
+    });
 
     // "close" follows the end of the child's stdout, so everything it wrote has been handed to output.
     child.once("close", (code, signal) => {
@@ -113,8 +120,7 @@ const pump = (
   to: Writable,
   direction: Direction,
   observer: RelayObserver | undefined,
-  onEnd: () => void,
-  onWriteError: () => void,
+  { onEnd, onWriteError }: { onEnd: () => void; onWriteError: () => void },
 ) => {
   let broken = false;
   from.on("data", (chunk: Uint8Array) => {
