@@ -15,5 +15,11 @@
         "noConsole": "error"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/**", "!src/boundary/**"],
+      "plugins": ["./biome-plugins/no-throw-try-catch.grit"]
+    }
+  ]
 }

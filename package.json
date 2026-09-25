@@ -14,5 +14,8 @@
     "@biomejs/biome": "2.4.13",
     "@types/bun": "1.4.2",
     "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "better-result": "3.0.1"
   }
 }
