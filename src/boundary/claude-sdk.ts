@@ -54,9 +54,9 @@ class ClaudeInterruptFailed extends TaggedError("ClaudeInterruptFailed")<{
   message: string;
 }> {}
 
-// resolveSettings merges the same files as the CLI without starting it, but skips an admin policyHelper.
 export type { ClaudeStreamFailed };
 
+// resolveSettings merges the same files as the CLI without starting it, but skips an admin policyHelper.
 export const readSettingsEnv = (
   resolve: ResolveSettings,
   cwd: string,

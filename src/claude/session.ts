@@ -70,7 +70,7 @@ export const startClaudeSession = async (
   return Result.ok(createSession(claude, input));
 };
 
-// Only the prompt text reaches Claude; Codex instructions and the app's history stay out of the preset system prompt.
+// Codex instructions and the app's history are never appended to the preset system prompt.
 const sessionOptions = (
   settings: ClaudeSessionSettings,
   env: Env,
@@ -144,7 +144,7 @@ const denyToolApproval: CanUseTool = async (toolName) => ({
 
 const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
-// resolveSettings reads this process's environment, so Claude gets the same one and both resolve the same settings files, such as under CLAUDE_CONFIG_DIR.
+// resolveSettings resolves settings directories such as CLAUDE_CONFIG_DIR from this process's environment, so Claude starts from the same one and differs only by the billing variables removed from it.
 const PROCESS_RUNTIME: ClaudeRuntime = {
   query,
   resolveSettings,
