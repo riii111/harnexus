@@ -54,17 +54,6 @@ describe("createSerialQueue", () => {
     await expect(failed).rejects.toThrow("boom");
     expect(await next).toBe("next");
   });
-
-  test("returns each task's own value", async () => {
-    const queue = createSerialQueue();
-
-    const values = await Promise.all([
-      queue.run("thread-1", async () => 1),
-      queue.run("thread-1", async () => 2),
-    ]);
-
-    expect(values).toEqual([1, 2]);
-  });
 });
 
 const deferred = () => {

@@ -35,6 +35,12 @@ export class FileWriteFailed extends TaggedError("FileWriteFailed")<{
   message: string;
 }> {}
 
+export class FileSyncFailed extends TaggedError("FileSyncFailed")<{
+  path: string;
+  cause: unknown;
+  message: string;
+}> {}
+
 export const checkExecutable = (path: string) =>
   Result.tryPromise({
     try: () => access(path, constants.X_OK),
@@ -82,8 +88,26 @@ export const readTextFileIfExists = (path: string) =>
       new FileReadFailed({ path, cause, message: `cannot read ${path}` }),
   });
 
-// Readers see either the previous or the new content, because the rename happens only after the temporary file is flushed to disk.
+// FileSyncFailed means the file already holds the new content but the rename may not survive a crash.
 export const writeFileAtomic = (path: string, content: string) =>
+  Result.gen(async function* () {
+    yield* Result.await(replaceFile(path, content));
+    yield* Result.await(
+      Result.tryPromise({
+        try: () => syncDirectory(dirname(path)),
+        catch: (cause) =>
+          new FileSyncFailed({
+            path,
+            cause,
+            message: `wrote ${path} but cannot sync its directory`,
+          }),
+      }),
+    );
+    return Result.ok();
+  });
+
+// Readers see either the previous or the new content, because the rename happens only after the temporary file is flushed to disk.
+const replaceFile = (path: string, content: string) =>
   Result.tryPromise({
     try: async () => {
       const temporary = join(
@@ -93,7 +117,6 @@ export const writeFileAtomic = (path: string, content: string) =>
       try {
         const file = await open(temporary, "wx", OWNER_ONLY);
         try {
-          await file.chmod(OWNER_ONLY);
           await file.writeFile(content, "utf8");
           await file.sync();
         } finally {
@@ -104,7 +127,6 @@ export const writeFileAtomic = (path: string, content: string) =>
         await rm(temporary, { force: true }).catch(() => {});
         throw cause;
       }
-      await syncDirectory(dirname(path));
     },
     catch: (cause) =>
       new FileWriteFailed({ path, cause, message: `cannot write ${path}` }),

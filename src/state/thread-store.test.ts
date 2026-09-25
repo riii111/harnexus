@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result, TaggedError } from "better-result";
-import { FileWriteFailed, writeFileAtomic } from "../boundary/fs.ts";
+import {
+  FileSyncFailed,
+  FileWriteFailed,
+  writeFileAtomic,
+} from "../boundary/fs.ts";
 import { openThreadStore } from "./thread-store.ts";
 
 let dir: string;
@@ -136,16 +140,33 @@ describe("ThreadStore", () => {
     expect(store.get("thread-1")?.reviewerThreadIds).toEqual(["reviewer-1"]);
   });
 
-  test("keeps the previous state when a write fails midway", async () => {
+  test("keeps the previous state when a write fails before the rename", async () => {
     const good = await openStore();
     await good.register(ENTRY);
-    const store = await openStore(writeHalfThenFail);
+    const store = await openStore(failingWrite);
 
     const updated = await store.setSession("thread-1", "session-1");
 
     expect(updated.isErr() && updated.error._tag).toBe("StatePersistFailed");
     expect(store.get("thread-1")?.sessionId).toBeNull();
     expect((await openStore()).get("thread-1")?.sessionId).toBeNull();
+  });
+
+  test("follows the file and stops saving when the rename is not confirmed", async () => {
+    const good = await openStore();
+    await good.register(ENTRY);
+    const store = await openStore(writeThenFailSync);
+
+    const updated = await store.setSession("thread-1", "session-1");
+    const later = await store.setModel("thread-1", "claude-opus-5-5");
+
+    expect(updated.isErr() && updated.error._tag).toBe("StatePersistFailed");
+    expect(store.get("thread-1")?.sessionId).toBe("session-1");
+    expect(later.isErr() && later.error._tag).toBe("StateStoreHalted");
+    expect((await openStore()).get("thread-1")).toMatchObject({
+      sessionId: "session-1",
+      model: "claude-sonnet-5",
+    });
   });
 
   test("rejects values that could not be loaded again", async () => {
@@ -315,6 +336,30 @@ describe("ThreadStore.runWrite", () => {
     expect(retried.isOk() && retried.value).toBe("sent");
   });
 
+  test("reports a finished write whose state could not be saved", async () => {
+    const switchable = switchableWrite();
+    const store = await openStore(switchable.write);
+    await store.register(ENTRY);
+
+    const result = await store.runWrite(
+      "thread-1",
+      async () => {
+        switchable.failNext();
+        return Result.ok("sent");
+      },
+      never,
+    );
+
+    expect(result.isErr() && result.error).toMatchObject({
+      _tag: "RunStateNotSaved",
+      runState: "idle",
+    });
+    expect(store.get("thread-1")?.runState).toBe("idle");
+    expect((await openStore()).get("thread-1")?.runState).toBe(
+      "outcomeUnknown",
+    );
+  });
+
   test("returns to idle after a write that failed with a known outcome", async () => {
     const store = await openStore();
     await store.register(ENTRY);
@@ -377,7 +422,7 @@ describe("ThreadStore.runWrite", () => {
   test("does not start a write whose running state cannot be saved", async () => {
     const good = await openStore();
     await good.register(ENTRY);
-    const store = await openStore(writeHalfThenFail);
+    const store = await openStore(failingWrite);
     let called = false;
 
     const result = await store.runWrite(
@@ -462,19 +507,39 @@ const openStore = async (write = writeFileAtomic) => {
   return opened.value;
 };
 
-// Simulates a crash after part of the new content reached the temporary file.
-const writeHalfThenFail = async (target: string, content: string) => {
-  await writeFile(
-    join(dir, `.threads.json.leftover.tmp`),
-    content.slice(0, content.length / 2),
-  );
-  return Result.err(
+const failingWrite = async (target: string) =>
+  Result.err(
     new FileWriteFailed({
       path: target,
       cause: new Error("disk full"),
       message: `cannot write ${target}`,
     }),
   );
+
+const writeThenFailSync = async (target: string, content: string) => {
+  const written = await writeFileAtomic(target, content);
+  if (written.isErr()) return written;
+  return Result.err(
+    new FileSyncFailed({
+      path: target,
+      cause: new Error("fsync failed"),
+      message: `wrote ${target} but cannot sync its directory`,
+    }),
+  );
+};
+
+const switchableWrite = () => {
+  let fail = false;
+  return {
+    write: (target: string, content: string) => {
+      if (!fail) return writeFileAtomic(target, content);
+      fail = false;
+      return failingWrite(target);
+    },
+    failNext: () => {
+      fail = true;
+    },
+  };
 };
 
 const deferred = () => {

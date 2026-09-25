@@ -1,5 +1,6 @@
 import { Result, TaggedError } from "better-result";
 import {
+  type FileSyncFailed,
   type FileWriteFailed,
   readTextFileIfExists,
   writeFileAtomic,
@@ -41,7 +42,19 @@ class InvalidThreadRecord extends TaggedError("InvalidThreadRecord")<{
 
 class StatePersistFailed extends TaggedError("StatePersistFailed")<{
   path: string;
-  cause: FileWriteFailed;
+  cause: FileWriteFailed | FileSyncFailed;
+  message: string;
+}> {}
+
+class StateStoreHalted extends TaggedError("StateStoreHalted")<{
+  path: string;
+  message: string;
+}> {}
+
+class RunStateNotSaved extends TaggedError("RunStateNotSaved")<{
+  threadId: string;
+  runState: RunState;
+  cause: StatePersistFailed | StateStoreHalted;
   message: string;
 }> {}
 
@@ -53,7 +66,7 @@ class StateFileCorrupt extends TaggedError("StateFileCorrupt")<{
 type WriteFile = (
   path: string,
   content: string,
-) => Promise<Result<void, FileWriteFailed>>;
+) => Promise<Result<void, FileWriteFailed | FileSyncFailed>>;
 
 // A thread that was running when the previous process stopped may have sent its write, so it is loaded as outcome unknown.
 export const openThreadStore = (
@@ -79,8 +92,36 @@ const createThreadStore = (
   let records: ReadonlyMap<string, ThreadRecord> = new Map(
     initial.map((record) => [record.threadId, record]),
   );
+  let halted = false;
   const threadQueue = createSerialQueue();
   const fileQueue = createSerialQueue();
+
+  const save = async (
+    next: ReadonlyMap<string, ThreadRecord>,
+  ): Promise<Result<void, StatePersistFailed | StateStoreHalted>> => {
+    if (halted) {
+      return Result.err(
+        new StateStoreHalted({
+          path,
+          message: `saving to ${path} stopped after an unconfirmed write; restart to reload it`,
+        }),
+      );
+    }
+    const written = await write(path, serializeState(next));
+    if (written.isOk()) return Result.ok();
+    // The file already holds next, so memory follows it; later saves stop because what survives a crash is unknown until the file is reloaded.
+    if (written.error._tag === "FileSyncFailed") {
+      records = next;
+      halted = true;
+    }
+    return Result.err(
+      new StatePersistFailed({
+        path,
+        cause: written.error,
+        message: `cannot save thread state to ${path}`,
+      }),
+    );
+  };
 
   // Every change to records happens inside the file queue, so a snapshot being written is never overtaken by another change.
   // The change is kept in memory only after the file holds it, so a failed write leaves both unchanged.
@@ -101,27 +142,20 @@ const createThreadStore = (
         );
       }
       const next = new Map(records).set(changed.value.threadId, changed.value);
-      const written = await write(path, serializeState(next));
-      if (written.isErr()) {
-        return Result.err(
-          new StatePersistFailed({
-            path,
-            cause: written.error,
-            message: `cannot save thread state to ${path}`,
-          }),
-        );
-      }
+      const saved = await save(next);
+      if (saved.isErr()) return Result.err(saved.error);
       records = next;
       return Result.ok(changed.value);
     });
 
   // Used after a write has run: memory must reflect it even if the file lags, and a stale "running" entry reloads as outcome unknown.
   const finishWrite = (threadId: string, runState: RunState) =>
-    fileQueue.run(path, async () => {
+    fileQueue.run(path, () => {
       const record = records.get(threadId);
-      if (record === undefined) return;
-      records = new Map(records).set(threadId, { ...record, runState });
-      await write(path, serializeState(records));
+      if (record !== undefined) {
+        records = new Map(records).set(threadId, { ...record, runState });
+      }
+      return save(records);
     });
 
   const update = (
@@ -192,16 +226,29 @@ const createThreadStore = (
           startWrite(current.get(threadId), threadId),
         );
         if (started.isErr()) return Result.err(started.error);
-        // A rejected operation may have sent its write, so the thread is left as outcome unknown before the rejection propagates.
-        let runState: RunState = "outcomeUnknown";
+        let finished = false;
         try {
           const result = await operation(started.value);
-          if (result.isOk() || !isOutcomeUnknown(result.error)) {
-            runState = "idle";
+          const runState: RunState =
+            result.isOk() || !isOutcomeUnknown(result.error)
+              ? "idle"
+              : "outcomeUnknown";
+          const saved = await finishWrite(threadId, runState);
+          finished = true;
+          if (saved.isErr()) {
+            return Result.err(
+              new RunStateNotSaved({
+                threadId,
+                runState,
+                cause: saved.error,
+                message: `the write on thread ${threadId} finished but its state was not saved`,
+              }),
+            );
           }
           return result;
         } finally {
-          await finishWrite(threadId, runState);
+          // A rejected operation may have sent its write; a save failure here is left to the stale "running" entry, which reloads as outcome unknown.
+          if (!finished) await finishWrite(threadId, "outcomeUnknown");
         }
       }),
   };
