@@ -67,6 +67,10 @@ export const completeToolItem = (
   }
 };
 
+// An MCP tool call has no declined status, so a refused one stays failed.
+export const declineToolItem = (item: ToolItem): ToolItem | null =>
+  item.type === "mcpToolCall" ? null : { ...item, status: "declined" };
+
 // A tool left open when the turn ends never reports a result, so it is closed as failed rather than left running in the app.
 export const abandonToolItem = (item: ToolItem): ToolItem =>
   item.type === "mcpToolCall"

@@ -279,6 +279,33 @@ describe("tools", () => {
     ).toEqual(["declined", "declined"]);
   });
 
+  test("completes a tool again as declined when only the result reports its denial", () => {
+    const out = run([
+      assistant("msg-1", [
+        toolUse("tool-1", "Edit", {
+          file_path: "/secret/a",
+          old_string: "o",
+          new_string: "n",
+        }),
+      ]),
+      toolResult("tool-1", "denied by rule", true),
+      result({
+        subtype: "success",
+        is_error: false,
+        result: "done",
+        permission_denials: [
+          { tool_name: "Edit", tool_use_id: "tool-1", tool_input: {} },
+        ],
+      }),
+    ]);
+
+    expect(
+      completedItems(out).flatMap((item) =>
+        item.type === "fileChange" ? [item.status] : [],
+      ),
+    ).toEqual(["failed", "declined"]);
+  });
+
   test("renders a repeated tool call only once", () => {
     const call = assistant("msg-1", [
       toolUse("tool-1", "Bash", { command: "ls" }),
@@ -677,7 +704,12 @@ const toolResult = (
 const success = () =>
   result({ subtype: "success", is_error: false, result: "done" });
 
-const result = (fields: object) => ({ type: "result", errors: [], ...fields });
+const result = (fields: object) => ({
+  type: "result",
+  errors: [],
+  permission_denials: [],
+  ...fields,
+});
 
 type Output = { notifications: AppNotification[] };
 

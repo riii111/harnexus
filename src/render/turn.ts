@@ -14,7 +14,12 @@ import type {
   TurnError,
   UserInput,
 } from "./protocol.ts";
-import { abandonToolItem, completeToolItem, startToolItem } from "./tools.ts";
+import {
+  abandonToolItem,
+  completeToolItem,
+  declineToolItem,
+  startToolItem,
+} from "./tools.ts";
 
 // Each function returns a new state and never changes the one it receives, so a turn can be replayed from fixed inputs.
 export type TurnState = Readonly<Omit<Draft, "notifications">>;
@@ -62,6 +67,7 @@ export const startTurn = (params: {
     messages: {},
     tools: {},
     toolUseIds: [],
+    failedTools: {},
     declinedToolUseIds: [],
     finalMessage: null,
     interrupting: false,
@@ -141,6 +147,11 @@ export const renderSdkMessage = (
       }
       break;
     case "result":
+      correctDenials(
+        draft,
+        message.permission_denials.map((denial) => denial.tool_use_id),
+        now,
+      );
       finish(
         draft,
         draft.interrupting ? { status: "interrupted" } : outcomeOf(message),
@@ -354,7 +365,18 @@ const renderToolResults = (
       output: single ? message.tool_use_result : undefined,
       durationMs: now - tool.startedAtMs,
     });
+    if (item.status === "failed") draft.failedTools[block.tool_use_id] = item;
     itemCompleted(draft, item, now);
+  }
+};
+
+// Path deny rules and hook denials reach the host only in the result, after their items closed as failed, so those items are completed again as declined; the app keeps the latest completion of an item id.
+const correctDenials = (draft: Draft, toolUseIds: string[], now: number) => {
+  for (const toolUseId of toolUseIds) {
+    draft.declinedToolUseIds.push(toolUseId);
+    const failed = draft.failedTools[toolUseId];
+    const declined = failed === undefined ? null : declineToolItem(failed);
+    if (declined !== null) itemCompleted(draft, declined, now);
   }
 };
 
@@ -375,8 +397,11 @@ const finish = (draft: Draft, outcome: TurnOutcome, now: number) => {
   const completed = outcome.status === "completed";
   closeBlocks(draft, now);
   flushPending(draft, completed ? "final_answer" : null, now);
-  for (const tool of Object.values(draft.tools)) {
-    itemCompleted(draft, abandonToolItem(tool.item), now);
+  for (const [toolUseId, tool] of Object.entries(draft.tools)) {
+    const declined = draft.declinedToolUseIds.includes(toolUseId)
+      ? declineToolItem(tool.item)
+      : null;
+    itemCompleted(draft, declined ?? abandonToolItem(tool.item), now);
   }
   draft.tools = {};
   const error: TurnError | null =
@@ -502,6 +527,7 @@ const open = (state: TurnState): Draft => ({
   tools: { ...state.tools },
   toolUseIds: [...state.toolUseIds],
   declinedToolUseIds: [...state.declinedToolUseIds],
+  failedTools: { ...state.failedTools },
   notifications: [],
 });
 
@@ -527,6 +553,7 @@ type Draft = {
   tools: Record<string, OpenTool>;
   toolUseIds: string[];
   declinedToolUseIds: string[];
+  failedTools: Record<string, ToolItem>;
   finalMessage: AgentMessageItem | null;
   interrupting: boolean;
   finished: boolean;
