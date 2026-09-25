@@ -47,6 +47,40 @@ export const startChild = (
     });
   });
 
+// Resolves with the first line the process writes to stdout, or null when it writes none before exiting or before timeoutMs; the process is killed once the line is read or the time runs out.
+export const readFirstLine = (
+  path: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+) =>
+  new Promise<string | null>((resolve) => {
+    const spawned = Result.try({
+      try: () =>
+        spawn(path, args, { stdio: ["ignore", "pipe", "ignore"], env }),
+      catch: (cause) => spawnFailed(path, cause),
+    });
+    if (spawned.isErr()) {
+      resolve(null);
+      return;
+    }
+    const child = spawned.value;
+    let output = "";
+    const finish = (line: string | null) => {
+      clearTimeout(timer);
+      child.kill("SIGKILL");
+      resolve(line);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    child.once("error", () => finish(null));
+    child.stdout.on("data", (chunk: Uint8Array) => {
+      output += Buffer.from(chunk).toString();
+      const end = output.indexOf("\n");
+      if (end >= 0) finish(output.slice(0, end));
+    });
+    child.once("close", () => finish(null));
+  });
+
 // Re-raising lets the caller tell a signal from an exit code; process.exit is reached only when the signal is ignored.
 export const exitLike = (exit: ChildExit): never => {
   if (exit.signal !== null) {

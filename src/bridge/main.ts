@@ -5,6 +5,7 @@ import { createObserver } from "../rpc/observe.ts";
 import { runRelay } from "../rpc/relay.ts";
 import { loadCodexPath, loadLogPath } from "../shared/config.ts";
 import { createLogger, type LogSink } from "../shared/logger.ts";
+import { startAppToolsProbe } from "./app-tools-probe.ts";
 
 const { logger, logFileFailure } = createBridgeLogger(process.env);
 if (logFileFailure !== null) {
@@ -18,6 +19,7 @@ if (codexPath.isErr()) {
 }
 
 logger.log({ event: "bridge_started" });
+void startAppToolsProbe(process.env, logger.log);
 const exit = await runRelay(
   codexPath.value,
   process.argv.slice(2),
