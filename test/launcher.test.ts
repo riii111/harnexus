@@ -38,9 +38,6 @@ describe("delegation to the standard Codex", () => {
       const cwd = join(dir, "work");
       await mkdir(cwd, { recursive: true });
       const { env, reportPath } = setup({
-        PWD: cwd,
-        // bash as /bin/sh adds SHLVL only when the caller did not pass one.
-        SHLVL: "2",
         FAKE_CODEX_EXIT: "7",
         CALLER_VALUE: "kept as is",
       });
@@ -89,7 +86,8 @@ describe("app-server", () => {
       expect(result).toMatchObject({ stdout: '{"id":1}\n', exitCode: 3 });
       expect(report.pid).not.toBe(proc.pid);
       expect(report.argv).toEqual(args);
-      expect(report.env).toMatchObject({
+      expect(report.env).toEqual({
+        ...env,
         DO_NOT_TRACK: "1",
         HARNEXUS_LAUNCHER_ACTIVE: "1",
       });
@@ -264,11 +262,12 @@ type Report = {
   env: Record<string, string>;
 };
 
-// Records how it was started, then echoes stdin and exits with FAKE_CODEX_EXIT, or waits for a signal when FAKE_CODEX_MODE=wait.
+// Records how it was started (renamed into place so readReport never sees a partial write), then echoes stdin and exits with FAKE_CODEX_EXIT, or waits for a signal when FAKE_CODEX_MODE=wait.
 const FAKE_CODEX = `#!/usr/bin/env -S ${BUN} --no-env-file --config=/dev/null
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
+const report = process.env.FAKE_CODEX_REPORT;
 writeFileSync(
-  process.env.FAKE_CODEX_REPORT,
+  report + ".tmp",
   JSON.stringify({
     pid: process.pid,
     argv: process.argv.slice(2),
@@ -276,6 +275,7 @@ writeFileSync(
     env: process.env,
   }),
 );
+renameSync(report + ".tmp", report);
 if (process.env.FAKE_CODEX_MODE === "wait") {
   setInterval(() => {}, 1000);
 } else {
