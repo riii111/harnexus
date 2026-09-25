@@ -291,6 +291,33 @@ describe("app-server shutdown", () => {
     );
   }
 
+  for (const [mode, signal] of [
+    ["close-stdout", "SIGTERM"],
+    ["close-stdout-ignore-term", "SIGKILL"],
+  ] as const) {
+    test(
+      `stops a Codex that closes stdout and keeps running, with ${signal}`,
+      async () => {
+        const { env, reportPath } = setup({
+          HARNEXUS_SHUTDOWN_GRACE_MS: "100",
+          FAKE_CODEX_MODE: mode,
+        });
+
+        const proc = launch(["app-server"], env);
+        const report = await readReport(reportPath);
+        const result = await finish(proc);
+
+        expect(result).toMatchObject({ exitCode: null, signal });
+        expect(result.stderr).toContain('"event":"server_closed"');
+        expect(result.stderr).toContain(
+          `"event":"server_signaled","signal":"${signal}"`,
+        );
+        expect(await stopsRunning(report.pid)).toBe(true);
+      },
+      TIMEOUT,
+    );
+  }
+
   test(
     "ends Codex when the bridge dies",
     async () => {
@@ -352,12 +379,7 @@ describe("app-server output at exit", () => {
         expect({ exitCode: proc.exitCode, signal: proc.signalCode }).toEqual(
           expected,
         );
-        const lines = received.split("\n");
-        expect(lines.at(-2)).toBe("END");
-        expect(lines).toHaveLength(BURST_LINES + 2);
-        expect(lines[BURST_LINES - 1]?.startsWith(`${BURST_LINES - 1} `)).toBe(
-          true,
-        );
+        expect(received === BURST_OUTPUT).toBe(true);
       },
       TIMEOUT,
     );
@@ -464,6 +486,10 @@ const readReport = async (path: string): Promise<Report> => {
 
 // About 4 MB, far above a pipe's capacity, so Codex exits while most of its output is still on the way.
 const BURST_LINES = 4000;
+const BURST_OUTPUT = `${Array.from(
+  { length: BURST_LINES },
+  (_, i) => `${i} ${"x".repeat(1000)}\n`,
+).join("")}END\n`;
 
 const readSlowly = async (stream: ReadableStream<Uint8Array>) => {
   const chunks: Uint8Array[] = [];
@@ -511,7 +537,7 @@ type Report = {
 
 // Records how it was started (renamed into place so readReport never sees a partial write), then echoes stdin and exits with FAKE_CODEX_EXIT, or waits for a signal when FAKE_CODEX_MODE=wait.
 const FAKE_CODEX = `#!/usr/bin/env -S ${BUN} --no-env-file --config=/dev/null
-import { renameSync, writeFileSync } from "node:fs";
+import { closeSync, renameSync, writeFileSync } from "node:fs";
 const report = process.env.FAKE_CODEX_REPORT;
 writeFileSync(
   report + ".tmp",
@@ -533,6 +559,10 @@ if (process.env.FAKE_CODEX_MODE === "burst") {
   await new Promise((resolve) => process.stdout.write("END\\n", resolve));
   if (process.env.FAKE_BURST_SIGNAL) process.kill(process.pid, process.env.FAKE_BURST_SIGNAL);
   process.exit(Number(process.env.FAKE_CODEX_EXIT ?? "0"));
+} else if (process.env.FAKE_CODEX_MODE?.startsWith("close-stdout")) {
+  closeSync(1);
+  if (process.env.FAKE_CODEX_MODE === "close-stdout-ignore-term") process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1000);
 } else if (process.env.FAKE_CODEX_MODE === "wait" || process.env.FAKE_CODEX_MODE === "wait-ignore-term") {
   if (process.env.FAKE_CODEX_MODE === "wait-ignore-term") process.on("SIGTERM", () => {});
   setInterval(() => {}, 1000);

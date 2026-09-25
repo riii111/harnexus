@@ -10,6 +10,7 @@ import { type RelayObserver, relayStreams } from "../rpc/relay.ts";
 import { loadShutdownGraceMs } from "../shared/config.ts";
 import { startAppToolsProbe } from "./app-tools-probe.ts";
 import { createBridgeLogger } from "./logging.ts";
+import { stopLingeringServer } from "./supervise.ts";
 import { createToolCallProbe } from "./tool-call-probe.ts";
 
 // Must match bin/harnexus-codex.
@@ -28,14 +29,21 @@ if (pipes.isErr()) {
 
 logger.log({ event: "bridge_started" });
 void startAppToolsProbe(process.env, logger.log);
+const shutdownGraceMs = loadShutdownGraceMs(process.env);
 await relayStreams({
   input: process.stdin,
   output: process.stdout,
   ...withToolCallProbe(pipes.value, createObserver(logger.log)),
   signalServer,
-  shutdownGraceMs: loadShutdownGraceMs(process.env),
+  shutdownGraceMs,
 });
 logger.log({ event: "server_closed" });
+pipes.value.serverInput.destroy();
+await stopLingeringServer({
+  isRunning: () => process.ppid === serverPid,
+  signal: signalServer,
+  graceMs: shutdownGraceMs,
+});
 process.exit(0);
 
 // The parent is Codex until it exits; checking it first keeps a reused pid from being signaled.
