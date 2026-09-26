@@ -28,6 +28,15 @@ export const serverFromEnv = (
   };
 };
 
+export const serializeServerSignalEvent = (entry: ServerSignalEvent) => {
+  switch (entry.event) {
+    case "server_signaled":
+      return { event: entry.event, signal: entry.signal };
+    case "server_signal_failed":
+      return { event: entry.event, signal: entry.signal, code: entry.code };
+  }
+};
+
 // The errno code tells a refused signal (EPERM) apart from a server that exited just before it (ESRCH).
 export const signalWithLog =
   (

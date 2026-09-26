@@ -2,80 +2,19 @@ import { describe, expect, test } from "bun:test";
 import { createLogger } from "./logger.ts";
 
 describe("createLogger", () => {
-  test("writes one JSON line per event to the sink", () => {
+  test("writes only the serialized fields, stamped with a time, as one JSON line", () => {
     const lines: string[] = [];
-    const logger = createLogger((line) => lines.push(line));
+    const logger = createLogger(
+      (line) => lines.push(line),
+      (entry: { event: string; secret: string }) => ({ event: entry.event }),
+    );
 
-    logger.log({ event: "server_signaled", signal: "SIGTERM" });
+    logger.log({ event: "sample", secret: "secret-token" });
 
     expect(lines).toHaveLength(1);
     expect(lines[0]?.endsWith("\n")).toBe(true);
-    expect(JSON.parse(lines[0] ?? "")).toMatchObject({
-      event: "server_signaled",
-      signal: "SIGTERM",
-    });
-  });
-
-  test("records a failed server signal with its errno code", () => {
-    const lines: string[] = [];
-    const logger = createLogger((line) => lines.push(line));
-
-    logger.log({
-      event: "server_signal_failed",
-      signal: "SIGKILL",
-      code: "EPERM",
-    });
-
-    const { time: _time, ...record } = JSON.parse(lines[0] ?? "");
-    expect(record).toEqual({
-      event: "server_signal_failed",
-      signal: "SIGKILL",
-      code: "EPERM",
-    });
-  });
-
-  test("drops fields outside the event shape", () => {
-    const lines: string[] = [];
-    const logger = createLogger((line) => lines.push(line));
-    const entry = {
-      event: "bridge_started",
-      params: { token: "secret-token", prompt: "private text" },
-    } as const;
-    const widened: LogEvent = entry;
-
-    logger.log(widened);
-
-    expect(lines.join("")).not.toContain("secret-token");
-    expect(lines.join("")).not.toContain("private text");
-  });
-
-  test("keeps only the summary fields of an observed message", () => {
-    const lines: string[] = [];
-    const logger = createLogger((line) => lines.push(line));
-    const entry = {
-      event: "rpc_message",
-      direction: "app_to_server",
-      kind: "request",
-      method: "turn/start",
-      id: 1,
-      tools: [{ name: "t", inputSchema: true, description: "private text" }],
-      mcpStartup: null,
-      params: { token: "secret-token" },
-    } as const;
-    const widened: LogEvent = entry;
-
-    logger.log(widened);
-
-    const { time: _time, ...record } = JSON.parse(lines[0] ?? "");
-    expect(record).toEqual({
-      event: "rpc_message",
-      direction: "app_to_server",
-      kind: "request",
-      method: "turn/start",
-      id: 1,
-      tools: [{ name: "t", inputSchema: true }],
-    });
+    const { time, ...record } = JSON.parse(lines[0] ?? "");
+    expect(Number.isNaN(Date.parse(time))).toBe(false);
+    expect(record).toEqual({ event: "sample" });
   });
 });
-
-type LogEvent = Parameters<ReturnType<typeof createLogger>["log"]>[0];
