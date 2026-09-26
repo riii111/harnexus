@@ -140,7 +140,6 @@ export const listFileNames = (path: string) =>
       new FileReadFailed({ path, cause, message: `cannot list ${path}` }),
   });
 
-// readdir follows a symbolic link, so a linked folder is listed like any other.
 export const listDirectoryIfExists = (path: string) =>
   Result.tryPromise({
     try: async () => {
