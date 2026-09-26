@@ -6,9 +6,9 @@ import type {
   ToolItem,
 } from "./protocol.ts";
 
-export type ToolUse = { name: string; input: unknown };
+type ToolUse = { name: string; input: unknown };
 
-export type ToolResult = {
+type ToolResult = {
   content: unknown;
   isError: boolean;
   declined: boolean;
@@ -50,7 +50,7 @@ export const startToolItem = (
       diff: input.content,
     });
   }
-  return startGeneric(id, use);
+  return startMcpToolCall(id, use);
 };
 
 export const completeToolItem = (
@@ -107,7 +107,7 @@ const startFileChange = (
   status: "inProgress",
 });
 
-const startGeneric = (id: string, use: ToolUse): McpToolCallItem => {
+const startMcpToolCall = (id: string, use: ToolUse): McpToolCallItem => {
   const mcp = MCP_TOOL_NAME.exec(use.name);
   return {
     type: "mcpToolCall",

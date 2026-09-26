@@ -1,4 +1,5 @@
 import { parseJson } from "../boundary/json.ts";
+import { isObject } from "../shared/object.ts";
 import { isClaudeModel, withClaudeModels } from "../turn/models.ts";
 import {
   type AppRequest,
@@ -253,6 +254,3 @@ const parseMessage = (line: Buffer) => {
 };
 
 const encode = (message: object) => Buffer.from(`${JSON.stringify(message)}\n`);
-
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);

@@ -1,5 +1,6 @@
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { ToolItem } from "../render/protocol.ts";
+import { isObject } from "../shared/object.ts";
 
 export type ToolCall = {
   toolName: string;
@@ -262,9 +263,6 @@ const unanswered = (call: ToolCall): PermissionResult => ({
 });
 
 const questionId = (index: number) => `question-${index + 1}`;
-
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 type AskedQuestion = {
   question: string;
