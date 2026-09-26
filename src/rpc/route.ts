@@ -86,7 +86,6 @@ export const createRouter = (
   };
 
   // The server creates the thread on its default model, so a Claude model never reaches it; a resume that would move a Claude thread is refused, since Claude keeps running where the thread started.
-  // A resume naming another Claude model switches the thread to it, as a Codex thread would.
   const routeThreadOpen = (
     line: Buffer,
     message: Record<string, unknown>,

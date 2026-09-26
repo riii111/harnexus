@@ -67,6 +67,8 @@ const REFUSAL_MESSAGES = {
   turn_running: "a Claude turn is already running on this thread",
   no_running_turn: "no running Claude turn matches the turn id",
   steer_not_sent: "the Claude turn ended before the steer reached it",
+  too_many_steers:
+    "this Claude turn takes no more steers; send it as the next turn",
   bridge_closing: "the bridge is shutting down",
   thread_not_saved: "the Claude thread could not be saved",
   thread_busy: "the Claude thread cannot start a turn",

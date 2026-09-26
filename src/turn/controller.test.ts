@@ -429,6 +429,7 @@ describe("turn/steer", () => {
 
   // user_message_uuids holds at most 64 sends and user_message_uuid only the last, so a steer Claude took can go unnamed.
   test.each<{ name: string; taken: (uuid: string | undefined) => object }>([
+    { name: "no uuids", taken: () => ({}) },
     {
       name: "a full list",
       taken: (uuid) => ({
@@ -442,16 +443,18 @@ describe("turn/steer", () => {
       name: "only the last uuid",
       taken: (uuid) => ({ user_message_uuid: uuid }),
     },
-  ])("ends the turn and closes Claude when nothing is queued and $name leaves a steer unnamed", async ({
+  ])("fails the turn asking for the steer again and resumes on a new session when nothing is queued and the result has $name", async ({
     taken,
   }) => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
+    const next = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings } = await harness([claude, next]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => claude.started());
     turns.steerTurn(steer(30, "turn-1", "also this"));
     const [prompt] = await readPrompts(claude, 2);
+    claude.emit(sdk(answer("msg-1", "ok")));
     claude.emit(
       sdk(
         result({
@@ -464,9 +467,31 @@ describe("turn/steer", () => {
       ),
     );
     await until(() => turnCompleted(sent) !== undefined);
+    await completeTurn(turns, sent, next, 11);
 
-    expect(turnsCompleted(sent)).toEqual(["completed"]);
+    expect(turnCompleted(sent)).toMatchObject({
+      status: "failed",
+      error: { message: expect.stringContaining("send it again") },
+    });
+    expect(turnsCompleted(sent)).toEqual(["failed", "completed"]);
     expect(claude.closes()).toBe(1);
+    expect(settings[1]).toMatchObject({ resume: "se-1" });
+  });
+
+  test("refuses a steer beyond what one turn's result can name", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    // Steers are sent one after another into the same turn, so this loop is a scenario rather than a table.
+    for (let id = 100; id < 162; id += 1) {
+      turns.steerTurn(steer(id, "turn-1", `steer ${id}`));
+    }
+    turns.steerTurn(steer(162, "turn-1", "one too many"));
+
+    expect(responseTo(sent, 161)?.result).toEqual({ turnId: "turn-1" });
+    expect(responseTo(sent, 162)).toEqual(REFUSED(162));
   });
 
   test("fails the turn and closes Claude when the Claude turn before a queued steer fails", async () => {
@@ -545,24 +570,6 @@ describe("turn/steer", () => {
       "hello",
       "also this",
     ]);
-  });
-
-  test("closes Claude when the result does not say whether it took the steer", async () => {
-    const first = fakeClaude(SUBSCRIPTION);
-    const second = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, settings } = await harness([first, second]);
-
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => first.started());
-    turns.steerTurn(steer(30, "turn-1", "also this"));
-    first.emit(sdk(answer("msg-1", "ok")));
-    first.emit(sdk(success()));
-    await until(() => turnCompleted(sent) !== undefined);
-    await completeTurn(turns, sent, second, 11);
-
-    expect(first.closes()).toBe(1);
-    expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
-    expect(settings[1]).toMatchObject({ resume: "se-1" });
   });
 
   test.each([

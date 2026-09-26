@@ -73,7 +73,8 @@ type FailureTag =
   | InferErr<StreamedMessage>["_tag"]
   | InterruptTag
   | BridgeClosing["_tag"]
-  | StreamEnded["_tag"];
+  | StreamEnded["_tag"]
+  | "SteerUnconfirmed";
 
 // runWrite is generic in the operation's error, so the store's own tags are listed; a new tag there fails to compile here.
 type StoreTag =
@@ -99,6 +100,7 @@ type ActiveTurn = {
   slot: SessionSlot | null;
   unsentSteers: string[];
   pendingSteers: Set<string>;
+  steers: number;
 };
 
 class BridgeClosing extends TaggedError("BridgeClosing")<{
@@ -169,6 +171,7 @@ export const createTurnController = ({
       slot: null,
       unsentSteers: [],
       pendingSteers: new Set(),
+      steers: 0,
     };
     activeTurns.set(threadId, active);
     void runTurn(id, checked.thread, active, input.items, input.text).then(() =>
@@ -195,12 +198,17 @@ export const createTurnController = ({
       refuse(id, "text_only");
       return;
     }
+    if (active.steers >= MAX_STEERS_PER_TURN) {
+      refuse(id, "too_many_steers");
+      return;
+    }
     if (active.slot === null) {
       active.unsentSteers.push(input.text);
     } else if (sendSteer(active, active.slot, input.text).isErr()) {
       refuse(id, "steer_not_sent");
       return;
     }
+    active.steers += 1;
     send({ id, result: { turnId: state.turnId } });
     log({ event: "claude_turn", step: "steered" });
     apply(active, renderUserInput(state, input.items, null, now()));
@@ -399,12 +407,22 @@ export const createTurnController = ({
         }
       }
       const message = received.value;
-      if (message.type === "result" && awaitsSteer(active, message)) {
+      const steers =
+        message.type === "result" ? steersAfter(active, message) : "none";
+      if (message.type === "result" && steers !== "none") {
         apply(active, renderInterimResult(active.state, message, now()));
-        continue;
+        if (steers === "queued") continue;
+        // The steer may never run, so the user is told to send it again, and the session goes so a late run cannot leak into the next turn.
+        dropSession(threadId, slot.value);
+        finish(
+          active,
+          { status: "failed", message: STEER_UNCONFIRMED },
+          "SteerUnconfirmed",
+        );
+        return;
       }
       apply(active, renderSdkMessage(active.state, message, now()));
-      // A steer no result accounted for may still run later, so the session goes with it rather than leak that run into the next turn; after a stop, the interrupt receipt decides instead.
+      // A failed result leaves its steers unrun, so the session goes with them rather than run them into the next turn; after a stop, the interrupt receipt decides instead.
       if (
         active.state.finished &&
         !active.state.interrupting &&
@@ -573,20 +591,23 @@ export const createTurnController = ({
   };
 };
 
-// A list under its cap names every send the turn took, so a steer it leaves out runs as a later turn, even one that reached Claude after this result was written.
-// A capped list or the single last uuid may leave out a steer already taken, so the turn then waits only when the CLI counts a queued send, which promises another result.
+// A list under its cap names every send the turn took, so a steer it leaves out runs as a later turn, even one that reached Claude after this result was written; a queued send the CLI counts promises that turn too.
+// A capped list or the single last uuid of an older CLI may leave out a steer already taken, so with nothing counted as queued whether the steer runs is unknown.
 // A failed result ends the turn, since the steer's run would otherwise hide its error.
-const awaitsSteer = (active: ActiveTurn, result: SDKResultMessage) => {
+const steersAfter = (
+  active: ActiveTurn,
+  result: SDKResultMessage,
+): "none" | "queued" | "unknown" => {
   const listed = result.user_message_uuids;
   const taken =
     listed ??
     (result.user_message_uuid === undefined ? [] : [result.user_message_uuid]);
   for (const uuid of taken) active.pendingSteers.delete(uuid);
-  if (active.state?.interrupting) return false;
-  if (result.subtype !== "success" || result.is_error) return false;
-  if (active.pendingSteers.size === 0) return false;
+  if (active.state?.interrupting) return "none";
+  if (result.subtype !== "success" || result.is_error) return "none";
+  if (active.pendingSteers.size === 0) return "none";
   const complete = listed !== undefined && listed.length < TAKEN_UUIDS_LIMIT;
-  return complete || (result.queued_turn_count ?? 0) > 0;
+  return complete || (result.queued_turn_count ?? 0) > 0 ? "queued" : "unknown";
 };
 
 const resumeFrom = (sessionId: string | null) =>
@@ -614,3 +635,9 @@ const INVALID_REQUEST = -32600;
 
 // The SDK documents user_message_uuids as holding at most this many entries.
 const TAKEN_UUIDS_LIMIT = 64;
+
+// With the prompt, a turn's sends stay under the list cap, so the list names each of them.
+const MAX_STEERS_PER_TURN = TAKEN_UUIDS_LIMIT - 2;
+
+const STEER_UNCONFIRMED =
+  "Claude may not have received the last steer; send it again if it was not answered";
