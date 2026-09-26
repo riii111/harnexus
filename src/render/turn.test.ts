@@ -12,7 +12,7 @@ import {
   startTurn,
 } from "./turn.ts";
 
-describe("text", () => {
+describe("renderSdkMessage text", () => {
   test("streams text as deltas and reports it as the final answer", () => {
     const out = run([
       ...streamedText("msg-1", ["Hel", "lo"], "end_turn"),
@@ -120,7 +120,7 @@ describe("text", () => {
   });
 });
 
-describe("tools", () => {
+describe("renderSdkMessage tools", () => {
   test("maps Bash to a command execution and reads a failed exit code", () => {
     const out = run([
       assistant("msg-1", [toolUse("tool-1", "Bash", { command: "false" })]),
@@ -317,7 +317,7 @@ describe("tools", () => {
   });
 });
 
-describe("turn end", () => {
+describe("renderSdkMessage turn end", () => {
   test("fails the turn once with the result error, not as an answer", () => {
     const out = run([
       ...streamedText("msg-1", ["partial"], null),
@@ -400,7 +400,7 @@ describe("turn end", () => {
   });
 });
 
-describe("state", () => {
+describe("renderSdkMessage replay", () => {
   test("replays the same notifications from the same state", () => {
     const { state } = begin();
     const messages = [
@@ -422,7 +422,7 @@ describe("state", () => {
   });
 });
 
-describe("recorded sessions", () => {
+describe("turn rendering against recorded app-server sessions", () => {
   test("renders a failed turn with thinking, an edit and an MCP tool as recorded", () => {
     const out = runRecorded("tu-fixture-3", [
       streamEvent({ type: "message_start", message: { id: "msg-1" } }),
