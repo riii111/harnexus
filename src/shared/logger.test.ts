@@ -22,6 +22,24 @@ describe("createLogger", () => {
     });
   });
 
+  test("records a failed server signal with its errno code", () => {
+    const lines: string[] = [];
+    const logger = createLogger((line) => lines.push(line));
+
+    logger.log({
+      event: "server_signal_failed",
+      signal: "SIGKILL",
+      code: "EPERM",
+    });
+
+    const { time: _time, ...record } = JSON.parse(lines[0] ?? "");
+    expect(record).toEqual({
+      event: "server_signal_failed",
+      signal: "SIGKILL",
+      code: "EPERM",
+    });
+  });
+
   test("drops fields outside the event shape", () => {
     const lines: string[] = [];
     const logger = createLogger((line) => lines.push(line));

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { Result } from "better-result";
+import { type InferErr, Result } from "better-result";
+import type { signalProcess } from "../boundary/process.ts";
 import {
   SERVER_PID_ENV,
   stopLingeringServer,
@@ -84,7 +85,7 @@ describe("watchServer", () => {
     );
 
     expect(server.isRunning()).toBe(false);
-    expect(server.signal("SIGTERM")).toBe(false);
+    expect(server.signal("SIGTERM")).toEqual(Result.ok(false));
     expect(sent).toEqual([]);
   });
 
@@ -96,8 +97,19 @@ describe("watchServer", () => {
     );
 
     expect(server.isRunning()).toBe(true);
-    expect(server.signal("SIGTERM")).toBe(true);
+    expect(server.signal("SIGTERM")).toEqual(Result.ok(true));
     expect(sent).toEqual([[4242, "SIGTERM"]]);
+  });
+
+  test("reports a signal the system refuses as a failure with its errno code", () => {
+    const server = watchServer(
+      { [SERVER_PID_ENV]: "4242" },
+      { parentPid: () => 4242, send: refuse("EPERM") },
+    );
+
+    const sent = server.signal("SIGTERM");
+
+    expect(sent.isErr() && sent.error.code).toBe("EPERM");
   });
 });
 
@@ -105,3 +117,12 @@ const record = (sent: [number, string][]) => (pid: number, signal: string) => {
   sent.push([pid, signal]);
   return Result.ok(undefined);
 };
+
+const refuse = (code: string) => (pid: number) =>
+  Result.err({
+    _tag: "ProcessSignalFailed",
+    pid,
+    code,
+    cause: null,
+    message: `cannot signal ${pid}`,
+  } as InferErr<ReturnType<typeof signalProcess>>);

@@ -55,7 +55,16 @@ await stopLingeringServer({
 process.exit(0);
 
 function signalServer(signal: Signals) {
-  if (server.signal(signal)) logger.log({ event: "server_signaled", signal });
+  const sent = server.signal(signal);
+  if (sent.isErr()) {
+    logger.log({
+      event: "server_signal_failed",
+      signal,
+      code: sent.error.code,
+    });
+  } else if (sent.value) {
+    logger.log({ event: "server_signaled", signal });
+  }
 }
 
 // Without its thread store the bridge offers no Claude model and relays everything, so Codex keeps working.

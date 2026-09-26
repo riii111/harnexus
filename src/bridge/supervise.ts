@@ -1,3 +1,4 @@
+import { Result } from "better-result";
 import { type Signals, signalProcess } from "../boundary/process.ts";
 
 export const SERVER_PID_ENV = "HARNEXUS_SERVER_PID";
@@ -18,7 +19,8 @@ export const watchServer = (
   const isRunning = () => known && parentPid() === pid;
   return {
     isRunning,
-    signal: (signal: Signals) => isRunning() && send(pid, signal).isOk(),
+    signal: (signal: Signals) =>
+      isRunning() ? send(pid, signal).map(() => true) : Result.ok(false),
   };
 };
 

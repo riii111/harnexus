@@ -13,6 +13,7 @@ export type LogEvent =
   | { event: "log_file_unavailable"; reason: LogFileFailure }
   | { event: "server_closed" }
   | { event: "server_signaled"; signal: Signals }
+  | { event: "server_signal_failed"; signal: Signals; code: string | null }
   | { event: "claude_unavailable"; reason: ClaudeUnavailable }
   | { event: "bridge_signaled"; signal: Signals }
   | ObservationEvent
@@ -47,6 +48,8 @@ const serialize = (entry: LogEvent) => {
     case "server_signaled":
     case "bridge_signaled":
       return { event: entry.event, signal: entry.signal };
+    case "server_signal_failed":
+      return { event: entry.event, signal: entry.signal, code: entry.code };
     case "claude_unavailable":
       return { event: entry.event, reason: entry.reason };
     case "claude_turn":
