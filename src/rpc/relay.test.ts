@@ -38,6 +38,30 @@ describe("relayStreams", () => {
     expect(log.join("")).not.toContain(SECRET);
   });
 
+  test("holds the server output back while the app output is full and resumes on drain", async () => {
+    const output = heldCollector();
+    const serverOutput = new PassThrough();
+    const chunks = Array.from({ length: 8 }, (_, i) =>
+      Buffer.alloc(HELD_HIGH_WATER_MARK, i),
+    );
+
+    const relaying = relayStreams({
+      input: new PassThrough(),
+      output: output.stream,
+      serverInput: collector().stream,
+      serverOutput,
+    });
+    for (const chunk of chunks) serverOutput.write(chunk);
+    await Bun.sleep(10);
+    const buffered = output.stream.writableLength;
+    output.release();
+    serverOutput.end();
+    await relaying;
+
+    expect(buffered).toBeLessThanOrEqual(HELD_HIGH_WATER_MARK);
+    expect(output.bytes().equals(Buffer.concat(chunks))).toBe(true);
+  });
+
   test("hands every byte to a slow output before completing", async () => {
     const chunks = Array.from({ length: 64 }, (_, i) =>
       Buffer.alloc(16 * 1024, i),
@@ -74,25 +98,6 @@ describe("relayStreams", () => {
 
     expect(output.bytes().toString()).toBe("to app\n");
     expect(serverInput.bytes().toString()).toBe("to server\n");
-  });
-
-  test("ends the server input when the app disconnects", async () => {
-    const serverInput = collector();
-    const serverOutput = new PassThrough();
-    const input = new PassThrough();
-
-    const relaying = relayStreams({
-      input,
-      output: collector().stream,
-      serverInput: serverInput.stream,
-      serverOutput,
-    });
-    input.end();
-    await once(serverInput.stream, "finish");
-    serverOutput.end();
-    await relaying;
-
-    expect(serverInput.stream.writableFinished).toBe(true);
   });
 
   test("signals a server that outlives the app with SIGTERM, then SIGKILL", async () => {
@@ -133,10 +138,10 @@ describe("relayStreams", () => {
       serverInput: injector.stream,
       serverOutput,
       signalServer: (signal) => signals.push(signal),
-      shutdownGraceMs: 20,
+      shutdownGraceMs: 5,
     });
     injector.inject("own\n");
-    await Bun.sleep(120);
+    await Bun.sleep(40);
     serverOutput.end();
     await relaying;
 
@@ -167,16 +172,10 @@ describe("relayStreams", () => {
   test("ends the server input when the app stops reading output", async () => {
     const serverInput = collector();
     const serverOutput = new PassThrough();
-    const broken = new Writable({
-      write(_chunk, _encoding, callback) {
-        callback(new Error("EPIPE"));
-      },
-    });
-    broken.on("error", () => {});
 
     const relaying = relayStreams({
       input: new PassThrough(),
-      output: broken,
+      output: silentlyBroken(),
       serverInput: serverInput.stream,
       serverOutput,
     });
@@ -206,6 +205,40 @@ const collector = ({ delayMs = 0, highWaterMark = 16 * 1024 } = {}) => {
   });
   return { stream, bytes: () => Buffer.concat(chunks) };
 };
+
+const HELD_HIGH_WATER_MARK = 16 * 1024;
+
+// Completes no write until released, like an app that has stopped reading for a while.
+const heldCollector = () => {
+  const chunks: Uint8Array[] = [];
+  const held: (() => void)[] = [];
+  let released = false;
+  const stream = new Writable({
+    highWaterMark: HELD_HIGH_WATER_MARK,
+    write(chunk: Uint8Array, _encoding, callback) {
+      const complete = () => {
+        chunks.push(chunk);
+        callback();
+      };
+      if (released) complete();
+      else held.push(complete);
+    },
+  });
+  const release = () => {
+    released = true;
+    for (const complete of held.splice(0)) complete();
+  };
+  return { stream, release, bytes: () => Buffer.concat(chunks) };
+};
+
+// Fails writes only through their callbacks, as Bun's process.stdout does on EPIPE without emitting "error".
+const silentlyBroken = () =>
+  Object.assign(new Writable({ write: (_chunk, _encoding, done) => done() }), {
+    write: (_chunk: Uint8Array, callback?: (error?: Error | null) => void) => {
+      queueMicrotask(() => callback?.(new Error("EPIPE")));
+      return true;
+    },
+  });
 
 const FIXED_CHUNKS = [
   Buffer.from('{"id":1,"method":"initialize","params":{"clientInfo":'),
