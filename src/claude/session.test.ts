@@ -269,11 +269,11 @@ describe("startClaudeSession started session", () => {
     ]);
   });
 
-  test("wakes the SDK waiting for input when a message is sent", async () => {
+  test("wakes the SDK waiting on the prompt when a message is sent", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const session = await startedSession(claude);
-    const input = claude.prompt()?.[Symbol.asyncIterator]();
-    const waiting = input?.next();
+    const prompt = claude.prompt()?.[Symbol.asyncIterator]();
+    const waiting = prompt?.next();
 
     const uuid = session.send("steer to the failing test").unwrap();
 
@@ -282,7 +282,7 @@ describe("startClaudeSession started session", () => {
       value: userMessage("steer to the failing test", uuid),
     });
     session.close();
-    expect(await input?.next()).toEqual({ done: true, value: undefined });
+    expect(await prompt?.next()).toEqual({ done: true, value: undefined });
   });
 
   test("streams messages until the SDK ends", async () => {
@@ -354,7 +354,7 @@ describe("startClaudeSession started session", () => {
       name: "fails",
       options: { closeEnding: new Error("Operation aborted") },
     },
-  ])("close ends the input and the stream when the pending read $name", async ({
+  ])("close ends the prompt and the stream when the pending read $name", async ({
     options,
   }) => {
     const claude = fakeClaude(SUBSCRIPTION, options);

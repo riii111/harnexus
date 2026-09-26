@@ -260,6 +260,15 @@ export const createRouter = (
   return { fromApp, fromServer };
 };
 
+export const serializeRouteEvent = (entry: RouteEvent) => {
+  switch (entry.event) {
+    case "claude_request_refused":
+      return { event: entry.event, method: entry.method, reason: entry.reason };
+    case "model_id_collision":
+      return { event: entry.event, model: entry.model };
+  }
+};
+
 const SETTINGS_UPDATED = "thread/settings/updated";
 
 const REFUSED_METHODS = [

@@ -27,7 +27,7 @@ import {
   type Env,
   withoutApiBilling,
 } from "./auth.ts";
-import { createInputQueue } from "./input.ts";
+import { createPromptQueue } from "./prompt-queue.ts";
 
 export type ClaudeSessionSettings = {
   cwd: string;
@@ -46,34 +46,29 @@ class ClaudeSessionClosed extends TaggedError("ClaudeSessionClosed")<{
 type ClaudeRuntime = ClaudeSdk & { env: Env };
 
 // The settings and the account are checked before any prompt is sent, so a login that would bill the API never starts a conversation.
-export const startClaudeSession = async (
+export const startClaudeSession = (
   settings: ClaudeSessionSettings,
   runtime: ClaudeRuntime = PROCESS_RUNTIME,
-) => {
-  const settingsChecked = (
-    await readSettingsEnv(
-      runtime.resolveSettings,
-      settings.cwd,
-      SETTING_SOURCES,
-    )
-  ).andThen(checkSettingsEnv);
-  if (settingsChecked.isErr()) return Result.err(settingsChecked.error);
-  const input = createInputQueue();
-  const opened = openQuery(
-    runtime.query,
-    input.stream,
-    sessionOptions(settings, runtime.env),
-  );
-  if (opened.isErr()) return Result.err(opened.error);
-  const claude = opened.value;
-  const checked = (await readAccount(claude)).andThen(checkSubscription);
-  if (checked.isErr()) {
-    input.end();
-    closeQuery(claude);
-    return Result.err(checked.error);
-  }
-  return Result.ok(createSession(claude, input));
-};
+) =>
+  Result.gen(async function* () {
+    const settingsEnv = yield* Result.await(
+      readSettingsEnv(runtime.resolveSettings, settings.cwd, SETTING_SOURCES),
+    );
+    yield* checkSettingsEnv(settingsEnv);
+    const prompt = createPromptQueue();
+    const claude = yield* openQuery(
+      runtime.query,
+      prompt.stream,
+      sessionOptions(settings, runtime.env),
+    );
+    const checked = (await readAccount(claude)).andThen(checkSubscription);
+    if (checked.isErr()) {
+      prompt.end();
+      closeQuery(claude);
+    }
+    yield* checked;
+    return Result.ok(createSession(claude, prompt));
+  });
 
 // Codex instructions and the app's history are never appended to the preset system prompt.
 const sessionOptions = (
@@ -96,19 +91,19 @@ const sessionOptions = (
 
 const createSession = (
   claude: ClaudeQuery,
-  input: ReturnType<typeof createInputQueue>,
+  prompt: ReturnType<typeof createPromptQueue>,
 ) => {
   let closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
-    input.end();
+    prompt.end();
     closeQuery(claude);
   };
   return {
     messages: readMessages(claude, () => closed, close),
     send: (text: string) => {
-      const uuid = closed ? null : input.push(text);
+      const uuid = closed ? null : prompt.push(text);
       return uuid === null ? Result.err(sessionClosed()) : Result.ok(uuid);
     },
     interrupt: async () =>

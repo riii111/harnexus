@@ -5,7 +5,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { createLogger } from "../shared/logger.ts";
-import { createObserver } from "./observe.ts";
+import { createObserver, serializeObservationEvent } from "./observe.ts";
 import { relayStreams } from "./relay.ts";
 
 describe("relay over recorded app-server shapes", () => {
@@ -78,7 +78,9 @@ const replay = async (path: string, records: FixtureRecord[]) => {
     serverInput: server.stdin,
     serverOutput: server.stdout,
     stopServer: { signal: () => {}, graceMs: 5000 },
-    observer: createObserver(createLogger((line) => log.push(line)).log),
+    observer: createObserver(
+      createLogger((line) => log.push(line), serializeObservationEvent).log,
+    ),
   });
   let expectedBytes = 0;
   for (const record of records) {

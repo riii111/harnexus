@@ -3,14 +3,17 @@ import { once } from "node:events";
 import { PassThrough, Readable, Writable } from "node:stream";
 import { createLogger } from "../shared/logger.ts";
 import { createLineInjector } from "./inject.ts";
-import { createObserver } from "./observe.ts";
+import { createObserver, serializeObservationEvent } from "./observe.ts";
 import { relayStreams } from "./relay.ts";
 
 describe("relayStreams", () => {
   test("relays bytes unchanged and logs only summaries", async () => {
     const output = collector();
     const log: string[] = [];
-    const logger = createLogger((line) => log.push(line));
+    const logger = createLogger(
+      (line) => log.push(line),
+      serializeObservationEvent,
+    );
     const echo = new PassThrough();
 
     await relayStreams({

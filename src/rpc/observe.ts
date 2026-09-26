@@ -112,6 +112,38 @@ export const createObserver = (
   };
 };
 
+export const serializeObservationEvent = (entry: ObservationEvent) => {
+  switch (entry.event) {
+    case "rpc_message":
+      return {
+        event: entry.event,
+        direction: entry.direction,
+        kind: entry.kind,
+        method: entry.method,
+        id: entry.id,
+        ...(entry.mcpStartup !== null && {
+          mcpStartup: {
+            server: entry.mcpStartup.server,
+            status: entry.mcpStartup.status,
+            failure: entry.mcpStartup.failure,
+          },
+        }),
+        ...(entry.tools.length > 0 && {
+          tools: entry.tools.map(({ name, inputSchema }) => ({
+            name,
+            inputSchema,
+          })),
+        }),
+      };
+    case "rpc_unobserved":
+      return {
+        event: entry.event,
+        direction: entry.direction,
+        reason: entry.reason,
+      };
+  }
+};
+
 // Responses carry only an id, so the method comes from the request sent the other way; the map is bounded because some requests are never answered.
 const createRequestTracker = () => {
   const pending = new Map<string, string>();
