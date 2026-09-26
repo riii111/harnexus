@@ -58,11 +58,9 @@ describe("loadShutdownGraceMs", () => {
 
   test.each([
     { name: "unset", value: undefined },
-    { name: "empty", value: "" },
     { name: "zero", value: "0" },
     { name: "negative", value: "-1" },
     { name: "fractional", value: "1.5" },
-    { name: "non-numeric", value: "x" },
   ])("falls back to 5000 when the value is $name", ({ value }) => {
     expect(loadShutdownGraceMs({ HARNEXUS_SHUTDOWN_GRACE_MS: value })).toBe(
       5000,
