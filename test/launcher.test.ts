@@ -21,6 +21,7 @@ let dir: string;
 let fakeCodex: string;
 let lingeringCodex: string;
 let reports = 0;
+const launched: Bun.Subprocess[] = [];
 
 beforeAll(async () => {
   dir = await realpath(await mkdtemp(join(tmpdir(), "harnexus-launcher-")));
@@ -33,6 +34,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  killLeftovers();
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -331,7 +333,7 @@ describe("app-server shutdown", () => {
         HARNEXUS_SHUTDOWN_GRACE_MS: "200",
       });
       // An open stdin keeps the relay's disconnect timer out, so only the bridge's own shutdown can signal.
-      const proc = Bun.spawn([LAUNCHER, "app-server"], {
+      const proc = spawnLauncher(["app-server"], {
         cwd: dir,
         env,
         stdin: "pipe",
@@ -357,7 +359,7 @@ describe("app-server shutdown", () => {
     "ends Codex when the bridge dies",
     async () => {
       const { env, reportPath } = setup({});
-      const proc = Bun.spawn([LAUNCHER, "app-server"], {
+      const proc = spawnLauncher(["app-server"], {
         cwd: dir,
         env,
         stdin: "pipe",
@@ -377,6 +379,36 @@ describe("app-server shutdown", () => {
   );
 });
 
+describe("leftover processes", () => {
+  test(
+    "are killed even when the bridge outlives its launcher",
+    async () => {
+      const { env, reportPath } = setup({ FAKE_CODEX_MODE: "wait" });
+      const proc = spawnLauncher(["app-server"], {
+        cwd: dir,
+        env,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      await readReport(reportPath);
+      const [bridge] = childPids(proc.pid);
+      if (bridge === undefined) return expect.unreachable("no bridge started");
+      // A stopped bridge cannot exit on the end of Codex's output, as a hung one would not.
+      process.kill(bridge, "SIGSTOP");
+      proc.kill("SIGKILL");
+      await proc.exited;
+      expect(isAlive(bridge)).toBe(true);
+
+      killLeftovers();
+      for (let i = 0; i < 100 && isAlive(bridge); i++) await Bun.sleep(20);
+
+      expect(isAlive(bridge)).toBe(false);
+    },
+    TIMEOUT,
+  );
+});
+
 describe("app-server output at exit", () => {
   test(
     "delivers every byte Codex wrote before exiting to an app that keeps reading slowly",
@@ -385,7 +417,7 @@ describe("app-server output at exit", () => {
         FAKE_CODEX_MODE: "burst",
         FAKE_BURST_LINES: String(BURST_LINES),
       });
-      const proc = Bun.spawn([LAUNCHER, "app-server"], {
+      const proc = spawnLauncher(["app-server"], {
         cwd: dir,
         env,
         stdin: "pipe",
@@ -492,13 +524,58 @@ const launch = (
   env: Record<string, string>,
   options: { cwd?: string; stdin?: string } = {},
 ) =>
-  Bun.spawn([LAUNCHER, ...args], {
+  spawnLauncher(args, {
     cwd: options.cwd ?? dir,
     env,
     stdin: new Blob([options.stdin ?? ""]),
     stdout: "pipe",
     stderr: "pipe",
   });
+
+// Each launcher leads its own process group, which Codex, the bridge and anything they start stay in after the launcher is gone.
+const spawnLauncher = <
+  const In extends Bun.SpawnOptions.Writable,
+  const Out extends Bun.SpawnOptions.Readable,
+  const Err extends Bun.SpawnOptions.Readable,
+>(
+  args: string[],
+  options: Bun.SpawnOptions.SpawnOptions<In, Out, Err>,
+) => {
+  const proc = Bun.spawn([LAUNCHER, ...args], { ...options, detached: true });
+  launched.push(proc);
+  return proc;
+};
+
+// A failed or timed-out test leaves processes in its launcher's group, reparented once the launcher ends; a group led by a process other than its live launcher was formed after the launcher's group emptied and its id was reused, so it is left alone.
+const killLeftovers = () => {
+  const running = new Map(
+    launched.map((proc) => [
+      proc.pid,
+      proc.exitCode === null && proc.signalCode === null,
+    ]),
+  );
+  const table = processTable();
+  const reused = new Set(
+    table
+      .filter(({ pid, pgid }) => pid === pgid && running.get(pid) === false)
+      .map(({ pgid }) => pgid),
+  );
+  for (const { pid, pgid } of table) {
+    if (running.has(pgid) && !reused.has(pgid)) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
+    }
+  }
+};
+
+const processTable = () =>
+  Bun.spawnSync(["ps", "-A", "-o", "pid=,pgid="])
+    .stdout.toString()
+    .split("\n")
+    .map((line) => /^\s*(\d+)\s+(\d+)\s*$/.exec(line))
+    .filter((match) => match !== null)
+    .map(([, pid, pgid]) => ({ pid: Number(pid), pgid: Number(pgid) }));
 
 const finish = async (proc: ReturnType<typeof launch>) => {
   const [stdout, stderr] = await Promise.all([
@@ -589,7 +666,8 @@ if (process.env.FAKE_CODEX_MODE === "burst") {
   process.exit(0);
 } else if (process.env.FAKE_CODEX_MODE === "wait" || process.env.FAKE_CODEX_MODE === "wait-ignore-term") {
   if (process.env.FAKE_CODEX_MODE === "wait-ignore-term") process.on("SIGTERM", () => {});
-  setInterval(() => {}, 1000);
+  // Still ends on its own if the test run is killed before afterAll can stop it.
+  setTimeout(() => process.exit(0), 60_000);
 } else {
   process.stdout.write(await Bun.stdin.text());
   process.exitCode = Number(process.env.FAKE_CODEX_EXIT ?? "0");
