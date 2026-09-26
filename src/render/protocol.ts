@@ -46,9 +46,19 @@ export type ThreadItem =
       clientId: string | null;
       content: UserInput[];
     }
+  | FunctionCallOutputItem
   | AgentMessageItem
   | ReasoningItem
   | ToolItem;
+
+// A turn another thread started through codex_app opens with the call's output, which the app shows as a message sent from that thread.
+export type FunctionCallOutputItem = {
+  type: "functionCallOutput";
+  id: string;
+  name: string;
+  namespace: string | null;
+  output: string | readonly { type: "input_text"; text: string }[];
+};
 
 export type AgentMessageItem = {
   type: "agentMessage";

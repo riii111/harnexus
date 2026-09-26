@@ -115,6 +115,11 @@ describe("delegatedMessage", () => {
         tool: "send_message_to_thread",
         text: REPLY,
         sourceThreadId: "th-reviewer",
+        toolOutput: {
+          name: "send_message_to_thread",
+          namespace: "codex_app",
+          output: REPLY,
+        },
       },
     },
     {
@@ -130,6 +135,14 @@ describe("delegatedMessage", () => {
         tool: "create_thread",
         text: "<source_thread_id>th-codex\n</source_thread_id>",
         sourceThreadId: "th-codex",
+        toolOutput: {
+          name: "create_thread",
+          namespace: null,
+          output: [
+            { type: "input_text", text: "<source_thread_id>th-codex" },
+            { type: "input_text", text: "</source_thread_id>" },
+          ],
+        },
       },
     },
     {
@@ -139,6 +152,11 @@ describe("delegatedMessage", () => {
         tool: "send_message_to_thread",
         text: "hello",
         sourceThreadId: null,
+        toolOutput: {
+          name: "send_message_to_thread",
+          namespace: null,
+          output: "hello",
+        },
       },
     },
     {

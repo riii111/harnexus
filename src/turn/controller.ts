@@ -24,6 +24,7 @@ import {
   type Rendered,
   renderInterimResult,
   renderSdkMessage,
+  renderToolOutput,
   renderToolRequest,
   renderTurnCompleted,
   renderTurnStarted,
@@ -142,7 +143,15 @@ type ActiveTurn = {
 // answered is set when the app got the turn as soon as it was accepted, so a turn that cannot run is shown as failed rather than refused.
 type TurnRequest = { id: AppRequest["id"]; turnId: string; answered: boolean };
 
-type TextInput = { items: UserInput[]; text: string };
+type TextInput = {
+  items: UserInput[];
+  toolOutput: ToolOutput | null;
+  text: string;
+};
+
+type ToolOutput = NonNullable<
+  ReturnType<typeof delegatedMessage>
+>["toolOutput"];
 
 type TurnInput = TextInput & { permissionMode: PermissionMode };
 
@@ -219,7 +228,7 @@ export const createTurnController = ({
       refuse(id, "reply_to_other_worker");
       return;
     }
-    const input = textInput(params.input, delegated?.text ?? null);
+    const input = textInput(params.input, delegated);
     if (input === null) {
       refuse(id, "text_only");
       return;
@@ -534,7 +543,7 @@ export const createTurnController = ({
       cwd: thread.cwd,
       now: now(),
     });
-    const shown = renderUserInput(started.state, input.items, messageId, now());
+    const shown = renderInput(started.state, input, messageId);
     const failed = renderTurnCompleted(
       shown.state,
       { status: "failed", message },
@@ -593,10 +602,7 @@ export const createTurnController = ({
     if (!request.answered)
       send({ id: request.id, result: { turn: started.turn } });
     log({ event: "claude_turn", step: "started" });
-    apply(
-      active,
-      renderUserInput(started.state, input.items, messageId, now()),
-    );
+    apply(active, renderInput(started.state, input, messageId));
 
     await waitForPendingInterrupt(threadId);
     if (active.state?.interrupting) {
@@ -692,6 +698,28 @@ export const createTurnController = ({
         dropSession(threadId, slot.value);
       }
     }
+  };
+
+  const renderInput = (
+    state: TurnState,
+    input: TextInput,
+    messageId: string | null,
+  ): Rendered => {
+    const delegated =
+      input.toolOutput === null
+        ? { state, notifications: [] }
+        : renderToolOutput(state, input.toolOutput, now());
+    if (input.items.length === 0) return delegated;
+    const typed = renderUserInput(
+      delegated.state,
+      input.items,
+      messageId,
+      now(),
+    );
+    return {
+      state: typed.state,
+      notifications: [...delegated.notifications, ...typed.notifications],
+    };
   };
 
   const sendSteer = (active: ActiveTurn, slot: SessionSlot, text: string) => {
@@ -978,20 +1006,20 @@ const clientMessageId = (params: Record<string, unknown>) =>
 
 const textInput = (
   value: unknown,
-  delegated: string | null,
+  delegated: { text: string; toolOutput: ToolOutput } | null,
 ): TextInput | null => {
-  const typed = Array.isArray(value) ? value : [];
-  const items =
-    delegated === null
-      ? typed
-      : [{ type: "text", text: delegated, text_elements: [] }, ...typed];
-  if (items.length === 0) return null;
-  const texts: string[] = [];
+  const items = Array.isArray(value) ? value : [];
+  if (items.length === 0 && delegated === null) return null;
+  const texts = delegated === null ? [] : [delegated.text];
   for (const item of items) {
     if (!isTextItem(item)) return null;
     texts.push(item.text);
   }
-  return { items: items as UserInput[], text: texts.join("\n") };
+  return {
+    items: items as UserInput[],
+    toolOutput: delegated?.toolOutput ?? null,
+    text: texts.join("\n"),
+  };
 };
 
 const isTextItem = (item: unknown): item is { type: "text"; text: string } =>

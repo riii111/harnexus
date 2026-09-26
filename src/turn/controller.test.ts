@@ -1495,7 +1495,7 @@ describe("turn/start carrying another thread's message", () => {
       threadId: THREAD,
       source: "th-lead",
     },
-  ])("passes a message from $name to Claude as the turn's text", async ({
+  ])("passes a message from $name to Claude and shows it as the call output the app labels as sent from another thread", async ({
     threadId,
     source,
   }) => {
@@ -1506,12 +1506,17 @@ describe("turn/start carrying another thread's message", () => {
     await until(() => claude.started());
 
     expect(await firstPrompt(claude.prompt())).toBe(delegation(source));
-    const shown = sent.find(
-      (m) =>
-        m.method === "item/started" && m.params.item.type === "userMessage",
-    );
-    expect(shown?.params.item.content).toEqual([
-      { type: "text", text: delegation(source), text_elements: [] },
+    const shown = sent
+      .filter((m) => m.method === "item/started")
+      .map((m) => m.params.item);
+    expect(shown).toEqual([
+      {
+        type: "functionCallOutput",
+        id: expect.any(String),
+        name: "send_message_to_thread",
+        namespace: "codex_app",
+        output: delegation(source),
+      },
     ]);
   });
 });

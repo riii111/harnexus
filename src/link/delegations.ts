@@ -76,18 +76,29 @@ export const delegatedMessage = (params: Record<string, unknown>) => {
   ) {
     return null;
   }
-  const text = outputText(output.output);
-  return text === null
-    ? null
-    : {
-        tool: output.name,
-        text,
-        sourceThreadId: SOURCE_THREAD.exec(text)?.[1] ?? null,
-      };
+  const texts = outputTexts(output.output);
+  if (texts === null) return null;
+  const text = texts.join("\n");
+  return {
+    tool: output.name,
+    text,
+    sourceThreadId: SOURCE_THREAD.exec(text)?.[1] ?? null,
+    toolOutput: {
+      name: output.name,
+      namespace: typeof output.namespace === "string" ? output.namespace : null,
+      output:
+        typeof output.output === "string" ? output.output : textItems(texts),
+    },
+  };
 };
 
-const outputText = (body: unknown) => {
-  if (typeof body === "string") return body;
+const textItems = (
+  texts: readonly string[],
+): readonly { type: "input_text"; text: string }[] =>
+  texts.map((text) => ({ type: "input_text", text }));
+
+const outputTexts = (body: unknown) => {
+  if (typeof body === "string") return [body];
   if (!Array.isArray(body) || body.length === 0) return null;
   const texts: string[] = [];
   for (const item of body) {
@@ -100,7 +111,7 @@ const outputText = (body: unknown) => {
     }
     texts.push(item.text);
   }
-  return texts.join("\n");
+  return texts;
 };
 
 const DELEGATING_TOOLS: ReadonlySet<string> = new Set([
