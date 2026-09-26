@@ -236,7 +236,6 @@ const createThreadStore = (
             }),
       ),
 
-    // null forgets a session Claude can no longer resume, so the next turn starts a new conversation.
     setSessionId: (threadId: string, sessionId: string | null) =>
       update(threadId, (mapping) => ({ ...mapping, sessionId })),
 

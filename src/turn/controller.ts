@@ -226,10 +226,9 @@ export const createTurnController = ({
   // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
   const modes = new Map<string, Mode>();
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  // Threads the server was asked to keep on disk while this bridge runs; one note per run is enough, and a failed request is retried at the next turn.
   const materialized = new Set<string>();
-  // Threads whose unknown outcome the user was told of by refusing their own message, so their next own message is taken as the decision to continue; a message from another thread never is.
-  const warnedUnknown = new Set<string>();
+  // A thread with an unknown outcome continues only on a new message the user typed after being told, so neither a resent copy of a refused message nor another thread's message counts.
+  const refusedForUnknown = new Map<string, Set<string>>();
   const appRequests = createAppRequests({ send, now });
   let closed = false;
 
@@ -476,15 +475,18 @@ export const createTurnController = ({
         saveModel(threadId, picked);
       }
     }
-    const typedByUser = input.toolOutput === null;
-    if (typedByUser && warnedUnknown.has(threadId)) {
+    const typedByUser = input.toolOutput === null && messageId !== null;
+    if (
+      typedByUser &&
+      refusedForUnknown.get(threadId)?.has(messageId) === false
+    ) {
       const cleared = await store.resolveOutcomeUnknown(threadId);
       if (cleared.isErr()) {
         forgetMessage(threadId, messageId);
         refuseTurn(request, queued, "thread_busy", cleared.error);
         return;
       }
-      warnedUnknown.delete(threadId);
+      refusedForUnknown.delete(threadId);
       log({ event: "claude_turn", step: "outcome_cleared" });
     }
     let responded = false;
@@ -544,11 +546,13 @@ export const createTurnController = ({
       forgetMessage(threadId, messageId);
       // Re-running could repeat a write that already landed, so the user decides by sending again after being told.
       if (ran.error._tag === "WriteOutcomeUnknown") {
-        if (typedByUser) warnedUnknown.add(threadId);
+        if (typedByUser) {
+          const refused = refusedForUnknown.get(threadId) ?? new Set();
+          refusedForUnknown.set(threadId, refused.add(messageId));
+        }
         refuseTurn(request, queued, "outcome_unknown", ran.error);
         return;
       }
-      // The store's message says why.
       refuseTurn(request, queued, "thread_busy", ran.error, ran.error.message);
       return;
     }
@@ -855,7 +859,6 @@ export const createTurnController = ({
     return found.isErr() || found.value;
   };
 
-  // The loss is reported on this turn, so the next one starts a new conversation instead of failing the same way.
   const forgetSession = (threadId: string) => {
     sessionIds.set(threadId, null);
     log({ event: "claude_turn", step: "session_missing" });

@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -461,6 +462,18 @@ describe("claudeSessionExists", () => {
     const found = await claudeSessionExists("se-1", configDir);
 
     expect(found.isOk() && found.value).toBe(false);
+  });
+
+  test("finds a record in a project folder reached through a symbolic link", async () => {
+    const linked = join(configDir, "elsewhere");
+    mkdirSync(linked);
+    writeFileSync(join(linked, "se-1.jsonl"), "{}\n");
+    mkdirSync(join(configDir, "projects"));
+    symlinkSync(linked, join(configDir, "projects", "-work-tree"));
+
+    const found = await claudeSessionExists("se-1", configDir);
+
+    expect(found.isOk() && found.value).toBe(true);
   });
 
   test("skips a file beside the project folders", async () => {

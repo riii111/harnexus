@@ -84,11 +84,10 @@ export const claudeSessionExists = (
     const projects = yield* Result.await(listDirectoryIfExists(projectsDir));
     const fileName = `${sessionId}.jsonl`;
     for (const project of projects ?? []) {
-      if (!project.isDirectory) continue;
       const files = yield* Result.await(
-        listDirectoryIfExists(join(projectsDir, project.name)),
+        listDirectoryIfExists(join(projectsDir, project)),
       );
-      if (files?.some((file) => file.name === fileName)) return Result.ok(true);
+      if (files?.includes(fileName)) return Result.ok(true);
     }
     return Result.ok(false);
   });

@@ -140,18 +140,14 @@ export const listFileNames = (path: string) =>
       new FileReadFailed({ path, cause, message: `cannot list ${path}` }),
   });
 
-// A missing directory is null rather than an error, since it means there is nothing in it.
+// readdir follows a symbolic link, so a linked folder is listed like any other.
 export const listDirectoryIfExists = (path: string) =>
   Result.tryPromise({
     try: async () => {
       try {
-        const entries = await readdir(path, { withFileTypes: true });
-        return entries.map((entry) => ({
-          name: entry.name,
-          isDirectory: entry.isDirectory(),
-        }));
+        return await readdir(path);
       } catch (cause) {
-        if (isMissingFile(cause)) return null;
+        if (isMissingFile(cause) || isNotDirectory(cause)) return null;
         throw cause;
       }
     },
@@ -240,6 +236,9 @@ const syncDirectory = async (path: string) => {
 
 const isMissingFile = (cause: unknown) =>
   cause instanceof Error && "code" in cause && cause.code === "ENOENT";
+
+const isNotDirectory = (cause: unknown) =>
+  cause instanceof Error && "code" in cause && cause.code === "ENOTDIR";
 
 const OWNER_ONLY = 0o600;
 

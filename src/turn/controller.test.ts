@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -450,7 +450,7 @@ describe("session ids", () => {
 });
 
 describe("a thread whose last turn has an unknown outcome", () => {
-  test("runs the message sent after the refusal and clears the unknown state", async () => {
+  test("runs a new message the user sends after the refusal and clears the unknown state", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     let undecided = true;
     const { turns, sent, store, events } = await harness([claude], {
@@ -460,9 +460,9 @@ describe("a thread whose last turn has an unknown outcome", () => {
     await until(() => store.get(THREAD)?.runState === "outcomeUnknown");
     undecided = false;
 
-    turns.startTurn(turnStart(11, "again"), undefined);
+    turns.startTurn(withMessageId(turnStart(11, "again"), "m-1"), undefined);
     await until(() => responseTo(sent, 11) !== undefined);
-    await completeTurn(turns, sent, claude, 12);
+    await completeTurn(turns, sent, claude, 12, "m-2");
     await until(() => store.get(THREAD)?.runState === "idle");
 
     expect(responseTo(sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
@@ -474,17 +474,16 @@ describe("a thread whose last turn has an unknown outcome", () => {
   });
 
   test("refuses the first message after a restart without starting Claude, then resumes the conversation", async () => {
-    const first = fakeClaude(SUBSCRIPTION);
-    const before = await harness([first], { unsettledWrite: () => true });
-    await completeTurn(before.turns, before.sent, first, 10);
-    await until(() => before.store.get(THREAD)?.runState === "outcomeUnknown");
     const second = fakeClaude(SUBSCRIPTION);
+    const after = await restartedWithUnknownOutcome([second]);
 
-    const after = await harness([second]);
-    after.turns.startTurn(turnStart(11, "again"), undefined);
+    after.turns.startTurn(
+      withMessageId(turnStart(11, "again"), "m-1"),
+      undefined,
+    );
     await until(() => responseTo(after.sent, 11) !== undefined);
     const refusedStarted = second.started();
-    await completeTurn(after.turns, after.sent, second, 12);
+    await completeTurn(after.turns, after.sent, second, 12, "m-2");
 
     expect(responseTo(after.sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
     expect(refusedStarted).toBe(false);
@@ -492,40 +491,63 @@ describe("a thread whose last turn has an unknown outcome", () => {
     expect(turnsCompleted(after.sent)).toEqual(["completed"]);
   });
 
-  test("counts only the user's own messages toward continuing, not another thread's", async () => {
-    const first = fakeClaude(SUBSCRIPTION);
-    const before = await harness([first], { unsettledWrite: () => true });
-    await completeTurn(before.turns, before.sent, first, 10);
-    await until(() => before.store.get(THREAD)?.runState === "outcomeUnknown");
+  test.each([
+    {
+      name: "another thread's message",
+      request: () => withMessageId(reply(12, THREAD, NEW_REVIEWER), "m-2"),
+    },
+    {
+      name: "the refused message sent again",
+      request: () => withMessageId(turnStart(12, "again"), "m-1"),
+    },
+    {
+      name: "a message without a client message id",
+      request: () => turnStart(12, "again"),
+    },
+  ])("does not take $name as the user's decision to continue", async ({
+    request,
+  }) => {
     const second = fakeClaude(SUBSCRIPTION);
+    const after = await restartedWithUnknownOutcome([second]);
+    after.turns.startTurn(
+      withMessageId(turnStart(11, "again"), "m-1"),
+      undefined,
+    );
+    await until(() => responseTo(after.sent, 11) !== undefined);
 
-    const after = await harness([second]);
-    for (const request of [
-      reply(11, THREAD, NEW_REVIEWER),
-      turnStart(12, "what happened?"),
-      reply(13, THREAD, NEW_REVIEWER),
-    ]) {
-      after.turns.startTurn(request, undefined);
-      await until(() => responseTo(after.sent, request.id) !== undefined);
-    }
-    const repliesStarted = second.started();
-    await completeTurn(after.turns, after.sent, second, 14);
+    after.turns.startTurn(request(), undefined);
+    await until(() => responseTo(after.sent, 12) !== undefined);
+    await completeTurn(after.turns, after.sent, second, 13, "m-3");
+
+    expect(responseTo(after.sent, 12)?.error.message).toBe(OUTCOME_UNKNOWN);
+    expect(after.settings).toHaveLength(1);
+    expect(turnsCompleted(after.sent)).toEqual(["completed"]);
+  });
+
+  test("does not count another thread's message as telling the user", async () => {
+    const second = fakeClaude(SUBSCRIPTION);
+    const after = await restartedWithUnknownOutcome([second]);
+
+    after.turns.startTurn(
+      withMessageId(reply(11, THREAD, NEW_REVIEWER), "m-0"),
+      undefined,
+    );
+    await until(() => responseTo(after.sent, 11) !== undefined);
+    after.turns.startTurn(
+      withMessageId(turnStart(12, "what happened?"), "m-1"),
+      undefined,
+    );
+    await until(() => responseTo(after.sent, 12) !== undefined);
 
     expect(
-      [11, 12, 13].map((id) => responseTo(after.sent, id)?.error.message),
-    ).toEqual([OUTCOME_UNKNOWN, OUTCOME_UNKNOWN, OUTCOME_UNKNOWN]);
-    expect(repliesStarted).toBe(false);
-    expect(turnsCompleted(after.sent).at(-1)).toBe("completed");
+      [11, 12].map((id) => responseTo(after.sent, id)?.error.message),
+    ).toEqual([OUTCOME_UNKNOWN, OUTCOME_UNKNOWN]);
+    expect(second.started()).toBe(false);
   });
 
   test("keeps refusing while the unknown state cannot be cleared", async () => {
-    const first = fakeClaude(SUBSCRIPTION);
-    const before = await harness([first], { unsettledWrite: () => true });
-    await completeTurn(before.turns, before.sent, first, 10);
-    await until(() => before.store.get(THREAD)?.runState === "outcomeUnknown");
     const second = fakeClaude(SUBSCRIPTION);
-
-    const after = await harness([second], {
+    const after = await restartedWithUnknownOutcome([second], {
       files: {
         removeMarker: async (path) =>
           Result.err(
@@ -533,13 +555,22 @@ describe("a thread whose last turn has an unknown outcome", () => {
           ),
       },
     });
-    after.turns.startTurn(turnStart(11, "again"), undefined);
+
+    after.turns.startTurn(
+      withMessageId(turnStart(11, "again"), "m-1"),
+      undefined,
+    );
     await until(() => responseTo(after.sent, 11) !== undefined);
-    after.turns.startTurn(turnStart(12, "and again"), undefined);
+    after.turns.startTurn(
+      withMessageId(turnStart(12, "and again"), "m-2"),
+      undefined,
+    );
     await until(() => responseTo(after.sent, 12) !== undefined);
 
     expect(responseTo(after.sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
-    expect(responseTo(after.sent, 12)?.error).toBeDefined();
+    expect(responseTo(after.sent, 12)?.error.message).toBe(
+      "the Claude thread cannot start a turn",
+    );
     expect(second.started()).toBe(false);
     expect(after.store.get(THREAD)?.runState).toBe("outcomeUnknown");
   });
@@ -2052,14 +2083,30 @@ const harness = async (
   };
 };
 
+const restartedWithUnknownOutcome = async (
+  fakes: ReturnType<typeof fakeClaude>[],
+  options: Parameters<typeof harness>[1] = {},
+) => {
+  const first = fakeClaude(SUBSCRIPTION);
+  const before = await harness([first], { unsettledWrite: () => true });
+  await completeTurn(before.turns, before.sent, first, 10);
+  await until(() => before.store.get(THREAD)?.runState === "outcomeUnknown");
+  return harness(fakes, options);
+};
+
 const completeTurn = async (
   turns: ReturnType<typeof createTurnController>,
   sent: Sent[],
   claude: ReturnType<typeof fakeClaude>,
   id: number,
+  messageId?: string,
 ) => {
   const before = turnsCompleted(sent).length;
-  turns.startTurn(turnStart(id, `prompt ${id}`), undefined);
+  const request = turnStart(id, `prompt ${id}`);
+  turns.startTurn(
+    messageId === undefined ? request : withMessageId(request, messageId),
+    undefined,
+  );
   await until(() => responseTo(sent, id) !== undefined);
   claude.emit(sdk(answer(`msg-${id}`, "ok")));
   claude.emit(sdk(success()));
@@ -2109,11 +2156,12 @@ const ALLOWED_TOOLS = ["mcp__codex_link__read_thread"];
 const OUTCOME_UNKNOWN =
   "the previous Claude turn on this thread stopped before its outcome was known; check what that turn did, such as changed files or messages to other threads, then send a message yourself to continue";
 
-// A projects entry that is a file cannot be listed, as an unreadable folder cannot.
+// A link to itself cannot be listed, as an unreadable folder cannot, and still leaves the test directory removable.
 const unlistableConfigDir = async () => {
   const configDir = join(dir, "claude-config");
-  await mkdir(configDir, { recursive: true });
-  await writeFile(join(configDir, "projects"), "");
+  const project = join(configDir, "projects", "-work-tree");
+  await mkdir(join(configDir, "projects"), { recursive: true });
+  await symlink(project, project);
   return configDir;
 };
 
