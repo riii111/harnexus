@@ -182,11 +182,8 @@ describe("ThreadStore", () => {
     const later = await store.addReviewer("thread-1", "reviewer-1");
 
     expect(updated.isErr() && updated.error._tag).toBe("StatePersistFailed");
-    expect(later.isOk()).toBe(true);
-    expect((await openStore()).get("thread-1")).toMatchObject({
-      sessionId: "session-1",
-      reviewerThreadIds: ["reviewer-1"],
-    });
+    expect(later.isOk() && later.value).toMatchObject(BOTH_UPDATES);
+    expect((await openStore()).get("thread-1")).toMatchObject(BOTH_UPDATES);
   });
 
   test("rejects an empty session id and keeps the saved one", async () => {
