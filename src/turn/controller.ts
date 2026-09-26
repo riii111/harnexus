@@ -286,7 +286,6 @@ export const createTurnController = ({
     let sessionId = sessionIds.get(threadId) ?? record.sessionId;
     while (active.state !== null && !active.state.finished) {
       const next = await slot.value.session.messages.next();
-      // A stream that ends without a result is reported like a stream failure.
       const received =
         next.done === true
           ? Result.err(

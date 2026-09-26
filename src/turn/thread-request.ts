@@ -19,7 +19,7 @@ export const requestedModel = (params: Record<string, unknown>) => {
   return typeof params.model === "string" ? params.model : undefined;
 };
 
-// Decides which Claude thread a turn, resume or settings change runs on; known is the thread already recorded, and fallbackCwd is where the server last reported a thread that is switching to Claude.
+// fallbackCwd is where the server last reported a Codex thread, since a request that switches it to Claude may not carry its directory.
 // TODO: accept a model or working directory change in P10, which restarts the Claude session for it; plan mode waits for the plan approval relay in P9.
 export const checkThread = (
   params: Record<string, unknown>,

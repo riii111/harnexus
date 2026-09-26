@@ -1,6 +1,5 @@
 import { Transform } from "node:stream";
 
-// Each complete line is replaced by what rewrite returns, or dropped on null; a trailing partial line at the end passes unchanged.
 export const createLineRewriter = (
   rewrite: (line: Buffer) => Buffer | null,
 ) => {
