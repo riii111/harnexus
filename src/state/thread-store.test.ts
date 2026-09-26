@@ -51,33 +51,24 @@ describe("openThreadStore", () => {
     });
   });
 
-  test("refuses a file that is not valid JSON", async () => {
-    await writeFile(path, '{"version":1,"threads":[');
-
-    const opened = await openThreadStore(path);
-
-    expect(opened.isErr() && opened.error._tag).toBe("StateFileCorrupt");
-  });
-
-  test("refuses a file whose records do not match the format", async () => {
-    await writeFile(
-      path,
-      JSON.stringify({
+  test.each([
+    { name: "is not valid JSON", content: '{"version":1,"threads":[' },
+    {
+      name: "has records that do not match the format",
+      content: JSON.stringify({
         version: 1,
         threads: [{ ...SAVED_RECORD, reviewerThreadIds: [""] }],
       }),
-    );
-
-    const opened = await openThreadStore(path);
-
-    expect(opened.isErr() && opened.error._tag).toBe("StateFileCorrupt");
-  });
-
-  test("refuses a file with the same thread twice", async () => {
-    await writeFile(
-      path,
-      JSON.stringify({ version: 1, threads: [SAVED_RECORD, SAVED_RECORD] }),
-    );
+    },
+    {
+      name: "has the same thread twice",
+      content: JSON.stringify({
+        version: 1,
+        threads: [SAVED_RECORD, SAVED_RECORD],
+      }),
+    },
+  ])("refuses a file that $name", async ({ content }) => {
+    await writeFile(path, content);
 
     const opened = await openThreadStore(path);
 
@@ -162,22 +153,25 @@ describe("ThreadStore", () => {
     });
   });
 
-  test("rejects values that could not be loaded again", async () => {
+  test("rejects an empty session id and keeps the saved one", async () => {
     const store = await openStore();
     await store.register(ENTRY);
 
     const updated = await store.setSession("thread-1", "");
-    const registered = await store.register({
-      ...ENTRY,
-      threadId: "thread-2",
-      model: "",
-    });
 
     expect(updated.isErr() && updated.error._tag).toBe("InvalidThreadRecord");
+    expect((await openStore()).get("thread-1")?.sessionId).toBeNull();
+  });
+
+  test("rejects registering a thread with an empty model", async () => {
+    const store = await openStore();
+
+    const registered = await store.register({ ...ENTRY, model: "" });
+
     expect(registered.isErr() && registered.error._tag).toBe(
       "InvalidThreadRecord",
     );
-    expect((await openStore()).get("thread-1")?.sessionId).toBeNull();
+    expect((await openStore()).get("thread-1")).toBeUndefined();
   });
 
   test("never stores fields outside the record", async () => {

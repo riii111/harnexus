@@ -46,22 +46,21 @@ describe("createLineSplitter", () => {
     expect(split(["12345678\n"], 8)).toEqual(["12345678"]);
   });
 
-  for (const [label, make] of [
-    ["Uint8Array", bytes],
-    ["Buffer", (text: string) => Buffer.from(text)],
-  ] as const) {
-    test(`does not keep references to pushed ${label} chunks`, () => {
-      const events: LineEvent[] = [];
-      const splitter = createLineSplitter(1024, (event) => events.push(event));
-      const chunk = make("abc");
-      splitter.push(chunk);
-      chunk.fill(0x78);
-      splitter.push(make("\n"));
+  test.each([
+    { name: "Uint8Array", make: bytes },
+    { name: "Buffer", make: (text: string) => Buffer.from(text) },
+  ])("does not keep references to pushed $name chunks", ({ make }) => {
+    const events: LineEvent[] = [];
+    const splitter = createLineSplitter(1024, (event) => events.push(event));
+    const chunk = make("abc");
 
-      const [event] = events;
-      expect(
-        event?.kind === "line" && new TextDecoder().decode(event.bytes),
-      ).toBe("abc");
-    });
-  }
+    splitter.push(chunk);
+    chunk.fill(0x78);
+    splitter.push(make("\n"));
+
+    const [event] = events;
+    expect(
+      event?.kind === "line" && new TextDecoder().decode(event.bytes),
+    ).toBe("abc");
+  });
 });

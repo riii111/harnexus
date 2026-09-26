@@ -42,10 +42,12 @@ export const createLineInjector = (target: Writable) => {
   });
   return {
     stream,
+    // False means the line was never handed to the server.
     inject: (line: string) => {
-      if (broken || target.writableEnded) return;
+      if (broken || target.writableEnded) return false;
       if (atBoundary) target.write(line);
       else pending.push(line);
+      return true;
     },
   };
 };

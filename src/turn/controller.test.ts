@@ -193,12 +193,14 @@ describe("turn/interrupt", () => {
   });
 
   test.each([
-    ["a send still queued", ["uuid-queued"]],
-    ["no receipt from an older CLI", undefined],
-  ])("closes Claude when the interrupt leaves %s", async (_label, stillQueued) => {
+    { name: "a send still queued", stillQueued: ["uuid-queued"] },
+    { name: "no receipt from an older CLI", stillQueued: undefined },
+  ])("closes Claude when the interrupt leaves $name", async ({
+    stillQueued,
+  }) => {
     const claude = fakeClaude(
       SUBSCRIPTION,
-      stillQueued === undefined ? {} : { stillQueued },
+      stillQueued === undefined ? {} : { stillQueued: [...stillQueued] },
     );
     const { turns, sent } = await harness([claude]);
 
@@ -274,25 +276,27 @@ describe("turn/interrupt", () => {
 
 describe("refused requests", () => {
   test.each([
-    ["non-text input", { input: [{ type: "image", url: "x" }] }],
-    ["a Codex model", { model: "gpt-fixture" }],
-    ["another Claude model", { model: "claude-opus-5-5" }],
-    [
-      "another Claude model in the collaboration mode",
-      {
+    { name: "non-text input", override: { input: [{ type: "image" }] } },
+    { name: "a Codex model", override: { model: "gpt-fixture" } },
+    { name: "another Claude model", override: { model: "claude-opus-5-5" } },
+    {
+      name: "another Claude model in the collaboration mode",
+      override: {
         model: MODEL,
         collaborationMode: {
           mode: "default",
           settings: { model: "claude-opus-5-5" },
         },
       },
-    ],
-    [
-      "plan mode",
-      { collaborationMode: { mode: "plan", settings: { model: MODEL } } },
-    ],
-    ["another working directory", { cwd: "/elsewhere" }],
-  ])("refuses %s without starting Claude", async (_name, override) => {
+    },
+    {
+      name: "plan mode",
+      override: {
+        collaborationMode: { mode: "plan", settings: { model: MODEL } },
+      },
+    },
+    { name: "another working directory", override: { cwd: "/elsewhere" } },
+  ])("refuses $name without starting Claude", async ({ override }) => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
 

@@ -216,17 +216,21 @@ describe("thread/settings/update", () => {
   });
 
   test.each([
-    ["another model", { model: "claude-opus-5-5" }],
-    [
-      "another model in the collaboration mode",
-      { collaborationMode: { mode: "default", settings: { model: "gpt-x" } } },
-    ],
-    [
-      "plan mode",
-      { collaborationMode: { mode: "plan", settings: { model: CLAUDE } } },
-    ],
-    ["another working directory", { cwd: "/elsewhere" }],
-  ])("refuses %s on a Claude thread", (_label, change) => {
+    { name: "another model", change: { model: "claude-opus-5-5" } },
+    {
+      name: "another model in the collaboration mode",
+      change: {
+        collaborationMode: { mode: "default", settings: { model: "gpt-x" } },
+      },
+    },
+    {
+      name: "plan mode",
+      change: {
+        collaborationMode: { mode: "plan", settings: { model: CLAUDE } },
+      },
+    },
+    { name: "another working directory", change: { cwd: "/elsewhere" } },
+  ])("refuses $name on a Claude thread", ({ change }) => {
     const { router, calls } = setup(["th-claude"]);
 
     expect(router.fromApp(settingsUpdate(change))).toBeNull();

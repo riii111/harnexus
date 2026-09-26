@@ -9,20 +9,25 @@ import {
 } from "./config.ts";
 
 describe("loadLogPath", () => {
-  test("returns null when the variable is unset or empty", () => {
-    const unset = loadLogPath({});
-    const empty = loadLogPath({ [LOG_PATH_ENV]: "" });
+  test.each([
+    { name: "unset", env: {} },
+    { name: "empty", env: { [LOG_PATH_ENV]: "" } },
+  ])("returns null when the variable is $name", ({ env }) => {
+    const path = loadLogPath(env);
 
-    expect(unset.isOk() && unset.value).toBeNull();
-    expect(empty.isOk() && empty.value).toBeNull();
+    expect(path.isOk() && path.value).toBeNull();
   });
 
-  test("returns an absolute path and rejects a relative one", () => {
-    const absolute = loadLogPath({ [LOG_PATH_ENV]: "/var/log/x.log" });
-    const relative = loadLogPath({ [LOG_PATH_ENV]: "x.log" });
+  test("returns an absolute path", () => {
+    const path = loadLogPath({ [LOG_PATH_ENV]: "/var/log/x.log" });
 
-    expect(absolute.isOk() && absolute.value).toBe("/var/log/x.log");
-    expect(relative.isErr() && relative.error._tag).toBe("LogPathNotAbsolute");
+    expect(path.isOk() && path.value).toBe("/var/log/x.log");
+  });
+
+  test("rejects a relative path", () => {
+    const path = loadLogPath({ [LOG_PATH_ENV]: "x.log" });
+
+    expect(path.isErr() && path.error._tag).toBe("LogPathNotAbsolute");
   });
 });
 
@@ -44,18 +49,18 @@ describe("loadStatePath", () => {
 });
 
 describe("loadShutdownGraceMs", () => {
-  test("accepts a positive integer and falls back to 5000 otherwise", () => {
-    const grace = (value?: string) =>
-      loadShutdownGraceMs({ [SHUTDOWN_GRACE_ENV]: value });
+  test("accepts a positive integer", () => {
+    expect(loadShutdownGraceMs({ [SHUTDOWN_GRACE_ENV]: "200" })).toBe(200);
+  });
 
-    expect(grace("200")).toBe(200);
-    expect([
-      grace(),
-      grace(""),
-      grace("0"),
-      grace("-1"),
-      grace("1.5"),
-      grace("x"),
-    ]).toEqual(Array(6).fill(5000));
+  test.each([
+    { name: "unset", value: undefined },
+    { name: "empty", value: "" },
+    { name: "zero", value: "0" },
+    { name: "negative", value: "-1" },
+    { name: "fractional", value: "1.5" },
+    { name: "non-numeric", value: "x" },
+  ])("falls back to 5000 when the value is $name", ({ value }) => {
+    expect(loadShutdownGraceMs({ [SHUTDOWN_GRACE_ENV]: value })).toBe(5000);
   });
 });

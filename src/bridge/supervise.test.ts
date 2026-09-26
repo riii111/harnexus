@@ -68,17 +68,23 @@ describe("watchServer", () => {
     expect(sent).toEqual([]);
   });
 
-  test("never signals without a usable pid from the launcher", () => {
+  test.each([
+    { name: "no pid", value: undefined },
+    { name: "an empty pid", value: "" },
+    { name: "launchd's pid", value: "1" },
+    { name: "a zero pid", value: "0" },
+    { name: "a negative pid", value: "-5" },
+    { name: "a fractional pid", value: "12.5" },
+    { name: "a non-numeric pid", value: "abc" },
+  ])("never signals when the launcher passes $name", ({ value }) => {
     const sent: [number, string][] = [];
-    for (const value of [undefined, "", "1", "0", "-5", "12.5", "abc"]) {
-      const server = watchServer(
-        { [SERVER_PID_ENV]: value },
-        { parentPid: () => 1, send: record(sent) },
-      );
-      expect(server.isRunning()).toBe(false);
-      expect(server.signal("SIGTERM")).toBe(false);
-    }
+    const server = watchServer(
+      { [SERVER_PID_ENV]: value },
+      { parentPid: () => 1, send: record(sent) },
+    );
 
+    expect(server.isRunning()).toBe(false);
+    expect(server.signal("SIGTERM")).toBe(false);
     expect(sent).toEqual([]);
   });
 

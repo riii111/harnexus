@@ -127,32 +127,41 @@ describe("app-server", () => {
     TIMEOUT,
   );
 
-  const delegated = [
-    ["app-server", "generate-ts", "--out", "x"],
-    ["-c", "a=b", "app-server", "-c", "c=d", "daemon"],
-    ["app-server", "--listen", "unix://"],
-    ["app-server", "--listen=ws://127.0.0.1:1"],
-    ["exec", "app-server"],
-    ["-c", "app-server"],
-  ];
-  for (const args of delegated) {
-    test(
-      `hands ${args.join(" ")} to Codex without the bridge`,
-      async () => {
-        const { env, reportPath } = setup();
+  test.each<{ name: string; args: string[] }>([
+    {
+      name: "an app-server subcommand",
+      args: ["app-server", "generate-ts", "--out", "x"],
+    },
+    {
+      name: "the daemon subcommand after config overrides",
+      args: ["-c", "a=b", "app-server", "-c", "c=d", "daemon"],
+    },
+    {
+      name: "a unix socket listener",
+      args: ["app-server", "--listen", "unix://"],
+    },
+    {
+      name: "a websocket listener",
+      args: ["app-server", "--listen=ws://127.0.0.1:1"],
+    },
+    { name: "app-server as an exec argument", args: ["exec", "app-server"] },
+    { name: "app-server as a config value", args: ["-c", "app-server"] },
+  ])(
+    "hands $name to Codex without the bridge",
+    async ({ args }) => {
+      const { env, reportPath } = setup();
 
-        const proc = launch(args, env);
-        const result = await finish(proc);
-        const report = await readReport(reportPath);
+      const proc = launch(args, env);
+      const result = await finish(proc);
+      const report = await readReport(reportPath);
 
-        expect(result.exitCode).toBe(0);
-        expect(report.pid).toBe(proc.pid);
-        expect(report.argv).toEqual(args);
-        expect(result.stderr).not.toContain("bridge_started");
-      },
-      TIMEOUT,
-    );
-  }
+      expect(result.exitCode).toBe(0);
+      expect(report.pid).toBe(proc.pid);
+      expect(report.argv).toEqual(args);
+      expect(result.stderr).not.toContain("bridge_started");
+    },
+    TIMEOUT,
+  );
 
   test(
     "answers a Claude turn itself and relays the other lines to Codex",
@@ -227,21 +236,26 @@ describe("app-server", () => {
     TIMEOUT,
   );
 
-  test(
-    "keeps relaying with the log on stderr when the log file is unusable",
-    async () => {
-      const { env: relative } = setup({ HARNEXUS_LOG_PATH: "bridge.log" });
-      const { env: missing } = setup({
-        HARNEXUS_LOG_PATH: join(dir, "absent", "bridge.log"),
-      });
+  test.each([
+    {
+      name: "a relative path",
+      logPath: () => "bridge.log",
+      expected: "LogPathNotAbsolute",
+    },
+    {
+      name: "a path in a missing directory",
+      logPath: () => join(dir, "absent", "bridge.log"),
+      expected: "LogFileOpenFailed",
+    },
+  ])(
+    "keeps relaying with the log on stderr when HARNEXUS_LOG_PATH is $name",
+    async ({ logPath, expected }) => {
+      const { env } = setup({ HARNEXUS_LOG_PATH: logPath() });
 
-      const first = await finish(launch(["app-server"], relative));
-      const second = await finish(launch(["app-server"], missing));
+      const result = await finish(launch(["app-server"], env));
 
-      expect(first.exitCode).toBe(0);
-      expect(first.stderr).toContain('"reason":"LogPathNotAbsolute"');
-      expect(second.exitCode).toBe(0);
-      expect(second.stderr).toContain('"reason":"LogFileOpenFailed"');
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain(`"reason":"${expected}"`);
       expect(existsSync(join(dir, "bridge.log"))).toBe(false);
     },
     TIMEOUT,
@@ -281,23 +295,21 @@ describe("app-server", () => {
     TIMEOUT,
   );
 
-  for (const signal of ["SIGTERM", "SIGINT"] as const) {
-    test(
-      `forwards ${signal} to Codex and ends with the same signal`,
-      async () => {
-        const { env, reportPath } = setup({ FAKE_CODEX_MODE: "wait" });
+  test.each([{ signal: "SIGTERM" as const }, { signal: "SIGINT" as const }])(
+    "forwards $signal to Codex and ends with the same signal",
+    async ({ signal }) => {
+      const { env, reportPath } = setup({ FAKE_CODEX_MODE: "wait" });
 
-        const proc = launch(["app-server"], env);
-        const report = await readReport(reportPath);
-        proc.kill(signal);
-        const result = await finish(proc);
+      const proc = launch(["app-server"], env);
+      const report = await readReport(reportPath);
+      proc.kill(signal);
+      const result = await finish(proc);
 
-        expect(result).toMatchObject({ exitCode: null, signal });
-        expect(isAlive(report.pid)).toBe(false);
-      },
-      TIMEOUT,
-    );
-  }
+      expect(result).toMatchObject({ exitCode: null, signal });
+      expect(isAlive(report.pid)).toBe(false);
+    },
+    TIMEOUT,
+  );
 });
 
 describe("app-server shutdown", () => {
@@ -319,57 +331,61 @@ describe("app-server shutdown", () => {
     TIMEOUT,
   );
 
-  for (const [mode, signal] of [
-    ["wait", "SIGTERM"],
-    ["wait-ignore-term", "SIGKILL"],
-  ] as const) {
-    test(
-      `stops a Codex that ignores the app disconnecting, with ${signal}`,
-      async () => {
-        const { env, reportPath } = setup({
-          HARNEXUS_SHUTDOWN_GRACE_MS: "200",
-          FAKE_CODEX_MODE: mode,
-        });
+  test.each([
+    { name: "exits on SIGTERM", mode: "wait", expected: "SIGTERM" },
+    {
+      name: "also ignores SIGTERM",
+      mode: "wait-ignore-term",
+      expected: "SIGKILL",
+    },
+  ])(
+    "signals $expected to a Codex that ignores the app disconnecting and $name",
+    async ({ mode, expected }) => {
+      const { env, reportPath } = setup({
+        HARNEXUS_SHUTDOWN_GRACE_MS: "200",
+        FAKE_CODEX_MODE: mode,
+      });
 
-        const proc = launch(["app-server"], env);
-        await readReport(reportPath);
-        const result = await finish(proc);
+      const proc = launch(["app-server"], env);
+      await readReport(reportPath);
+      const result = await finish(proc);
 
-        expect(result).toMatchObject({ exitCode: null, signal });
-        expect(result.stderr).toContain(
-          `"event":"server_signaled","signal":"${signal}"`,
-        );
-      },
-      TIMEOUT,
-    );
-  }
+      expect(result).toMatchObject({ exitCode: null, signal: expected });
+      expect(result.stderr).toContain(
+        `"event":"server_signaled","signal":"${expected}"`,
+      );
+    },
+    TIMEOUT,
+  );
 
-  for (const [mode, signal] of [
-    ["close-stdout", "SIGTERM"],
-    ["close-stdout-ignore-term", "SIGKILL"],
-  ] as const) {
-    test(
-      `stops a Codex that closes stdout and keeps running, with ${signal}`,
-      async () => {
-        const { env, reportPath } = setup({
-          HARNEXUS_SHUTDOWN_GRACE_MS: "100",
-          FAKE_CODEX_MODE: mode,
-        });
+  test.each([
+    { name: "exits on SIGTERM", mode: "close-stdout", expected: "SIGTERM" },
+    {
+      name: "ignores SIGTERM",
+      mode: "close-stdout-ignore-term",
+      expected: "SIGKILL",
+    },
+  ])(
+    "signals $expected to a Codex that closes stdout, keeps running and $name",
+    async ({ mode, expected }) => {
+      const { env, reportPath } = setup({
+        HARNEXUS_SHUTDOWN_GRACE_MS: "100",
+        FAKE_CODEX_MODE: mode,
+      });
 
-        const proc = launch(["app-server"], env);
-        const report = await readReport(reportPath);
-        const result = await finish(proc);
+      const proc = launch(["app-server"], env);
+      const report = await readReport(reportPath);
+      const result = await finish(proc);
 
-        expect(result).toMatchObject({ exitCode: null, signal });
-        expect(result.stderr).toContain('"event":"server_closed"');
-        expect(result.stderr).toContain(
-          `"event":"server_signaled","signal":"${signal}"`,
-        );
-        expect(await stopsRunning(report.pid)).toBe(true);
-      },
-      TIMEOUT,
-    );
-  }
+      expect(result).toMatchObject({ exitCode: null, signal: expected });
+      expect(result.stderr).toContain('"event":"server_closed"');
+      expect(result.stderr).toContain(
+        `"event":"server_signaled","signal":"${expected}"`,
+      );
+      expect(await stopsRunning(report.pid)).toBe(true);
+    },
+    TIMEOUT,
+  );
 
   test(
     "ends Codex when the bridge dies",
@@ -397,68 +413,74 @@ describe("app-server shutdown", () => {
 });
 
 describe("app-server output at exit", () => {
-  for (const [label, overrides, expected] of [
-    ["a normal exit", {}, { exitCode: 0, signal: null }],
-    [
-      "a non-zero exit",
-      { FAKE_CODEX_EXIT: "3" },
-      { exitCode: 3, signal: null },
-    ],
-    [
-      "a signal",
-      { FAKE_BURST_SIGNAL: "SIGTERM" },
-      { exitCode: null, signal: "SIGTERM" },
-    ],
-  ] as const) {
-    test(
-      `delivers every byte Codex wrote before ${label} to an app that keeps reading slowly`,
-      async () => {
-        const { env } = setup({
-          FAKE_CODEX_MODE: "burst",
-          FAKE_BURST_LINES: String(BURST_LINES),
-          ...overrides,
-        });
-        const proc = Bun.spawn([LAUNCHER, "app-server"], {
-          cwd: dir,
-          env,
-          stdin: "pipe",
-          stdout: "pipe",
-          stderr: "ignore",
-        });
+  test.each([
+    {
+      name: "a normal exit",
+      overrides: {},
+      expected: { exitCode: 0, signal: null },
+    },
+    {
+      name: "a non-zero exit",
+      overrides: { FAKE_CODEX_EXIT: "3" },
+      expected: { exitCode: 3, signal: null },
+    },
+    {
+      name: "a signal",
+      overrides: { FAKE_BURST_SIGNAL: "SIGTERM" },
+      expected: { exitCode: null, signal: "SIGTERM" },
+    },
+  ])(
+    "delivers every byte Codex wrote before $name to an app that keeps reading slowly",
+    async ({ overrides, expected }) => {
+      const { env } = setup({
+        FAKE_CODEX_MODE: "burst",
+        FAKE_BURST_LINES: String(BURST_LINES),
+        ...overrides,
+      });
+      const proc = Bun.spawn([LAUNCHER, "app-server"], {
+        cwd: dir,
+        env,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "ignore",
+      });
 
-        const received = await readSlowly(proc.stdout);
-        await proc.exited;
+      const received = await readSlowly(proc.stdout);
+      await proc.exited;
 
-        expect({ exitCode: proc.exitCode, signal: proc.signalCode }).toEqual(
-          expected,
-        );
-        expect(received === BURST_OUTPUT).toBe(true);
-      },
-      TIMEOUT,
-    );
-  }
+      expect({ exitCode: proc.exitCode, signal: proc.signalCode }).toEqual(
+        expected,
+      );
+      expect(received === BURST_OUTPUT).toBe(true);
+    },
+    TIMEOUT,
+  );
 });
 
 describe("refusals", () => {
-  const expectRefused = async (
-    args: string[],
-    env: Record<string, string>,
-    message: string,
-  ) => {
-    const result = await finish(launch(args, env));
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(message);
-  };
+  test.each([
+    {
+      name: "unset",
+      codexPath: () => undefined,
+      expected: "HARNEXUS_CODEX_PATH is not set",
+    },
+    {
+      name: "relative",
+      codexPath: () => "codex.js",
+      expected: "must be an absolute path",
+    },
+    {
+      name: "not an existing file",
+      codexPath: () => join(dir, "none"),
+      expected: "is not an executable file",
+    },
+  ])("refuses a HARNEXUS_CODEX_PATH that is $name", async ({
+    codexPath,
+    expected,
+  }) => {
+    const { env } = setup({ HARNEXUS_CODEX_PATH: codexPath() });
 
-  test("requires an absolute, executable HARNEXUS_CODEX_PATH", async () => {
-    const { env: unset } = setup({ HARNEXUS_CODEX_PATH: undefined });
-    const { env: relative } = setup({ HARNEXUS_CODEX_PATH: "codex.js" });
-    const { env: absent } = setup({ HARNEXUS_CODEX_PATH: join(dir, "none") });
-
-    await expectRefused(["exec"], unset, "HARNEXUS_CODEX_PATH is not set");
-    await expectRefused(["exec"], relative, "must be an absolute path");
-    await expectRefused(["exec"], absent, "is not an executable file");
+    await expectRefused(["exec"], env, expected);
   });
 
   test("requires HARNEXUS_BUN_PATH for app-server", async () => {
@@ -467,32 +489,40 @@ describe("refusals", () => {
     await expectRefused(["app-server"], env, "HARNEXUS_BUN_PATH is not set");
   });
 
-  test("refuses a Codex path that resolves to the launcher", async () => {
-    const link = join(dir, "codex-link");
-    await symlink(LAUNCHER, link);
-    const { env: direct } = setup({ HARNEXUS_CODEX_PATH: LAUNCHER });
-    const { env: linked } = setup({ HARNEXUS_CODEX_PATH: link });
+  test("refuses the launcher as the Codex path", async () => {
+    const { env } = setup({ HARNEXUS_CODEX_PATH: LAUNCHER });
 
-    await expectRefused(["exec"], direct, "points to the launcher itself");
-    await expectRefused(["exec"], linked, "points to the launcher itself");
+    await expectRefused(["exec"], env, "points to the launcher itself");
   });
 
-  test(
-    "stops when a launched process reaches the launcher again",
-    async () => {
-      const wrapper = join(dir, "codex-wrapper");
+  test("refuses a symlink to the launcher as the Codex path", async () => {
+    const link = join(dir, "codex-link");
+    await symlink(LAUNCHER, link);
+    const { env } = setup({ HARNEXUS_CODEX_PATH: link });
+
+    await expectRefused(["exec"], env, "points to the launcher itself");
+  });
+
+  test.each([{ command: "exec" }, { command: "app-server" }])(
+    "stops $command when the launched Codex reaches the launcher again",
+    async ({ command }) => {
+      const wrapper = join(dir, `codex-wrapper-${command}`);
       await writeFile(wrapper, `#!/bin/sh\nexec "${LAUNCHER}" "$@"\n`);
       await chmod(wrapper, 0o755);
       const { env } = setup({ HARNEXUS_CODEX_PATH: wrapper });
-      const { env: marked } = setup({ HARNEXUS_LAUNCHER_ACTIVE: "1" });
 
-      await expectRefused(["exec"], env, "recursive launch detected");
-      await expectRefused(["app-server"], env, "recursive launch detected");
-      await expectRefused(["exec"], marked, "recursive launch detected");
+      await expectRefused([command], env, "recursive launch detected");
     },
     TIMEOUT,
   );
+
+  test("stops when the launcher is already marked active", async () => {
+    const { env } = setup({ HARNEXUS_LAUNCHER_ACTIVE: "1" });
+
+    await expectRefused(["exec"], env, "recursive launch detected");
+  });
 });
+
 const setup = (overrides: Record<string, string | undefined> = {}) => {
   reports += 1;
   const reportPath = join(dir, `report-${reports}.json`);
@@ -509,6 +539,17 @@ const setup = (overrides: Record<string, string | undefined> = {}) => {
     if (value !== undefined) env[key] = value;
   }
   return { env, reportPath };
+};
+
+const expectRefused = async (
+  args: string[],
+  env: Record<string, string>,
+  message: string,
+) => {
+  const result = await finish(launch(args, env));
+  expect(result.exitCode).toBe(1);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toContain(message);
 };
 
 const launch = (

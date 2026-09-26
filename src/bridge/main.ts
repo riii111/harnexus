@@ -2,21 +2,15 @@ import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import { openServerPipes, type Signals } from "../boundary/process.ts";
 import { startClaudeSession } from "../claude/session.ts";
-import {
-  createLineInjector,
-  createLineRewriter,
-  createOwnResponseFilter,
-} from "../rpc/inject.ts";
-import { createObserver, type Direction } from "../rpc/observe.ts";
+import { createLineInjector, createLineRewriter } from "../rpc/inject.ts";
+import { createObserver } from "../rpc/observe.ts";
 import { type RelayObserver, relayStreams } from "../rpc/relay.ts";
 import { createRouter } from "../rpc/route.ts";
 import { loadShutdownGraceMs, loadStatePath } from "../shared/config.ts";
 import { openThreadStore } from "../state/thread-store.ts";
 import { createTurnController } from "../turn/controller.ts";
-import { startAppToolsProbe } from "./app-tools-probe.ts";
 import { createBridgeLogger } from "./logging.ts";
 import { stopLingeringServer, watchServer } from "./supervise.ts";
-import { createToolCallProbe } from "./tool-call-probe.ts";
 
 // Must match bin/harnexus-codex.
 const SERVER_OUTPUT_FD = 3;
@@ -36,11 +30,11 @@ if (pipes.isErr()) {
 }
 
 logger.log({ event: "bridge_started" });
-void startAppToolsProbe(process.env, logger.log);
 const shutdownGraceMs = loadShutdownGraceMs(process.env);
-const claude = await withClaude(
-  withToolCallProbe(pipes.value, createObserver(logger.log)),
-);
+const claude = await withClaude({
+  ...pipes.value,
+  observer: createObserver(logger.log),
+});
 for (const signal of BRIDGE_SIGNALS) {
   process.once(signal, () => {
     logger.log({ event: "bridge_signaled", signal });
@@ -103,37 +97,5 @@ async function withClaude(relay: {
       serverOutput: relay.serverOutput.pipe(serverOutput),
     },
     closeAll: turns.closeAll,
-  };
-}
-
-function withToolCallProbe(
-  {
-    serverInput,
-    serverOutput,
-  }: { serverInput: Writable; serverOutput: Readable },
-  observer: RelayObserver,
-) {
-  const probe = createToolCallProbe(process.env, logger.log);
-  if (probe === null) return { serverInput, serverOutput, observer };
-  const injector = createLineInjector(serverInput);
-  const filtered = createOwnResponseFilter(
-    probe.isOwnResponse,
-    probe.onOwnResponse,
-  );
-  serverOutput.on("error", () => filtered.end());
-  probe.attach(injector.inject);
-  return {
-    serverInput: injector.stream,
-    serverOutput: serverOutput.pipe(filtered),
-    observer: {
-      chunk: (direction: Direction, chunk: Uint8Array) => {
-        observer.chunk(direction, chunk);
-        probe.observer.chunk(direction, chunk);
-      },
-      end: (direction: Direction) => {
-        observer.end(direction);
-        probe.observer.end(direction);
-      },
-    },
   };
 }
