@@ -3,6 +3,7 @@ import {
   LOG_PATH_ENV,
   loadLogPath,
   loadShutdownGraceMs,
+  loadStatePath,
   SHUTDOWN_GRACE_ENV,
 } from "./config.ts";
 
@@ -26,6 +27,31 @@ describe("loadLogPath", () => {
     const path = loadLogPath({ [LOG_PATH_ENV]: "x.log" });
 
     expect(path.isErr() && path.error._tag).toBe("LogPathNotAbsolute");
+  });
+});
+
+describe("loadStatePath", () => {
+  test.each([
+    { name: "unset", env: {} },
+    { name: "empty", env: { HARNEXUS_STATE_PATH: "" } },
+  ])("defaults to the user's state directory when $name", ({ env }) => {
+    const path = loadStatePath(env, () => "/Users/fixture");
+
+    expect(path.isOk() && path.value).toBe(
+      "/Users/fixture/.local/state/harnexus/threads.json",
+    );
+  });
+
+  test("returns an absolute path as given", () => {
+    const path = loadStatePath({ HARNEXUS_STATE_PATH: "/tmp/t.json" });
+
+    expect(path.isOk() && path.value).toBe("/tmp/t.json");
+  });
+
+  test("rejects a relative path", () => {
+    const path = loadStatePath({ HARNEXUS_STATE_PATH: "t.json" });
+
+    expect(path.isErr() && path.error._tag).toBe("StatePathNotAbsolute");
   });
 });
 

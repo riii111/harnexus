@@ -23,7 +23,7 @@ type ThreadMapping = {
   readonly reviewerThreadIds: readonly string[];
 };
 
-type ThreadRecord = ThreadMapping & { readonly runState: RunState };
+export type ThreadRecord = ThreadMapping & { readonly runState: RunState };
 
 type RunState = "idle" | "running" | "outcomeUnknown";
 
@@ -88,6 +88,8 @@ class StateFileCorrupt extends TaggedError("StateFileCorrupt")<{
   cause?: unknown;
   message: string;
 }> {}
+
+export type ThreadStore = ReturnType<typeof createThreadStore>;
 
 // A write is guarded by a marker file that exists from before the operation until its outcome is known, so a restart finds every unfinished write as outcome unknown.
 export const openThreadStore = (

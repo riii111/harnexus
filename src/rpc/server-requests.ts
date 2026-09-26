@@ -1,7 +1,8 @@
 import type { Readable, Writable } from "node:stream";
 import { Result, TaggedError } from "better-result";
 import { parseJson } from "../boundary/json.ts";
-import { createLineInjector, createOwnResponseFilter } from "./inject.ts";
+import { createLineInjector } from "./inject.ts";
+import { createLineRewriter } from "./line-rewriter.ts";
 
 class ServerRequestNotSent extends TaggedError("ServerRequestNotSent")<{
   method: string;
@@ -42,34 +43,26 @@ export const attachServerRequests = ({
   const injector = createLineInjector(serverInput);
   const pending = new Map<string, (answer: Answer) => void>();
   let sequence = 0;
-  let matched: Response | null = null;
   let closed = false;
 
-  // A late answer to a request that already timed out is still dropped, since the app never sent that id.
-  const isOwnResponse = (line: Buffer) => {
-    matched = null;
-    if (sequence === 0 || !line.includes(ID_PREFIX_BYTES)) return false;
+  // The app must never see a response to a request it did not send; a late answer to a request that already timed out is still dropped, since the app never sent that id.
+  const dropOwnResponse = (line: Buffer) => {
+    if (sequence === 0 || !line.includes(ID_PREFIX_BYTES)) return line;
     const parsed = parseJson(line.toString());
-    if (parsed.isErr() || !isResponse(parsed.value)) return false;
-    if (!isIssued(parsed.value.id)) return false;
-    matched = parsed.value;
-    return true;
-  };
-
-  const isIssued = (id: string) => {
-    const number = id.startsWith(ID_PREFIX) ? id.slice(ID_PREFIX.length) : "";
-    return /^[1-9]\d*$/.test(number) && Number(number) <= sequence;
-  };
-
-  const onOwnResponse = () => {
-    const response = matched;
-    matched = null;
-    if (response === null) return;
+    if (parsed.isErr() || !isResponse(parsed.value)) return line;
+    const response = parsed.value;
+    if (!isIssued(response.id)) return line;
     pending.get(response.id)?.(
       "error" in response
         ? { kind: "rejected", error: response.error }
         : { kind: "result", result: response.result },
     );
+    return null;
+  };
+
+  const isIssued = (id: string) => {
+    const number = id.startsWith(ID_PREFIX) ? id.slice(ID_PREFIX.length) : "";
+    return /^[1-9]\d*$/.test(number) && Number(number) <= sequence;
   };
 
   // A response can only arrive before the server output ends, so everything still waiting then is unanswered.
@@ -78,7 +71,7 @@ export const attachServerRequests = ({
     for (const answer of [...pending.values()]) answer({ kind: "closed" });
   };
 
-  const filtered = createOwnResponseFilter(isOwnResponse, onOwnResponse);
+  const filtered = createLineRewriter(dropOwnResponse);
   serverOutput.on("error", () => filtered.end());
   filtered.once("finish", closeAll);
 
