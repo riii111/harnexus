@@ -79,7 +79,6 @@ export const renderTurnStarted = (params: {
   return { ...seal(draft), turn };
 };
 
-// Used for the opening prompt and for each steer, since both appear as user messages in the thread.
 export const renderToolOutput = (
   state: TurnState,
   output: Omit<FunctionCallOutputItem, "type" | "id">,
@@ -97,6 +96,7 @@ export const renderToolOutput = (
   return seal(draft);
 };
 
+// Used for the opening prompt and for each steer, since both appear as user messages in the thread.
 export const renderUserInput = (
   state: TurnState,
   input: UserInput[],
