@@ -6,8 +6,21 @@ import {
 } from "./delegations.ts";
 
 describe("createDelegationWatch", () => {
+  test("claims a thread for its caller as it is handed out and never one nobody waits for", () => {
+    const claims: string[][] = [];
+    const watch = createDelegationWatch((source, threadId) =>
+      claims.push([source, threadId]),
+    );
+    watch.expect("th-claude");
+
+    watch.observe("th-other", "th-foreign");
+    watch.observe("th-claude", "th-reviewer-1");
+
+    expect(claims).toEqual([["th-claude", "th-reviewer-1"]]);
+  });
+
   test("gives each waiting create_thread the next thread started for its caller", async () => {
-    const watch = createDelegationWatch();
+    const watch = createDelegationWatch(() => {});
     const first = watch.expect("th-claude");
     const second = watch.expect("th-claude");
 
@@ -20,7 +33,7 @@ describe("createDelegationWatch", () => {
   });
 
   test("ignores a repeated first turn of a thread it already handed out", async () => {
-    const watch = createDelegationWatch();
+    const watch = createDelegationWatch(() => {});
     const first = watch.expect("th-claude");
     watch.observe("th-claude", "th-reviewer-1");
     expect(await first.wait(1_000)).toBe("th-reviewer-1");
@@ -32,7 +45,7 @@ describe("createDelegationWatch", () => {
   });
 
   test("keeps a thread seen before anyone waits from answering a later create_thread when its turn comes again", async () => {
-    const watch = createDelegationWatch();
+    const watch = createDelegationWatch(() => {});
     watch.observe("th-claude", "th-unrelated");
     const waiting = watch.expect("th-claude");
 

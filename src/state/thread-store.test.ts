@@ -198,6 +198,34 @@ describe("ThreadStore", () => {
     expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
   });
 
+  test("traces a claimed reviewer to its worker before it is added and keeps it through the add", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+
+    store.claimReviewer("thread-1", "reviewer-1");
+    store.claimReviewer("thread-2", "reviewer-1");
+
+    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
+    const refused = await store.addReviewer("thread-2", "reviewer-1");
+    const added = await store.addReviewer("thread-1", "reviewer-1");
+    expect(refused.isErr() && refused.error._tag).toBe("ReviewerTaken");
+    expect(added.isOk() && added.value.reviewerThreadIds).toEqual([
+      "reviewer-1",
+    ]);
+    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
+  });
+
+  test("never claims a Claude thread as a reviewer", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+
+    store.claimReviewer("thread-2", "thread-1");
+
+    expect(store.reviewerOwner("thread-1")).toBeUndefined();
+  });
+
   test("releases the claim on a Claude thread it refused as a reviewer", async () => {
     const store = await openStore();
     await store.register(ENTRY);

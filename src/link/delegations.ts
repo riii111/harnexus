@@ -3,7 +3,10 @@ import { isObject } from "../shared/object.ts";
 export type DelegationWatch = ReturnType<typeof createDelegationWatch>;
 
 // The app answers create_thread with a provisional id only; the real thread id first appears in the turn/start the app sends to the new thread, whose tool output names the thread that asked for it.
-export const createDelegationWatch = () => {
+// claim runs as a thread is handed to its caller, before the caller's wait resumes, so the thread is known as that caller's from the moment it is seen.
+export const createDelegationWatch = (
+  claim: (sourceThreadId: string, threadId: string) => void,
+) => {
   const waiters = new Map<string, ((threadId: string) => void)[]>();
   // Every thread seen or named by an answer, so its late or repeated first turn never answers a later create_thread.
   const claimed = new Set<string>();
@@ -15,7 +18,9 @@ export const createDelegationWatch = () => {
     const queue = waiters.get(sourceThreadId);
     const next = queue?.shift();
     if (queue?.length === 0) waiters.delete(sourceThreadId);
-    next?.(threadId);
+    if (next === undefined) return;
+    claim(sourceThreadId, threadId);
+    next(threadId);
   };
 
   // Registered before create_thread is sent, since the new thread's turn/start can arrive before the tool answer.

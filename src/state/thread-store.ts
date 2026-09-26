@@ -136,7 +136,7 @@ const createThreadStore = (
   const runStates = new Map<string, RunState>(
     unknownThreadIds.map((threadId) => [threadId, "outcomeUnknown"]),
   );
-  // A reviewer is claimed from the call that adds it, so a reply arriving while it is saved is already traced to its worker; a claim whose save failed stays, as that worker still created the thread.
+  // A reviewer is claimed as soon as its worker learns of it, so a reply arriving before or while it is saved is already traced to that worker; a claim whose save failed stays, as that worker still created the thread.
   const claimedReviewers = new Map<string, string>();
   let halted = false;
   const threadQueue = createSerialQueue();
@@ -297,10 +297,17 @@ const createThreadStore = (
         added.isErr() &&
         (added.error._tag === "ReviewerTaken" ||
           added.error._tag === "ThreadNotFound");
-      if (claimed === undefined && (added.isOk() || refused)) {
+      if (added.isOk() || (refused && claimed === undefined)) {
         claimedReviewers.delete(reviewerThreadId);
       }
       return added;
+    },
+
+    claimReviewer: (threadId: string, reviewerThreadId: string) => {
+      const taken =
+        claimedReviewers.has(reviewerThreadId) ||
+        takenReviewer(mappings, undefined, threadId, reviewerThreadId) !== null;
+      if (!taken) claimedReviewers.set(reviewerThreadId, threadId);
     },
 
     reviewerOwner: (reviewerThreadId: string) =>

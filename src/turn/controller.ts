@@ -139,6 +139,9 @@ type ActiveTurn = {
   steers: number;
 };
 
+// answered is set when the app got the turn as soon as it was accepted, so a turn that cannot run is shown as failed rather than refused.
+type TurnRequest = { id: AppRequest["id"]; turnId: string; answered: boolean };
+
 type TextInput = { items: UserInput[]; text: string };
 
 type TurnInput = TextInput & { permissionMode: PermissionMode };
@@ -192,7 +195,7 @@ export const createTurnController = ({
   let closed = false;
 
   // fallbackCwd is the thread's directory as last reported by the server, used when a Codex thread switches to Claude.
-  // A turn/start on a busy thread, such as a reviewer's reply, waits in the store's per-thread queue instead of being refused.
+  // A turn/start on a busy thread, such as a reviewer's reply, waits in the store's per-thread queue instead of being refused; its sender gives up long before the running turn may end, so it is answered on acceptance.
   const startTurn = (
     { id, params }: AppRequest,
     fallbackCwd: string | undefined,
@@ -243,15 +246,27 @@ export const createTurnController = ({
         requestedMode(params) ?? modes.get(threadId) ?? "default",
       ),
     };
-    void runTurn(id, checked.thread, threadId, turn, messageId).then(() => {
-      const left = (turnsInFlight.get(threadId) ?? 1) - 1;
-      if (left > 0) {
-        turnsInFlight.set(threadId, left);
-        return;
-      }
-      turnsInFlight.delete(threadId);
-      scheduleIdleClose(threadId);
-    });
+    const request = { id, turnId: newTurnId(), answered: inFlight > 0 };
+    if (request.answered) {
+      const waiting = renderTurnStarted({
+        threadId,
+        turnId: request.turnId,
+        cwd: checked.thread.cwd,
+        now: now(),
+      });
+      send({ id, result: { turn: waiting.turn } });
+    }
+    void runTurn(request, checked.thread, threadId, turn, messageId).then(
+      () => {
+        const left = (turnsInFlight.get(threadId) ?? 1) - 1;
+        if (left > 0) {
+          turnsInFlight.set(threadId, left);
+          return;
+        }
+        turnsInFlight.delete(threadId);
+        scheduleIdleClose(threadId);
+      },
+    );
   };
 
   // Each worker keeps its own Claude process, so an idle one is closed; without a session id its next turn could not resume the conversation, so it stays.
@@ -389,12 +404,13 @@ export const createTurnController = ({
 
   // A failed turn is shown to the user, who decides whether to send it again, so no turn outcome is treated as unknown here; only a crash or a thread tool write left undecided leaves the marker.
   const runTurn = async (
-    requestId: AppRequest["id"],
+    request: TurnRequest,
     thread: Thread,
     threadId: string,
     input: TurnInput,
     messageId: string | null,
   ) => {
+    const queued = { threadId, thread, input, messageId };
     if (store.get(threadId) === undefined) {
       const registered = await store.register({
         threadId,
@@ -406,7 +422,7 @@ export const createTurnController = ({
         registered.error._tag !== "ThreadAlreadyRegistered"
       ) {
         forgetMessage(threadId, messageId);
-        refuse(requestId, "thread_not_saved", registered.error);
+        refuseTurn(request, queued, "thread_not_saved", registered.error);
         return;
       }
       // A turn accepted just before this one may have registered the thread first, with its own model and directory.
@@ -415,7 +431,7 @@ export const createTurnController = ({
         saved === undefined ? null : savedThreadChange(thread, saved);
       if (change !== null) {
         forgetMessage(threadId, messageId);
-        refuse(requestId, change);
+        refuseTurn(request, queued, change);
         return;
       }
       adopted.delete(threadId);
@@ -431,14 +447,14 @@ export const createTurnController = ({
       async (record) => {
         if (closed) {
           forgetMessage(threadId, messageId);
-          refuse(requestId, "bridge_closing");
+          refuseTurn(request, queued, "bridge_closing");
           return Result.ok();
         }
         // Without the saved id a restart could run the same message again, so the turn does not start.
         const saved = await recordMessage(threadId, messageId);
         if (saved.isErr()) {
           forgetMessage(threadId, messageId);
-          refuse(requestId, "message_not_saved", saved.error);
+          refuseTurn(request, queued, "message_not_saved", saved.error);
           return Result.ok();
         }
         responded = true;
@@ -453,7 +469,7 @@ export const createTurnController = ({
         };
         activeTurns.set(threadId, active);
         await streamTurn(
-          requestId,
+          request,
           record,
           thread.model,
           active,
@@ -480,7 +496,7 @@ export const createTurnController = ({
     if (!responded) {
       forgetMessage(threadId, messageId);
       // The store's message says why, such as an earlier turn whose outcome is unknown.
-      refuse(requestId, "thread_busy", ran.error, ran.error.message);
+      refuseTurn(request, queued, "thread_busy", ran.error, ran.error.message);
       return;
     }
     log({
@@ -488,6 +504,50 @@ export const createTurnController = ({
       step: "run_state_not_saved",
       error: ran.error._tag,
     });
+  };
+
+  const refuseTurn = (
+    request: TurnRequest,
+    {
+      threadId,
+      thread,
+      input,
+      messageId,
+    }: {
+      threadId: string;
+      thread: Thread;
+      input: TextInput;
+      messageId: string | null;
+    },
+    reason: Refusal,
+    cause: { _tag: StoreTag } | null = null,
+    message: string = refusalMessage(reason),
+  ) => {
+    if (!request.answered) {
+      refuse(request.id, reason, cause, message);
+      return;
+    }
+    logRefusal(reason, cause);
+    const started = renderTurnStarted({
+      threadId,
+      turnId: request.turnId,
+      cwd: thread.cwd,
+      now: now(),
+    });
+    const shown = renderUserInput(started.state, input.items, messageId, now());
+    const failed = renderTurnCompleted(
+      shown.state,
+      { status: "failed", message },
+      now(),
+    );
+    // The thread's status belongs to the turn running ahead of this one, if any.
+    for (const notification of [
+      ...started.notifications,
+      ...shown.notifications,
+      ...failed.notifications,
+    ]) {
+      if (notification.method !== "thread/status/changed") send(notification);
+    }
   };
 
   const isDelivered = (threadId: string, messageId: string) =>
@@ -515,7 +575,7 @@ export const createTurnController = ({
   };
 
   const streamTurn = async (
-    requestId: AppRequest["id"],
+    request: TurnRequest,
     record: ThreadRecord,
     model: string,
     active: ActiveTurn,
@@ -525,12 +585,13 @@ export const createTurnController = ({
     const threadId = record.threadId;
     const started = renderTurnStarted({
       threadId,
-      turnId: newTurnId(),
+      turnId: request.turnId,
       cwd: record.worktree,
       now: now(),
     });
     apply(active, started);
-    send({ id: requestId, result: { turn: started.turn } });
+    if (!request.answered)
+      send({ id: request.id, result: { turn: started.turn } });
     log({ event: "claude_turn", step: "started" });
     apply(
       active,
@@ -822,13 +883,16 @@ export const createTurnController = ({
     message: string = refusalMessage(reason),
   ) => {
     reject({ id }, message);
+    logRefusal(reason, cause);
+  };
+
+  const logRefusal = (reason: Refusal, cause: { _tag: StoreTag } | null) =>
     log({
       event: "claude_turn",
       step: "refused",
       reason,
       error: cause?._tag ?? null,
     });
-  };
 
   // The router logs its own refusals, so this only answers the app.
   const reject = ({ id }: Pick<AppRequest, "id">, message: string) =>

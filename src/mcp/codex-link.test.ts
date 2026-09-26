@@ -94,7 +94,7 @@ describe("createCodexLink tools", () => {
   });
 
   test("learns the created thread from the app's first turn on it when the answer has only a provisional id", async () => {
-    const delegations = createDelegationWatch();
+    const delegations = createDelegationWatch(() => {});
     const { client, store } = await connect({
       delegations,
       answer: (params) => {
@@ -117,7 +117,7 @@ describe("createCodexLink tools", () => {
   });
 
   test("never takes the late first turn of a thread an earlier answer already named", async () => {
-    const delegations = createDelegationWatch();
+    const delegations = createDelegationWatch(() => {});
     let creates = 0;
     const { client, store, link } = await connect({
       delegations,
@@ -277,7 +277,7 @@ describe("createCodexLink tools", () => {
 
 describe("createCodexLink over the app's turn for the created thread", () => {
   test("saves the thread the app starts for the call as the reviewer", async () => {
-    const delegations = createDelegationWatch();
+    const delegations = createDelegationWatch(() => {});
     const router = createRouter(
       CODEX_ONLY_TURNS,
       () => {},
@@ -578,7 +578,7 @@ const connect = async ({
   reviewers = {},
   callerRegistered = true,
   addReviewerFails = false,
-  delegations = createDelegationWatch(),
+  delegations = createDelegationWatch(() => {}),
   models = () => Result.ok(DEFAULT_MODELS),
   answer = () => Result.ok(textAnswer("ok")),
 }: {
