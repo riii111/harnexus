@@ -184,7 +184,7 @@ describe("threads with a Claude model", () => {
     expect(calls).toEqual([]);
   });
 
-  test("reads the model of a turn from its collaboration mode first", () => {
+  test("reads the model of a turn from its collaboration mode when the request has no model", () => {
     const { router, calls } = setup();
     const line = encode({
       id: 7,
@@ -192,7 +192,6 @@ describe("threads with a Claude model", () => {
       params: {
         threadId: "th-codex",
         cwd: "/fixture/work",
-        model: "gpt-fixture",
         collaborationMode: { mode: "default", settings: { model: CLAUDE } },
       },
     });
@@ -250,10 +249,35 @@ describe("thread/settings/update", () => {
     expect(calls).toEqual([]);
   });
 
+  // The app sends its previous collaboration mode along with the model just picked, as observed with App 26.924.
+  test("keeps the thread's model picked again over a stale collaboration mode", () => {
+    const { router, calls } = setup(["th-claude"]);
+
+    const forwarded = router.fromApp(
+      settingsUpdate({
+        model: CLAUDE,
+        collaborationMode: {
+          mode: "default",
+          settings: { model: "claude-opus-5-5" },
+        },
+      }),
+    );
+
+    expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
+    expect(calls).toEqual([]);
+  });
+
   test.each([
     { name: "another model", change: { model: "claude-opus-5-5" } },
     {
-      name: "another model in the collaboration mode",
+      name: "another model beside a collaboration mode naming the thread's",
+      change: {
+        model: "claude-opus-5-5",
+        collaborationMode: { mode: "default", settings: { model: CLAUDE } },
+      },
+    },
+    {
+      name: "another model in the collaboration mode alone",
       change: {
         collaborationMode: { mode: "default", settings: { model: "gpt-x" } },
       },

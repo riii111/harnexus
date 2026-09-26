@@ -10,13 +10,13 @@ export type AppRequest = {
 
 export type Refusal = keyof typeof REFUSAL_MESSAGES;
 
-// The app's collaboration mode takes precedence over the plain model field, so both are read in that order.
+// The app spreads its last collaboration mode into requests while model carries the new choice (App 26.924), so model is read first and the mode only fills in when model is absent.
 export const requestedModel = (params: Record<string, unknown>) => {
+  if (typeof params.model === "string") return params.model;
   const settings = collaborationMode(params)?.settings;
-  if (isObject(settings) && typeof settings.model === "string") {
-    return settings.model;
-  }
-  return typeof params.model === "string" ? params.model : undefined;
+  return isObject(settings) && typeof settings.model === "string"
+    ? settings.model
+    : undefined;
 };
 
 // fallbackCwd is where the server last reported a Codex thread, since a request that switches it to Claude may not carry its directory.

@@ -359,10 +359,29 @@ export const createTurnController = ({
   };
 
   // The app may start the next turn as soon as it sees turn/completed, so the thread stops counting as active then; the store's per-thread queue still holds that turn until this one's marker is cleared.
-  const apply = (active: ActiveTurn, rendered: Rendered) => {
+  const apply = (
+    active: ActiveTurn,
+    rendered: Rendered,
+    error: FailureTag | null = null,
+  ) => {
+    const wasFinished = active.state?.finished ?? false;
     active.state = rendered.state;
     if (rendered.state.finished) release(active);
-    for (const notification of rendered.notifications) send(notification);
+    for (const notification of rendered.notifications) {
+      send(notification);
+      if (
+        notification.method === "turn/completed" &&
+        notification.params.turn.status !== "inProgress" &&
+        !wasFinished
+      ) {
+        log({
+          event: "claude_turn",
+          step: "finished",
+          status: notification.params.turn.status,
+          error,
+        });
+      }
+    }
   };
 
   // A turn the user already stopped ends as interrupted whatever went wrong afterwards.
@@ -384,13 +403,7 @@ export const createTurnController = ({
     error: FailureTag | null,
   ) => {
     if (active.state === null || active.state.finished) return;
-    apply(active, finishTurn(active.state, outcome, now()));
-    log({
-      event: "claude_turn",
-      step: "finished",
-      status: outcome.status,
-      error,
-    });
+    apply(active, finishTurn(active.state, outcome, now()), error);
   };
 
   const release = (active: ActiveTurn) => {

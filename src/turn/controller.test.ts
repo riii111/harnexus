@@ -59,6 +59,20 @@ describe("turn/start on a Claude thread", () => {
     });
   });
 
+  test("logs a turn Claude completes as finished", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, events } = await harness([claude]);
+
+    await completeTurn(turns, sent, claude, 10);
+
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "finished",
+      status: "completed",
+      error: null,
+    });
+  });
+
   test("keeps one Claude session for the thread across turns", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, settings } = await harness([claude]);
@@ -360,9 +374,8 @@ describe("refused requests", () => {
     { name: "a Codex model", override: { model: "gpt-fixture" } },
     { name: "another Claude model", override: { model: "claude-opus-5-5" } },
     {
-      name: "another Claude model in the collaboration mode",
+      name: "another Claude model in the collaboration mode alone",
       override: {
-        model: MODEL,
         collaborationMode: {
           mode: "default",
           settings: { model: "claude-opus-5-5" },
