@@ -258,14 +258,16 @@ describe("startClaudeSession started session", () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const session = await startedSession(claude);
 
-    const first = session.send("review the diff").unwrap();
-    const second = session.send("also run the tests").unwrap();
+    const first = session.send("review the diff");
+    if (first.isErr()) return expect.unreachable(first.error.message);
+    const second = session.send("also run the tests");
+    if (second.isErr()) return expect.unreachable(second.error.message);
     session.close();
 
-    expect(first).not.toBe(second);
+    expect(first.value).not.toBe(second.value);
     expect(await claude.prompts()).toEqual([
-      userMessage("review the diff", first),
-      userMessage("also run the tests", second),
+      userMessage("review the diff", first.value),
+      userMessage("also run the tests", second.value),
     ]);
   });
 
@@ -275,11 +277,12 @@ describe("startClaudeSession started session", () => {
     const prompt = claude.prompt()?.[Symbol.asyncIterator]();
     const waiting = prompt?.next();
 
-    const uuid = session.send("steer to the failing test").unwrap();
+    const sent = session.send("steer to the failing test");
+    if (sent.isErr()) return expect.unreachable(sent.error.message);
 
     expect(await waiting).toEqual({
       done: false,
-      value: userMessage("steer to the failing test", uuid),
+      value: userMessage("steer to the failing test", sent.value),
     });
     session.close();
     expect(await prompt?.next()).toEqual({ done: true, value: undefined });
@@ -425,8 +428,11 @@ const SUBSCRIPTION: AccountInfo = {
 const writeUserSettings = (dir: string, env: Record<string, string>) =>
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ env }));
 
-const startedSession = async (claude: ReturnType<typeof fakeClaude>) =>
-  (await startClaudeSession(SETTINGS, claude.runtime)).unwrap();
+const startedSession = async (claude: ReturnType<typeof fakeClaude>) => {
+  const started = await startClaudeSession(SETTINGS, claude.runtime);
+  if (started.isErr()) return expect.unreachable(started.error.message);
+  return started.value;
+};
 
 const collect = async <T>(items: AsyncIterable<T>) => {
   const collected: T[] = [];
