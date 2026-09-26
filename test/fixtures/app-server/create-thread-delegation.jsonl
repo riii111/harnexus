@@ -1,0 +1,5 @@
+{"direction":"app_to_server","message":{"id":30,"method":"thread/start","params":{"model":"gpt-fixture","cwd":"/fixture/work"}}}
+{"direction":"server_to_app","message":{"id":30,"result":{"thread":{"id":"th-fixture-reviewer","model":"gpt-fixture","cwd":"/fixture/work"},"model":"gpt-fixture","cwd":"/fixture/work"}}}
+{"direction":"server_to_app","message":{"method":"thread/started","params":{"thread":{"id":"th-fixture-reviewer"}}}}
+{"direction":"app_to_server","message":{"id":31,"method":"turn/start","params":{"threadId":"th-fixture-reviewer","input":[],"toolOutput":{"name":"create_thread","namespace":"codex_app","output":"<codex_delegation>\n  <source_thread_id>th-fixture-claude</source_thread_id>\n  <prompt>sk-fixture-secret review the change</prompt>\n</codex_delegation>"}}}}
+{"direction":"server_to_app","message":{"id":31,"result":{"turn":{"id":"tu-fixture-reviewer-1","items":[],"itemsView":"full","status":"inProgress","error":null,"startedAt":1700000010,"completedAt":null,"durationMs":null}}}}

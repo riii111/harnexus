@@ -32,6 +32,8 @@ export type ClaudeSessionSettings = {
   model: string;
   resume?: string;
   mcpServers?: Record<string, McpServerConfig>;
+  // Tools that run without asking, on top of the user's own allow rules.
+  allowedTools?: string[];
   // The SDK reports no message when canUseTool refuses a tool, so the refusal is passed out here.
   onToolDeclined?: (toolUseId: string) => void;
 };
@@ -87,6 +89,7 @@ const sessionOptions = (
   canUseTool: denyToolApproval(settings.onToolDeclined),
   includePartialMessages: true,
   mcpServers: settings.mcpServers ?? {},
+  allowedTools: settings.allowedTools ?? [],
   ...(settings.resume === undefined ? {} : { resume: settings.resume }),
 });
 
