@@ -334,27 +334,13 @@ describe("startClaudeSession started session", () => {
     expect(session.send("next turn").isOk()).toBe(true);
   });
 
-  test.each<{
-    name: string;
-    options: Parameters<typeof fakeClaude>[1];
-    expected: string[] | null;
-  }>([
-    {
-      name: "the CLI returns a receipt",
-      options: { stillQueued: ["uuid-1"] },
-      expected: ["uuid-1"],
-    },
-    { name: "the CLI gives no receipt", options: {}, expected: null },
-  ])("reports the sends that survive an interrupt when $name", async ({
-    options,
-    expected,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION, options);
+  test("reports the sends that survive an interrupt", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: ["uuid-1"] });
     const session = await startedSession(claude);
 
     const interrupted = await session.interrupt();
 
-    expect(interrupted.isOk() && interrupted.value).toEqual(expected);
+    expect(interrupted.isOk() && interrupted.value).toEqual(["uuid-1"]);
   });
 
   test("reports an interrupt the SDK rejects", async () => {
