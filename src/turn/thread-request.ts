@@ -11,6 +11,8 @@ export type AppRequest = {
 
 export type Refusal = keyof typeof REFUSAL_MESSAGES;
 
+export type Mode = "plan" | "default";
+
 // The app spreads its last collaboration mode into requests while model carries the new choice (App 26.924), so model is read first and the mode only fills in when model is absent.
 export const requestedModel = (params: Record<string, unknown>) => {
   if (typeof params.model === "string") return params.model;
@@ -49,8 +51,6 @@ export const savedThreadChange = (
   isSameDirectory(requested.cwd, saved.cwd) ? null : "directory_change";
 
 export const refusalMessage = (refusal: Refusal) => REFUSAL_MESSAGES[refusal];
-
-export type Mode = "plan" | "default";
 
 export const requestedMode = (
   params: Record<string, unknown>,

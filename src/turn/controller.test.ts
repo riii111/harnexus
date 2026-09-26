@@ -215,7 +215,10 @@ describe("tool approval", () => {
         {
           question: "Which?",
           header: "Pick",
-          options: [{ label: "A", description: "" }],
+          options: [
+            { label: "A", description: "the first" },
+            { label: "B", description: "the second" },
+          ],
           multiSelect: false,
         },
       ],
@@ -317,6 +320,43 @@ describe("tool approval", () => {
   });
 });
 
+describe("tool approval that must default to no", () => {
+  test("asks for the approving word without choices", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { sent } = await startedTurn(claude);
+
+    askTool(claude, "Bash", { command: "ls" }, { defaultToNo: true });
+    const request = await appRequest(sent);
+
+    expect(request.method).toBe("item/tool/requestUserInput");
+    expect(request.params.questions).toMatchObject([
+      { question: expect.stringContaining('Type "Allow"'), options: null },
+    ]);
+  });
+
+  test.each([
+    { name: "a choice number", typed: "2", expected: "deny" },
+    { name: "the approving word", typed: "Allow", expected: "allow" },
+  ])("answers $expected to $name", async ({ typed, expected }) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await startedTurn(claude);
+
+    const decision = askTool(
+      claude,
+      "Bash",
+      { command: "ls" },
+      { defaultToNo: true },
+    );
+    const request = await appRequest(sent);
+    turns.answerRequest({
+      id: request.id,
+      result: { answers: { approval: { answers: [typed] } } },
+    });
+
+    expect((await decision)?.behavior).toBe(expected);
+  });
+});
+
 describe("permission mode", () => {
   test.each([
     { name: "plan", mode: "plan", expected: "plan" },
@@ -342,6 +382,26 @@ describe("permission mode", () => {
     await until(() => claude.modes().length === 1);
 
     expect(claude.modes()).toEqual([expected]);
+  });
+
+  test("fails the turn without sending the prompt when Claude refuses the mode", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      permissionModeError: new Error("no control channel"),
+    });
+    const { turns, sent, events } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        step: "finished",
+        error: "ClaudePermissionModeFailed",
+      }),
+    );
+    expect(claude.closes()).toBe(1);
+    expect(await claude.prompts()).toEqual([]);
   });
 
   test("runs a turn without a mode in the mode picked earlier", async () => {
@@ -1297,7 +1357,11 @@ const askTool = (
   claude: ReturnType<typeof fakeClaude>,
   toolName: string,
   input: Record<string, unknown>,
-  options: { agentID?: string; signal?: AbortSignal } = {},
+  options: {
+    agentID?: string;
+    signal?: AbortSignal;
+    defaultToNo?: boolean;
+  } = {},
 ) => {
   const canUseTool = claude.options().canUseTool as CanUseTool;
   return canUseTool(toolName, input, {
@@ -1305,6 +1369,9 @@ const askTool = (
     toolUseID: "tool-1",
     requestId: "request-1",
     ...(options.agentID === undefined ? {} : { agentID: options.agentID }),
+    ...(options.defaultToNo === undefined
+      ? {}
+      : { defaultToNo: options.defaultToNo }),
   });
 };
 

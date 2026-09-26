@@ -641,7 +641,7 @@ export const createTurnController = ({
     return Result.ok(slot);
   };
 
-  // Only a call inside a running turn reaches the app; the SDK reports no message when a call is refused here, so the refusal is recorded on the turn to show its item as declined.
+  // The SDK reports no message when a call is refused here, so the refusal is recorded on the turn to show its item as declined.
   const approveTool =
     (threadId: string): CanUseTool =>
     async (toolName, input, options) => {

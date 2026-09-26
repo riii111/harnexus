@@ -20,7 +20,6 @@ export type PromptTarget = {
   now: number;
 };
 
-// decide takes the result the app answered with, or null when no answer came, which never approves.
 export type AppPrompt = {
   method: string;
   params: Record<string, unknown>;
@@ -102,7 +101,7 @@ const questionsPrompt = (
   },
 });
 
-// Approving leaves plan mode for the rest of the turn, as Claude Code does; any other answer is passed back as feedback on the plan.
+// Approving leaves plan mode for the rest of the turn, as Claude Code does.
 const planPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
   method: REQUEST_USER_INPUT,
   params: userInputParams(target, [
@@ -168,7 +167,7 @@ const toolPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
   },
 });
 
-// Every accepting decision allows this call once, including Codex policy amendments, which are not written to Claude's settings.
+// Codex policy amendments are never written to Claude's settings, so they allow only this call.
 const decideApproval = (call: ToolCall, answer: unknown): PermissionResult => {
   if (!isObject(answer) || answer.decision === undefined) {
     return unanswered(call);

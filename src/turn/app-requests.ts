@@ -1,7 +1,7 @@
 // The server numbers its own requests to the app, so the bridge's string ids with this prefix never collide with them.
 const ID_PREFIX = "harnexus-";
 
-// A request settles once, with the app's result or null; null covers an error answer, a cancel and a stop, and the app is told the request is resolved either way so its prompt closes.
+// The app keeps a prompt open until told its request is resolved, so every settled request is announced, answered or not.
 export const createAppRequests = ({
   send,
   now,

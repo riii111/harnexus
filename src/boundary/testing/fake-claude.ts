@@ -14,6 +14,7 @@ export const fakeClaude = (
   account: AccountInfo | Error,
   {
     interruptError,
+    permissionModeError,
     interruptAnswered,
     stillQueued,
     closeEnding = { done: true, value: undefined },
@@ -21,6 +22,7 @@ export const fakeClaude = (
     env = { PATH: "/usr/bin" },
   }: {
     interruptError?: Error;
+    permissionModeError?: Error;
     // Holds the interrupt receipt back, as the CLI may send it after the turn's result.
     interruptAnswered?: Promise<void>;
     stillQueued?: string[];
@@ -61,6 +63,7 @@ export const fakeClaude = (
         : { still_queued: stillQueued };
     },
     setPermissionMode: async (mode) => {
+      if (permissionModeError !== undefined) throw permissionModeError;
       modes.push(mode);
     },
     accountInfo: async () => {
