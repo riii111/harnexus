@@ -733,6 +733,9 @@ const CODEX_ONLY_TURNS: Parameters<typeof createRouter>[0] = {
   steerTurn: () => expect.unreachable("no Claude thread in this session"),
   interruptTurn: () => expect.unreachable("no Claude thread in this session"),
   reject: () => expect.unreachable("no Claude thread in this session"),
+  answerRequest: () => false,
+  selectMode: () => expect.unreachable("no Claude thread in this session"),
+  modeOf: () => undefined,
 };
 
 const FIXTURE_DIR = join(import.meta.dir, "../../test/fixtures/app-server");

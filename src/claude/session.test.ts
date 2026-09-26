@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type AccountInfo,
-  type CanUseTool,
   resolveSettings,
   type SDKMessage,
   type SDKUserMessage,
@@ -102,25 +101,12 @@ describe("startClaudeSession options", () => {
     expect(claude.options().env).toEqual({ PATH: "/usr/bin" });
   });
 
-  test("denies every tool that asks for approval", async () => {
+  test("asks the given canUseTool about tools that need approval", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
 
     await startClaudeSession(SETTINGS, claude.runtime);
-    const canUseTool = claude.options().canUseTool as CanUseTool;
-    const decision = await canUseTool(
-      "Bash",
-      { command: "rm -rf build" },
-      {
-        signal: new AbortController().signal,
-        toolUseID: "tool-1",
-        requestId: "request-1",
-      },
-    );
 
-    expect(decision).toEqual({
-      behavior: "deny",
-      message: expect.stringContaining("Bash"),
-    });
+    expect(claude.options().canUseTool).toBe(SETTINGS.canUseTool);
   });
 });
 
@@ -410,11 +396,25 @@ describe("startClaudeSession started session", () => {
     );
     expect(claude.interrupts()).toBe(0);
   });
+
+  test("switches Claude's permission mode until closed", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const session = await startedSession(claude);
+
+    const switched = await session.setPermissionMode("plan");
+    session.close();
+    const late = await session.setPermissionMode("default");
+
+    expect(switched.isOk()).toBe(true);
+    expect(late.isErr() && late.error._tag).toBe("ClaudeSessionClosed");
+    expect(claude.modes()).toEqual(["plan"]);
+  });
 });
 
 const SETTINGS: ClaudeSessionSettings = {
   cwd: "/work/tree",
   model: "claude-sonnet-5",
+  canUseTool: async () => ({ behavior: "deny", message: "not in this test" }),
 };
 
 const SUBSCRIPTION: AccountInfo = {

@@ -110,34 +110,6 @@ describe("turn/start on a Claude thread", () => {
     expect(responseTo(sent, 11)?.result.turn).toMatchObject({ id: "turn-2" });
   });
 
-  test("shows a tool that needed approval as declined", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
-
-    turns.startTurn(turnStart(10, "clean up"), undefined);
-    await until(() => claude.started());
-    const canUseTool = claude.options().canUseTool as CanUseTool;
-    const decision = await canUseTool(
-      "Bash",
-      { command: "rm -rf build" },
-      {
-        signal: new AbortController().signal,
-        toolUseID: "tool-1",
-        requestId: "request-1",
-      },
-    );
-    claude.emit(sdk(bashCall("tool-1")));
-    claude.emit(sdk(toolError("tool-1")));
-    claude.emit(sdk(success()));
-    await until(() => turnCompleted(sent) !== undefined);
-
-    expect(decision?.behavior).toBe("deny");
-    const command = completedItems(sent).find(
-      (item) => item.type === "commandExecution",
-    );
-    expect(command).toMatchObject({ status: "declined" });
-  });
-
   test("fails the turn when the login is not a subscription", async () => {
     const claude = fakeClaude({ apiProvider: "bedrock" });
     const { turns, sent } = await harness([claude]);
@@ -164,6 +136,283 @@ describe("turn/start on a Claude thread", () => {
     expect(turnsCompleted(sent)).toEqual(["failed", "completed"]);
     expect(first.closes()).toBe(1);
     expect(settings[1]).toMatchObject({ resume: "se-1" });
+  });
+});
+
+describe("tool approval", () => {
+  test("asks the app about the tool's item and allows what it accepts", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await startedTurn(claude);
+
+    const decision = askTool(claude, "Bash", { command: "rm -rf build" });
+    const request = await appRequest(sent);
+    turns.answerRequest({ id: request.id, result: { decision: "accept" } });
+
+    expect(await decision).toEqual({ behavior: "allow" });
+    const started = sent.find(
+      (m) =>
+        m.method === "item/started" &&
+        m.params.item.type === "commandExecution",
+    );
+    expect(request).toMatchObject({
+      id: "harnexus-1",
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: THREAD,
+        turnId: "turn-1",
+        itemId: started?.params.item.id,
+        command: "rm -rf build",
+      },
+    });
+    expect(resolvedRequests(sent)).toEqual(["harnexus-1"]);
+  });
+
+  test("shows a tool the app declined as declined", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await startedTurn(claude);
+
+    const decision = askTool(claude, "Bash", { command: "rm -rf build" });
+    const request = await appRequest(sent);
+    turns.answerRequest({ id: request.id, result: { decision: "decline" } });
+    expect((await decision)?.behavior).toBe("deny");
+    claude.emit(sdk(bashCall("tool-1")));
+    claude.emit(sdk(toolError("tool-1")));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    const commands = sent.filter(
+      (m) =>
+        m.method === "item/started" &&
+        m.params.item.type === "commandExecution",
+    );
+    expect(commands).toHaveLength(1);
+    const command = completedItems(sent).find(
+      (item) => item.type === "commandExecution",
+    );
+    expect(command).toMatchObject({ status: "declined" });
+  });
+
+  test("denies a tool whose request the app answers with an error", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await startedTurn(claude);
+
+    const decision = askTool(claude, "Write", {
+      file_path: "/w/a.ts",
+      content: "",
+    });
+    const request = await appRequest(sent);
+    turns.answerRequest({ id: request.id, error: { code: -1, message: "no" } });
+
+    expect(request.method).toBe("item/fileChange/requestApproval");
+    expect((await decision)?.behavior).toBe("deny");
+  });
+
+  test("returns the app's answers to Claude's question", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await startedTurn(claude);
+    const input = {
+      questions: [
+        {
+          question: "Which?",
+          header: "Pick",
+          options: [
+            { label: "A", description: "the first" },
+            { label: "B", description: "the second" },
+          ],
+          multiSelect: false,
+        },
+      ],
+    };
+
+    const decision = askTool(claude, "AskUserQuestion", input);
+    const request = await appRequest(sent);
+    turns.answerRequest({
+      id: request.id,
+      result: { answers: { "question-1": { answers: ["A"] } } },
+    });
+
+    expect(request.method).toBe("item/tool/requestUserInput");
+    expect(await decision).toEqual({
+      behavior: "allow",
+      updatedInput: { ...input, answers: { "Which?": "A" } },
+    });
+  });
+
+  test("asks a subagent's tool without adding an item to the thread", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { sent } = await startedTurn(claude);
+
+    askTool(claude, "Bash", { command: "ls" }, { agentID: "agent-1" });
+    const request = await appRequest(sent);
+
+    expect(request.method).toBe("item/tool/requestUserInput");
+    expect(request.params.itemId).toBe("turn-1-tool-1");
+    expect(
+      sent.filter(
+        (m) =>
+          m.method === "item/started" && m.params.item.type !== "userMessage",
+      ),
+    ).toEqual([]);
+  });
+
+  test("denies a tool asked outside a running turn without asking the app", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+
+    const decision = await askTool(claude, "Bash", { command: "ls" });
+
+    expect(decision?.behavior).toBe("deny");
+    expect(sent.filter((m) => m.method?.endsWith("requestApproval"))).toEqual(
+      [],
+    );
+  });
+
+  test.each<{ name: string; stop: (turns: Turns) => void }>([
+    {
+      name: "the turn is interrupted",
+      stop: (turns) => turns.interruptTurn(interrupt(20, "turn-1")),
+    },
+    { name: "the bridge closes", stop: (turns) => turns.closeAll() },
+  ])("denies a waiting tool and closes its prompt when $name", async ({
+    stop,
+  }) => {
+    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
+    const { turns, sent } = await startedTurn(claude);
+
+    const decision = askTool(claude, "Bash", { command: "ls" });
+    const request = await appRequest(sent);
+    stop(turns);
+
+    expect((await decision)?.behavior).toBe("deny");
+    expect(resolvedRequests(sent)).toEqual([request.id]);
+  });
+
+  test("denies a waiting tool and closes its prompt when the turn fails", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { sent } = await startedTurn(claude);
+
+    const decision = askTool(claude, "Bash", { command: "ls" });
+    const request = await appRequest(sent);
+    claude.fail(new Error("socket closed"));
+
+    expect((await decision)?.behavior).toBe("deny");
+    expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
+    expect(resolvedRequests(sent)).toEqual([request.id]);
+  });
+
+  test("denies a waiting tool when Claude aborts the request", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { sent } = await startedTurn(claude);
+    const abort = new AbortController();
+
+    const decision = askTool(
+      claude,
+      "Bash",
+      { command: "ls" },
+      { signal: abort.signal },
+    );
+    const request = await appRequest(sent);
+    abort.abort();
+
+    expect((await decision)?.behavior).toBe("deny");
+    expect(resolvedRequests(sent)).toEqual([request.id]);
+  });
+});
+
+describe("tool approval that must default to no", () => {
+  test("asks for the approving word without choices", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { sent } = await startedTurn(claude);
+
+    askTool(claude, "Bash", { command: "ls" }, { defaultToNo: true });
+    const request = await appRequest(sent);
+
+    expect(request.method).toBe("item/tool/requestUserInput");
+    expect(request.params.questions).toMatchObject([
+      { question: expect.stringContaining('Type "Allow"'), options: null },
+    ]);
+  });
+
+  test.each([
+    { name: "a choice number", typed: "2", expected: "deny" },
+    { name: "the approving word", typed: "Allow", expected: "allow" },
+  ])("answers $expected to $name", async ({ typed, expected }) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await startedTurn(claude);
+
+    const decision = askTool(
+      claude,
+      "Bash",
+      { command: "ls" },
+      { defaultToNo: true },
+    );
+    const request = await appRequest(sent);
+    turns.answerRequest({
+      id: request.id,
+      result: { answers: { approval: { answers: [typed] } } },
+    });
+
+    expect((await decision)?.behavior).toBe(expected);
+  });
+});
+
+describe("permission mode", () => {
+  test.each([
+    { name: "plan", mode: "plan", expected: "plan" },
+    { name: "default", mode: "default", expected: "default" },
+  ])("runs a turn in the app's $name mode as Claude's $expected mode", async ({
+    mode,
+    expected,
+  }) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude]);
+    const request = turnStart(10, "hello");
+
+    turns.startTurn(
+      {
+        ...request,
+        params: {
+          ...request.params,
+          collaborationMode: { mode, settings: { model: MODEL } },
+        },
+      },
+      undefined,
+    );
+    await until(() => claude.modes().length === 1);
+
+    expect(claude.modes()).toEqual([expected]);
+  });
+
+  test("fails the turn without sending the prompt when Claude refuses the mode", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      permissionModeError: new Error("no control channel"),
+    });
+    const { turns, sent, events } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        step: "finished",
+        error: "ClaudePermissionModeFailed",
+      }),
+    );
+    expect(claude.closes()).toBe(1);
+    expect(await claude.prompts()).toEqual([]);
+  });
+
+  test("runs a turn without a mode in the mode picked earlier", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude]);
+
+    turns.selectMode(THREAD, "plan");
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.modes().length === 1);
+
+    expect(claude.modes()).toEqual(["plan"]);
   });
 });
 
@@ -776,12 +1025,6 @@ describe("refused requests", () => {
         collaborationMode: { mode: "default", settings: { model: "gpt-x" } },
       },
     },
-    {
-      name: "plan mode",
-      override: {
-        collaborationMode: { mode: "plan", settings: { model: MODEL } },
-      },
-    },
     { name: "another working directory", override: { cwd: "/elsewhere" } },
   ])("refuses $name without starting Claude", async ({ override }) => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -1102,6 +1345,49 @@ describe("closeAll", () => {
     expect(claude.started()).toBe(false);
   });
 });
+
+const startedTurn = async (claude: ReturnType<typeof fakeClaude>) => {
+  const started = await harness([claude]);
+  started.turns.startTurn(turnStart(10, "hello"), undefined);
+  await until(() => claude.started());
+  return started;
+};
+
+const askTool = (
+  claude: ReturnType<typeof fakeClaude>,
+  toolName: string,
+  input: Record<string, unknown>,
+  options: {
+    agentID?: string;
+    signal?: AbortSignal;
+    defaultToNo?: boolean;
+  } = {},
+) => {
+  const canUseTool = claude.options().canUseTool as CanUseTool;
+  return canUseTool(toolName, input, {
+    signal: options.signal ?? new AbortController().signal,
+    toolUseID: "tool-1",
+    requestId: "request-1",
+    ...(options.agentID === undefined ? {} : { agentID: options.agentID }),
+    ...(options.defaultToNo === undefined
+      ? {}
+      : { defaultToNo: options.defaultToNo }),
+  });
+};
+
+const appRequest = async (sent: Sent[]) => {
+  const find = () =>
+    sent.find((m) => typeof m.id === "string" && m.id.startsWith("harnexus-"));
+  await until(() => find() !== undefined);
+  return find();
+};
+
+const resolvedRequests = (sent: Sent[]) =>
+  sent
+    .filter((m) => m.method === "serverRequest/resolved")
+    .map((m) => m.params.requestId);
+
+type Turns = ReturnType<typeof createTurnController>;
 
 const diskFull = async (target: string) =>
   Result.err(

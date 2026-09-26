@@ -1,6 +1,7 @@
 import type {
   AccountInfo,
   Options,
+  PermissionMode,
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -13,6 +14,7 @@ export const fakeClaude = (
   account: AccountInfo | Error,
   {
     interruptError,
+    permissionModeError,
     interruptAnswered,
     stillQueued,
     closeEnding = { done: true, value: undefined },
@@ -20,6 +22,7 @@ export const fakeClaude = (
     env = { PATH: "/usr/bin" },
   }: {
     interruptError?: Error;
+    permissionModeError?: Error;
     // Holds the interrupt receipt back, as the CLI may send it after the turn's result.
     interruptAnswered?: Promise<void>;
     stillQueued?: string[];
@@ -33,6 +36,7 @@ export const fakeClaude = (
   let options: Options | null = null;
   let prompt: AsyncIterable<SDKUserMessage> | null = null;
   let interrupts = 0;
+  const modes: PermissionMode[] = [];
   let closes = 0;
   const deliver = (item: Delivery) => {
     const resolve = waiting;
@@ -57,6 +61,10 @@ export const fakeClaude = (
       return stillQueued === undefined
         ? undefined
         : { still_queued: stillQueued };
+    },
+    setPermissionMode: async (mode) => {
+      if (permissionModeError !== undefined) throw permissionModeError;
+      modes.push(mode);
     },
     accountInfo: async () => {
       if (account instanceof Error) throw account;
@@ -95,6 +103,7 @@ export const fakeClaude = (
     end: () => deliver({ done: true, value: undefined }),
     fail: (error: Error) => deliver(error),
     interrupts: () => interrupts,
+    modes: () => modes,
     closes: () => closes,
   };
 };

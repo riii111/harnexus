@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AppRequest } from "../turn/thread-request.ts";
+import type { AppRequest, Mode } from "../turn/thread-request.ts";
 import { createRouter, type RouteEvent } from "./route.ts";
 
 describe("Codex threads", () => {
@@ -279,6 +279,23 @@ describe("threads with a Claude model", () => {
   });
 });
 
+describe("app responses", () => {
+  test("hands an answer to the bridge's own request to the turns and not to the server", () => {
+    const { router, calls } = setup(["th-claude"]);
+    const answer = { id: BRIDGE_REQUEST, result: { decision: "accept" } };
+
+    expect(router.fromApp(encode(answer))).toBeNull();
+    expect(calls).toEqual([["answerRequest", answer]]);
+  });
+
+  test("forwards an answer to the server's request unchanged", () => {
+    const { router } = setup(["th-claude"]);
+    const line = encode({ id: 1, result: { decision: "accept" } });
+
+    expect(router.fromApp(line)).toEqual(line);
+  });
+});
+
 describe("thread/settings/update", () => {
   test("drops a Claude thread's own model before the server sees it", () => {
     const { router, calls } = setup(["th-claude"]);
@@ -295,7 +312,7 @@ describe("thread/settings/update", () => {
       threadId: "th-claude",
       approvalPolicy: "never",
     });
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([["selectMode", "th-claude", "default"]]);
   });
 
   // The app sends its previous collaboration mode along with the model just picked, as observed with App 26.924.
@@ -313,7 +330,7 @@ describe("thread/settings/update", () => {
     );
 
     expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([["selectMode", "th-claude", "default"]]);
   });
 
   test.each([
@@ -333,7 +350,9 @@ describe("thread/settings/update", () => {
     const forwarded = router.fromApp(settingsUpdate(change));
 
     expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
-    expect(calls).toEqual([["changeModel", "th-claude", OTHER_CLAUDE]]);
+    expect(calls.filter(([name]) => name !== "selectMode")).toEqual([
+      ["changeModel", "th-claude", OTHER_CLAUDE],
+    ]);
   });
 
   test.each([
@@ -341,12 +360,6 @@ describe("thread/settings/update", () => {
       name: "a Codex model in the collaboration mode alone",
       change: {
         collaborationMode: { mode: "default", settings: { model: "gpt-x" } },
-      },
-    },
-    {
-      name: "plan mode",
-      change: {
-        collaborationMode: { mode: "plan", settings: { model: CLAUDE } },
       },
     },
     { name: "another working directory", change: { cwd: "/elsewhere" } },
@@ -408,6 +421,21 @@ describe("thread/settings/update", () => {
     expect(calls).toEqual([]);
   });
 
+  test("keeps plan mode picked for a Claude thread from the server", () => {
+    const { router, calls } = setup(["th-claude"]);
+
+    const forwarded = router.fromApp(
+      settingsUpdate({
+        collaborationMode: { mode: "plan", settings: { model: CLAUDE } },
+      }),
+    );
+    const out = parse(router.fromServer(settingsNotice("default")));
+
+    expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
+    expect(calls).toEqual([["selectMode", "th-claude", "plan"]]);
+    expect(out.params.threadSettings.collaborationMode.mode).toBe("plan");
+  });
+
   test("reports the Claude model in the server's settings notice", () => {
     const { router } = setup(["th-claude"]);
     const notice = encode({
@@ -434,6 +462,19 @@ describe("thread/settings/update", () => {
 });
 
 const CLAUDE = "claude-sonnet-5";
+const BRIDGE_REQUEST = "harnexus-1";
+
+const settingsNotice = (mode: string) =>
+  encode({
+    method: "thread/settings/updated",
+    params: {
+      threadId: "th-claude",
+      threadSettings: {
+        model: "gpt-fixture",
+        collaborationMode: { mode, settings: { model: "gpt-fixture" } },
+      },
+    },
+  });
 const OTHER_CLAUDE = "claude-opus-5-5";
 
 const settingsUpdate = (change: object) =>
@@ -449,6 +490,7 @@ const setup = (claudeThreads: string[] = []) => {
   const threads = new Map(
     claudeThreads.map((id) => [id, { model: CLAUDE, cwd: "/fixture/work" }]),
   );
+  const modes = new Map<string, Mode>();
   const router = createRouter(
     {
       isClaudeThread: (threadId) =>
@@ -468,6 +510,15 @@ const setup = (claudeThreads: string[] = []) => {
       steerTurn: (request) => calls.push(["steerTurn", request]),
       interruptTurn: (request) => calls.push(["interruptTurn", request]),
       reject: (request, message) => calls.push(["reject", request, message]),
+      answerRequest: (response) => {
+        calls.push(["answerRequest", response]);
+        return response.id === BRIDGE_REQUEST;
+      },
+      selectMode: (threadId, mode) => {
+        calls.push(["selectMode", threadId, mode]);
+        modes.set(threadId, mode);
+      },
+      modeOf: (threadId) => modes.get(threadId),
     },
     (event) => events.push(event),
     (source, threadId) => calls.push(["delegated", source, threadId]),

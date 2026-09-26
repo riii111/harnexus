@@ -50,6 +50,18 @@ export const markToolDeclined = (
         declinedToolUseIds: [...state.declinedToolUseIds, toolUseId],
       };
 
+// A permission request can reach the bridge before the message carrying its tool call, and the app's prompt points at the tool's item, so the item starts here; the later tool call is skipped as already started.
+export const renderToolRequest = (
+  state: TurnState,
+  block: { id: string; name: string; input: unknown },
+  now: number,
+): Rendered => {
+  if (state.finished) return { state, notifications: [] };
+  const draft = open(state);
+  startTool(draft, block, now);
+  return seal(draft);
+};
+
 export const renderTurnStarted = (params: {
   threadId: string;
   turnId: string;

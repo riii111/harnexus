@@ -11,6 +11,8 @@ export type AppRequest = {
 
 export type Refusal = keyof typeof REFUSAL_MESSAGES;
 
+export type Mode = "plan" | "default";
+
 // The app spreads its last collaboration mode into requests while model carries the new choice (App 26.924), so model is read first and the mode only fills in when model is absent.
 export const requestedModel = (params: Record<string, unknown>) => {
   if (typeof params.model === "string") return params.model;
@@ -22,7 +24,6 @@ export const requestedModel = (params: Record<string, unknown>) => {
 
 // fallbackCwd is where the server last reported a Codex thread, since a request that switches it to Claude may not carry its directory.
 // A thread may move to another Claude model, but Claude keeps running where the thread started, so a new directory is refused.
-// TODO: accept plan mode once P9 relays the plan approval to the app.
 export const checkThread = (
   params: Record<string, unknown>,
   known: Thread | undefined,
@@ -30,7 +31,6 @@ export const checkThread = (
 ): { thread: Thread } | { refusal: Refusal } => {
   const model = requestedModel(params) ?? known?.model;
   if (!isClaudeModel(model)) return { refusal: "codex_model" };
-  if (requestsPlanMode(params)) return { refusal: "plan_mode" };
   if (known !== undefined) {
     return typeof params.cwd === "string" &&
       !isSameDirectory(params.cwd, known.cwd)
@@ -52,9 +52,12 @@ export const savedThreadChange = (
 
 export const refusalMessage = (refusal: Refusal) => REFUSAL_MESSAGES[refusal];
 
-const requestsPlanMode = (params: Record<string, unknown>) => {
+export const requestedMode = (
+  params: Record<string, unknown>,
+): Mode | undefined => {
   const mode = collaborationMode(params)?.mode;
-  return mode !== undefined && mode !== "default";
+  if (typeof mode !== "string") return undefined;
+  return mode === "plan" ? "plan" : "default";
 };
 
 // Spelling differences such as a trailing slash do not change the directory; symlinks are not resolved, since that needs the file system.
@@ -66,7 +69,6 @@ const collaborationMode = (params: Record<string, unknown>) =>
 const REFUSAL_MESSAGES = {
   missing_thread: "the request needs a threadId",
   codex_model: "a Claude thread cannot switch to a Codex model",
-  plan_mode: "Claude threads do not support plan mode yet",
   directory_change:
     "changing the working directory of a Claude thread is not supported",
   directory_unknown: "the working directory of this thread is unknown",

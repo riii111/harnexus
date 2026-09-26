@@ -1,11 +1,16 @@
 import { randomUUID } from "node:crypto";
-import type { SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  CanUseTool,
+  PermissionMode,
+  SDKResultMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import {
   type InferErr,
   type InferOk,
   Result,
   TaggedError,
 } from "better-result";
+import { promptFor } from "../claude/permission.ts";
 import type {
   ClaudeSessionSettings,
   startClaudeSession,
@@ -18,6 +23,7 @@ import {
   type Rendered,
   renderInterimResult,
   renderSdkMessage,
+  renderToolRequest,
   renderTurnCompleted,
   renderTurnStarted,
   renderUserInput,
@@ -25,11 +31,14 @@ import {
   type TurnState,
 } from "../render/turn.ts";
 import type { ThreadRecord, ThreadStore } from "../state/thread-store.ts";
+import { createAppRequests } from "./app-requests.ts";
 import {
   type AppRequest,
   checkThread,
+  type Mode,
   type Refusal,
   refusalMessage,
+  requestedMode,
   savedThreadChange,
   type Thread,
 } from "./thread-request.ts";
@@ -89,6 +98,7 @@ type InterruptTag = ErrorTag<ReturnType<ClaudeSession["interrupt"]>>;
 type FailureTag =
   | ErrorTag<SessionStart>
   | ErrorTag<ReturnType<ClaudeSession["send"]>>
+  | ErrorTag<ReturnType<ClaudeSession["setPermissionMode"]>>
   | InferErr<StreamedMessage>["_tag"]
   | InterruptTag
   | BridgeClosing["_tag"]
@@ -127,6 +137,8 @@ type ActiveTurn = {
 };
 
 type TextInput = { items: UserInput[]; text: string };
+
+type TurnInput = TextInput & { permissionMode: PermissionMode };
 
 class BridgeClosing extends TaggedError("BridgeClosing")<{
   message: string;
@@ -168,6 +180,9 @@ export const createTurnController = ({
   // Message ids accepted but not yet saved, so a copy arriving while the first waits or runs is caught too.
   const acceptedMessageIds = new Map<string, Set<string>>();
   const turnsInFlight = new Map<string, number>();
+  // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
+  const modes = new Map<string, Mode>();
+  const appRequests = createAppRequests({ send, now });
   let closed = false;
 
   // fallbackCwd is the thread's directory as last reported by the server, used when a Codex thread switches to Claude.
@@ -205,7 +220,14 @@ export const createTurnController = ({
     const inFlight = turnsInFlight.get(threadId) ?? 0;
     if (inFlight > 0) log({ event: "claude_turn", step: "queued" });
     turnsInFlight.set(threadId, inFlight + 1);
-    void runTurn(id, checked.thread, threadId, input, messageId).then(() => {
+    const turn = {
+      ...input,
+      permissionMode: selectMode(
+        threadId,
+        requestedMode(params) ?? modes.get(threadId) ?? "default",
+      ),
+    };
+    void runTurn(id, checked.thread, threadId, turn, messageId).then(() => {
       const left = (turnsInFlight.get(threadId) ?? 1) - 1;
       if (left === 0) turnsInFlight.delete(threadId);
       else turnsInFlight.set(threadId, left);
@@ -285,6 +307,7 @@ export const createTurnController = ({
     const repeated = active.state.interrupting;
     active.state = markInterrupting(active.state);
     send({ id, result: {} });
+    appRequests.cancel(threadId);
     const slot = sessions.get(threadId);
     slot?.link.stopWrites();
     if (slot === undefined || repeated || slot.pendingInterrupt !== null) {
@@ -307,9 +330,15 @@ export const createTurnController = ({
     });
   };
 
+  const selectMode = (threadId: string, mode: Mode) => {
+    modes.set(threadId, mode);
+    return mode;
+  };
+
   // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
   const closeAll = () => {
     closed = true;
+    appRequests.cancel(null);
     for (const [threadId, slot] of sessions) dropSession(threadId, slot);
   };
 
@@ -318,7 +347,7 @@ export const createTurnController = ({
     requestId: AppRequest["id"],
     thread: Thread,
     threadId: string,
-    input: TextInput,
+    input: TurnInput,
     messageId: string | null,
   ) => {
     if (store.get(threadId) === undefined) {
@@ -445,7 +474,7 @@ export const createTurnController = ({
     record: ThreadRecord,
     model: string,
     active: ActiveTurn,
-    input: TextInput,
+    input: TurnInput,
     messageId: string | null,
   ) => {
     const threadId = record.threadId;
@@ -474,6 +503,15 @@ export const createTurnController = ({
       return;
     }
     active.link = slot.value.link;
+    // Claude leaves plan mode when a plan is approved, so the mode the app asks for is set again on every turn.
+    const mode = await slot.value.session.setPermissionMode(
+      input.permissionMode,
+    );
+    if (mode.isErr()) {
+      dropSession(threadId, slot.value);
+      fail(active, mode.error);
+      return;
+    }
     if (active.state?.interrupting) {
       finish(active, { status: "interrupted" }, null);
       return;
@@ -583,12 +621,7 @@ export const createTurnController = ({
       ...resumeFrom(sessionIds.get(record.threadId) ?? record.sessionId),
       mcpServers: { [link.server.name]: link.server },
       allowedTools: link.allowedTools,
-      onToolDeclined: (toolUseId) => {
-        const active = activeTurns.get(record.threadId);
-        if (active?.state) {
-          active.state = markToolDeclined(active.state, toolUseId);
-        }
-      },
+      canUseTool: approveTool(record.threadId),
     });
     if (started.isErr()) return Result.err(started.error);
     // Shutdown may have happened while Claude was starting.
@@ -606,6 +639,60 @@ export const createTurnController = ({
     };
     sessions.set(record.threadId, slot);
     return Result.ok(slot);
+  };
+
+  // The SDK reports no message when a call is refused here, so the refusal is recorded on the turn to show its item as declined.
+  const approveTool =
+    (threadId: string): CanUseTool =>
+    async (toolName, input, options) => {
+      const active = activeTurns.get(threadId);
+      const state = active?.state;
+      if (active === undefined || !state || state.interrupting) {
+        return declineTool(active, options.toolUseID, NO_TURN);
+      }
+      const block = { id: options.toolUseID, name: toolName, input };
+      // A subagent's call has no item in the thread, so its prompt carries an id of its own.
+      if (options.agentID === undefined) {
+        apply(active, renderToolRequest(state, block, now()));
+      }
+      const item = active.state?.tools[options.toolUseID]?.item ?? null;
+      const prompt = promptFor(
+        {
+          toolName,
+          input,
+          item,
+          title: options.title,
+          reason: options.decisionReason,
+          defaultToNo: options.defaultToNo === true,
+        },
+        {
+          threadId,
+          turnId: state.turnId,
+          itemId: item?.id ?? `${state.turnId}-${options.toolUseID}`,
+          now: now(),
+        },
+      );
+      const answer = await appRequests.ask(
+        threadId,
+        prompt.method,
+        prompt.params,
+        options.signal,
+      );
+      const decision = prompt.decide(answer);
+      return decision.behavior === "deny"
+        ? declineTool(active, options.toolUseID, decision.message)
+        : decision;
+    };
+
+  const declineTool = (
+    active: ActiveTurn | undefined,
+    toolUseId: string,
+    message: string,
+  ) => {
+    if (active?.state) {
+      active.state = markToolDeclined(active.state, toolUseId);
+    }
+    return { behavior: "deny" as const, message };
   };
 
   // The app may start the next turn as soon as it sees turn/completed, so the thread stops counting as active then; the store's per-thread queue still holds that turn until this one's marker is cleared.
@@ -656,9 +743,11 @@ export const createTurnController = ({
     apply(active, renderTurnCompleted(active.state, outcome, now()), error);
   };
 
+  // A prompt still open when its turn ends can no longer change what Claude did, so it is closed with the turn.
   const release = (active: ActiveTurn) => {
     if (activeTurns.get(active.threadId) === active) {
       activeTurns.delete(active.threadId);
+      appRequests.cancel(active.threadId);
     }
   };
 
@@ -705,6 +794,9 @@ export const createTurnController = ({
     changeModel,
     closeAll,
     reject,
+    answerRequest: appRequests.answer,
+    selectMode,
+    modeOf: (threadId: string) => modes.get(threadId),
     isClaudeThread: (threadId: unknown) =>
       typeof threadId === "string" && threadOf(threadId) !== undefined,
     threadOf,
@@ -761,6 +853,8 @@ const isTextItem = (item: unknown): item is { type: "text"; text: string } =>
   typeof item.text === "string";
 
 const INVALID_REQUEST = -32600;
+
+const NO_TURN = "no Claude turn is running to ask the app for approval";
 
 // The SDK documents user_message_uuids as holding at most this many entries.
 const TAKEN_UUIDS_LIMIT = 64;

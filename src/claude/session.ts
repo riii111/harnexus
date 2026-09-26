@@ -2,6 +2,7 @@ import {
   type CanUseTool,
   type McpServerConfig,
   type Options,
+  type PermissionMode,
   query,
   resolveSettings,
   type SDKMessage,
@@ -18,6 +19,7 @@ import {
   openQuery,
   readAccount,
   readSettingsEnv,
+  setQueryPermissionMode,
 } from "../boundary/claude-sdk.ts";
 import {
   checkSettingsEnv,
@@ -34,8 +36,7 @@ export type ClaudeSessionSettings = {
   mcpServers?: Record<string, McpServerConfig>;
   // Tools that run without asking, on top of the user's own allow rules.
   allowedTools?: string[];
-  // The SDK reports no message when canUseTool refuses a tool, so the refusal is passed out here.
-  onToolDeclined?: (toolUseId: string) => void;
+  canUseTool: CanUseTool;
 };
 
 class ClaudeSessionClosed extends TaggedError("ClaudeSessionClosed")<{
@@ -84,9 +85,9 @@ const sessionOptions = (
   env: withoutApiBilling(env),
   settingSources: SETTING_SOURCES,
   systemPrompt: { type: "preset", preset: "claude_code" },
-  // A user's default mode such as bypassPermissions would skip canUseTool, which is the only approval surface so far.
+  // A user's default mode such as bypassPermissions would skip canUseTool, which is how the app approves tools.
   permissionMode: "default",
-  canUseTool: denyToolApproval(settings.onToolDeclined),
+  canUseTool: settings.canUseTool,
   includePartialMessages: true,
   mcpServers: settings.mcpServers ?? {},
   allowedTools: settings.allowedTools ?? [],
@@ -112,6 +113,10 @@ const createSession = (
     },
     interrupt: async () =>
       closed ? Result.err(sessionClosed()) : interruptQuery(claude),
+    setPermissionMode: async (mode: PermissionMode) =>
+      closed
+        ? Result.err(sessionClosed())
+        : setQueryPermissionMode(claude, mode),
     close,
   };
 };
@@ -140,17 +145,6 @@ async function* readMessages(
     close();
   }
 }
-
-// TODO: replace with the approval relay to the app in P9.
-const denyToolApproval =
-  (onDeclined: (toolUseId: string) => void = () => {}): CanUseTool =>
-  async (toolName, _input, { toolUseID }) => {
-    onDeclined(toolUseID);
-    return {
-      behavior: "deny",
-      message: `${toolName} needs approval, and this session cannot ask for it yet`,
-    };
-  };
 
 const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
