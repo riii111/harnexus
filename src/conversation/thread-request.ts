@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
+import { isClaudeModel } from "../infra/claude/models.ts";
 import { isObject } from "../runtime/object.ts";
-import { isClaudeModel } from "./models.ts";
 
 export type Thread = { model: string; cwd: string };
 
