@@ -1132,6 +1132,30 @@ describe("turn/start arriving on a busy thread", () => {
     expect(events).toContainEqual({ event: "claude_turn", step: "queued" });
   });
 
+  test("stops an answered waiting turn before it reaches Claude and leaves the running turn's prompt open", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    const decision = askTool(claude, "Bash", { command: "ls" });
+    const request = await appRequest(sent);
+    turns.startTurn(turnStart(11, "reply"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+
+    turns.interruptTurn(interrupt(21, "turn-2"));
+
+    expect(responseTo(sent, 21)).toEqual({ id: 21, result: {} });
+    expect(resolvedRequests(sent)).toEqual([]);
+    expect(claude.interrupts()).toBe(0);
+    turns.answerRequest({ id: request.id, result: { decision: "accept" } });
+    expect(await decision).toEqual({ behavior: "allow" });
+    claude.emit(sdk(success()));
+    await until(() => turnsCompleted(sent).length === 2);
+    expect(turnsCompleted(sent)).toEqual(["completed", "interrupted"]);
+    await completeTurn(turns, sent, claude, 12);
+    expect(await promptsUntil(claude, 2)).toEqual(["hello", "prompt 12"]);
+  });
+
   test("fails a waiting turn without its thread status once the bridge is closing", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
