@@ -1,5 +1,6 @@
 import {
   type CanUseTool,
+  getSessionInfo,
   type McpServerConfig,
   type Options,
   type PermissionMode,
@@ -17,8 +18,10 @@ import {
   interruptQuery,
   nextMessage,
   openQuery,
+  type ReadSessionInfo,
   readAccount,
   readSettingsEnv,
+  sessionRecordExists,
   setQueryPermissionMode,
 } from "../boundary/claude-sdk.ts";
 import {
@@ -69,6 +72,13 @@ export const startClaudeSession = (
     yield* checked;
     return Result.ok(createSession(claude, prompt));
   });
+
+// Claude keeps a conversation in a file under its config directory, which the user may delete or move to another machine.
+export const claudeSessionExists = (
+  sessionId: string,
+  cwd: string,
+  read: ReadSessionInfo = getSessionInfo,
+) => sessionRecordExists(read, sessionId, cwd);
 
 // Codex instructions and the app's history are never appended to the preset system prompt.
 const sessionOptions = (

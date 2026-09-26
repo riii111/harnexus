@@ -9,8 +9,16 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { failingQuery, fakeClaude } from "../boundary/testing/fake-claude.ts";
-import { type ClaudeSessionSettings, startClaudeSession } from "./session.ts";
+import {
+  failingQuery,
+  failingSessionRead,
+  fakeClaude,
+} from "../boundary/testing/fake-claude.ts";
+import {
+  type ClaudeSessionSettings,
+  claudeSessionExists,
+  startClaudeSession,
+} from "./session.ts";
 
 describe("startClaudeSession options", () => {
   test("loads every settings source with the Claude Code preset in the worktree", async () => {
@@ -411,6 +419,40 @@ describe("startClaudeSession started session", () => {
     expect(switched.isOk()).toBe(true);
     expect(late.isErr() && late.error._tag).toBe("ClaudeSessionClosed");
     expect(claude.modes()).toEqual(["plan"]);
+  });
+});
+
+describe("claudeSessionExists", () => {
+  test.each([
+    { name: "under the thread's directory", saved: { dir: "/work/tree" } },
+    { name: "only under another spelling of it", saved: { dir: undefined } },
+  ])("finds a session saved $name", async ({ saved }) => {
+    const read = async (_id: string, options?: { dir?: string }) =>
+      options?.dir === saved.dir ? { sessionId: "se-1" } : undefined;
+
+    const found = await claudeSessionExists("se-1", "/work/tree", read);
+
+    expect(found.isOk() && found.value).toBe(true);
+  });
+
+  test("reports a session found nowhere as missing", async () => {
+    const found = await claudeSessionExists(
+      "se-1",
+      "/work/tree",
+      async () => undefined,
+    );
+
+    expect(found.isOk() && found.value).toBe(false);
+  });
+
+  test("reports a failed lookup as an error", async () => {
+    const found = await claudeSessionExists(
+      "se-1",
+      "/work/tree",
+      failingSessionRead(new Error("permission denied")),
+    );
+
+    expect(found.isErr() && found.error._tag).toBe("ClaudeSessionLookupFailed");
   });
 });
 

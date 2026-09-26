@@ -10,10 +10,18 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
-import { FileWriteFailed, writeFileAtomic } from "../boundary/fs.ts";
-import { fakeClaude } from "../boundary/testing/fake-claude.ts";
+import {
+  FileRemoveFailed,
+  FileWriteFailed,
+  writeFileAtomic,
+} from "../boundary/fs.ts";
+import {
+  failingSessionRead,
+  fakeClaude,
+} from "../boundary/testing/fake-claude.ts";
 import {
   type ClaudeSessionSettings,
+  claudeSessionExists,
   startClaudeSession,
 } from "../claude/session.ts";
 import { openThreadStore } from "../state/thread-store.ts";
@@ -441,6 +449,162 @@ describe("session ids", () => {
       error: "StatePersistFailed",
     });
     expect(settings[1]).toMatchObject({ resume: "se-1" });
+  });
+});
+
+describe("a thread whose last turn has an unknown outcome", () => {
+  test("runs the message sent after the refusal and clears the unknown state", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    let undecided = true;
+    const { turns, sent, store, events } = await harness([claude], {
+      unsettledWrite: () => undecided,
+    });
+    await completeTurn(turns, sent, claude, 10);
+    await until(() => store.get(THREAD)?.runState === "outcomeUnknown");
+    undecided = false;
+
+    turns.startTurn(turnStart(11, "again"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    await completeTurn(turns, sent, claude, 12);
+    await until(() => store.get(THREAD)?.runState === "idle");
+
+    expect(responseTo(sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
+    expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "outcome_cleared",
+    });
+  });
+
+  test("refuses the first message after a restart without starting Claude, then resumes the conversation", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const before = await harness([first], { unsettledWrite: () => true });
+    await completeTurn(before.turns, before.sent, first, 10);
+    await until(() => before.store.get(THREAD)?.runState === "outcomeUnknown");
+    const second = fakeClaude(SUBSCRIPTION);
+
+    const after = await harness([second]);
+    after.turns.startTurn(turnStart(11, "again"), undefined);
+    await until(() => responseTo(after.sent, 11) !== undefined);
+    const refusedStarted = second.started();
+    await completeTurn(after.turns, after.sent, second, 12);
+
+    expect(responseTo(after.sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
+    expect(refusedStarted).toBe(false);
+    expect(after.settings[0]).toMatchObject({ resume: "se-1" });
+    expect(turnsCompleted(after.sent)).toEqual(["completed"]);
+  });
+
+  test("keeps refusing while the unknown state cannot be cleared", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const before = await harness([first], { unsettledWrite: () => true });
+    await completeTurn(before.turns, before.sent, first, 10);
+    await until(() => before.store.get(THREAD)?.runState === "outcomeUnknown");
+    const second = fakeClaude(SUBSCRIPTION);
+
+    const after = await harness([second], {
+      files: {
+        removeMarker: async (path) =>
+          Result.err(
+            new FileRemoveFailed({ path, cause: null, message: "read-only" }),
+          ),
+      },
+    });
+    after.turns.startTurn(turnStart(11, "again"), undefined);
+    await until(() => responseTo(after.sent, 11) !== undefined);
+    after.turns.startTurn(turnStart(12, "and again"), undefined);
+    await until(() => responseTo(after.sent, 12) !== undefined);
+
+    expect(responseTo(after.sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
+    expect(responseTo(after.sent, 12)?.error).toBeDefined();
+    expect(second.started()).toBe(false);
+    expect(after.store.get(THREAD)?.runState).toBe("outcomeUnknown");
+  });
+});
+
+describe("a saved session Claude no longer has", () => {
+  test("fails the turn without starting Claude and starts a new conversation on the next turn", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const before = await harness([first]);
+    await completeTurn(before.turns, before.sent, first, 10);
+    await until(() => before.store.get(THREAD)?.runState === "idle");
+    const second = fakeClaude(SUBSCRIPTION);
+
+    const after = await harness([second], { missingSessions: ["se-1"] });
+    after.turns.startTurn(turnStart(11, "hello"), undefined);
+    await until(() => turnCompleted(after.sent) !== undefined);
+    const failedStarted = second.started();
+    await until(() => after.store.get(THREAD)?.sessionId === null);
+    await completeTurn(after.turns, after.sent, second, 12);
+
+    expect(turnCompleted(after.sent)).toMatchObject({
+      status: "failed",
+      error: { message: expect.stringContaining("send again") },
+    });
+    expect(failedStarted).toBe(false);
+    expect(after.settings).toHaveLength(1);
+    expect(after.settings[0]?.resume).toBeUndefined();
+    expect(after.events).toContainEqual({
+      event: "claude_turn",
+      step: "session_missing",
+    });
+  });
+
+  test("resumes the saved session when its record cannot be looked up", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const before = await harness([first]);
+    await completeTurn(before.turns, before.sent, first, 10);
+    await until(() => before.store.get(THREAD)?.runState === "idle");
+    const second = fakeClaude(SUBSCRIPTION);
+
+    const after = await harness([second], { sessionLookupFails: true });
+    await completeTurn(after.turns, after.sent, second, 11);
+
+    expect(after.settings[0]).toMatchObject({ resume: "se-1" });
+    expect(turnsCompleted(after.sent)).toEqual(["completed"]);
+  });
+});
+
+describe("keeping the thread on the server's disk", () => {
+  test("asks the server once per thread while the bridge runs", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, materialized } = await harness([claude]);
+
+    await completeTurn(turns, sent, claude, 10);
+    await completeTurn(turns, sent, claude, 11);
+
+    expect(materialized).toEqual([THREAD]);
+  });
+
+  test("asks again at the next turn after a failure and logs it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, materialized, events } = await harness([claude], {
+      materializeFailures: 1,
+    });
+
+    await completeTurn(turns, sent, claude, 10);
+    await settle();
+    await completeTurn(turns, sent, claude, 11);
+
+    expect(materialized).toEqual([THREAD, THREAD]);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "thread_not_materialized",
+      error: "ServerRequestUnanswered",
+    });
+  });
+
+  test("does not ask for a turn refused before it runs", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, materialized } = await harness([claude]);
+
+    turns.startTurn(
+      { id: 10, params: { threadId: THREAD, input: [{ type: "image" }] } },
+      undefined,
+    );
+    await until(() => responseTo(sent, 10) !== undefined);
+
+    expect(materialized).toEqual([]);
   });
 });
 
@@ -1303,7 +1467,7 @@ describe("thread tools", () => {
       event: "claude_turn",
       step: "outcome_unknown",
     });
-    expect(responseTo(sent, 11)?.error.message).toContain("unknown outcome");
+    expect(responseTo(sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
   });
 
   test("stop taking writes when the turn is stopped", async () => {
@@ -1788,6 +1952,9 @@ const harness = async (
     onSend = () => {},
     unsettledWrite = () => false,
     idleSessionMs,
+    missingSessions = [],
+    sessionLookupFails = false,
+    materializeFailures = 0,
   }: {
     adopt?: boolean;
     files?: Parameters<typeof openThreadStore>[1];
@@ -1795,6 +1962,9 @@ const harness = async (
     onSend?: (message: Sent) => void;
     unsettledWrite?: () => boolean;
     idleSessionMs?: number;
+    missingSessions?: string[];
+    sessionLookupFails?: boolean;
+    materializeFailures?: number;
   } = {},
 ) => {
   const opened = await openThreadStore(join(dir, "threads.json"), files);
@@ -1805,9 +1975,25 @@ const harness = async (
   const settings: ClaudeSessionSettings[] = [];
   const links: string[] = [];
   const gates: string[] = [];
+  const materialized: string[] = [];
+  let failuresLeft = materializeFailures;
   let turnCount = 0;
   const turns = createTurnController({
     store,
+    findSession: async (sessionId, cwd) =>
+      sessionLookupFails
+        ? claudeSessionExists(
+            sessionId,
+            cwd,
+            failingSessionRead(new Error("permission denied")),
+          )
+        : Result.ok(!missingSessions.includes(sessionId)),
+    materializeThread: async (threadId) => {
+      materialized.push(threadId);
+      if (failuresLeft === 0) return Result.ok({});
+      failuresLeft -= 1;
+      return Result.err({ _tag: "ServerRequestUnanswered" as const });
+    },
     openLink: (threadId) => {
       links.push(threadId);
       return {
@@ -1843,6 +2029,7 @@ const harness = async (
     settings,
     links,
     gates,
+    materialized,
   };
 };
 
@@ -1899,6 +2086,9 @@ const DUPLICATE = (id: number) => ({
 });
 
 const ALLOWED_TOOLS = ["mcp__codex_link__read_thread"];
+
+const OUTCOME_UNKNOWN =
+  "the previous Claude turn on this thread stopped before it was known whether its message to another thread was sent; check that thread, then send again to continue";
 
 const REFUSED = (id: number) => ({
   id,

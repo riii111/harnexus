@@ -13,6 +13,7 @@ import {
 import { promptFor } from "../claude/permission.ts";
 import type {
   ClaudeSessionSettings,
+  claudeSessionExists,
   startClaudeSession,
 } from "../claude/session.ts";
 import { delegatedMessage } from "../link/delegations.ts";
@@ -33,6 +34,7 @@ import {
   type TurnOutcome,
   type TurnState,
 } from "../render/turn.ts";
+import type { ServerRequest } from "../rpc/server-requests.ts";
 import type { ThreadRecord, ThreadStore } from "../state/thread-store.ts";
 import { createAppRequests } from "./app-requests.ts";
 import {
@@ -56,7 +58,9 @@ export type TurnEvent =
         | "outcome_unknown"
         | "steered"
         | "model_changed"
-        | "idle_closed";
+        | "idle_closed"
+        | "session_missing"
+        | "outcome_cleared";
     }
   | {
       event: "claude_turn";
@@ -73,6 +77,11 @@ export type TurnEvent =
   | { event: "claude_turn"; step: "interrupt_failed"; error: InterruptTag }
   | {
       event: "claude_turn";
+      step: "thread_not_materialized";
+      error: ErrorTag<ReturnType<ServerRequest>>;
+    }
+  | {
+      event: "claude_turn";
       step: "session_not_saved" | "model_not_saved" | "run_state_not_saved";
       error: StoreTag;
     };
@@ -82,6 +91,15 @@ type SessionStart = Awaited<ReturnType<typeof startClaudeSession>>;
 type ClaudeSession = InferOk<SessionStart>;
 
 type StartSession = (settings: ClaudeSessionSettings) => Promise<SessionStart>;
+
+type FindSession = (
+  sessionId: string,
+  cwd: string,
+) => ReturnType<typeof claudeSessionExists>;
+
+type MaterializeThread = (
+  threadId: string,
+) => Promise<Result<unknown, { _tag: ErrorTag<ReturnType<ServerRequest>> }>>;
 
 type CodexLink = Pick<
   ReturnType<typeof createCodexLink>,
@@ -107,6 +125,7 @@ type FailureTag =
   | InterruptTag
   | BridgeClosing["_tag"]
   | StreamEnded["_tag"]
+  | SessionMissing["_tag"]
   | "SteerUnconfirmed";
 
 // runWrite is generic in the operation's error, so the store's own tags are listed; a new tag there fails to compile here.
@@ -167,10 +186,16 @@ class LinkWriteUnsettled extends TaggedError("LinkWriteUnsettled")<{
   message: string;
 }> {}
 
+class SessionMissing extends TaggedError("SessionMissing")<{
+  message: string;
+}> {}
+
 // A thread keeps one Claude session across turns; a session that fails is dropped and the next turn resumes it from the stored session id.
 export const createTurnController = ({
   store,
   startSession,
+  findSession,
+  materializeThread,
   openLink,
   send,
   log,
@@ -180,6 +205,8 @@ export const createTurnController = ({
 }: {
   store: ThreadStore;
   startSession: StartSession;
+  findSession: FindSession;
+  materializeThread: MaterializeThread;
   openLink: (threadId: string) => CodexLink;
   send: (message: object) => void;
   log: (event: TurnEvent) => void;
@@ -191,8 +218,8 @@ export const createTurnController = ({
   const adopted = new Map<string, Thread>();
   const sessions = new Map<string, SessionSlot>();
   const activeTurns = new Map<string, ActiveTurn>();
-  // A session id or model the store failed to save still applies while the bridge runs.
-  const sessionIds = new Map<string, string>();
+  // A session id or model the store failed to save still applies while the bridge runs; a null session id is one Claude lost.
+  const sessionIds = new Map<string, string | null>();
   const models = new Map<string, string>();
   // Message ids accepted but not yet saved, so a copy arriving while the first waits or runs is caught too.
   const acceptedMessageIds = new Map<string, Set<string>>();
@@ -200,6 +227,10 @@ export const createTurnController = ({
   // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
   const modes = new Map<string, Mode>();
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Threads the server was asked to keep on disk while this bridge runs; one note per run is enough, and a failed request is retried at the next turn.
+  const materialized = new Set<string>();
+  // Threads whose unknown outcome the user was told of, so their next message is taken as the decision to continue.
+  const warnedUnknown = new Set<string>();
   const appRequests = createAppRequests({ send, now });
   let closed = false;
 
@@ -285,11 +316,7 @@ export const createTurnController = ({
       idleTimers.delete(threadId);
       const slot = sessions.get(threadId);
       if (slot === undefined) return;
-      if (
-        (sessionIds.get(threadId) ?? store.get(threadId)?.sessionId) == null
-      ) {
-        return;
-      }
+      if (sessionIdOf(threadId) == null) return;
       dropSession(threadId, slot);
       log({ event: "claude_turn", step: "idle_closed" });
     }, idleSessionMs);
@@ -450,6 +477,16 @@ export const createTurnController = ({
         saveModel(threadId, picked);
       }
     }
+    if (warnedUnknown.has(threadId)) {
+      const cleared = await store.resolveOutcomeUnknown(threadId);
+      if (cleared.isErr()) {
+        forgetMessage(threadId, messageId);
+        refuseTurn(request, queued, "thread_busy", cleared.error);
+        return;
+      }
+      warnedUnknown.delete(threadId);
+      log({ event: "claude_turn", step: "outcome_cleared" });
+    }
     let responded = false;
     const ran = await store.runWrite(
       threadId,
@@ -467,6 +504,7 @@ export const createTurnController = ({
           return Result.ok();
         }
         responded = true;
+        materialize(threadId);
         const active: ActiveTurn = {
           threadId,
           state: null,
@@ -504,7 +542,13 @@ export const createTurnController = ({
     }
     if (!responded) {
       forgetMessage(threadId, messageId);
-      // The store's message says why, such as an earlier turn whose outcome is unknown.
+      // Re-running could repeat a write that already landed, so the user decides by sending again after being told.
+      if (ran.error._tag === "WriteOutcomeUnknown") {
+        warnedUnknown.add(threadId);
+        refuseTurn(request, queued, "outcome_unknown", ran.error);
+        return;
+      }
+      // The store's message says why.
       refuseTurn(request, queued, "thread_busy", ran.error, ran.error.message);
       return;
     }
@@ -512,6 +556,20 @@ export const createTurnController = ({
       event: "claude_turn",
       step: "run_state_not_saved",
       error: ran.error._tag,
+    });
+  };
+
+  const materialize = (threadId: string) => {
+    if (materialized.has(threadId)) return;
+    materialized.add(threadId);
+    void materializeThread(threadId).then((done) => {
+      if (done.isOk()) return;
+      materialized.delete(threadId);
+      log({
+        event: "claude_turn",
+        step: "thread_not_materialized",
+        error: done.error._tag,
+      });
     });
   };
 
@@ -644,7 +702,7 @@ export const createTurnController = ({
         return;
       }
     }
-    let sessionId = sessionIds.get(threadId) ?? record.sessionId;
+    let sessionId = sessionIdOf(threadId);
     while (active.state !== null && !active.state.finished) {
       const next = await slot.value.session.messages.next();
       const received =
@@ -737,7 +795,9 @@ export const createTurnController = ({
   const sessionFor = async (
     record: ThreadRecord,
     model: string,
-  ): Promise<Result<SessionSlot, InferErr<SessionStart> | BridgeClosing>> => {
+  ): Promise<
+    Result<SessionSlot, InferErr<SessionStart> | BridgeClosing | SessionMissing>
+  > => {
     const existing = sessions.get(record.threadId);
     if (existing?.model === model) return Result.ok(existing);
     if (existing !== undefined) dropSession(record.threadId, existing);
@@ -746,13 +806,22 @@ export const createTurnController = ({
         new BridgeClosing({ message: refusalMessage("bridge_closing") }),
       );
     }
+    const resume = sessionIdOf(record.threadId);
+    if (resume !== null && !(await sessionFound(resume, record.worktree))) {
+      forgetSession(record.threadId);
+      return Result.err(
+        new SessionMissing({
+          message:
+            "Claude's record of this conversation is gone, so it cannot continue; send again to start a new Claude conversation in this thread",
+        }),
+      );
+    }
     // Each session gets its own thread tool server, since one server instance serves one Claude process.
     const link = openLink(record.threadId);
-    // TODO: clear a stored session id that Claude can no longer resume in P11a, which decides how a missing session is shown; until then every turn of that thread fails the same way.
     const started = await startSession({
       cwd: record.worktree,
       model,
-      ...resumeFrom(sessionIds.get(record.threadId) ?? record.sessionId),
+      ...resumeFrom(resume),
       mcpServers: { [link.server.name]: link.server },
       allowedTools: link.allowedTools,
       canUseTool: approveTool(record.threadId),
@@ -773,6 +842,32 @@ export const createTurnController = ({
     };
     sessions.set(record.threadId, slot);
     return Result.ok(slot);
+  };
+
+  const sessionIdOf = (threadId: string) =>
+    sessionIds.has(threadId)
+      ? (sessionIds.get(threadId) ?? null)
+      : (store.get(threadId)?.sessionId ?? null);
+
+  // A record that cannot be looked up is left for Claude to resume, which reports its own failure.
+  const sessionFound = async (sessionId: string, cwd: string) => {
+    const found = await findSession(sessionId, cwd);
+    return found.isErr() || found.value;
+  };
+
+  // The loss is reported on this turn, so the next one starts a new conversation instead of failing the same way.
+  const forgetSession = (threadId: string) => {
+    sessionIds.set(threadId, null);
+    log({ event: "claude_turn", step: "session_missing" });
+    void store.setSessionId(threadId, null).then((saved) => {
+      if (saved.isErr()) {
+        log({
+          event: "claude_turn",
+          step: "session_not_saved",
+          error: saved.error._tag,
+        });
+      }
+    });
   };
 
   // The SDK reports no message when a call is refused here, so the refusal is recorded on the turn to show its item as declined.
@@ -953,6 +1048,8 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
     case "steered":
     case "model_changed":
     case "idle_closed":
+    case "session_missing":
+    case "outcome_cleared":
       return { event: entry.event, step: entry.step };
     case "finished":
       return {
@@ -969,6 +1066,7 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
         error: entry.error,
       };
     case "interrupt_failed":
+    case "thread_not_materialized":
     case "session_not_saved":
     case "model_not_saved":
     case "run_state_not_saved":
