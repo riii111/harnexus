@@ -467,5 +467,5 @@ const CREATE_TARGET = z
     z.strictObject({ type: z.string(), projectId: z.string() }),
   ])
   .describe(
-    "Where the thread runs: a project with an environment ({ type, projectId, environment: { type } or { type, startingState } }), a directory ({ type, directoryName }), or a project ({ type, projectId }). To run a reviewer in a project's worktree, give the environment. Use list_projects for project ids; if the app rejects a type value, its error lists the accepted ones.",
+    'Where the thread runs. Use a project with an environment: { type: "project", projectId, environment: { type: "local" } } runs the reviewer in the project\'s checkout, and { type: "project", projectId, environment: { type: "worktree", startingState: { type: "branch", branchName } } } runs it in a new worktree. Always include environment: the app rejects { type: "project", projectId } without one as invalid arguments. The app also defines a directory form ({ type, directoryName }). Use list_projects for project ids; if the app rejects a type value, its error lists the accepted ones.',
   );
