@@ -49,7 +49,7 @@ class DirectoryPrepareFailed extends TaggedError("DirectoryPrepareFailed")<{
 }> {}
 
 // The open mode applies only to a new file, so an existing one is narrowed too; a failed write is dropped because logging must never stop the relay.
-export const openAppendSink = (path: string) =>
+export const openLogSink = (path: string) =>
   Result.try({
     try: () => {
       const fd = openSync(path, "a", OWNER_ONLY);
