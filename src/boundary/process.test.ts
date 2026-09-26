@@ -6,7 +6,8 @@ describe("signalProcess", () => {
     const child = Bun.spawn(["/usr/bin/true"]);
     await child.exited;
 
-    const sent = signalProcess(child.pid, "SIGTERM");
+    // SIGURG is ignored by default, so a process that reused the pid is left unharmed.
+    const sent = signalProcess(child.pid, "SIGURG");
 
     expect(sent.isErr() && sent.error.code).toBe("ESRCH");
   });
