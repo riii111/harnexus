@@ -18,12 +18,15 @@ export const fakeClaude = (
   account: AccountInfo | Error,
   {
     interruptError,
+    interruptAnswered,
     stillQueued,
     closeEnding = { done: true, value: undefined },
     settingsEnv = {},
     env = { PATH: "/usr/bin" },
   }: {
     interruptError?: Error;
+    // Holds the interrupt receipt back, as the CLI may send it after the turn's result.
+    interruptAnswered?: Promise<void>;
     stillQueued?: string[];
     closeEnding?: Delivery;
     settingsEnv?: Record<string, string> | Error;
@@ -54,6 +57,7 @@ export const fakeClaude = (
     },
     interrupt: async () => {
       interrupts += 1;
+      await interruptAnswered;
       if (interruptError !== undefined) throw interruptError;
       return stillQueued === undefined
         ? undefined

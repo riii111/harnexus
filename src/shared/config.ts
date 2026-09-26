@@ -28,7 +28,7 @@ export const loadLogPath = (env: Record<string, string | undefined>) => {
   return Result.ok(path);
 };
 
-export const STATE_PATH_ENV = "HARNEXUS_STATE_PATH";
+const STATE_PATH_ENV = "HARNEXUS_STATE_PATH";
 
 export const loadStatePath = (
   env: Record<string, string | undefined>,

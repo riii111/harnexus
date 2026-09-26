@@ -213,6 +213,33 @@ describe("turn/interrupt", () => {
     expect(claude.closes()).toBe(1);
   });
 
+  test("waits for a late interrupt receipt before the next turn reuses the session", async () => {
+    const first = fakeClaude(SUBSCRIPTION, {
+      stillQueued: ["uuid-queued"],
+      interruptAnswered: gate.promise,
+    });
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings } = await harness([first, second]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => first.started());
+    first.emit(sdk(answer("msg-1", "partial")));
+    turns.interruptTurn(interrupt(20, "turn-1"));
+    first.emit(
+      sdk(result({ subtype: "error_during_execution", is_error: true })),
+    );
+    await until(() => turnCompleted(sent) !== undefined);
+    turns.startTurn(turnStart(11, "again"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    expect(settings).toHaveLength(1);
+    gate.open();
+    await until(() => second.started());
+
+    expect(turnCompleted(sent)).toMatchObject({ status: "interrupted" });
+    expect(first.closes()).toBe(1);
+    expect(settings[1]).toMatchObject({ resume: "se-1" });
+  });
+
   test("keeps an interrupt accepted while Claude was starting", async () => {
     const claude = fakeClaude({ apiProvider: "bedrock" });
     let start = () => {};
@@ -373,6 +400,20 @@ const diskFull = async (target: string) =>
       message: `cannot write ${target}`,
     }),
   );
+
+const createGate = () => {
+  let open = () => {};
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+};
+
+let gate = createGate();
+
+beforeEach(() => {
+  gate = createGate();
+});
 
 const THREAD = "th-fixture-1";
 const MODEL = "claude-sonnet-5";

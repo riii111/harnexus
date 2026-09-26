@@ -5,32 +5,43 @@ import type { AppRequest } from "../turn/controller.ts";
 import { createRouter, type RouteEvent } from "./route.ts";
 
 describe("Codex threads", () => {
-  test("pass every fixture line unchanged except the model list response", () => {
+  // The lines of one session are replayed in order, so the loop inside is a scenario rather than a table.
+  test.each<{ file: string; expected: number[] }>([
+    { file: "handshake.jsonl", expected: [2] },
+    { file: "turn-with-tools.jsonl", expected: [] },
+    { file: "steer-and-interrupt.jsonl", expected: [] },
+    { file: "turn-failed-with-edits.jsonl", expected: [] },
+  ])("pass $file unchanged except the ids $expected of model list responses", ({
+    file,
+    expected,
+  }) => {
     const { router } = setup();
-    const changed: string[] = [];
+    const changed: unknown[] = [];
 
-    for (const file of FIXTURES) {
-      for (const { direction, line } of fixtureLines(file)) {
-        const routed =
-          direction === "app_to_server"
-            ? router.fromApp(line)
-            : router.fromServer(line);
-        if (routed === null || !routed.equals(line)) {
-          changed.push(`${file} ${JSON.parse(line.toString()).id}`);
-        }
+    for (const { direction, line } of fixtureLines(file)) {
+      const routed =
+        direction === "app_to_server"
+          ? router.fromApp(line)
+          : router.fromServer(line);
+      if (routed === null || !routed.equals(line)) {
+        changed.push(JSON.parse(line.toString()).id);
       }
     }
 
-    expect(changed).toEqual(["handshake.jsonl 2"]);
+    expect(changed).toEqual(expected);
   });
 
-  test("leave turn requests of a Codex thread to the server", () => {
+  test.each([
+    { method: "turn/start" },
+    { method: "turn/interrupt" },
+    { method: "turn/steer" },
+    { method: "review/start" },
+    { method: "thread/compact/start" },
+  ])("leave $method of a Codex thread to the server", ({ method }) => {
     const { router, calls } = setup();
+    const line = encode({ id: 5, method, params: { threadId: "codex" } });
 
-    for (const method of ["turn/start", "turn/interrupt", "turn/steer"]) {
-      const line = encode({ id: 5, method, params: { threadId: "codex" } });
-      expect(router.fromApp(line)).toEqual(line);
-    }
+    expect(router.fromApp(line)).toEqual(line);
     expect(calls).toEqual([]);
   });
 });
@@ -127,26 +138,48 @@ describe("threads with a Claude model", () => {
     expect(out.result.model).toBe(CLAUDE);
   });
 
-  test("hands turn requests of a Claude thread to the turn controller", () => {
+  test.each([
+    { method: "turn/start", expected: "startTurn" },
+    { method: "turn/interrupt", expected: "interruptTurn" },
+    { method: "turn/steer", expected: "refuse" },
+    { method: "review/start", expected: "refuse" },
+    { method: "thread/compact/start", expected: "refuse" },
+  ])("hands $method of a Claude thread to $expected instead of the server", ({
+    method,
+    expected,
+  }) => {
     const { router, calls } = setup(["th-claude"]);
+    const line = encode({ id: 6, method, params: { threadId: "th-claude" } });
 
-    for (const method of [
-      "turn/start",
-      "turn/interrupt",
-      "turn/steer",
-      "review/start",
-      "thread/compact/start",
-    ]) {
-      const line = encode({ id: 6, method, params: { threadId: "th-claude" } });
-      expect(router.fromApp(line)).toBeNull();
-    }
-    expect(calls.map(([name]) => name)).toEqual([
-      "startTurn",
-      "interruptTurn",
-      "refuse",
-      "refuse",
-      "refuse",
-    ]);
+    expect(router.fromApp(line)).toBeNull();
+    expect(calls.map(([name]) => name)).toEqual([expected]);
+  });
+
+  test.each([
+    { name: "another model", change: { model: "claude-opus-5-5" } },
+    { name: "another working directory", change: { cwd: "/elsewhere" } },
+  ])("refuses a resume of a Claude thread with $name", ({ change }) => {
+    const { router, calls } = setup(["th-claude"]);
+    const line = encode({
+      id: 4,
+      method: "thread/resume",
+      params: { threadId: "th-claude", ...change },
+    });
+
+    expect(router.fromApp(line)).toBeNull();
+    expect(calls.map(([name]) => name)).toEqual(["refuse"]);
+  });
+
+  test("forwards a resume of a Claude thread in its own directory", () => {
+    const { router, calls } = setup(["th-claude"]);
+    const line = encode({
+      id: 4,
+      method: "thread/resume",
+      params: { threadId: "th-claude", cwd: "/fixture/work/" },
+    });
+
+    expect(router.fromApp(line)).toEqual(line);
+    expect(calls).toEqual([]);
   });
 
   test("reads the model of a turn from its collaboration mode first", () => {
@@ -321,13 +354,6 @@ const settingsUpdate = (change: object) =>
     method: "thread/settings/update",
     params: { threadId: "th-claude", ...change },
   });
-
-const FIXTURES = [
-  "handshake.jsonl",
-  "turn-with-tools.jsonl",
-  "steer-and-interrupt.jsonl",
-  "turn-failed-with-edits.jsonl",
-];
 
 const setup = (claudeThreads: string[] = []) => {
   const calls: unknown[][] = [];

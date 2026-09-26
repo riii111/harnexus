@@ -82,12 +82,19 @@ export const createRouter = (
     }
   };
 
-  // The server creates the thread on its default model, so a Claude model never reaches it.
+  // The server creates the thread on its default model, so a Claude model never reaches it; a resume that would move a Claude thread is refused, since Claude keeps running where the thread started.
   const routeThreadOpen = (
     line: Buffer,
     message: Record<string, unknown>,
-    { id, params }: AppRequest,
+    request: AppRequest,
   ) => {
+    const { id, params } = request;
+    const refusal =
+      message.method === "thread/resume" ? resumeRefusal(params) : null;
+    if (refusal !== null) {
+      turns.refuse(request, refusal);
+      return null;
+    }
     const created =
       message.method === "thread/start" && isClaudeModel(params.model);
     pending.set(id, {
@@ -97,6 +104,25 @@ export const createRouter = (
     if (!isClaudeModel(params.model)) return line;
     const { model: _model, ...rest } = params;
     return encode({ ...message, params: rest });
+  };
+
+  // TODO: accept a model or directory change on resume in P10, together with the same change through turn/start.
+  const resumeRefusal = (params: Record<string, unknown>) => {
+    const known =
+      typeof params.threadId === "string"
+        ? turns.threadOf(params.threadId)
+        : undefined;
+    if (known === undefined) return null;
+    if (typeof params.model === "string" && params.model !== known.model) {
+      return "changing the model of a Claude thread is not supported yet";
+    }
+    if (
+      typeof params.cwd === "string" &&
+      !isSameDirectory(params.cwd, known.cwd)
+    ) {
+      return "changing the working directory of a Claude thread is not supported yet";
+    }
+    return null;
   };
 
   // Settings that do not reach Claude, such as the approval policy, still go to the server; only what Claude would have to follow is checked.
