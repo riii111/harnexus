@@ -27,11 +27,12 @@ describe("createDelegationWatch", () => {
     expect(await second.wait(20)).toBeNull();
   });
 
-  test("keeps a thread seen before anyone waits from answering a later create_thread", async () => {
+  test("keeps a thread seen before anyone waits from answering a later create_thread when its turn comes again", async () => {
     const watch = createDelegationWatch();
-
     watch.observe("th-claude", "th-unrelated");
     const waiting = watch.expect("th-claude");
+
+    watch.observe("th-claude", "th-unrelated");
 
     expect(await waiting.wait(20)).toBeNull();
   });

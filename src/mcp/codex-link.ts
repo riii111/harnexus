@@ -43,6 +43,8 @@ export const createCodexLink = ({
   let writesInFlight = 0;
   // Bumped when the turn that queued writes stops, since the SDK's cancel notice never reaches a tool handler's signal.
   let generation = 0;
+  // Set from the stop until the next turn sends, so a call that reaches the server late for a stopped turn is not sent either.
+  let stopped = false;
 
   const callApp = async (
     name: AppTool,
@@ -80,11 +82,11 @@ export const createCodexLink = ({
     args: Record<string, unknown>,
     targets: readonly string[],
     {
-      queuedIn = generation,
+      queuedIn = currentGeneration(),
       onSuccess = async (result) => result,
       beforeSend = () => {},
     }: {
-      queuedIn?: number;
+      queuedIn?: number | null;
       onSuccess?: (result: ToolResult) => Promise<ToolResult>;
       beforeSend?: () => void;
     } = {},
@@ -120,11 +122,13 @@ export const createCodexLink = ({
       }
     });
 
+  const currentGeneration = () => (stopped ? null : generation);
+
   // Without a model the app would give the reviewer this thread's Claude model, and the bridge would then run the reviewer as Claude.
   const createThread = async (
     args: Record<string, unknown> & { model?: string | undefined },
   ) => {
-    const queuedIn = generation;
+    const queuedIn = currentGeneration();
     const model = await reviewerModel(args.model);
     if ("refusal" in model) return failure(model.refusal);
     if (queuedIn !== generation) return notSentAfterStop("create_thread");
@@ -314,8 +318,12 @@ export const createCodexLink = ({
     ),
     // A turn that ends while a write is still waiting for its answer cannot know the outcome either, so both count; the turn runner turns this into the thread's outcome-unknown state so a restart does not repeat the turn.
     hasUnsettledWrite: () => unknownWrite !== null || writesInFlight > 0,
-    cancelQueuedWrites: () => {
+    stopWrites: () => {
       generation += 1;
+      stopped = true;
+    },
+    acceptWrites: () => {
+      stopped = false;
     },
   };
 };

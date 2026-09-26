@@ -646,26 +646,29 @@ describe("thread tools", () => {
     expect(responseTo(sent, 11)?.error.message).toContain("unknown outcome");
   });
 
-  test("cancel their queued writes when the turn is stopped", async () => {
+  test("stop taking writes when the turn is stopped", async () => {
     const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
-    const { turns, cancels } = await harness([claude]);
+    const { turns, gates } = await harness([claude]);
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => claude.started());
-    expect(cancels()).toBe(0);
+    expect(gates).toEqual(["accept"]);
 
     turns.interruptTurn(interrupt(20, "turn-1"));
 
-    expect(cancels()).toBe(1);
+    expect(gates).toEqual(["accept", "stop"]);
   });
 
-  test("cancel their queued writes when the turn finishes", async () => {
+  test("stop taking writes when a turn finishes and take them again for the next turn", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, store, cancels } = await harness([claude]);
+    const { turns, sent, store, gates } = await harness([claude]);
 
     await completeTurn(turns, sent, claude, 10);
     await until(() => store.get(THREAD)?.runState === "idle");
+    expect(gates).toEqual(["accept", "stop"]);
+    await completeTurn(turns, sent, claude, 11);
+    await until(() => gates.length === 4);
 
-    expect(cancels()).toBe(1);
+    expect(gates).toEqual(["accept", "stop", "accept", "stop"]);
   });
 
   test("clear the run state after a turn whose writes were all decided", async () => {
@@ -779,7 +782,7 @@ const harness = async (
   const events: TurnEvent[] = [];
   const settings: ClaudeSessionSettings[] = [];
   const links: string[] = [];
-  let cancels = 0;
+  const gates: string[] = [];
   let turnCount = 0;
   const turns = createTurnController({
     store,
@@ -789,9 +792,8 @@ const harness = async (
         server: createSdkMcpServer({ name: "codex_link", tools: [] }),
         allowedTools: ALLOWED_TOOLS,
         hasUnsettledWrite: unsettledWrite,
-        cancelQueuedWrites: () => {
-          cancels += 1;
-        },
+        stopWrites: () => gates.push("stop"),
+        acceptWrites: () => gates.push("accept"),
       };
     },
     send: (message) => {
@@ -817,7 +819,7 @@ const harness = async (
     store,
     settings,
     links,
-    cancels: () => cancels,
+    gates,
   };
 };
 

@@ -62,7 +62,11 @@ type StartSession = (settings: ClaudeSessionSettings) => Promise<SessionStart>;
 
 type CodexLink = Pick<
   ReturnType<typeof createCodexLink>,
-  "server" | "allowedTools" | "hasUnsettledWrite" | "cancelQueuedWrites"
+  | "server"
+  | "allowedTools"
+  | "hasUnsettledWrite"
+  | "stopWrites"
+  | "acceptWrites"
 >;
 
 type ErrorTag<R> = InferErr<Awaited<R>> extends { _tag: infer T } ? T : never;
@@ -205,7 +209,7 @@ export const createTurnController = ({
     active.state = markInterrupting(active.state);
     send({ id, result: {} });
     const slot = sessions.get(threadId);
-    slot?.link.cancelQueuedWrites();
+    slot?.link.stopWrites();
     if (slot === undefined || repeated || slot.pendingInterrupt !== null) {
       return;
     }
@@ -286,7 +290,7 @@ export const createTurnController = ({
         activeTurns.set(threadId, active);
         await streamTurn(requestId, record, active, input, messageId);
         release(active);
-        active.link?.cancelQueuedWrites();
+        active.link?.stopWrites();
         return active.link?.hasUnsettledWrite()
           ? Result.err(
               new LinkWriteUnsettled({
@@ -376,6 +380,7 @@ export const createTurnController = ({
       finish(active, { status: "interrupted" }, null);
       return;
     }
+    slot.value.link.acceptWrites();
     const sent = slot.value.session.send(input.text);
     if (sent.isErr()) {
       dropSession(threadId, slot.value);

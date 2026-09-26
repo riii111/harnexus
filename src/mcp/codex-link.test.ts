@@ -540,7 +540,7 @@ describe("createCodexLink write outcomes", () => {
     const second = send(client);
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    link.cancelQueuedWrites();
+    link.stopWrites();
     release(Result.ok(textAnswer("sent")));
     await first;
 
@@ -549,15 +549,19 @@ describe("createCodexLink write outcomes", () => {
     expect(link.hasUnsettledWrite()).toBe(false);
   });
 
-  test("still sends a write made after the stop", async () => {
+  test("refuses a write that arrives after the stop until writes are accepted again", async () => {
     const { client, link, requests } = await connect({
       reviewers: { [CALLER]: [REVIEWER] },
     });
 
-    link.cancelQueuedWrites();
-    const sent = await send(client);
+    link.stopWrites();
+    const late = await send(client);
+    expect(text(late)).toContain("stopped");
+    expect(requests).toHaveLength(0);
+    link.acceptWrites();
+    const next = await send(client);
 
-    expect(sent.isError).toBeFalsy();
+    expect(next.isError).toBeFalsy();
     expect(requests).toHaveLength(1);
   });
 

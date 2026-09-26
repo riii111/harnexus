@@ -3,18 +3,17 @@ export type DelegationWatch = ReturnType<typeof createDelegationWatch>;
 // The app answers create_thread with a provisional id only; the real thread id first appears in the turn/start the app sends to the new thread, whose tool output names the thread that asked for it.
 export const createDelegationWatch = () => {
   const waiters = new Map<string, ((threadId: string) => void)[]>();
-  // Threads already matched to a create_thread, so their late or repeated first turn never answers a later one.
+  // Every thread seen or named by an answer, so its late or repeated first turn never answers a later create_thread.
   const claimed = new Set<string>();
 
   // A thread created from anywhere but a pending create_thread of a Claude thread is ignored, so it can never become someone's reviewer.
   const observe = (sourceThreadId: string, threadId: string) => {
     if (claimed.has(threadId)) return;
+    claimed.add(threadId);
     const queue = waiters.get(sourceThreadId);
     const next = queue?.shift();
     if (queue?.length === 0) waiters.delete(sourceThreadId);
-    if (next === undefined) return;
-    claimed.add(threadId);
-    next(threadId);
+    next?.(threadId);
   };
 
   // Registered before create_thread is sent, since the new thread's turn/start can arrive before the tool answer.
