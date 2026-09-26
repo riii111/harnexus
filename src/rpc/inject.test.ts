@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { type PassThrough, Writable } from "node:stream";
-import { createLineInjector, createOwnResponseFilter } from "./inject.ts";
+import { Writable } from "node:stream";
+import { createLineInjector } from "./inject.ts";
 
 describe("createLineInjector", () => {
   test("writes an injected line at once on a line boundary", async () => {
@@ -26,6 +26,16 @@ describe("createLineInjector", () => {
     expect(target.text()).toBe(
       "app 1 first half second half\nown\napp 2 start\n",
     );
+  });
+
+  test("completes an empty write only after injected lines reach a slow target", async () => {
+    const target = sink(10);
+    const injector = createLineInjector(target.stream);
+
+    injector.inject("own\n");
+    await write(injector.stream, "");
+
+    expect(target.text()).toBe("own\n");
   });
 
   test("ends the target when the app ends", async () => {
@@ -60,31 +70,16 @@ describe("createLineInjector", () => {
   });
 });
 
-describe("createOwnResponseFilter", () => {
-  test("drops own lines split across chunks and keeps every other byte", async () => {
-    const own: string[] = [];
-    const filter = createOwnResponseFilter(
-      (line) => line.includes("OWN"),
-      (line) => own.push(line.toString()),
-    );
-    const output = collect(filter);
-
-    filter.write("keep 1\nO");
-    filter.write("WN reply\nkeep 2\npar");
-    filter.end("tial");
-    const text = await output;
-
-    expect(text).toBe("keep 1\nkeep 2\npartial");
-    expect(own).toEqual(["OWN reply\n"]);
-  });
-});
-
-const sink = () => {
+const sink = (delayMs = 0) => {
   const chunks: Buffer[] = [];
   const stream = new Writable({
     write(chunk, _encoding, callback) {
-      chunks.push(Buffer.from(chunk));
-      callback();
+      const store = () => {
+        chunks.push(Buffer.from(chunk));
+        callback();
+      };
+      if (delayMs === 0) store();
+      else setTimeout(store, delayMs);
     },
   });
   return { stream, text: () => Buffer.concat(chunks).toString() };
@@ -92,9 +87,3 @@ const sink = () => {
 
 const write = (stream: Writable, text: string) =>
   new Promise<void>((resolve) => stream.write(text, () => resolve()));
-
-const collect = async (stream: PassThrough | NodeJS.ReadableStream) => {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks).toString();
-};

@@ -164,6 +164,59 @@ describe("app-server", () => {
   );
 
   test(
+    "answers a Claude turn itself and relays the other lines to Codex",
+    async () => {
+      const { env } = setup();
+      const claudeTurn = JSON.stringify({
+        id: 1,
+        method: "turn/start",
+        params: {
+          threadId: "th-unknown",
+          model: "claude-sonnet-5",
+          input: [{ type: "text", text: "hello" }],
+        },
+      });
+      const codexLine = JSON.stringify({ id: 2, method: "fixture/ping" });
+
+      const proc = launch(["app-server"], env, {
+        stdin: `${claudeTurn}\n${codexLine}\n`,
+      });
+      const result = await finish(proc);
+      const lines = result.stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+
+      expect(lines).toContainEqual(JSON.parse(codexLine));
+      expect(lines).toContainEqual({
+        id: 1,
+        error: { code: -32600, message: expect.any(String) },
+      });
+      expect(result.stdout).not.toContain("turn/start");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "relays everything without Claude when the state path is unusable",
+    async () => {
+      const { env } = setup({ HARNEXUS_STATE_PATH: "threads.json" });
+      const claudeTurn = `${JSON.stringify({
+        id: 1,
+        method: "turn/start",
+        params: { threadId: "t", model: "claude-sonnet-5" },
+      })}\n`;
+
+      const proc = launch(["app-server"], env, { stdin: claudeTurn });
+      const result = await finish(proc);
+
+      expect(result.stdout).toBe(claudeTurn);
+      expect(result.stderr).toContain('"reason":"StatePathNotAbsolute"');
+    },
+    TIMEOUT,
+  );
+
+  test(
     "also appends the log to HARNEXUS_LOG_PATH, readable only by the owner",
     async () => {
       const logPath = join(dir, "owner-only.log");
@@ -478,6 +531,7 @@ const setup = (overrides: Record<string, string | undefined> = {}) => {
     PATH: "/usr/bin:/bin",
     HARNEXUS_CODEX_PATH: fakeCodex,
     HARNEXUS_BUN_PATH: BUN,
+    HARNEXUS_STATE_PATH: join(dir, `threads-${reports}.json`),
     FAKE_CODEX_REPORT: reportPath,
     ...overrides,
   });
