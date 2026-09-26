@@ -21,7 +21,9 @@ type Turns = {
   isClaudeThread: (threadId: unknown) => boolean;
   threadOf: (threadId: string) => Thread | undefined;
   adopt: (threadId: string, thread: Thread) => void;
+  changeModel: (threadId: string, model: string) => void;
   startTurn: (request: AppRequest, fallbackCwd: string | undefined) => void;
+  steerTurn: (request: AppRequest) => void;
   interruptTurn: (request: AppRequest) => void;
   reject: (request: AppRequest, message: string) => void;
   answerRequest: (response: Record<string, unknown>) => boolean;
@@ -74,14 +76,16 @@ export const createRouter = (
         }
         turns.startTurn(request, cwdOf(params));
         return null;
+      case "turn/steer":
+        if (!turns.isClaudeThread(params.threadId)) return line;
+        turns.steerTurn(request);
+        return null;
       case "turn/interrupt":
         if (!turns.isClaudeThread(params.threadId)) return line;
         turns.interruptTurn(request);
         return null;
       case "thread/settings/update":
         return routeSettingsUpdate(line, message, request);
-      // TODO: pass steers into the running Claude turn in P10.
-      case "turn/steer":
       // The server would run these on its own model with none of the Claude conversation.
       case "review/start":
       case "thread/compact/start":
@@ -108,15 +112,19 @@ export const createRouter = (
     request: AppRequest,
   ) => {
     const { id, params } = request;
-    const known =
+    const threadId =
       message.method === "thread/resume" && typeof params.threadId === "string"
-        ? turns.threadOf(params.threadId)
+        ? params.threadId
         : undefined;
-    if (known !== undefined) {
+    const known = threadId === undefined ? undefined : turns.threadOf(threadId);
+    if (threadId !== undefined && known !== undefined) {
       const checked = checkThread(params, known, undefined);
       if ("refusal" in checked) {
         refuse("thread/resume", request, checked.refusal);
         return null;
+      }
+      if (checked.thread.model !== known.model) {
+        turns.changeModel(threadId, checked.thread.model);
       }
     }
     const created =
@@ -149,6 +157,9 @@ export const createRouter = (
       return null;
     }
     if (known === undefined) turns.adopt(threadId, checked.thread);
+    else if (checked.thread.model !== known.model) {
+      turns.changeModel(threadId, checked.thread.model);
+    }
     const mode = requestedMode(params);
     if (mode !== undefined) turns.selectMode(threadId, mode);
     if (!("model" in params) && !("collaborationMode" in params)) return line;
@@ -254,7 +265,6 @@ const SETTINGS_UPDATED = "thread/settings/updated";
 const REFUSED_METHODS = [
   "thread/resume",
   "thread/settings/update",
-  "turn/steer",
   "review/start",
   "thread/compact/start",
 ] as const;

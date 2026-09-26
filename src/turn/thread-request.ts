@@ -21,7 +21,7 @@ export const requestedModel = (params: Record<string, unknown>) => {
 };
 
 // fallbackCwd is where the server last reported a Codex thread, since a request that switches it to Claude may not carry its directory.
-// TODO: accept a model or working directory change in P10, which restarts the Claude session for it.
+// A thread may move to another Claude model, but Claude keeps running where the thread started, so a new directory is refused.
 export const checkThread = (
   params: Record<string, unknown>,
   known: Thread | undefined,
@@ -29,14 +29,11 @@ export const checkThread = (
 ): { thread: Thread } | { refusal: Refusal } => {
   const model = requestedModel(params) ?? known?.model;
   if (!isClaudeModel(model)) return { refusal: "codex_model" };
-  if (known !== undefined && model !== known.model) {
-    return { refusal: "model_change" };
-  }
   if (known !== undefined) {
     return typeof params.cwd === "string" &&
       !isSameDirectory(params.cwd, known.cwd)
       ? { refusal: "directory_change" }
-      : { thread: known };
+      : { thread: { model, cwd: known.cwd } };
   }
   const cwd = typeof params.cwd === "string" ? params.cwd : fallbackCwd;
   return cwd === undefined
@@ -44,14 +41,12 @@ export const checkThread = (
     : { thread: { model, cwd } };
 };
 
-// A turn checked before another turn saved the thread would otherwise run on the settings that turn saved.
+// A turn checked before another turn saved the thread would otherwise run in the directory that turn saved; a different model is a model change, which the turn applies itself.
 export const savedThreadChange = (
   requested: Thread,
   saved: Thread,
-): Refusal | null => {
-  if (requested.model !== saved.model) return "model_change";
-  return isSameDirectory(requested.cwd, saved.cwd) ? null : "directory_change";
-};
+): Refusal | null =>
+  isSameDirectory(requested.cwd, saved.cwd) ? null : "directory_change";
 
 export const refusalMessage = (refusal: Refusal) => REFUSAL_MESSAGES[refusal];
 
@@ -74,13 +69,15 @@ const collaborationMode = (params: Record<string, unknown>) =>
 const REFUSAL_MESSAGES = {
   missing_thread: "the request needs a threadId",
   codex_model: "a Claude thread cannot switch to a Codex model",
-  model_change: "changing the model of a Claude thread is not supported yet",
   directory_change:
-    "changing the working directory of a Claude thread is not supported yet",
+    "changing the working directory of a Claude thread is not supported",
   directory_unknown: "the working directory of this thread is unknown",
   text_only: "Claude threads accept text input only",
   duplicate_message: "this message was already delivered to the Claude thread",
-  no_running_turn: "no running Claude turn matches turnId",
+  no_running_turn: "no running Claude turn matches the turn id",
+  steer_not_sent: "the Claude turn ended before the steer reached it",
+  too_many_steers:
+    "this Claude turn takes no more steers; send it as the next turn",
   bridge_closing: "the bridge is shutting down",
   thread_not_saved: "the Claude thread could not be saved",
   message_not_saved:
