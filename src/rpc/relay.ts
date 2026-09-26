@@ -1,6 +1,7 @@
 import type { Readable, Writable } from "node:stream";
 import type { Signal } from "../boundary/process.ts";
-import type { Direction } from "./observe.ts";
+
+export type Direction = "app_to_server" | "server_to_app";
 
 export type RelayObserver = {
   chunk: (direction: Direction, chunk: Uint8Array) => void;

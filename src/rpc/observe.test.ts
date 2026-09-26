@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createLogger } from "../shared/logger.ts";
-import { createObserver, type Direction } from "./observe.ts";
+import { createObserver } from "./observe.ts";
+import type { Direction } from "./relay.ts";
 
 describe("createObserver", () => {
   test("names the MCP startup state and failure without the error text", () => {
