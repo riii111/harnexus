@@ -141,7 +141,6 @@ type ActiveTurn = {
 };
 
 // answered is set when the app got the turn as soon as it was accepted, so a turn that cannot run is shown as failed rather than refused.
-// stopped is set by a stop the app sends for an answered turn that still waits, so it ends as interrupted without reaching Claude.
 type TurnRequest = {
   id: AppRequest["id"];
   turnId: string;
@@ -206,7 +205,6 @@ export const createTurnController = ({
   // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
   const modes = new Map<string, Mode>();
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  // Turns the app already got an answer for while they wait behind a running turn, by turn id.
   const waitingTurns = new Map<
     string,
     { threadId: string; request: TurnRequest }
