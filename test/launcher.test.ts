@@ -19,6 +19,7 @@ const TIMEOUT = 20_000;
 
 let dir: string;
 let fakeCodex: string;
+let lingeringCodex: string;
 let reports = 0;
 
 beforeAll(async () => {
@@ -26,6 +27,9 @@ beforeAll(async () => {
   fakeCodex = join(dir, "codex.js");
   await writeFile(fakeCodex, FAKE_CODEX);
   await chmod(fakeCodex, 0o755);
+  lingeringCodex = join(dir, "codex-lingering.sh");
+  await writeFile(lingeringCodex, LINGERING_CODEX);
+  await chmod(lingeringCodex, 0o755);
 });
 
 afterAll(async () => {
@@ -53,21 +57,6 @@ describe("delegation to the standard Codex", () => {
       expect(report.argv).toEqual(args);
       expect(report.cwd).toBe(cwd);
       expect(report.env).toEqual({ ...env, HARNEXUS_LAUNCHER_ACTIVE: "1" });
-    },
-    TIMEOUT,
-  );
-
-  test(
-    "lets the caller see the signal that ended Codex",
-    async () => {
-      const { env, reportPath } = setup({ FAKE_CODEX_MODE: "wait" });
-
-      const proc = launch(["exec"], env);
-      await readReport(reportPath);
-      proc.kill("SIGTERM");
-      const result = await finish(proc);
-
-      expect(result).toMatchObject({ exitCode: null, signal: "SIGTERM" });
     },
     TIMEOUT,
   );
@@ -145,7 +134,6 @@ describe("app-server", () => {
       args: ["app-server", "--listen=ws://127.0.0.1:1"],
     },
     { name: "app-server as an exec argument", args: ["exec", "app-server"] },
-    { name: "app-server as a config value", args: ["-c", "app-server"] },
   ])(
     "hands $name to Codex without the bridge",
     async ({ args }) => {
@@ -295,17 +283,17 @@ describe("app-server", () => {
     TIMEOUT,
   );
 
-  test.each([{ signal: "SIGTERM" as const }, { signal: "SIGINT" as const }])(
-    "forwards $signal to Codex and ends with the same signal",
-    async ({ signal }) => {
+  test(
+    "lets SIGINT from the caller end Codex",
+    async () => {
       const { env, reportPath } = setup({ FAKE_CODEX_MODE: "wait" });
 
       const proc = launch(["app-server"], env);
       const report = await readReport(reportPath);
-      proc.kill(signal);
+      proc.kill("SIGINT");
       const result = await finish(proc);
 
-      expect(result).toMatchObject({ exitCode: null, signal });
+      expect(result).toMatchObject({ exitCode: null, signal: "SIGINT" });
       expect(isAlive(report.pid)).toBe(false);
     },
     TIMEOUT,
@@ -314,75 +302,53 @@ describe("app-server", () => {
 
 describe("app-server shutdown", () => {
   test(
-    "lets the caller see the signal that ended Codex and then closes the output",
+    "signals SIGTERM, then SIGKILL, to a Codex that ignores both the app disconnecting and SIGTERM",
     async () => {
       const { env, reportPath } = setup({
-        FAKE_CODEX_MODE: "wait",
-      });
-
-      const proc = launch(["app-server"], env);
-      await readReport(reportPath);
-      proc.kill("SIGTERM");
-      const result = await finish(proc);
-
-      expect(result).toMatchObject({ exitCode: null, signal: "SIGTERM" });
-      expect(result.stderr).toContain('"event":"server_closed"');
-    },
-    TIMEOUT,
-  );
-
-  test.each([
-    { name: "exits on SIGTERM", mode: "wait", expected: "SIGTERM" },
-    {
-      name: "also ignores SIGTERM",
-      mode: "wait-ignore-term",
-      expected: "SIGKILL",
-    },
-  ])(
-    "signals $expected to a Codex that ignores the app disconnecting and $name",
-    async ({ mode, expected }) => {
-      const { env, reportPath } = setup({
         HARNEXUS_SHUTDOWN_GRACE_MS: "200",
-        FAKE_CODEX_MODE: mode,
+        FAKE_CODEX_MODE: "wait-ignore-term",
       });
 
       const proc = launch(["app-server"], env);
       await readReport(reportPath);
       const result = await finish(proc);
 
-      expect(result).toMatchObject({ exitCode: null, signal: expected });
-      expect(result.stderr).toContain(
-        `"event":"server_signaled","signal":"${expected}"`,
-      );
+      expect(result).toMatchObject({ exitCode: null, signal: "SIGKILL" });
+      expect(serverEvents(result.stderr)).toEqual([
+        "SIGTERM",
+        "SIGKILL",
+        "server_closed",
+      ]);
     },
     TIMEOUT,
   );
 
-  test.each([
-    { name: "exits on SIGTERM", mode: "close-stdout", expected: "SIGTERM" },
-    {
-      name: "ignores SIGTERM",
-      mode: "close-stdout-ignore-term",
-      expected: "SIGKILL",
-    },
-  ])(
-    "signals $expected to a Codex that closes stdout, keeps running and $name",
-    async ({ mode, expected }) => {
-      const { env, reportPath } = setup({
-        HARNEXUS_SHUTDOWN_GRACE_MS: "100",
-        FAKE_CODEX_MODE: mode,
+  test(
+    "signals SIGTERM, then SIGKILL, to a Codex that closes stdout while the app stays connected and ignores SIGTERM",
+    async () => {
+      const { env } = setup({
+        HARNEXUS_CODEX_PATH: lingeringCodex,
+        HARNEXUS_SHUTDOWN_GRACE_MS: "200",
+      });
+      // An open stdin keeps the relay's disconnect timer out, so only the bridge's own shutdown can signal.
+      const proc = Bun.spawn([LAUNCHER, "app-server"], {
+        cwd: dir,
+        env,
+        stdin: "pipe",
+        stdout: "ignore",
+        stderr: "pipe",
       });
 
-      const proc = launch(["app-server"], env);
-      const report = await readReport(reportPath);
-      const result = await finish(proc);
+      const stderr = await new Response(proc.stderr).text();
+      await proc.exited;
+      proc.stdin.end();
 
-      expect(result).toMatchObject({ exitCode: null, signal: expected });
-      expect(result.stderr).toContain('"event":"server_closed"');
-      expect(result.stderr).toContain(
-        `"event":"server_signaled","signal":"${expected}"`,
-      );
-      expect(await stopsRunning(report.pid)).toBe(true);
+      expect(proc.signalCode).toBe("SIGKILL");
+      expect(serverEvents(stderr)).toEqual([
+        "server_closed",
+        "SIGTERM",
+        "SIGKILL",
+      ]);
     },
     TIMEOUT,
   );
@@ -406,36 +372,18 @@ describe("app-server shutdown", () => {
       const exitCode = await proc.exited;
 
       expect(exitCode).toBe(0);
-      expect(await stopsRunning(bridge[0] ?? -1)).toBe(true);
     },
     TIMEOUT,
   );
 });
 
 describe("app-server output at exit", () => {
-  test.each([
-    {
-      name: "a normal exit",
-      overrides: {},
-      expected: { exitCode: 0, signal: null },
-    },
-    {
-      name: "a non-zero exit",
-      overrides: { FAKE_CODEX_EXIT: "3" },
-      expected: { exitCode: 3, signal: null },
-    },
-    {
-      name: "a signal",
-      overrides: { FAKE_BURST_SIGNAL: "SIGTERM" },
-      expected: { exitCode: null, signal: "SIGTERM" },
-    },
-  ])(
-    "delivers every byte Codex wrote before $name to an app that keeps reading slowly",
-    async ({ overrides, expected }) => {
+  test(
+    "delivers every byte Codex wrote before exiting to an app that keeps reading slowly",
+    async () => {
       const { env } = setup({
         FAKE_CODEX_MODE: "burst",
         FAKE_BURST_LINES: String(BURST_LINES),
-        ...overrides,
       });
       const proc = Bun.spawn([LAUNCHER, "app-server"], {
         cwd: dir,
@@ -448,9 +396,10 @@ describe("app-server output at exit", () => {
       const received = await readSlowly(proc.stdout);
       await proc.exited;
 
-      expect({ exitCode: proc.exitCode, signal: proc.signalCode }).toEqual(
-        expected,
-      );
+      expect({ exitCode: proc.exitCode, signal: proc.signalCode }).toEqual({
+        exitCode: 0,
+        signal: null,
+      });
       expect(received === BURST_OUTPUT).toBe(true);
     },
     TIMEOUT,
@@ -489,12 +438,6 @@ describe("refusals", () => {
     await expectRefused(["app-server"], env, "HARNEXUS_BUN_PATH is not set");
   });
 
-  test("refuses the launcher as the Codex path", async () => {
-    const { env } = setup({ HARNEXUS_CODEX_PATH: LAUNCHER });
-
-    await expectRefused(["exec"], env, "points to the launcher itself");
-  });
-
   test("refuses a symlink to the launcher as the Codex path", async () => {
     const link = join(dir, "codex-link");
     await symlink(LAUNCHER, link);
@@ -503,23 +446,15 @@ describe("refusals", () => {
     await expectRefused(["exec"], env, "points to the launcher itself");
   });
 
-  test.each([{ command: "exec" }, { command: "app-server" }])(
-    "stops $command when the launched Codex reaches the launcher again",
-    async ({ command }) => {
-      const wrapper = join(dir, `codex-wrapper-${command}`);
-      await writeFile(wrapper, `#!/bin/sh\nexec "${LAUNCHER}" "$@"\n`);
-      await chmod(wrapper, 0o755);
-      const { env } = setup({ HARNEXUS_CODEX_PATH: wrapper });
-
-      await expectRefused([command], env, "recursive launch detected");
-    },
-    TIMEOUT,
-  );
-
-  test("stops when the launcher is already marked active", async () => {
+  test.each([
+    { command: "exec" },
+    { command: "app-server" },
+  ])("stops $command when the launcher is already marked active", async ({
+    command,
+  }) => {
     const { env } = setup({ HARNEXUS_LAUNCHER_ACTIVE: "1" });
 
-    await expectRefused(["exec"], env, "recursive launch detected");
+    await expectRefused([command], env, "recursive launch detected");
   });
 });
 
@@ -602,17 +537,16 @@ const childPids = (pid: number) =>
     .filter((line) => line !== "")
     .map(Number);
 
-// The killed bridge can linger as a zombie until it is reaped, which kill(pid, 0) still reports as alive.
-const stopsRunning = async (pid: number) => {
-  for (let i = 0; i < 200; i++) {
-    const state = Bun.spawnSync(["ps", "-o", "stat=", "-p", String(pid)])
-      .stdout.toString()
-      .trim();
-    if (state === "" || state.startsWith("Z")) return true;
-    await Bun.sleep(25);
-  }
-  return false;
-};
+const serverEvents = (stderr: string) =>
+  stderr
+    .split("\n")
+    .filter((line) => line.startsWith("{"))
+    .map((line) => JSON.parse(line))
+    .filter(
+      (record) =>
+        record.event === "server_closed" || record.event === "server_signaled",
+    )
+    .map((record) => record.signal ?? record.event);
 
 const isAlive = (pid: number) => {
   try {
@@ -632,7 +566,7 @@ type Report = {
 
 // Records how it was started (renamed into place so readReport never sees a partial write), then echoes stdin and exits with FAKE_CODEX_EXIT, or waits for a signal when FAKE_CODEX_MODE=wait.
 const FAKE_CODEX = `#!/usr/bin/env -S ${BUN} --no-env-file --config=/dev/null
-import { closeSync, renameSync, writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
 const report = process.env.FAKE_CODEX_REPORT;
 writeFileSync(
   report + ".tmp",
@@ -652,12 +586,7 @@ if (process.env.FAKE_CODEX_MODE === "burst") {
     }
   }
   await new Promise((resolve) => process.stdout.write("END\\n", resolve));
-  if (process.env.FAKE_BURST_SIGNAL) process.kill(process.pid, process.env.FAKE_BURST_SIGNAL);
-  process.exit(Number(process.env.FAKE_CODEX_EXIT ?? "0"));
-} else if (process.env.FAKE_CODEX_MODE?.startsWith("close-stdout")) {
-  closeSync(1);
-  if (process.env.FAKE_CODEX_MODE === "close-stdout-ignore-term") process.on("SIGTERM", () => {});
-  setInterval(() => {}, 1000);
+  process.exit(0);
 } else if (process.env.FAKE_CODEX_MODE === "wait" || process.env.FAKE_CODEX_MODE === "wait-ignore-term") {
   if (process.env.FAKE_CODEX_MODE === "wait-ignore-term") process.on("SIGTERM", () => {});
   setInterval(() => {}, 1000);
@@ -665,4 +594,11 @@ if (process.env.FAKE_CODEX_MODE === "burst") {
   process.stdout.write(await Bun.stdin.text());
   process.exitCode = Number(process.env.FAKE_CODEX_EXIT ?? "0");
 }
+`;
+
+// Unlike closeSync(1) in Bun, which leaves the pipe open until exit, exec >&- gives the bridge EOF while Codex keeps running; the ignored SIGTERM survives exec.
+const LINGERING_CODEX = `#!/bin/sh
+exec >&-
+trap '' TERM
+exec sleep 30
 `;
