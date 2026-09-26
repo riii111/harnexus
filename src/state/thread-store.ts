@@ -283,9 +283,11 @@ const createThreadStore = (
         }
         const marked = await files.createMarker(markerPath(threadId));
         if (marked.isErr()) {
-          // A marker that exists without a confirmed sync is withdrawn, since the operation never ran.
-          if (marked.error._tag === "FileSyncFailed")
-            await clearMarker(threadId);
+          // A marker that exists without a confirmed sync is withdrawn, since the operation never ran; one that stays leaves the thread outcome unknown, which is reported instead.
+          if (marked.error._tag === "FileSyncFailed") {
+            const cleared = await clearMarker(threadId);
+            if (cleared.isErr()) return Result.err(cleared.error);
+          }
           return Result.err(
             new WriteNotStarted({
               threadId,

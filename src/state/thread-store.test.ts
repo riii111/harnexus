@@ -441,7 +441,7 @@ describe("ThreadStore.runWrite", () => {
     expect(store.get("thread-1")?.runState).toBe("idle");
   });
 
-  test("recovers when an unconfirmed marker cannot be withdrawn", async () => {
+  test("reports an unconfirmed marker it cannot withdraw and clears it on resolve", async () => {
     let removals = 0;
     const store = await openStore({
       createMarker: createThenFailSync,
@@ -465,7 +465,7 @@ describe("ThreadStore.runWrite", () => {
     const afterRestart = (await openStore()).get("thread-1")?.runState;
     const resolved = await store.resolveOutcomeUnknown("thread-1");
 
-    expect(result.isErr() && result.error._tag).toBe("WriteNotStarted");
+    expect(result.isErr() && result.error._tag).toBe("RunStateNotSaved");
     expect(called).toBe(false);
     expect(stuck).toBe("outcomeUnknown");
     expect(afterRestart).toBe("outcomeUnknown");
