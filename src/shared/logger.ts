@@ -29,7 +29,7 @@ type ClaudeUnavailable =
 
 export type LogSink = (line: string) => void;
 
-export const createLogger = (sink: LogSink = stderrSink) => ({
+export const createLogger = (sink: LogSink) => ({
   log: (entry: LogEvent) => {
     const record = { time: new Date().toISOString(), ...serialize(entry) };
     sink(`${JSON.stringify(record)}\n`);
@@ -108,8 +108,4 @@ const serializeTurn = (entry: TurnEvent) => {
     case "run_state_not_saved":
       return { event: entry.event, step: entry.step, error: entry.error };
   }
-};
-
-const stderrSink: LogSink = (line) => {
-  process.stderr.write(line);
 };

@@ -12,7 +12,7 @@ import {
   startTurn,
 } from "./turn.ts";
 
-describe("text", () => {
+describe("renderSdkMessage text", () => {
   test("streams text as deltas and reports it as the final answer", () => {
     const out = run([
       ...streamedText("msg-1", ["Hel", "lo"], "end_turn"),
@@ -120,7 +120,7 @@ describe("text", () => {
   });
 });
 
-describe("tools", () => {
+describe("renderSdkMessage tools", () => {
   test("maps Bash to a command execution and reads a failed exit code", () => {
     const out = run([
       assistant("msg-1", [toolUse("tool-1", "Bash", { command: "false" })]),
@@ -317,7 +317,7 @@ describe("tools", () => {
   });
 });
 
-describe("turn end", () => {
+describe("renderSdkMessage turn end", () => {
   test("fails the turn once with the result error, not as an answer", () => {
     const out = run([
       ...streamedText("msg-1", ["partial"], null),
@@ -400,29 +400,34 @@ describe("turn end", () => {
   });
 });
 
-describe("state", () => {
-  test("replays the same notifications from the same state", () => {
-    const { state } = begin();
+describe("renderSdkMessage determinism", () => {
+  test("renders the same notifications for the same messages", () => {
     const messages = [
       ...streamedText("msg-1", ["a"], null),
       assistant("msg-1", [toolUse("tool-1", "Bash", { command: "ls" })]),
       toolResult("tool-1", "x", false),
       success(),
     ];
-    const replay = () => {
-      let current = state;
-      return messages.flatMap((message) => {
-        const next = renderSdkMessage(current, sdk(message), NOW);
-        current = next.state;
-        return next.notifications;
-      });
-    };
 
-    expect(replay()).toEqual(replay());
+    expect(run(messages).notifications).toEqual(run(messages).notifications);
+  });
+
+  test("stamps notifications with the given time, not the clock", () => {
+    const messages = [...streamedText("msg-1", ["a"], "end_turn"), success()];
+
+    const stamps = run(messages).notifications.map((n) => n.emittedAtMs);
+
+    expect({ first: stamps[0], last: stamps.at(-1) }).toEqual({
+      first: NOW,
+      last: NOW + messages.length,
+    });
+    expect(
+      stamps.filter((at) => at < NOW || at > NOW + messages.length),
+    ).toEqual([]);
   });
 });
 
-describe("recorded sessions", () => {
+describe("turn rendering against recorded app-server sessions", () => {
   test("renders a failed turn with thinking, an edit and an MCP tool as recorded", () => {
     const out = runRecorded("tu-fixture-3", [
       streamEvent({ type: "message_start", message: { id: "msg-1" } }),
@@ -601,13 +606,22 @@ const run = (messages: object[]) => {
   const all = [...notifications];
   messages.forEach((message, index) => {
     ({ state, notifications } = renderSdkMessage(
-      state,
+      deepFreeze(state),
       sdk(message),
       NOW + index + 1,
     ));
     all.push(...notifications);
   });
   return { state, notifications: all };
+};
+
+// Callers may keep earlier states, so rendering must not mutate its input.
+const deepFreeze = <T>(value: T): T => {
+  if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
 };
 
 const runRecorded = (turnId: string, messages: object[]) => {
