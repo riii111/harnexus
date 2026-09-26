@@ -35,7 +35,7 @@ describe("openThreadStore", () => {
   test("restores the saved mapping in a new store", async () => {
     const store = await openStore();
     await store.register(ENTRY);
-    await store.setSession("thread-1", "session-1");
+    await store.setSessionId("thread-1", "session-1");
     await store.addReviewer("thread-1", "reviewer-1");
     await store.setModel("thread-1", "claude-opus-5-5");
 
@@ -110,7 +110,7 @@ describe("ThreadStore", () => {
   test("reports updates to an unknown thread", async () => {
     const store = await openStore();
 
-    const updated = await store.setSession("thread-9", "session-1");
+    const updated = await store.setSessionId("thread-9", "session-1");
 
     expect(updated.isErr() && updated.error._tag).toBe("ThreadNotFound");
   });
@@ -129,7 +129,7 @@ describe("ThreadStore", () => {
     await good.register(ENTRY);
     const store = await openStore({ writeState: failingWrite });
 
-    const updated = await store.setSession("thread-1", "session-1");
+    const updated = await store.setSessionId("thread-1", "session-1");
 
     expect(updated.isErr() && updated.error._tag).toBe("StatePersistFailed");
     expect(store.get("thread-1")?.sessionId).toBeNull();
@@ -141,7 +141,7 @@ describe("ThreadStore", () => {
     await good.register(ENTRY);
     const store = await openStore({ writeState: writeThenFailSync });
 
-    const updated = await store.setSession("thread-1", "session-1");
+    const updated = await store.setSessionId("thread-1", "session-1");
     const later = await store.setModel("thread-1", "claude-opus-5-5");
 
     expect(updated.isErr() && updated.error._tag).toBe("StatePersistFailed");
@@ -157,7 +157,7 @@ describe("ThreadStore", () => {
     const store = await openStore();
     await store.register(ENTRY);
 
-    const updated = await store.setSession("thread-1", "");
+    const updated = await store.setSessionId("thread-1", "");
 
     expect(updated.isErr() && updated.error._tag).toBe("InvalidThreadRecord");
     expect((await openStore()).get("thread-1")?.sessionId).toBeNull();
@@ -267,7 +267,7 @@ describe("ThreadStore.runWrite", () => {
     );
     await started.promise;
     const held = gated.hold();
-    const session = store.setSession("thread-2", "session-2");
+    const session = store.setSessionId("thread-2", "session-2");
     await held.entered;
 
     blocker.resolve();
@@ -289,7 +289,7 @@ describe("ThreadStore.runWrite", () => {
     await store.runWrite(
       "thread-1",
       async () => {
-        saved = store.setSession("thread-1", "session-1");
+        saved = store.setSessionId("thread-1", "session-1");
         return Result.ok(null);
       },
       never,
@@ -501,7 +501,7 @@ describe("ThreadStore.runWrite", () => {
     await store.runWrite(
       "thread-1",
       async () => {
-        await store.setSession("thread-1", "session-1");
+        await store.setSessionId("thread-1", "session-1");
         return Result.ok(null);
       },
       never,

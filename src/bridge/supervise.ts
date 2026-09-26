@@ -1,9 +1,14 @@
-import { type Signals, signalProcess } from "../boundary/process.ts";
+import { Result } from "better-result";
+import { type Signal, signalProcess } from "../boundary/process.ts";
 
-export const SERVER_PID_ENV = "HARNEXUS_SERVER_PID";
+const SERVER_PID_ENV = "HARNEXUS_SERVER_PID";
 
-// Codex is alive only while it is still this process's parent; without a pid from the launcher nothing is ever signaled, so a reparented bridge cannot mistake launchd or a reused pid for Codex.
-export const watchServer = (
+export type ServerSignalEvent =
+  | { event: "server_signaled"; signal: Signal }
+  | { event: "server_signal_failed"; signal: Signal; code: string | null };
+
+// The server is alive only while it is still this process's parent; without a pid from the launcher nothing is ever signaled, so a reparented bridge cannot mistake launchd or a reused pid for the server.
+export const serverFromEnv = (
   env: NodeJS.ProcessEnv,
   {
     parentPid = () => process.ppid,
@@ -18,11 +23,27 @@ export const watchServer = (
   const isRunning = () => known && parentPid() === pid;
   return {
     isRunning,
-    signal: (signal: Signals) => isRunning() && send(pid, signal).isOk(),
+    signal: (signal: Signal) =>
+      isRunning() ? send(pid, signal).map(() => true) : Result.ok(false),
   };
 };
 
-// Codex can close stdout and keep running, and once the relay ends the bridge is the only process left to stop it.
+// The errno code tells a refused signal (EPERM) apart from a server that exited just before it (ESRCH).
+export const signalWithLog =
+  (
+    server: Pick<ReturnType<typeof serverFromEnv>, "signal">,
+    log: (entry: ServerSignalEvent) => void,
+  ) =>
+  (signal: Signal) => {
+    const sent = server.signal(signal);
+    if (sent.isErr()) {
+      log({ event: "server_signal_failed", signal, code: sent.error.code });
+    } else if (sent.value) {
+      log({ event: "server_signaled", signal });
+    }
+  };
+
+// The server can close stdout and keep running, and once the relay ends the bridge is the only process left to stop it.
 export const stopLingeringServer = async ({
   isRunning,
   signal,
@@ -30,7 +51,7 @@ export const stopLingeringServer = async ({
   pollMs = POLL_MS,
 }: {
   isRunning: () => boolean;
-  signal: (signal: Signals) => void;
+  signal: (signal: Signal) => void;
   graceMs: number;
   pollMs?: number;
 }) => {

@@ -4,12 +4,7 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  ClaudeQuery,
-  ClaudeSdk,
-  ResolveSettings,
-  RunQuery,
-} from "../claude-sdk.ts";
+import type { ClaudeQuery, ClaudeSdk } from "../claude-sdk.ts";
 
 type Delivery = IteratorResult<SDKMessage, void> | Error;
 
@@ -72,11 +67,11 @@ export const fakeClaude = (
       deliver(closeEnding);
     },
   };
-  const resolveSettings: ResolveSettings = async () => {
+  const resolveSettings: ClaudeSdk["resolveSettings"] = async () => {
     if (settingsEnv instanceof Error) throw settingsEnv;
     return { effective: { env: settingsEnv } };
   };
-  const run: RunQuery = (params) => {
+  const run: ClaudeSdk["query"] = (params) => {
     options = params.options;
     prompt = params.prompt;
     return claude;
@@ -105,7 +100,7 @@ export const fakeClaude = (
 };
 
 export const failingQuery =
-  (error: Error): RunQuery =>
+  (error: Error): ClaudeSdk["query"] =>
   () => {
     throw error;
   };

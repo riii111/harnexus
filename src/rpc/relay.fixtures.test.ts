@@ -73,10 +73,11 @@ const replay = async (path: string, records: FixtureRecord[]) => {
   });
   const exited = once(server, "close");
   const relaying = relayStreams({
-    input,
-    output: output.stream,
+    appInput: input,
+    appOutput: output.stream,
     serverInput: server.stdin,
     serverOutput: server.stdout,
+    stopServer: { signal: () => {}, graceMs: 5000 },
     observer: createObserver(createLogger((line) => log.push(line)).log),
   });
   let expectedBytes = 0;

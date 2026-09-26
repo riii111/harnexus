@@ -1,7 +1,6 @@
 import { parseJson } from "../boundary/json.ts";
 import { createLineSplitter } from "./line-splitter.ts";
-
-export type Direction = "app_to_server" | "server_to_app";
+import type { Direction } from "./relay.ts";
 
 // Only identifiers and structural schema reach an event, so params, conversations, code and credentials never do.
 export type ObservationEvent =

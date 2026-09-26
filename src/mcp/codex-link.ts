@@ -7,6 +7,7 @@ import { Result, TaggedError } from "better-result";
 import { z } from "zod";
 import { parseJson } from "../boundary/json.ts";
 import type { ServerRequest } from "../rpc/server-requests.ts";
+import { isObject } from "../shared/object.ts";
 import { createSerialQueue } from "../state/serial-queue.ts";
 
 // The subset of the thread store the link reads and writes; the real store satisfies it structurally.
@@ -232,17 +233,8 @@ class AppToolAnswerMalformed extends TaggedError("AppToolAnswerMalformed")<{
 }> {}
 
 // A malformed answer is still an answer to a call that ran, so for writes it counts as an unknown outcome like a lost one.
-const readToolResult = (value: unknown) => {
-  const answer = value as {
-    content?: unknown;
-    structuredContent?: unknown;
-    isError?: unknown;
-  } | null;
-  if (
-    typeof answer !== "object" ||
-    answer === null ||
-    !Array.isArray(answer.content)
-  ) {
+const readToolResult = (answer: unknown) => {
+  if (!isObject(answer) || !Array.isArray(answer.content)) {
     return Result.err(
       new AppToolAnswerMalformed({
         message: "the Codex app answered in an unexpected form",
@@ -252,7 +244,7 @@ const readToolResult = (value: unknown) => {
   const content = answer.content.flatMap(toContentItem);
   const result: ToolResult = {
     content,
-    ...(isRecord(answer.structuredContent) && {
+    ...(isObject(answer.structuredContent) && {
       structuredContent: answer.structuredContent,
     }),
     ...(answer.isError === true && { isError: true }),
@@ -268,17 +260,16 @@ const readToolResult = (value: unknown) => {
 
 // The app answers with text, image and audio items only, so any other item makes the whole answer malformed rather than being dropped.
 const toContentItem = (item: unknown): ContentItem[] => {
-  const value = item as Record<string, unknown> | null;
-  if (typeof value !== "object" || value === null) return [];
-  if (value.type === "text" && typeof value.text === "string") {
-    return [{ type: "text", text: value.text }];
+  if (!isObject(item)) return [];
+  if (item.type === "text" && typeof item.text === "string") {
+    return [{ type: "text", text: item.text }];
   }
   if (
-    (value.type === "image" || value.type === "audio") &&
-    typeof value.data === "string" &&
-    typeof value.mimeType === "string"
+    (item.type === "image" || item.type === "audio") &&
+    typeof item.data === "string" &&
+    typeof item.mimeType === "string"
   ) {
-    return [{ type: value.type, data: value.data, mimeType: value.mimeType }];
+    return [{ type: item.type, data: item.data, mimeType: item.mimeType }];
   }
   return [];
 };
@@ -297,17 +288,13 @@ const createdThreadId = (result: ToolResult) => {
 };
 
 const findThreadIdField = (value: unknown): string | null => {
-  if (!isRecord(value)) return null;
-  const record = value as { threadId?: unknown; thread?: { id?: unknown } };
-  if (typeof record.threadId === "string" && record.threadId !== "") {
-    return record.threadId;
+  if (!isObject(value)) return null;
+  if (typeof value.threadId === "string" && value.threadId !== "") {
+    return value.threadId;
   }
-  const nested = record.thread?.id;
+  const nested = isObject(value.thread) ? value.thread.id : undefined;
   return typeof nested === "string" && nested !== "" ? nested : null;
 };
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const failure = (text: string): ToolResult => ({
   content: [{ type: "text", text }],
