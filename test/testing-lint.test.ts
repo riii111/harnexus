@@ -94,6 +94,16 @@ describe("testing lint rules", () => {
       expected: [{ line: 1, rule: LOOP }],
     },
     {
+      name: "a template title without substitutions that embeds no property",
+      source: 'test.each([{ name: "a" }])(`does something`, () => {});',
+      expected: [{ line: 1, rule: MISSING_NAME }],
+    },
+    {
+      name: "a template title without substitutions that uses a positional specifier",
+      source: 'test.each([{ name: "a" }])(`does %s`, () => {});',
+      expected: [{ line: 1, rule: SPECIFIER }],
+    },
+    {
       name: "a focused test",
       source: `test.only("a", () => {});`,
       expected: [{ line: 1, rule: "lint/suspicious/noFocusedTests" }],
@@ -139,6 +149,11 @@ describe("b", () => {});`,
       name: "a title passed through a variable",
       source: `const title = "does $name";
 test.each([{ name: "a" }])(title, () => {});`,
+    },
+    {
+      name: "a template title whose substitution the lint cannot read",
+      source: `const format = (text: string) => text.length;
+test.each([{ name: "a" }])(\`\${format("%s")} $name\`, () => {});`,
     },
     {
       name: "an escaped percent sign before a specifier letter",

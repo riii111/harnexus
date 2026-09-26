@@ -29,7 +29,7 @@ or {
     $rows <: some JsArrayExpression() as $row,
     register_diagnostic(span=$row, message="Use object rows with a name instead of tuple rows. Keep the table and title inline instead of moving them to a variable.")
   },
-  // Only a title written as a literal is read; a title passed through a variable is left to review.
+  // Only a string or a template without substitutions is read; any other title is left to review.
   JsCallExpression(callee=$registered, arguments=JsCallArguments(args=[
     $title, ...
   ])) where {
@@ -41,7 +41,9 @@ or {
     },
     $title <: or {
       JsStringLiteralExpression(),
-      JsTemplateExpression()
+      JsTemplateExpression(elements=$parts) where {
+        $parts <: not some JsTemplateElement()
+      }
     },
     // %% prints a literal percent sign, so only an odd run of % before a specifier counts.
     $title <: r"(?s)(?:.*[^%])?(?:%%)*%[spdifjo#].*",
@@ -60,7 +62,12 @@ or {
     },
     $table <: `[$rows]`,
     $rows <: some JsObjectExpression(),
-    $title <: JsStringLiteralExpression(),
+    $title <: or {
+      JsStringLiteralExpression(),
+      JsTemplateExpression(elements=$parts) where {
+        $parts <: not some JsTemplateElement()
+      }
+    },
     $title <: not r"(?s).*\$[A-Za-z_][A-Za-z0-9_]*.*",
     register_diagnostic(span=$title, message="Embed a row property such as $name in the title so each case is named. Keep the table and title inline instead of moving them to a variable.")
   },
