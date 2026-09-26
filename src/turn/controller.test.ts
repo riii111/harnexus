@@ -13,6 +13,7 @@ import { Result } from "better-result";
 import {
   FileRemoveFailed,
   FileWriteFailed,
+  removeFile,
   writeFileAtomic,
 } from "../boundary/fs.ts";
 import { fakeClaude } from "../boundary/testing/fake-claude.ts";
@@ -1348,6 +1349,57 @@ describe("turn/start arriving on a busy thread", () => {
     expect(await promptsUntil(claude, 2)).toEqual(["hello", "reply"]);
     expect(settings).toHaveLength(1);
     expect(events).toContainEqual({ event: "claude_turn", step: "queued" });
+  });
+
+  test("stops an answered waiting turn before it reaches Claude and leaves the running turn's prompt open", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    const decision = askTool(claude, "Bash", { command: "ls" });
+    const request = await appRequest(sent);
+    turns.startTurn(turnStart(11, "reply"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+
+    turns.interruptTurn(interrupt(21, "turn-2"));
+
+    expect(responseTo(sent, 21)).toEqual({ id: 21, result: {} });
+    expect(resolvedRequests(sent)).toEqual([]);
+    expect(claude.interrupts()).toBe(0);
+    turns.answerRequest({ id: request.id, result: { decision: "accept" } });
+    expect(await decision).toEqual({ behavior: "allow" });
+    claude.emit(sdk(success()));
+    await until(() => turnsCompleted(sent).length === 2);
+    expect(turnsCompleted(sent)).toEqual(["completed", "interrupted"]);
+    await completeTurn(turns, sent, claude, 12);
+    expect(await promptsUntil(claude, 2)).toEqual(["hello", "prompt 12"]);
+  });
+
+  test("stops a turn answered while the turn before it is still being cleared up", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const gate = createGate();
+    let holdCleanup = false;
+    const { turns, sent } = await harness([claude], {
+      files: {
+        removeMarker: async (target) => {
+          if (holdCleanup) await gate.promise;
+          return removeFile(target);
+        },
+      },
+    });
+    holdCleanup = true;
+    await completeTurn(turns, sent, claude, 10);
+    turns.startTurn(turnStart(11, "again"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+
+    turns.interruptTurn(interrupt(21, "turn-2"));
+    gate.open();
+    await until(() => turnsCompleted(sent).length === 2);
+
+    expect(responseTo(sent, 21)).toEqual({ id: 21, result: {} });
+    expect(turnsCompleted(sent)).toEqual(["completed", "interrupted"]);
+    await completeTurn(turns, sent, claude, 12);
+    expect(await promptsUntil(claude, 2)).toEqual(["prompt 10", "prompt 12"]);
   });
 
   test("fails a waiting turn without its thread status once the bridge is closing", async () => {

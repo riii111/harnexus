@@ -159,7 +159,12 @@ type ActiveTurn = {
 };
 
 // answered is set when the app got the turn as soon as it was accepted, so a turn that cannot run is shown as failed rather than refused.
-type TurnRequest = { id: AppRequest["id"]; turnId: string; answered: boolean };
+type TurnRequest = {
+  id: AppRequest["id"];
+  turnId: string;
+  answered: boolean;
+  stopped: boolean;
+};
 
 type TextInput = {
   items: UserInput[];
@@ -229,6 +234,10 @@ export const createTurnController = ({
   const materialized = new Set<string>();
   // A thread with an unknown outcome continues only on a new message the user typed after being told, so neither a resent copy of a refused message nor another thread's message counts.
   const refusedForUnknown = new Map<string, Set<string>>();
+  const waitingTurns = new Map<
+    string,
+    { threadId: string; request: TurnRequest }
+  >();
   const appRequests = createAppRequests({ send, now });
   let closed = false;
 
@@ -284,8 +293,14 @@ export const createTurnController = ({
         requestedMode(params) ?? modes.get(threadId) ?? "default",
       ),
     };
-    const request = { id, turnId: newTurnId(), answered: inFlight > 0 };
+    const request = {
+      id,
+      turnId: newTurnId(),
+      answered: inFlight > 0,
+      stopped: false,
+    };
     if (request.answered) {
+      waitingTurns.set(request.turnId, { threadId, request });
       const waiting = renderTurnStarted({
         threadId,
         turnId: request.turnId,
@@ -393,7 +408,7 @@ export const createTurnController = ({
       active.state.finished ||
       active.state.turnId !== params.turnId
     ) {
-      refuse(id, "no_running_turn");
+      stopWaitingTurn(id, threadId, params.turnId);
       return;
     }
     // A stop while the session already has an interrupt in flight, from this turn or an earlier one, is answered without asking Claude again; that interrupt decides the session, and a turn that has not sent yet stops before sending.
@@ -421,6 +436,22 @@ export const createTurnController = ({
       dropSession(threadId, slot);
       finish(active, { status: "interrupted" }, null);
     });
+  };
+
+  // The running turn's prompts are left open, since the stop is for a turn behind it.
+  const stopWaitingTurn = (
+    id: AppRequest["id"],
+    threadId: string,
+    turnId: unknown,
+  ) => {
+    const waiting =
+      typeof turnId === "string" ? waitingTurns.get(turnId) : undefined;
+    if (waiting?.threadId !== threadId) {
+      refuse(id, "no_running_turn");
+      return;
+    }
+    waiting.request.stopped = true;
+    send({ id, result: {} });
   };
 
   const selectMode = (threadId: string, mode: Mode) => {
@@ -598,6 +629,7 @@ export const createTurnController = ({
       refuse(request.id, reason, cause, message);
       return;
     }
+    waitingTurns.delete(request.turnId);
     logRefusal(reason, cause);
     const started = renderTurnStarted({
       threadId,
@@ -665,6 +697,10 @@ export const createTurnController = ({
       send({ id: request.id, result: { turn: started.turn } });
     log({ event: "claude_turn", step: "started" });
     apply(active, renderInput(started.state, input, messageId));
+    waitingTurns.delete(request.turnId);
+    if (request.stopped && active.state !== null) {
+      active.state = markInterrupting(active.state);
+    }
 
     await waitForPendingInterrupt(threadId);
     if (active.state?.interrupting) {
