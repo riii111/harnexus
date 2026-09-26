@@ -12,7 +12,9 @@
   "linter": {
     "rules": {
       "suspicious": {
-        "noConsole": "error"
+        "noConsole": "error",
+        "noFocusedTests": "error",
+        "noSkippedTests": "error"
       }
     }
   },
@@ -20,6 +22,10 @@
     {
       "includes": ["src/**", "!src/boundary/**"],
       "plugins": ["./biome-plugins/no-throw-try-catch.grit"]
+    },
+    {
+      "includes": ["**/*.test.ts"],
+      "plugins": ["./biome-plugins/testing.grit"]
     }
   ]
 }

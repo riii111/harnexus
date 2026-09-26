@@ -1,0 +1,45 @@
+language js
+
+// Nested suites hide which target a test belongs to; testing.md asks for flat, side-by-side describe blocks.
+or {
+  `$inner($_, $_)` as $nested where {
+    $inner <: or { `describe`, `describe.each($_)` },
+    $nested <: within JsCallExpression() as $outer where {
+      $outer <: not $nested,
+      $outer <: `$suite($_, $_)` where {
+        $suite <: or { `describe`, `describe.each($_)` }
+      }
+    },
+    register_diagnostic(span=$nested, message="Do not nest describe blocks. Split them side by side, named after the target.")
+  },
+  `$runner.each([$rows])` where {
+    $runner <: or { `test`, `it`, `describe` },
+    $rows <: some JsArrayExpression() as $row,
+    register_diagnostic(span=$row, message="Use object rows with a name instead of tuple rows.")
+  },
+  `$runner.each($_)($title, $...)` where {
+    $runner <: or { `test`, `it`, `describe` },
+    $title <: r"(?s).*%[spdifjo#].*",
+    register_diagnostic(span=$title, message="Embed a row property such as $name instead of a positional specifier.")
+  },
+  `$runner.each([$rows])($title, $...)` where {
+    $runner <: or { `test`, `it`, `describe` },
+    $rows <: some JsObjectExpression(),
+    $title <: not r"(?s).*\$[A-Za-z_][A-Za-z0-9_]*.*",
+    register_diagnostic(span=$title, message="Embed a row property such as $name in the title so each case is named.")
+  },
+  or {
+    JsForOfStatement(),
+    JsForInStatement(),
+    JsForStatement(),
+    JsWhileStatement(),
+    JsDoWhileStatement(),
+    `$_.forEach($_)`,
+    `$_.map($_)`
+  } as $loop where {
+    $loop <: contains `$register($...)` where {
+      $register <: or { `test`, `it`, `describe` }
+    },
+    register_diagnostic(span=$loop, message="Register parametrized tests with test.each instead of a loop.")
+  }
+}
