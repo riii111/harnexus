@@ -283,17 +283,17 @@ describe("app-server", () => {
     TIMEOUT,
   );
 
-  test(
-    "lets SIGINT from the caller end Codex",
-    async () => {
+  test.each([{ signal: "SIGTERM" as const }, { signal: "SIGINT" as const }])(
+    "lets $signal from the caller end Codex",
+    async ({ signal }) => {
       const { env, reportPath } = setup({ FAKE_CODEX_MODE: "wait" });
 
       const proc = launch(["app-server"], env);
       const report = await readReport(reportPath);
-      proc.kill("SIGINT");
+      proc.kill(signal);
       const result = await finish(proc);
 
-      expect(result).toMatchObject({ exitCode: null, signal: "SIGINT" });
+      expect(result).toMatchObject({ exitCode: null, signal });
       expect(isAlive(report.pid)).toBe(false);
     },
     TIMEOUT,
