@@ -7,15 +7,6 @@ export type ServerSignalEvent =
   | { event: "server_signaled"; signal: Signal }
   | { event: "server_signal_failed"; signal: Signal; code: string | null };
 
-export const serializeServerSignalEvent = (entry: ServerSignalEvent) => {
-  switch (entry.event) {
-    case "server_signaled":
-      return { event: entry.event, signal: entry.signal };
-    case "server_signal_failed":
-      return { event: entry.event, signal: entry.signal, code: entry.code };
-  }
-};
-
 // The server is alive only while it is still this process's parent; without a pid from the launcher nothing is ever signaled, so a reparented bridge cannot mistake launchd or a reused pid for the server.
 export const serverFromEnv = (
   env: NodeJS.ProcessEnv,
@@ -35,6 +26,15 @@ export const serverFromEnv = (
     signal: (signal: Signal) =>
       isRunning() ? send(pid, signal).map(() => true) : Result.ok(false),
   };
+};
+
+export const serializeServerSignalEvent = (entry: ServerSignalEvent) => {
+  switch (entry.event) {
+    case "server_signaled":
+      return { event: entry.event, signal: entry.signal };
+    case "server_signal_failed":
+      return { event: entry.event, signal: entry.signal, code: entry.code };
+  }
 };
 
 // The errno code tells a refused signal (EPERM) apart from a server that exited just before it (ESRCH).

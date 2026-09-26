@@ -35,6 +35,23 @@ type ClaudeUnavailable =
   | InferErr<ReturnType<typeof loadStatePath>>["_tag"]
   | InferErr<Awaited<ReturnType<typeof openThreadStore>>>["_tag"];
 
+// The app may discard the server's stderr, so HARNEXUS_LOG_PATH keeps a copy in a file.
+export const createBridgeLogger = (env: NodeJS.ProcessEnv) => {
+  const file = loadLogPath(env).andThen((path) =>
+    path === null ? Result.ok(null) : openLogSink(path),
+  );
+  const appendToFile = file.isOk() ? file.value : null;
+  const sink: LogSink = (line) => {
+    process.stderr.write(line);
+    appendToFile?.(line);
+  };
+  const logger = createLogger(sink, serializeLogEvent);
+  if (file.isErr()) {
+    logger.log({ event: "log_file_unavailable", reason: file.error._tag });
+  }
+  return logger;
+};
+
 export const serializeLogEvent = (entry: LogEvent) => {
   switch (entry.event) {
     case "bridge_started":
@@ -59,21 +76,4 @@ export const serializeLogEvent = (entry: LogEvent) => {
     case "rpc_unobserved":
       return serializeObservationEvent(entry);
   }
-};
-
-// The app may discard the server's stderr, so HARNEXUS_LOG_PATH keeps a copy in a file.
-export const createBridgeLogger = (env: NodeJS.ProcessEnv) => {
-  const file = loadLogPath(env).andThen((path) =>
-    path === null ? Result.ok(null) : openLogSink(path),
-  );
-  const appendToFile = file.isOk() ? file.value : null;
-  const sink: LogSink = (line) => {
-    process.stderr.write(line);
-    appendToFile?.(line);
-  };
-  const logger = createLogger(sink, serializeLogEvent);
-  if (file.isErr()) {
-    logger.log({ event: "log_file_unavailable", reason: file.error._tag });
-  }
-  return logger;
 };

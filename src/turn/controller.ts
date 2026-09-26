@@ -73,36 +73,6 @@ export type TurnEvent =
       error: StoreTag;
     };
 
-export const serializeTurnEvent = (entry: TurnEvent) => {
-  switch (entry.step) {
-    case "started":
-    case "queued":
-    case "outcome_unknown":
-    case "steered":
-    case "model_changed":
-      return { event: entry.event, step: entry.step };
-    case "finished":
-      return {
-        event: entry.event,
-        step: entry.step,
-        status: entry.status,
-        error: entry.error,
-      };
-    case "refused":
-      return {
-        event: entry.event,
-        step: entry.step,
-        reason: entry.reason,
-        error: entry.error,
-      };
-    case "interrupt_failed":
-    case "session_not_saved":
-    case "model_not_saved":
-    case "run_state_not_saved":
-      return { event: entry.event, step: entry.step, error: entry.error };
-  }
-};
-
 type SessionStart = Awaited<ReturnType<typeof startClaudeSession>>;
 
 type ClaudeSession = InferOk<SessionStart>;
@@ -834,6 +804,36 @@ export const createTurnController = ({
       if (store.get(threadId) === undefined) adopted.set(threadId, thread);
     },
   };
+};
+
+export const serializeTurnEvent = (entry: TurnEvent) => {
+  switch (entry.step) {
+    case "started":
+    case "queued":
+    case "outcome_unknown":
+    case "steered":
+    case "model_changed":
+      return { event: entry.event, step: entry.step };
+    case "finished":
+      return {
+        event: entry.event,
+        step: entry.step,
+        status: entry.status,
+        error: entry.error,
+      };
+    case "refused":
+      return {
+        event: entry.event,
+        step: entry.step,
+        reason: entry.reason,
+        error: entry.error,
+      };
+    case "interrupt_failed":
+    case "session_not_saved":
+    case "model_not_saved":
+    case "run_state_not_saved":
+      return { event: entry.event, step: entry.step, error: entry.error };
+  }
 };
 
 // A list under its cap names every send the turn took, so a steer it leaves out runs as a later turn, even one that reached Claude after this result was written; a queued send the CLI counts promises that turn too.
