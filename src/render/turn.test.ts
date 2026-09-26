@@ -401,24 +401,15 @@ describe("renderSdkMessage turn end", () => {
 });
 
 describe("renderSdkMessage replay", () => {
-  test("replays the same notifications from the same state", () => {
-    const { state } = begin();
+  test("renders the same notifications for the same messages", () => {
     const messages = [
       ...streamedText("msg-1", ["a"], null),
       assistant("msg-1", [toolUse("tool-1", "Bash", { command: "ls" })]),
       toolResult("tool-1", "x", false),
       success(),
     ];
-    const replay = () => {
-      let current = state;
-      return messages.flatMap((message) => {
-        const next = renderSdkMessage(current, sdk(message), NOW);
-        current = next.state;
-        return next.notifications;
-      });
-    };
 
-    expect(replay()).toEqual(replay());
+    expect(run(messages).notifications).toEqual(run(messages).notifications);
   });
 });
 
@@ -601,13 +592,22 @@ const run = (messages: object[]) => {
   const all = [...notifications];
   messages.forEach((message, index) => {
     ({ state, notifications } = renderSdkMessage(
-      state,
+      deepFreeze(state),
       sdk(message),
       NOW + index + 1,
     ));
     all.push(...notifications);
   });
   return { state, notifications: all };
+};
+
+// Freezing the input state makes any in-place change to a state the caller still holds throw.
+const deepFreeze = <T>(value: T): T => {
+  if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
 };
 
 const runRecorded = (turnId: string, messages: object[]) => {
