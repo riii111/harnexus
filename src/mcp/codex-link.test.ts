@@ -28,6 +28,16 @@ describe("createCodexLink tools", () => {
     }
   });
 
+  test("lets only the read tools run without asking", async () => {
+    const { link } = await connect();
+
+    expect(link.allowedTools).toEqual([
+      "mcp__codex_link__list_projects",
+      "mcp__codex_link__read_thread",
+      "mcp__codex_link__wait_threads",
+    ]);
+  });
+
   test("calls the Codex app tool on behalf of the caller thread", async () => {
     const { client, requests } = await connect({
       answer: () => Result.ok(textAnswer("projects")),
@@ -366,6 +376,38 @@ describe("createCodexLink write outcomes", () => {
     expect((await first).isError).toBe(true);
     expect(text(await second)).toContain("unknown outcome");
     expect(requests).toHaveLength(1);
+  });
+
+  test("drops a queued write whose call was cancelled without sending it", async () => {
+    let release: (value: Result<unknown, ServerRequestError>) => void =
+      () => {};
+    const { client, link, requests } = await connect({
+      reviewers: { [CALLER]: [REVIEWER] },
+      answer: () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    });
+    const first = send(client);
+    await waitUntil(() => requests.length === 1);
+    const cancel = new AbortController();
+
+    const second = client.callTool(
+      {
+        name: "send_message_to_thread",
+        arguments: { threadId: REVIEWER, prompt: "hi" },
+      },
+      undefined,
+      { signal: cancel.signal },
+    );
+    cancel.abort();
+    await expect(second).rejects.toThrow();
+    release(Result.ok(textAnswer("sent")));
+    await first;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(requests).toHaveLength(1);
+    expect(link.hasUnsettledWrite()).toBe(false);
   });
 
   test("reports a write still waiting for its answer as unsettled, as when a turn is stopped mid-call", async () => {

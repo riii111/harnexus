@@ -71,6 +71,7 @@ export const createCodexLink = ({
     name: AppTool,
     args: Record<string, unknown>,
     targets: readonly string[],
+    extra: unknown,
     onSuccess: (result: ToolResult) => Promise<ToolResult> = async (result) =>
       result,
   ) =>
@@ -78,6 +79,12 @@ export const createCodexLink = ({
       if (unknownWrite !== null) {
         return failure(
           `An earlier ${unknownWrite} call has an unknown outcome and is never repeated automatically. Stop sending or creating threads and ask the user to check the app.`,
+        );
+      }
+      // A write queued behind another is dropped once its turn is stopped, since nobody is left to act on its result.
+      if (isAborted(extra)) {
+        return failure(
+          `The turn was stopped before ${name} was sent, so it was not sent.`,
         );
       }
       const refusal = refuseTargets(targets, { allowSelf: false });
@@ -150,7 +157,7 @@ export const createCodexLink = ({
     ),
     tool(
       "create_thread",
-      "Start a new Codex app thread as your reviewer and send it the first prompt. Only threads created here can be read, waited on or messaged afterwards.",
+      "Start a new Codex app thread as your reviewer and send it the first prompt. Only threads created here can be read, waited on or messaged afterwards. Do not ask the reviewer to message this thread back; wait for it with wait_threads and read its answer with read_thread.",
       {
         prompt: z.string().min(1),
         target: CREATE_TARGET,
@@ -158,7 +165,7 @@ export const createCodexLink = ({
         model: z.string().optional(),
         thinking: z.string().optional(),
       },
-      (args) => write("create_thread", args, [], recordReviewer),
+      (args, extra) => write("create_thread", args, [], extra, recordReviewer),
     ),
     tool(
       "send_message_to_thread",
@@ -169,7 +176,8 @@ export const createCodexLink = ({
         model: z.string().optional(),
         thinking: z.string().optional(),
       },
-      (args) => write("send_message_to_thread", args, [args.threadId]),
+      (args, extra) =>
+        write("send_message_to_thread", args, [args.threadId], extra),
     ),
     tool(
       "read_thread",
@@ -211,17 +219,21 @@ export const createCodexLink = ({
 
   return {
     server: createSdkMcpServer({ name: CODEX_LINK_SERVER, tools }),
+    // Reads only reach this thread and its own reviewers, so they run without asking; creating and sending stay under the user's Claude permission rules.
+    allowedTools: READ_TOOLS.map(
+      (name) => `mcp__${CODEX_LINK_SERVER}__${name}`,
+    ),
     // A turn that ends while a write is still waiting for its answer cannot know the outcome either, so both count; the turn runner turns this into the thread's outcome-unknown state so a restart does not repeat the turn.
     hasUnsettledWrite: () => unknownWrite !== null || writesInFlight > 0,
   };
 };
 
 type AppTool =
-  | "list_projects"
+  | (typeof READ_TOOLS)[number]
   | "create_thread"
-  | "send_message_to_thread"
-  | "read_thread"
-  | "wait_threads";
+  | "send_message_to_thread";
+
+const READ_TOOLS = ["list_projects", "read_thread", "wait_threads"] as const;
 
 type ToolResult = Awaited<ReturnType<SdkMcpToolDefinition["handler"]>>;
 
@@ -305,6 +317,11 @@ const findThreadIdField = (value: unknown): string | null => {
   const nested = record.thread?.id;
   return typeof nested === "string" && nested !== "" ? nested : null;
 };
+
+const isAborted = (extra: unknown) =>
+  isRecord(extra) &&
+  extra.signal instanceof AbortSignal &&
+  extra.signal.aborted;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
