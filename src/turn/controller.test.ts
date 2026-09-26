@@ -65,12 +65,18 @@ describe("turn/start on a Claude thread", () => {
 
     await completeTurn(turns, sent, claude, 10);
 
-    expect(events).toContainEqual({
-      event: "claude_turn",
-      step: "finished",
-      status: "completed",
-      error: null,
-    });
+    expect(
+      events.filter(
+        (event) => event.event === "claude_turn" && event.step === "finished",
+      ),
+    ).toEqual([
+      {
+        event: "claude_turn",
+        step: "finished",
+        status: "completed",
+        error: null,
+      },
+    ]);
   });
 
   test("keeps one Claude session for the thread across turns", async () => {
