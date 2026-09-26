@@ -1420,6 +1420,40 @@ describe("turn/start carrying another thread's message", () => {
     expect(claude.started()).toBe(false);
   });
 
+  test("refuses a message from a reviewer another worker is still saving", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const gate = createGate();
+    let holdWrites = false;
+    const { turns, sent, store } = await registeredWorkers([claude], {
+      writeState: async (target, content) => {
+        if (holdWrites) await gate.promise;
+        return writeFileAtomic(target, content);
+      },
+    });
+    holdWrites = true;
+    const adding = store.addReviewer(THREAD, NEW_REVIEWER);
+
+    turns.startTurn(reply(10, OTHER_THREAD, NEW_REVIEWER), undefined);
+    await settle();
+    gate.open();
+
+    expect(sent).toEqual([
+      {
+        id: 10,
+        error: {
+          code: -32600,
+          message:
+            "this message comes from a reviewer of another Claude thread",
+        },
+      },
+    ]);
+    expect(claude.started()).toBe(false);
+    const added = await adding;
+    expect(added.isOk() && added.value.reviewerThreadIds).toEqual([
+      NEW_REVIEWER,
+    ]);
+  });
+
   test.each([
     {
       name: "its own reviewer",
@@ -1626,7 +1660,7 @@ const interruptBeforeReceipt = async (
   expect(turnCompleted(sent)).toMatchObject({ status: "interrupted" });
 };
 
-// Starts a turn on THREAD and then one on OTHER_THREAD, so the first fake serves THREAD.
+// The harness hands out fakes in the order Claude starts, so OTHER_THREAD waits until THREAD has taken the first.
 const twoWorkers = async (fakes: ReturnType<typeof fakeClaude>[]) => {
   const started = await harness(fakes);
   started.turns.adopt(OTHER_THREAD, { model: MODEL, cwd: OTHER_DIR });
@@ -1636,9 +1670,11 @@ const twoWorkers = async (fakes: ReturnType<typeof fakeClaude>[]) => {
   return started;
 };
 
-// OTHER_THREAD created OTHER_REVIEWER; both workers are saved before any turn.
-const registeredWorkers = async (fakes: ReturnType<typeof fakeClaude>[]) => {
-  const started = await harness(fakes, { adopt: false });
+const registeredWorkers = async (
+  fakes: ReturnType<typeof fakeClaude>[],
+  files: Parameters<typeof openThreadStore>[1] = {},
+) => {
+  const started = await harness(fakes, { adopt: false, files });
   for (const [threadId, worktree] of [
     [THREAD, dir],
     [OTHER_THREAD, OTHER_DIR],
@@ -1657,7 +1693,6 @@ const registeredWorkers = async (fakes: ReturnType<typeof fakeClaude>[]) => {
   return started;
 };
 
-// The app sends another thread's send_message_to_thread as the tool output of a turn with no typed input.
 const reply = (id: number, threadId: string, source: string) => ({
   id,
   params: {
@@ -1693,6 +1728,7 @@ const THREAD = "th-fixture-1";
 const OTHER_THREAD = "th-fixture-2";
 const OTHER_DIR = "/work/other-worktree";
 const OTHER_REVIEWER = "th-fixture-reviewer-2";
+const NEW_REVIEWER = "th-fixture-reviewer-1";
 const MODEL = "claude-sonnet-5";
 const OTHER_MODEL = "claude-opus-5-5";
 const SUBSCRIPTION: AccountInfo = {

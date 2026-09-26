@@ -57,13 +57,19 @@ describe("delegationSource", () => {
       toolOutput: {
         name: "create_thread",
         output: [
-          {
-            type: "inputText",
-            text: "<source_thread_id>th-claude</source_thread_id>",
-          },
+          { type: "input_text", text: "<source_thread_id>th-claude" },
+          { type: "input_text", text: "</source_thread_id>" },
         ],
       },
       expected: "th-claude",
+    },
+    {
+      name: "a send_message_to_thread output",
+      toolOutput: {
+        name: "send_message_to_thread",
+        output: "<source_thread_id>th-claude</source_thread_id>",
+      },
+      expected: null,
     },
     {
       name: "another tool's output",
@@ -92,7 +98,11 @@ describe("delegatedMessage", () => {
         namespace: "codex_app",
         output: REPLY,
       },
-      expected: { text: REPLY, sourceThreadId: "th-reviewer" },
+      expected: {
+        tool: "send_message_to_thread",
+        text: REPLY,
+        sourceThreadId: "th-reviewer",
+      },
     },
     {
       name: "a create_thread output split into text items",
@@ -104,6 +114,7 @@ describe("delegatedMessage", () => {
         ],
       },
       expected: {
+        tool: "create_thread",
         text: "<source_thread_id>th-codex\n</source_thread_id>",
         sourceThreadId: "th-codex",
       },
@@ -111,7 +122,11 @@ describe("delegatedMessage", () => {
     {
       name: "an output without a source",
       toolOutput: { name: "send_message_to_thread", output: "hello" },
-      expected: { text: "hello", sourceThreadId: null },
+      expected: {
+        tool: "send_message_to_thread",
+        text: "hello",
+        sourceThreadId: null,
+      },
     },
     {
       name: "an output with an image",

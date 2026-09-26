@@ -207,7 +207,6 @@ export const createTurnController = ({
       refuse(id, checked.refusal);
       return;
     }
-    // A reviewer answers only the worker that created it, so its message to any other Claude thread is refused.
     const delegated = delegatedMessage(params);
     const owner =
       delegated?.sourceThreadId == null
@@ -255,7 +254,7 @@ export const createTurnController = ({
     });
   };
 
-  // Each worker keeps its own Claude process, so one left idle is closed and its next turn resumes the conversation; without a session id there is nothing to resume, so it stays.
+  // Each worker keeps its own Claude process, so an idle one is closed; without a session id its next turn could not resume the conversation, so it stays.
   const scheduleIdleClose = (threadId: string) => {
     cancelIdleClose(threadId);
     const timer = setTimeout(() => {

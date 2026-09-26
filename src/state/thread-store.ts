@@ -136,6 +136,8 @@ const createThreadStore = (
   const runStates = new Map<string, RunState>(
     unknownThreadIds.map((threadId) => [threadId, "outcomeUnknown"]),
   );
+  // A reviewer is claimed from the call that adds it, so a reply arriving while it is saved is already traced to its worker; a claim whose save failed stays, as that worker still created the thread.
+  const claimedReviewers = new Map<string, string>();
   let halted = false;
   const threadQueue = createSerialQueue();
   const fileQueue = createSerialQueue();
@@ -257,32 +259,53 @@ const createThreadStore = (
     setModel: (threadId: string, model: string) =>
       update(threadId, (mapping) => ({ ...mapping, model })),
 
-    // A reviewer answers one worker only, so a reply can be traced back to that worker; a Claude thread is not taken as a reviewer either.
-    addReviewer: (threadId: string, reviewerThreadId: string) =>
-      persistThenCommit<ThreadNotFound | ReviewerTaken>((current) => {
-        const mapping = current.get(threadId);
-        if (mapping === undefined) return Result.err(notFound(threadId));
-        if (mapping.reviewerThreadIds.includes(reviewerThreadId)) {
-          return Result.ok(mapping);
-        }
-        const owner = ownerIn(current, reviewerThreadId);
-        if (owner !== undefined || current.has(reviewerThreadId)) {
-          return Result.err(
-            new ReviewerTaken({
-              threadId,
-              reviewerThreadId,
-              message: `thread ${reviewerThreadId} is ${owner === undefined ? "a Claude thread" : "another thread's reviewer"}`,
-            }),
+    // A reviewer answers one worker only, so a reply can be traced back to that worker; a Claude thread is a worker of its own.
+    addReviewer: async (threadId: string, reviewerThreadId: string) => {
+      const claimed = claimedReviewers.get(reviewerThreadId);
+      if (claimed === undefined) {
+        claimedReviewers.set(reviewerThreadId, threadId);
+      }
+      const added = await persistThenCommit<ThreadNotFound | ReviewerTaken>(
+        (current) => {
+          const mapping = current.get(threadId);
+          if (mapping === undefined) return Result.err(notFound(threadId));
+          if (mapping.reviewerThreadIds.includes(reviewerThreadId)) {
+            return Result.ok(mapping);
+          }
+          const taken = takenReviewer(
+            current,
+            claimed,
+            threadId,
+            reviewerThreadId,
           );
-        }
-        return Result.ok({
-          ...mapping,
-          reviewerThreadIds: [...mapping.reviewerThreadIds, reviewerThreadId],
-        });
-      }),
+          if (taken !== null) {
+            return Result.err(
+              new ReviewerTaken({
+                threadId,
+                reviewerThreadId,
+                message: `thread ${reviewerThreadId} is ${taken}`,
+              }),
+            );
+          }
+          return Result.ok({
+            ...mapping,
+            reviewerThreadIds: [...mapping.reviewerThreadIds, reviewerThreadId],
+          });
+        },
+      );
+      const refused =
+        added.isErr() &&
+        (added.error._tag === "ReviewerTaken" ||
+          added.error._tag === "ThreadNotFound");
+      if (claimed === undefined && (added.isOk() || refused)) {
+        claimedReviewers.delete(reviewerThreadId);
+      }
+      return added;
+    },
 
     reviewerOwner: (reviewerThreadId: string) =>
-      ownerIn(mappings, reviewerThreadId),
+      ownerIn(mappings, reviewerThreadId) ??
+      claimedReviewers.get(reviewerThreadId),
 
     addMessageId: (threadId: string, messageId: string) =>
       update(threadId, (mapping) =>
@@ -350,6 +373,19 @@ const createThreadStore = (
         }
       }),
   };
+};
+
+const takenReviewer = (
+  mappings: ReadonlyMap<string, ThreadMapping>,
+  claimedBy: string | undefined,
+  threadId: string,
+  reviewerThreadId: string,
+) => {
+  if (mappings.has(reviewerThreadId)) return "a Claude thread";
+  const owner = ownerIn(mappings, reviewerThreadId) ?? claimedBy;
+  return owner === undefined || owner === threadId
+    ? null
+    : "another thread's reviewer";
 };
 
 const ownerIn = (

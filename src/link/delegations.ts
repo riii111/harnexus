@@ -55,23 +55,13 @@ export const createDelegationWatch = () => {
   return { observe, expect };
 };
 
-// Only the create_thread tool output carries the delegation, as <source_thread_id>…</source_thread_id> in text the app writes.
+// Only the create_thread tool output names the thread that created the one it starts.
 export const delegationSource = (params: Record<string, unknown>) => {
-  const output = params.toolOutput;
-  if (
-    typeof output !== "object" ||
-    output === null ||
-    !("name" in output) ||
-    output.name !== "create_thread" ||
-    !("output" in output)
-  ) {
-    return null;
-  }
-  const body = JSON.stringify(output.output) ?? "";
-  return SOURCE_THREAD.exec(body)?.[1] ?? null;
+  const message = delegatedMessage(params);
+  return message?.tool === "create_thread" ? message.sourceThreadId : null;
 };
 
-// A message from another thread arrives as the output of the codex_app call that sent it, in place of typed input; only an output made of text can reach Claude.
+// A message from another thread arrives as the output of the codex_app call that sent it, with the sender as <source_thread_id>…</source_thread_id> in text the app writes; only an output made of text can reach Claude.
 export const delegatedMessage = (params: Record<string, unknown>) => {
   const output = params.toolOutput;
   if (
@@ -84,7 +74,11 @@ export const delegatedMessage = (params: Record<string, unknown>) => {
   const text = outputText(output.output);
   return text === null
     ? null
-    : { text, sourceThreadId: SOURCE_THREAD.exec(text)?.[1] ?? null };
+    : {
+        tool: output.name,
+        text,
+        sourceThreadId: SOURCE_THREAD.exec(text)?.[1] ?? null,
+      };
 };
 
 const outputText = (body: unknown) => {
