@@ -165,15 +165,15 @@ export const createTurnController = ({
       refuse(id, "no running Claude turn matches turnId");
       return;
     }
-    // A repeated stop is answered without asking Claude again, since the first interrupt already decides what happens to the session.
+    // A stop while the session already has an interrupt in flight, from this turn or an earlier one, is answered without asking Claude again; that interrupt decides the session, and a turn that has not sent yet stops before sending.
     const repeated = entry.state.interrupting;
     entry.state = markInterrupting(entry.state);
     send({ id, result: {} });
     const session = sessions.get(threadId);
-    if (session === undefined || repeated) return;
+    if (session === undefined || repeated || interrupting.has(session)) return;
     // A send still queued in Claude would run after the interrupt, and an old CLI cannot say whether one is, so either way the session is closed and the next turn resumes it.
     const settled = session.interrupt().then((interrupted) => {
-      interrupting.delete(session);
+      if (interrupting.get(session) === settled) interrupting.delete(session);
       const stopped =
         interrupted.isOk() &&
         interrupted.value !== null &&
@@ -253,6 +253,11 @@ export const createTurnController = ({
     log({ event: "claude_turn", step: "started", detail: null });
     apply(entry, renderUserInput(started.state, input, null, now()));
 
+    await interruptSettled(threadId);
+    if (entry.state?.interrupting) {
+      finish(entry, { status: "interrupted" });
+      return;
+    }
     const session = await sessionFor(record);
     if (session.isErr()) {
       finish(
@@ -308,12 +313,16 @@ export const createTurnController = ({
     }
   };
 
+  const interruptSettled = async (threadId: string) => {
+    const existing = sessions.get(threadId);
+    if (existing !== undefined) await interrupting.get(existing);
+  };
+
   const sessionFor = async (record: ThreadRecord) => {
     const existing = sessions.get(record.threadId);
-    if (existing !== undefined) {
-      await interrupting.get(existing);
-      if (sessions.get(record.threadId) === existing)
-        return Result.ok(existing);
+    if (existing !== undefined) return Result.ok(existing);
+    if (closed) {
+      return Result.err(new BridgeClosing({ message: BRIDGE_CLOSING }));
     }
     // TODO: clear a stored session id that Claude can no longer resume in P11a, which decides how a missing session is shown; until then every turn of that thread fails the same way.
     const started = await startSession({

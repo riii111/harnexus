@@ -241,6 +241,52 @@ describe("turn/interrupt", () => {
     expect(settings[1]).toMatchObject({ resume: "se-1" });
   });
 
+  test("stops a turn waiting on an earlier interrupt without asking Claude again", async () => {
+    const gate = createGate();
+    const first = fakeClaude(SUBSCRIPTION, {
+      stillQueued: ["uuid-queued"],
+      interruptAnswered: gate.promise,
+    });
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings } = await harness([first, second]);
+    await interruptBeforeReceipt(turns, sent, first);
+
+    turns.startTurn(turnStart(11, "again"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    turns.interruptTurn(interrupt(21, "turn-2"));
+    gate.open();
+    await until(() => turnsCompleted(sent).length === 2);
+    await completeTurn(turns, sent, second, 12);
+
+    expect(responseTo(sent, 21)).toEqual({ id: 21, result: {} });
+    expect(first.interrupts()).toBe(1);
+    expect(turnsCompleted(sent)).toEqual([
+      "interrupted",
+      "interrupted",
+      "completed",
+    ]);
+    expect(settings).toHaveLength(2);
+  });
+
+  test("starts no Claude for a waiting turn once the bridge is closing", async () => {
+    const gate = createGate();
+    const first = fakeClaude(SUBSCRIPTION, {
+      stillQueued: ["uuid-queued"],
+      interruptAnswered: gate.promise,
+    });
+    const { turns, sent, settings } = await harness([first]);
+    await interruptBeforeReceipt(turns, sent, first);
+
+    turns.startTurn(turnStart(11, "again"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    turns.closeAll();
+    gate.open();
+    await until(() => turnsCompleted(sent).length === 2);
+
+    expect(turnsCompleted(sent)).toEqual(["interrupted", "failed"]);
+    expect(settings).toHaveLength(1);
+  });
+
   test("keeps an interrupt accepted while Claude was starting", async () => {
     const claude = fakeClaude({ apiProvider: "bedrock" });
     let start = () => {};
@@ -426,6 +472,22 @@ const diskFull = async (target: string) =>
       message: `cannot write ${target}`,
     }),
   );
+
+// Leaves turn-1 ended by its result while the interrupt receipt is still held back.
+const interruptBeforeReceipt = async (
+  turns: ReturnType<typeof createTurnController>,
+  sent: Sent[],
+  claude: ReturnType<typeof fakeClaude>,
+) => {
+  turns.startTurn(turnStart(10, "hello"), undefined);
+  await until(() => claude.started());
+  turns.interruptTurn(interrupt(20, "turn-1"));
+  claude.emit(
+    sdk(result({ subtype: "error_during_execution", is_error: true })),
+  );
+  await until(() => turnCompleted(sent) !== undefined);
+  expect(turnCompleted(sent)).toMatchObject({ status: "interrupted" });
+};
 
 const createGate = () => {
   let open = () => {};
