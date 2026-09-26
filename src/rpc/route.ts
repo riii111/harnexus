@@ -138,12 +138,7 @@ export const createRouter = (
     request: AppRequest,
     reason: Refusal,
   ) => {
-    turns.reject(
-      request,
-      reason === "unsupported_request"
-        ? `${method} is not supported on a Claude thread yet`
-        : refusalMessage(reason),
-    );
+    turns.reject(request, refusalMessage(reason));
     log({ event: "claude_request_refused", method, reason });
   };
 
