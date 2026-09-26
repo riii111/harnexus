@@ -5,10 +5,10 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result, TaggedError } from "better-result";
 import { z } from "zod";
-import { isClaudeModel } from "../../conversation/models.ts";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 import { createSerialQueue } from "../../runtime/serial-queue.ts";
+import { isClaudeModel } from "../claude/models.ts";
 import type { DelegationWatch } from "./delegations.ts";
 import type { ServerRequest } from "./server-requests.ts";
 

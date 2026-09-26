@@ -273,15 +273,7 @@ type Area = "bootstrap" | "conversation" | "presentation" | "infra" | "runtime";
 type Exception = { from: string; to: string; reason: string; until: string };
 
 // A pair listed here passes the area rules; the check fails once the reference disappears, so the list only shrinks.
-const EXCEPTIONS: readonly Exception[] = [
-  {
-    from: "infra/codex/codex-link.ts",
-    to: "conversation/models.ts",
-    reason:
-      "create_thread offers the Claude models, whose ids conversation/ owns",
-    until: "RA-02",
-  },
-];
+const EXCEPTIONS: readonly Exception[] = [];
 
 const ALLOWED: Record<Area, readonly Area[]> = {
   bootstrap: ["bootstrap", "conversation", "presentation", "infra", "runtime"],

@@ -1,7 +1,8 @@
+import { isClaudeModel } from "../infra/claude/models.ts";
 import { delegationSource } from "../infra/codex/delegations.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
-import { isClaudeModel, withClaudeModels } from "./models.ts";
+import { withClaudeModels } from "./model-list.ts";
 import {
   type AppRequest,
   checkThread,
