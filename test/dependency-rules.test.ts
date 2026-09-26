@@ -5,33 +5,6 @@ import { dirname, join, relative } from "node:path";
 import { type Node, SyntaxKind } from "typescript/unstable/ast";
 import { API } from "typescript/unstable/async";
 
-type Area = "bootstrap" | "conversation" | "presentation" | "infra" | "runtime";
-
-type Exception = { from: string; to: string; reason: string; until: string };
-
-// A pair listed here passes the area rules; the check fails once the reference disappears, so the list only shrinks.
-const EXCEPTIONS: readonly Exception[] = [
-  {
-    from: "infra/codex/codex-link.ts",
-    to: "conversation/models.ts",
-    reason:
-      "create_thread offers the Claude models, whose ids conversation/ owns",
-    until: "RA-02",
-  },
-];
-
-// Every area may use itself and runtime/; bootstrap/ alone may use bootstrap/.
-const ALLOWED: Record<Area, readonly Area[]> = {
-  bootstrap: ["bootstrap", "conversation", "presentation", "infra", "runtime"],
-  conversation: ["conversation", "presentation", "infra", "runtime"],
-  presentation: ["presentation", "runtime"],
-  infra: ["infra", "runtime"],
-  runtime: ["runtime"],
-};
-
-// Parsing JSON performs no I/O, so presentation/ may use it like any pure runtime helper.
-const PURE_BOUNDARIES = new Set(["runtime/json.boundary.ts"]);
-
 describe("dependency rules of src", () => {
   test("hold for every source file with only the listed exceptions", async () => {
     const references = await collectReferences(ROOT);
@@ -295,6 +268,32 @@ export const l = m;`,
   });
 });
 
+type Area = "bootstrap" | "conversation" | "presentation" | "infra" | "runtime";
+
+type Exception = { from: string; to: string; reason: string; until: string };
+
+// A pair listed here passes the area rules; the check fails once the reference disappears, so the list only shrinks.
+const EXCEPTIONS: readonly Exception[] = [
+  {
+    from: "infra/codex/codex-link.ts",
+    to: "conversation/models.ts",
+    reason:
+      "create_thread offers the Claude models, whose ids conversation/ owns",
+    until: "RA-02",
+  },
+];
+
+const ALLOWED: Record<Area, readonly Area[]> = {
+  bootstrap: ["bootstrap", "conversation", "presentation", "infra", "runtime"],
+  conversation: ["conversation", "presentation", "infra", "runtime"],
+  presentation: ["presentation", "runtime"],
+  infra: ["infra", "runtime"],
+  runtime: ["runtime"],
+};
+
+// Parsing JSON performs no I/O, so presentation/ may use it like any pure runtime helper.
+const PURE_BOUNDARIES = new Set(["runtime/json.boundary.ts"]);
+
 type Reference =
   | { kind: "file"; file: string }
   | { kind: "import"; from: string; specifier: string; to: string | undefined };
@@ -499,7 +498,6 @@ afterAll(async () => {
   await rm(tmp, { recursive: true, force: true });
 });
 
-// Each case gets its own project root, with the files placed relative to its src/.
 const writeProject = async (files: Record<string, string>) => {
   projects += 1;
   const root = join(tmp, `project-${projects}`);
