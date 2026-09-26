@@ -1,7 +1,6 @@
 import { parseJson } from "../boundary/json.ts";
 import { createLineSplitter } from "./line-splitter.ts";
-
-export type Direction = "app_to_server" | "server_to_app";
+import type { Direction } from "./relay.ts";
 
 // Only identifiers and structural schema reach an event, so params, conversations, code and credentials never do.
 export type ObservationEvent =
@@ -74,7 +73,7 @@ export const createObserver = (
     const id = requestId(message.id);
     const method =
       kind === "response" || kind === "error_response"
-        ? requests.answer(direction, id)
+        ? requests.takeMethod(direction, id)
         : identifier(String(message.method));
     if (kind === "request") requests.remember(direction, id, method);
     const tools = toolDefinitions(kind, method, message);
@@ -131,7 +130,7 @@ const createRequestTracker = () => {
       }
       pending.set(key(direction, id), method);
     },
-    answer: (direction: Direction, id: RequestId | null) => {
+    takeMethod: (direction: Direction, id: RequestId | null) => {
       if (id === null) return null;
       const requestKey = key(opposite(direction), id);
       const method = pending.get(requestKey) ?? null;

@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { isObject } from "../shared/object.ts";
 import { isClaudeModel } from "./models.ts";
 
 export type Thread = { model: string; cwd: string };
@@ -65,9 +66,6 @@ const isSameDirectory = (a: string, b: string) => resolve(a) === resolve(b);
 
 const collaborationMode = (params: Record<string, unknown>) =>
   isObject(params.collaborationMode) ? params.collaborationMode : undefined;
-
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const REFUSAL_MESSAGES = {
   missing_thread: "the request needs a threadId",

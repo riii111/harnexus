@@ -12,7 +12,7 @@ class StatePathNotAbsolute extends TaggedError("StatePathNotAbsolute")<{
   message: string;
 }> {}
 
-export const LOG_PATH_ENV = "HARNEXUS_LOG_PATH";
+const LOG_PATH_ENV = "HARNEXUS_LOG_PATH";
 
 export const loadLogPath = (env: Record<string, string | undefined>) => {
   const path = env[LOG_PATH_ENV];
@@ -49,7 +49,7 @@ export const loadStatePath = (
   return Result.ok(path);
 };
 
-export const SHUTDOWN_GRACE_ENV = "HARNEXUS_SHUTDOWN_GRACE_MS";
+const SHUTDOWN_GRACE_ENV = "HARNEXUS_SHUTDOWN_GRACE_MS";
 
 export const loadShutdownGraceMs = (
   env: Record<string, string | undefined>,

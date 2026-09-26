@@ -1,6 +1,8 @@
 // The subset of the app-server protocol the bridge emits for a Claude turn; shapes follow `test/fixtures/app-server/`.
 
-export type AppNotification =
+export type AppNotification = AppNotificationBody & { emittedAtMs: number };
+
+export type AppNotificationBody =
   | Envelope<
       "thread/status/changed",
       { threadId: string; status: ThreadStatus }
@@ -113,11 +115,7 @@ export type McpToolCallItem = {
 
 type ThreadStatus = { type: "idle" } | { type: "active"; activeFlags: never[] };
 
-type Envelope<M extends string, P> = {
-  method: M;
-  params: P;
-  emittedAtMs: number;
-};
+type Envelope<M extends string, P> = { method: M; params: P };
 
 type ItemParams = { item: ThreadItem; threadId: string; turnId: string };
 

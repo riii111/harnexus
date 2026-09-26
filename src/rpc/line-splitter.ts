@@ -1,6 +1,4 @@
-export type LineEvent =
-  | { kind: "line"; bytes: Uint8Array }
-  | { kind: "oversized" };
+type LineEvent = { kind: "line"; bytes: Uint8Array } | { kind: "oversized" };
 
 // A line over maxLineBytes is reported once and skipped up to its newline, so a huge message is never held in memory.
 export const createLineSplitter = (
@@ -33,7 +31,7 @@ export const createLineSplitter = (
           reset();
           onLine({ kind: "oversized" });
         } else if (end > start) {
-          // Buffer#slice shares memory, so the bytes are copied explicitly in case the caller reuses the chunk before the line completes.
+          // subarray shares memory, so the bytes are copied explicitly in case the caller reuses the chunk before the line completes.
           pending.push(new Uint8Array(chunk.subarray(start, end)));
           pendingBytes += end - start;
         }

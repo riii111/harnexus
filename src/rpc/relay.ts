@@ -1,31 +1,28 @@
 import type { Readable, Writable } from "node:stream";
-import type { Signals } from "../boundary/process.ts";
-import type { Direction } from "./observe.ts";
+import type { Signal } from "../boundary/process.ts";
+
+export type Direction = "app_to_server" | "server_to_app";
 
 export type RelayObserver = {
   chunk: (direction: Direction, chunk: Uint8Array) => void;
   end: (direction: Direction) => void;
 };
 
-const DEFAULT_SHUTDOWN_GRACE_MS = 5000;
-
 // The server is not a child here, so the relay ends on its output EOF instead of its exit.
 export const relayStreams = ({
-  input,
-  output,
+  appInput,
+  appOutput,
   serverInput,
   serverOutput,
   observer,
-  signalServer,
-  shutdownGraceMs = DEFAULT_SHUTDOWN_GRACE_MS,
+  stopServer: { signal: signalServer, graceMs },
 }: {
-  input: Readable;
-  output: Writable;
+  appInput: Readable;
+  appOutput: Writable;
   serverInput: Writable;
   serverOutput: Readable;
   observer?: RelayObserver;
-  signalServer?: (signal: Signals) => void;
-  shutdownGraceMs?: number;
+  stopServer: { signal: (signal: Signal) => void; graceMs: number };
 }) =>
   new Promise<void>((resolve) => {
     const timers: ReturnType<typeof setTimeout>[] = [];
@@ -36,43 +33,41 @@ export const relayStreams = ({
       if (!serverInput.writableEnded && !serverInput.destroyed) {
         serverInput.end();
       }
-      if (stopping || signalServer === undefined) return;
+      if (stopping) return;
       stopping = true;
       timers.push(
         setTimeout(() => {
           signalServer("SIGTERM");
-          timers.push(
-            setTimeout(() => signalServer("SIGKILL"), shutdownGraceMs),
-          );
-        }, shutdownGraceMs),
+          timers.push(setTimeout(() => signalServer("SIGKILL"), graceMs));
+        }, graceMs),
       );
     };
     const settle = () => {
       if (settled) return;
       settled = true;
       for (const timer of timers) clearTimeout(timer);
-      input.removeAllListeners("data");
-      input.pause();
+      appInput.removeAllListeners("data");
+      appInput.pause();
       resolve();
     };
     const finish = () => {
-      if (output.destroyed || output.writableEnded) {
+      if (appOutput.destroyed || appOutput.writableEnded) {
         settle();
         return;
       }
-      output.write(new Uint8Array(0), settle);
+      appOutput.write(new Uint8Array(0), settle);
     };
 
     serverInput.on("error", stopServer);
-    input.on("error", stopServer);
-    output.on("error", stopServer);
+    appInput.on("error", stopServer);
+    appOutput.on("error", stopServer);
     serverOutput.on("error", finish);
 
-    pump(input, serverInput, "app_to_server", observer, {
+    pump(appInput, serverInput, "app_to_server", observer, {
       onEnd: stopServer,
       onWriteError: stopServer,
     });
-    pump(serverOutput, output, "server_to_app", observer, {
+    pump(serverOutput, appOutput, "server_to_app", observer, {
       onEnd: finish,
       onWriteError: stopServer,
     });

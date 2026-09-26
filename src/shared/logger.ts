@@ -1,5 +1,6 @@
 import type { InferErr } from "better-result";
-import type { Signals } from "../boundary/process.ts";
+import type { Signal } from "../boundary/process.ts";
+import type { ServerSignalEvent } from "../bridge/supervise.ts";
 import type { ObservationEvent } from "../rpc/observe.ts";
 import type { RouteEvent } from "../rpc/route.ts";
 import type { openThreadStore } from "../state/thread-store.ts";
@@ -7,14 +8,14 @@ import type { TurnEvent } from "../turn/controller.ts";
 import type { loadStatePath } from "./config.ts";
 
 // serialize() copies only known fields, so request bodies, conversations, code and credentials cannot reach the log even through a widened object.
-export type LogEvent =
+type LogEvent =
   | { event: "bridge_started" }
   | { event: "bridge_startup_failed"; reason: StartupFailure }
   | { event: "log_file_unavailable"; reason: LogFileFailure }
   | { event: "server_closed" }
-  | { event: "server_signaled"; signal: Signals }
+  | ServerSignalEvent
   | { event: "claude_unavailable"; reason: ClaudeUnavailable }
-  | { event: "bridge_signaled"; signal: Signals }
+  | { event: "bridge_signaled"; signal: Signal }
   | ObservationEvent
   | TurnEvent
   | RouteEvent;
@@ -29,7 +30,7 @@ type ClaudeUnavailable =
 
 export type LogSink = (line: string) => void;
 
-export const createLogger = (sink: LogSink = stderrSink) => ({
+export const createLogger = (sink: LogSink) => ({
   log: (entry: LogEvent) => {
     const record = { time: new Date().toISOString(), ...serialize(entry) };
     sink(`${JSON.stringify(record)}\n`);
@@ -47,6 +48,8 @@ const serialize = (entry: LogEvent) => {
     case "server_signaled":
     case "bridge_signaled":
       return { event: entry.event, signal: entry.signal };
+    case "server_signal_failed":
+      return { event: entry.event, signal: entry.signal, code: entry.code };
     case "claude_unavailable":
       return { event: entry.event, reason: entry.reason };
     case "claude_turn":
@@ -110,8 +113,4 @@ const serializeTurn = (entry: TurnEvent) => {
     case "run_state_not_saved":
       return { event: entry.event, step: entry.step, error: entry.error };
   }
-};
-
-const stderrSink: LogSink = (line) => {
-  process.stderr.write(line);
 };

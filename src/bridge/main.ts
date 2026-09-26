@@ -1,6 +1,6 @@
 import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
-import { openServerPipes, type Signals } from "../boundary/process.ts";
+import { openServerPipes } from "../boundary/process.ts";
 import { startClaudeSession } from "../claude/session.ts";
 import { createDelegationWatch } from "../link/delegations.ts";
 import { createCodexLink } from "../mcp/codex-link.ts";
@@ -14,18 +14,22 @@ import { loadShutdownGraceMs, loadStatePath } from "../shared/config.ts";
 import { openThreadStore } from "../state/thread-store.ts";
 import { createTurnController } from "../turn/controller.ts";
 import { createBridgeLogger } from "./logging.ts";
-import { stopLingeringServer, watchServer } from "./supervise.ts";
+import {
+  serverFromEnv,
+  signalWithLog,
+  stopLingeringServer,
+} from "./supervise.ts";
 
 // Must match bin/harnexus-codex.
 const SERVER_OUTPUT_FD = 3;
 const SERVER_INPUT_FD = 4;
 
-// Handled so Claude processes are closed before exit; Codex still learns of the exit from EOF on its input as before.
+// Handled so Claude processes are closed before exit; the server still learns of the exit from EOF on its input as before.
 const BRIDGE_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
 
-// Codex is not a child of this process, so its exit status goes to the app and is not observable here.
+// The server is not a child of this process, so its exit status goes to the app and is not observable here.
 const logger = createBridgeLogger(process.env);
-const server = watchServer(process.env);
+const server = serverFromEnv(process.env);
 
 const pipes = openServerPipes(SERVER_OUTPUT_FD, SERVER_INPUT_FD);
 if (pipes.isErr()) {
@@ -34,7 +38,10 @@ if (pipes.isErr()) {
 }
 
 logger.log({ event: "bridge_started" });
-const shutdownGraceMs = loadShutdownGraceMs(process.env);
+const stopServer = {
+  signal: signalWithLog(server, logger.log),
+  graceMs: loadShutdownGraceMs(process.env),
+};
 const claude = await withClaude({
   ...pipes.value,
   observer: createObserver(logger.log),
@@ -46,29 +53,21 @@ for (const signal of BRIDGE_SIGNALS) {
     process.exit(128 + constants.signals[signal]);
   });
 }
-await relayStreams({ ...claude.streams, signalServer, shutdownGraceMs });
+await relayStreams({ ...claude.streams, stopServer });
 logger.log({ event: "server_closed" });
 claude.closeAll();
 pipes.value.serverInput.destroy();
-await stopLingeringServer({
-  isRunning: server.isRunning,
-  signal: signalServer,
-  graceMs: shutdownGraceMs,
-});
+await stopLingeringServer({ isRunning: server.isRunning, ...stopServer });
 process.exit(0);
 
-function signalServer(signal: Signals) {
-  if (server.signal(signal)) logger.log({ event: "server_signaled", signal });
-}
-
-// Without its thread store the bridge offers no Claude model and relays everything, so Codex keeps working.
+// Without its thread store the bridge offers no Claude model and relays everything, so Codex threads keep working.
 async function withClaude(relay: {
   serverInput: Writable;
   serverOutput: Readable;
   observer: RelayObserver;
 }) {
   const plain = {
-    streams: { input: process.stdin, output: process.stdout, ...relay },
+    streams: { appInput: process.stdin, appOutput: process.stdout, ...relay },
     closeAll: () => {},
   };
   const path = loadStatePath(process.env);
@@ -105,8 +104,8 @@ async function withClaude(relay: {
   return {
     streams: {
       ...relay,
-      input: process.stdin.pipe(appRewriter),
-      output: appInjector.stream,
+      appInput: process.stdin.pipe(appRewriter),
+      appOutput: appInjector.stream,
       serverInput: serverCalls.serverInput,
       serverOutput: serverCalls.serverOutput.pipe(serverRewriter),
     },
