@@ -27,6 +27,7 @@ import {
   renderTurnCompleted,
   renderTurnStarted,
   renderUserInput,
+  runningToolItem,
   type TurnOutcome,
   type TurnState,
 } from "../render/turn.ts";
@@ -655,7 +656,9 @@ export const createTurnController = ({
       if (options.agentID === undefined) {
         apply(active, renderToolRequest(state, block, now()));
       }
-      const item = active.state?.tools[options.toolUseID]?.item ?? null;
+      const item = active.state
+        ? runningToolItem(active.state, options.toolUseID)
+        : null;
       const prompt = promptFor(
         {
           toolName,
