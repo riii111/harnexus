@@ -81,11 +81,6 @@ class StatePersistFailed extends TaggedError("StatePersistFailed")<{
   message: string;
 }> {}
 
-class StateStoreHalted extends TaggedError("StateStoreHalted")<{
-  path: string;
-  message: string;
-}> {}
-
 class StateFileCorrupt extends TaggedError("StateFileCorrupt")<{
   path: string;
   cause?: unknown;
@@ -130,7 +125,6 @@ const createThreadStore = (
   const runStates = new Map<string, RunState>(
     unknownThreadIds.map((threadId) => [threadId, "outcomeUnknown"]),
   );
-  let halted = false;
   const threadQueue = createSerialQueue();
   const fileQueue = createSerialQueue();
 
@@ -139,22 +133,11 @@ const createThreadStore = (
 
   const save = async (
     next: ReadonlyMap<string, ThreadMapping>,
-  ): Promise<Result<void, StatePersistFailed | StateStoreHalted>> => {
-    if (halted) {
-      return Result.err(
-        new StateStoreHalted({
-          path,
-          message: `saving to ${path} stopped after an unconfirmed write; restart to reload it`,
-        }),
-      );
-    }
+  ): Promise<Result<void, StatePersistFailed>> => {
     const written = await files.writeState(path, serializeState(next));
     if (written.isOk()) return Result.ok();
-    // The file already holds next, so memory follows it; later saves stop because what survives a crash is unknown until the file is reloaded.
-    if (written.error._tag === "FileSyncFailed") {
-      mappings = next;
-      halted = true;
-    }
+    // The file already holds next, so memory follows it; the next synced save also makes this rename durable.
+    if (written.error._tag === "FileSyncFailed") mappings = next;
     return Result.err(
       new StatePersistFailed({
         path,
