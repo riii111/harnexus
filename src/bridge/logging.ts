@@ -15,7 +15,7 @@ import {
   serializeServerSignalEvent,
 } from "./supervise.ts";
 
-export type LogEvent =
+type LogEvent =
   | { event: "bridge_started" }
   | { event: "bridge_startup_failed"; reason: StartupFailure }
   | { event: "log_file_unavailable"; reason: LogFileFailure }
@@ -52,7 +52,7 @@ export const createBridgeLogger = (env: NodeJS.ProcessEnv) => {
   return logger;
 };
 
-export const serializeLogEvent = (entry: LogEvent) => {
+const serializeLogEvent = (entry: LogEvent) => {
   switch (entry.event) {
     case "bridge_started":
     case "server_closed":

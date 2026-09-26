@@ -1,33 +1,20 @@
-import { describe, expect, test } from "bun:test";
-import { createLogger } from "../shared/logger.ts";
-import { type LogEvent, serializeLogEvent } from "./logging.ts";
+import { describe, expect, spyOn, test } from "bun:test";
+import { createBridgeLogger } from "./logging.ts";
 
-describe("serializeLogEvent", () => {
-  test("writes one JSON line per event to the sink", () => {
-    const lines: string[] = [];
-    const logger = createLogger((line) => lines.push(line), serializeLogEvent);
+describe("createBridgeLogger", () => {
+  test("records a server signal with only its signal", () => {
+    const [record] = logged({ event: "server_signaled", signal: "SIGTERM" });
 
-    logger.log({ event: "server_signaled", signal: "SIGTERM" });
-
-    expect(lines).toHaveLength(1);
-    expect(lines[0]?.endsWith("\n")).toBe(true);
-    expect(JSON.parse(lines[0] ?? "")).toMatchObject({
-      event: "server_signaled",
-      signal: "SIGTERM",
-    });
+    expect(record).toEqual({ event: "server_signaled", signal: "SIGTERM" });
   });
 
   test("records a failed server signal with its errno code", () => {
-    const lines: string[] = [];
-    const logger = createLogger((line) => lines.push(line), serializeLogEvent);
-
-    logger.log({
+    const [record] = logged({
       event: "server_signal_failed",
       signal: "SIGKILL",
       code: "EPERM",
     });
 
-    const { time: _time, ...record } = JSON.parse(lines[0] ?? "");
     expect(record).toEqual({
       event: "server_signal_failed",
       signal: "SIGKILL",
@@ -36,23 +23,19 @@ describe("serializeLogEvent", () => {
   });
 
   test("drops fields outside the event shape", () => {
-    const lines: string[] = [];
-    const logger = createLogger((line) => lines.push(line), serializeLogEvent);
     const entry = {
       event: "bridge_started",
       params: { token: "secret-token", prompt: "private text" },
     } as const;
     const widened: LogEvent = entry;
 
-    logger.log(widened);
+    const log = JSON.stringify(logged(widened));
 
-    expect(lines.join("")).not.toContain("secret-token");
-    expect(lines.join("")).not.toContain("private text");
+    expect(log).not.toContain("secret-token");
+    expect(log).not.toContain("private text");
   });
 
   test("keeps only the summary fields of an observed message", () => {
-    const lines: string[] = [];
-    const logger = createLogger((line) => lines.push(line), serializeLogEvent);
     const entry = {
       event: "rpc_message",
       direction: "app_to_server",
@@ -65,9 +48,8 @@ describe("serializeLogEvent", () => {
     } as const;
     const widened: LogEvent = entry;
 
-    logger.log(widened);
+    const [record] = logged(widened);
 
-    const { time: _time, ...record } = JSON.parse(lines[0] ?? "");
     expect(record).toEqual({
       event: "rpc_message",
       direction: "app_to_server",
@@ -78,3 +60,20 @@ describe("serializeLogEvent", () => {
     });
   });
 });
+
+type LogEvent = Parameters<ReturnType<typeof createBridgeLogger>["log"]>[0];
+
+// Without HARNEXUS_LOG_PATH the bridge logger writes only to stderr, so each record is read back from there without its time.
+const logged = (entry: LogEvent) => {
+  const lines: string[] = [];
+  const write = spyOn(process.stderr, "write").mockImplementation((line) => {
+    lines.push(String(line));
+    return true;
+  });
+  createBridgeLogger({}).log(entry);
+  write.mockRestore();
+  return lines.map((line) => {
+    const { time: _time, ...record } = JSON.parse(line);
+    return record;
+  });
+};
