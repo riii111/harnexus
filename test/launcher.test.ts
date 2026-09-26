@@ -21,6 +21,7 @@ let dir: string;
 let fakeCodex: string;
 let lingeringCodex: string;
 let reports = 0;
+const launched: Bun.Subprocess[] = [];
 
 beforeAll(async () => {
   dir = await realpath(await mkdtemp(join(tmpdir(), "harnexus-launcher-")));
@@ -33,6 +34,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  killLeftovers();
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -331,7 +333,7 @@ describe("app-server shutdown", () => {
         HARNEXUS_SHUTDOWN_GRACE_MS: "200",
       });
       // An open stdin keeps the relay's disconnect timer out, so only the bridge's own shutdown can signal.
-      const proc = Bun.spawn([LAUNCHER, "app-server"], {
+      const proc = spawnLauncher(["app-server"], {
         cwd: dir,
         env,
         stdin: "pipe",
@@ -357,7 +359,7 @@ describe("app-server shutdown", () => {
     "ends Codex when the bridge dies",
     async () => {
       const { env, reportPath } = setup({});
-      const proc = Bun.spawn([LAUNCHER, "app-server"], {
+      const proc = spawnLauncher(["app-server"], {
         cwd: dir,
         env,
         stdin: "pipe",
@@ -385,7 +387,7 @@ describe("app-server output at exit", () => {
         FAKE_CODEX_MODE: "burst",
         FAKE_BURST_LINES: String(BURST_LINES),
       });
-      const proc = Bun.spawn([LAUNCHER, "app-server"], {
+      const proc = spawnLauncher(["app-server"], {
         cwd: dir,
         env,
         stdin: "pipe",
@@ -492,13 +494,65 @@ const launch = (
   env: Record<string, string>,
   options: { cwd?: string; stdin?: string } = {},
 ) =>
-  Bun.spawn([LAUNCHER, ...args], {
+  spawnLauncher(args, {
     cwd: options.cwd ?? dir,
     env,
     stdin: new Blob([options.stdin ?? ""]),
     stdout: "pipe",
     stderr: "pipe",
   });
+
+const spawnLauncher = <
+  const In extends Bun.SpawnOptions.Writable,
+  const Out extends Bun.SpawnOptions.Readable,
+  const Err extends Bun.SpawnOptions.Readable,
+>(
+  args: string[],
+  options: Bun.SpawnOptions.SpawnOptions<In, Out, Err>,
+) => {
+  const proc = Bun.spawn([LAUNCHER, ...args], options);
+  launched.push(proc);
+  return proc;
+};
+
+// A failed or timed-out test leaves its launcher running, and Codex and the bridge outlive it once reparented, so every process started from this run's directory is killed with its descendants; exited launchers are skipped, since their pids may belong to other processes by now.
+const killLeftovers = () => {
+  const table = processTable();
+  const doomed = new Set<number>(
+    launched
+      .filter((proc) => proc.exitCode === null && proc.signalCode === null)
+      .map((proc) => proc.pid),
+  );
+  for (const { pid, command } of table) {
+    if (command.includes(`${dir}/`)) doomed.add(pid);
+  }
+  for (let added = true; added; ) {
+    added = false;
+    for (const { pid, ppid } of table) {
+      if (!doomed.has(pid) && doomed.has(ppid)) {
+        doomed.add(pid);
+        added = true;
+      }
+    }
+  }
+  for (const pid of doomed) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {}
+  }
+};
+
+const processTable = () =>
+  Bun.spawnSync(["ps", "-A", "-ww", "-o", "pid=,ppid=,command="])
+    .stdout.toString()
+    .split("\n")
+    .map((line) => /^\s*(\d+)\s+(\d+)\s(.*)$/.exec(line))
+    .filter((match) => match !== null)
+    .map(([, pid, ppid, command]) => ({
+      pid: Number(pid),
+      ppid: Number(ppid),
+      command: command ?? "",
+    }));
 
 const finish = async (proc: ReturnType<typeof launch>) => {
   const [stdout, stderr] = await Promise.all([
@@ -589,7 +643,8 @@ if (process.env.FAKE_CODEX_MODE === "burst") {
   process.exit(0);
 } else if (process.env.FAKE_CODEX_MODE === "wait" || process.env.FAKE_CODEX_MODE === "wait-ignore-term") {
   if (process.env.FAKE_CODEX_MODE === "wait-ignore-term") process.on("SIGTERM", () => {});
-  setInterval(() => {}, 1000);
+  // Still ends on its own if the test run is killed before afterAll can stop it.
+  setTimeout(() => process.exit(0), 60_000);
 } else {
   process.stdout.write(await Bun.stdin.text());
   process.exitCode = Number(process.env.FAKE_CODEX_EXIT ?? "0");
