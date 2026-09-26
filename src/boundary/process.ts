@@ -3,7 +3,7 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { Result, TaggedError } from "better-result";
 import { isObject } from "../shared/object.ts";
 
-export type Signals = NodeJS.Signals;
+export type Signal = NodeJS.Signals;
 
 class ChildSpawnFailed extends TaggedError("ChildSpawnFailed")<{
   path: string;
@@ -73,7 +73,7 @@ class ProcessSignalFailed extends TaggedError("ProcessSignalFailed")<{
   message: string;
 }> {}
 
-export const signalProcess = (pid: number, signal: Signals) =>
+export const signalProcess = (pid: number, signal: Signal) =>
   Result.try({
     try: () => {
       process.kill(pid, signal);

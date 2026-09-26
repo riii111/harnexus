@@ -76,7 +76,7 @@ type FailureTag =
 // runWrite is generic in the operation's error, so the store's own tags are listed; a new tag there fails to compile here.
 type StoreTag =
   | ErrorTag<ReturnType<ThreadStore["register"]>>
-  | ErrorTag<ReturnType<ThreadStore["setSession"]>>
+  | ErrorTag<ReturnType<ThreadStore["setSessionId"]>>
   | "ThreadNotFound"
   | "WriteOutcomeUnknown"
   | "WriteNotStarted"
@@ -303,7 +303,7 @@ export const createTurnController = ({
       if (current !== undefined && current !== sessionId) {
         sessionId = current;
         sessionIds.set(threadId, current);
-        const saved = await store.setSession(threadId, current);
+        const saved = await store.setSessionId(threadId, current);
         if (saved.isErr()) {
           log({
             event: "claude_turn",

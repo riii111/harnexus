@@ -1,5 +1,5 @@
 import type { InferErr } from "better-result";
-import type { Signals } from "../boundary/process.ts";
+import type { Signal } from "../boundary/process.ts";
 import type { ObservationEvent } from "../rpc/observe.ts";
 import type { RouteEvent } from "../rpc/route.ts";
 import type { openThreadStore } from "../state/thread-store.ts";
@@ -12,10 +12,10 @@ type LogEvent =
   | { event: "bridge_startup_failed"; reason: StartupFailure }
   | { event: "log_file_unavailable"; reason: LogFileFailure }
   | { event: "server_closed" }
-  | { event: "server_signaled"; signal: Signals }
-  | { event: "server_signal_failed"; signal: Signals; code: string | null }
+  | { event: "server_signaled"; signal: Signal }
+  | { event: "server_signal_failed"; signal: Signal; code: string | null }
   | { event: "claude_unavailable"; reason: ClaudeUnavailable }
-  | { event: "bridge_signaled"; signal: Signals }
+  | { event: "bridge_signaled"; signal: Signal }
   | ObservationEvent
   | TurnEvent
   | RouteEvent;

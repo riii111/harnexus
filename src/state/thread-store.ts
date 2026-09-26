@@ -238,7 +238,7 @@ const createThreadStore = (
           : Result.ok({ ...entry, sessionId: null, reviewerThreadIds: [] }),
       ),
 
-    setSession: (threadId: string, sessionId: string) =>
+    setSessionId: (threadId: string, sessionId: string) =>
       update(threadId, (mapping) => ({ ...mapping, sessionId })),
 
     setModel: (threadId: string, model: string) =>

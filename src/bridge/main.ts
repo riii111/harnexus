@@ -1,6 +1,6 @@
 import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
-import { openServerPipes, type Signals } from "../boundary/process.ts";
+import { openServerPipes, type Signal } from "../boundary/process.ts";
 import { startClaudeSession } from "../claude/session.ts";
 import { createLineInjector } from "../rpc/inject.ts";
 import { createLineRewriter } from "../rpc/line-rewriter.ts";
@@ -11,7 +11,7 @@ import { loadShutdownGraceMs, loadStatePath } from "../shared/config.ts";
 import { openThreadStore } from "../state/thread-store.ts";
 import { createTurnController } from "../turn/controller.ts";
 import { createBridgeLogger } from "./logging.ts";
-import { stopLingeringServer, watchServer } from "./supervise.ts";
+import { serverFromEnv, stopLingeringServer } from "./supervise.ts";
 
 // Must match bin/harnexus-codex.
 const SERVER_OUTPUT_FD = 3;
@@ -22,7 +22,7 @@ const BRIDGE_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
 
 // Codex is not a child of this process, so its exit status goes to the app and is not observable here.
 const logger = createBridgeLogger(process.env);
-const server = watchServer(process.env);
+const server = serverFromEnv(process.env);
 
 const pipes = openServerPipes(SERVER_OUTPUT_FD, SERVER_INPUT_FD);
 if (pipes.isErr()) {
@@ -53,7 +53,7 @@ pipes.value.serverInput.destroy();
 await stopLingeringServer({ isRunning: server.isRunning, ...stopServer });
 process.exit(0);
 
-function signalServer(signal: Signals) {
+function signalServer(signal: Signal) {
   const sent = server.signal(signal);
   if (sent.isErr()) {
     logger.log({
@@ -73,7 +73,7 @@ async function withClaude(relay: {
   observer: RelayObserver;
 }) {
   const plain = {
-    streams: { input: process.stdin, output: process.stdout, ...relay },
+    streams: { appInput: process.stdin, appOutput: process.stdout, ...relay },
     closeAll: () => {},
   };
   const path = loadStatePath(process.env);
@@ -101,8 +101,8 @@ async function withClaude(relay: {
   return {
     streams: {
       ...relay,
-      input: process.stdin.pipe(appRewriter),
-      output: appInjector.stream,
+      appInput: process.stdin.pipe(appRewriter),
+      appOutput: appInjector.stream,
       serverOutput: relay.serverOutput.pipe(serverRewriter),
     },
     closeAll: turns.closeAll,

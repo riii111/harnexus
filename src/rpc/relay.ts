@@ -1,5 +1,5 @@
 import type { Readable, Writable } from "node:stream";
-import type { Signals } from "../boundary/process.ts";
+import type { Signal } from "../boundary/process.ts";
 import type { Direction } from "./observe.ts";
 
 export type RelayObserver = {
@@ -9,19 +9,19 @@ export type RelayObserver = {
 
 // The server is not a child here, so the relay ends on its output EOF instead of its exit.
 export const relayStreams = ({
-  input,
-  output,
+  appInput,
+  appOutput,
   serverInput,
   serverOutput,
   observer,
   stopServer: { signal: signalServer, graceMs },
 }: {
-  input: Readable;
-  output: Writable;
+  appInput: Readable;
+  appOutput: Writable;
   serverInput: Writable;
   serverOutput: Readable;
   observer?: RelayObserver;
-  stopServer: { signal: (signal: Signals) => void; graceMs: number };
+  stopServer: { signal: (signal: Signal) => void; graceMs: number };
 }) =>
   new Promise<void>((resolve) => {
     const timers: ReturnType<typeof setTimeout>[] = [];
@@ -45,28 +45,28 @@ export const relayStreams = ({
       if (settled) return;
       settled = true;
       for (const timer of timers) clearTimeout(timer);
-      input.removeAllListeners("data");
-      input.pause();
+      appInput.removeAllListeners("data");
+      appInput.pause();
       resolve();
     };
     const finish = () => {
-      if (output.destroyed || output.writableEnded) {
+      if (appOutput.destroyed || appOutput.writableEnded) {
         settle();
         return;
       }
-      output.write(new Uint8Array(0), settle);
+      appOutput.write(new Uint8Array(0), settle);
     };
 
     serverInput.on("error", stopServer);
-    input.on("error", stopServer);
-    output.on("error", stopServer);
+    appInput.on("error", stopServer);
+    appOutput.on("error", stopServer);
     serverOutput.on("error", finish);
 
-    pump(input, serverInput, "app_to_server", observer, {
+    pump(appInput, serverInput, "app_to_server", observer, {
       onEnd: stopServer,
       onWriteError: stopServer,
     });
-    pump(serverOutput, output, "server_to_app", observer, {
+    pump(serverOutput, appOutput, "server_to_app", observer, {
       onEnd: finish,
       onWriteError: stopServer,
     });

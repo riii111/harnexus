@@ -14,8 +14,8 @@ describe("relayStreams", () => {
     const echo = new PassThrough();
 
     await relayStreams({
-      input: Readable.from(FIXED_CHUNKS),
-      output: output.stream,
+      appInput: Readable.from(FIXED_CHUNKS),
+      appOutput: output.stream,
       serverInput: echo,
       serverOutput: echo,
       stopServer: IGNORE_SIGNALS,
@@ -48,8 +48,8 @@ describe("relayStreams", () => {
     const echo = new PassThrough();
 
     await relayStreams({
-      input: Readable.from(chunks),
-      output: output.stream,
+      appInput: Readable.from(chunks),
+      appOutput: output.stream,
       serverInput: echo,
       serverOutput: echo,
       stopServer: IGNORE_SIGNALS,
@@ -65,8 +65,8 @@ describe("relayStreams", () => {
     const input = new PassThrough();
 
     const relaying = relayStreams({
-      input,
-      output: output.stream,
+      appInput: input,
+      appOutput: output.stream,
       serverInput: serverInput.stream,
       serverOutput,
       stopServer: IGNORE_SIGNALS,
@@ -85,8 +85,8 @@ describe("relayStreams", () => {
     const input = new PassThrough();
 
     const relaying = relayStreams({
-      input,
-      output: collector().stream,
+      appInput: input,
+      appOutput: collector().stream,
       serverInput: serverInput.stream,
       serverOutput,
       stopServer: IGNORE_SIGNALS,
@@ -105,8 +105,8 @@ describe("relayStreams", () => {
     const input = new PassThrough();
 
     const relaying = relayStreams({
-      input,
-      output: collector().stream,
+      appInput: input,
+      appOutput: collector().stream,
       serverInput: collector().stream,
       serverOutput,
       stopServer: { signal: (signal) => signals.push(signal), graceMs: 20 },
@@ -131,8 +131,8 @@ describe("relayStreams", () => {
     );
 
     const relaying = relayStreams({
-      input: new PassThrough(),
-      output: collector().stream,
+      appInput: new PassThrough(),
+      appOutput: collector().stream,
       serverInput: injector.stream,
       serverOutput,
       stopServer: { signal: (signal) => signals.push(signal), graceMs: 20 },
@@ -151,8 +151,8 @@ describe("relayStreams", () => {
     const input = new PassThrough();
 
     const relaying = relayStreams({
-      input,
-      output: collector().stream,
+      appInput: input,
+      appOutput: collector().stream,
       serverInput: collector().stream,
       serverOutput,
       stopServer: { signal: (signal) => signals.push(signal), graceMs: 50 },
@@ -176,8 +176,8 @@ describe("relayStreams", () => {
     broken.on("error", () => {});
 
     const relaying = relayStreams({
-      input: new PassThrough(),
-      output: broken,
+      appInput: new PassThrough(),
+      appOutput: broken,
       serverInput: serverInput.stream,
       serverOutput,
       stopServer: IGNORE_SIGNALS,
