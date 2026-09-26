@@ -26,18 +26,13 @@ afterEach(async () => {
 });
 
 describe("openThreadStore", () => {
-  test("starts empty when the file does not exist", async () => {
-    const store = await openStore();
-
-    expect(store.get("thread-1")).toBeUndefined();
-  });
-
   test("restores the saved mapping in a new store", async () => {
     const store = await openStore();
     await store.register(ENTRY);
     await store.setSessionId("thread-1", "session-1");
     await store.addReviewer("thread-1", "reviewer-1");
     await store.setModel("thread-1", "claude-opus-5-5");
+    await store.addMessageId("thread-1", "message-1");
 
     const reopened = await openStore();
 
@@ -47,8 +42,20 @@ describe("openThreadStore", () => {
       model: "claude-opus-5-5",
       worktree: "/work/tree",
       reviewerThreadIds: ["reviewer-1"],
+      messageIds: ["message-1"],
       runState: "idle",
     });
+  });
+
+  test("loads a file saved before message ids were kept with none", async () => {
+    await writeFile(
+      path,
+      JSON.stringify({ version: 1, threads: [SAVED_RECORD] }),
+    );
+
+    const store = await openStore();
+
+    expect(store.get("thread-1")?.messageIds).toEqual([]);
   });
 
   test.each([
@@ -86,7 +93,7 @@ describe("openThreadStore", () => {
         started.resolve();
         return new Promise<Result<null, never>>(() => {});
       },
-      never,
+      neverUnknown,
     );
     await started.promise;
 
@@ -115,6 +122,21 @@ describe("ThreadStore", () => {
     expect(updated.isErr() && updated.error._tag).toBe("ThreadNotFound");
   });
 
+  test("keeps both of two updates to the same thread made at once", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+
+    const [session, reviewer] = await Promise.all([
+      store.setSessionId("thread-1", "session-1"),
+      store.addReviewer("thread-1", "reviewer-1"),
+    ]);
+
+    expect(session.isOk() && session.value.sessionId).toBe("session-1");
+    expect(reviewer.isOk() && reviewer.value).toMatchObject(BOTH_UPDATES);
+    expect(store.get("thread-1")).toMatchObject(BOTH_UPDATES);
+    expect((await openStore()).get("thread-1")).toMatchObject(BOTH_UPDATES);
+  });
+
   test("keeps each reviewer once", async () => {
     const store = await openStore();
     await store.register(ENTRY);
@@ -122,6 +144,21 @@ describe("ThreadStore", () => {
     await store.addReviewer("thread-1", "reviewer-1");
 
     expect(store.get("thread-1")?.reviewerThreadIds).toEqual(["reviewer-1"]);
+  });
+
+  test("keeps each message id once and only the latest 64", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    for (let index = 0; index < 70; index += 1) {
+      await store.addMessageId("thread-1", `message-${index}`);
+    }
+    await store.addMessageId("thread-1", "message-69");
+
+    const ids = store.get("thread-1")?.messageIds ?? [];
+
+    expect(ids).toHaveLength(64);
+    expect(ids[0]).toBe("message-6");
+    expect(ids.at(-1)).toBe("message-69");
   });
 
   test("keeps the previous state when a write fails before the rename", async () => {
@@ -199,7 +236,7 @@ describe("ThreadStore.runWrite", () => {
         events.push("first:end");
         return Result.ok(1);
       },
-      never,
+      neverUnknown,
     );
     const second = store.runWrite(
       "thread-1",
@@ -207,7 +244,7 @@ describe("ThreadStore.runWrite", () => {
         events.push("second:start");
         return Result.ok(2);
       },
-      never,
+      neverUnknown,
     );
     await started.promise;
     expect(events).toEqual(["first:start"]);
@@ -235,12 +272,12 @@ describe("ThreadStore.runWrite", () => {
         await blocker.promise;
         return Result.ok("first");
       },
-      never,
+      neverUnknown,
     );
     const second = await store.runWrite(
       "thread-2",
       async () => Result.ok("second"),
-      never,
+      neverUnknown,
     );
 
     expect(second.isOk() && second.value).toBe("second");
@@ -263,7 +300,7 @@ describe("ThreadStore.runWrite", () => {
         await blocker.promise;
         return Result.ok(null);
       },
-      never,
+      neverUnknown,
     );
     await started.promise;
     const held = gated.hold();
@@ -292,7 +329,7 @@ describe("ThreadStore.runWrite", () => {
         saved = store.setSessionId("thread-1", "session-1");
         return Result.ok(null);
       },
-      never,
+      neverUnknown,
     );
     await saved;
 
@@ -309,7 +346,7 @@ describe("ThreadStore.runWrite", () => {
     const rejected = store.runWrite(
       "thread-1",
       () => Promise.reject(new Error("boom")),
-      never,
+      neverUnknown,
     );
 
     await expect(rejected).rejects.toThrow("boom");
@@ -318,7 +355,7 @@ describe("ThreadStore.runWrite", () => {
     const retried = await store.runWrite(
       "thread-1",
       async () => Result.ok("sent"),
-      never,
+      neverUnknown,
     );
     expect(retried.isOk() && retried.value).toBe("sent");
   });
@@ -332,11 +369,15 @@ describe("ThreadStore.runWrite", () => {
       return Result.ok("sent");
     };
 
-    const result = await store.runWrite("thread-1", operation, never);
+    const result = await store.runWrite("thread-1", operation, neverUnknown);
     const resolved = await store.resolveOutcomeUnknown("thread-1");
-    const again = await store.runWrite("thread-1", operation, never);
+    const again = await store.runWrite("thread-1", operation, neverUnknown);
     const restarted = await openStore();
-    const afterRestart = await restarted.runWrite("thread-1", operation, never);
+    const afterRestart = await restarted.runWrite(
+      "thread-1",
+      operation,
+      neverUnknown,
+    );
 
     expect(result.isErr() && result.error._tag).toBe("RunStateNotSaved");
     expect(resolved.isErr() && resolved.error._tag).toBe("RunStateNotSaved");
@@ -354,7 +395,7 @@ describe("ThreadStore.runWrite", () => {
     const result = await store.runWrite(
       "thread-1",
       async () => Result.ok("sent"),
-      never,
+      neverUnknown,
     );
 
     expect(result.isOk() && result.value).toBe("sent");
@@ -392,7 +433,7 @@ describe("ThreadStore.runWrite", () => {
         called = true;
         return Result.ok(null);
       },
-      never,
+      neverUnknown,
     );
 
     expect(retried.isErr() && retried.error._tag).toBe("WriteOutcomeUnknown");
@@ -415,16 +456,18 @@ describe("ThreadStore.runWrite", () => {
     const retried = await store.runWrite(
       "thread-1",
       async () => Result.ok("sent"),
-      never,
+      neverUnknown,
     );
 
     expect(retried.isOk() && retried.value).toBe("sent");
   });
 
-  test("does not start a write whose marker cannot be created", async () => {
-    const good = await openStore();
-    await good.register(ENTRY);
-    const store = await openStore({ createMarker: failingCreate });
+  test.each([
+    { name: "cannot be created", createMarker: failingCreate },
+    { name: "is created without a sync", createMarker: createThenFailSync },
+  ])("does not start a write whose marker $name", async ({ createMarker }) => {
+    const store = await openStore({ createMarker });
+    await store.register(ENTRY);
     let called = false;
 
     const result = await store.runWrite(
@@ -433,15 +476,16 @@ describe("ThreadStore.runWrite", () => {
         called = true;
         return Result.ok(null);
       },
-      never,
+      neverUnknown,
     );
 
     expect(result.isErr() && result.error._tag).toBe("WriteNotStarted");
     expect(called).toBe(false);
     expect(store.get("thread-1")?.runState).toBe("idle");
+    expect(await readdir(`${path}.writes`)).toEqual([]);
   });
 
-  test("recovers when an unconfirmed marker cannot be withdrawn", async () => {
+  test("reports an unconfirmed marker it cannot withdraw and clears it on resolve", async () => {
     let removals = 0;
     const store = await openStore({
       createMarker: createThenFailSync,
@@ -459,37 +503,17 @@ describe("ThreadStore.runWrite", () => {
         called = true;
         return Result.ok(null);
       },
-      never,
+      neverUnknown,
     );
     const stuck = store.get("thread-1")?.runState;
     const afterRestart = (await openStore()).get("thread-1")?.runState;
     const resolved = await store.resolveOutcomeUnknown("thread-1");
 
-    expect(result.isErr() && result.error._tag).toBe("WriteNotStarted");
+    expect(result.isErr() && result.error._tag).toBe("RunStateNotSaved");
     expect(called).toBe(false);
     expect(stuck).toBe("outcomeUnknown");
     expect(afterRestart).toBe("outcomeUnknown");
     expect(resolved.isOk()).toBe(true);
-    expect(store.get("thread-1")?.runState).toBe("idle");
-    expect(await readdir(`${path}.writes`)).toEqual([]);
-  });
-
-  test("withdraws an unconfirmed marker without running the write", async () => {
-    const store = await openStore({ createMarker: createThenFailSync });
-    await store.register(ENTRY);
-    let called = false;
-
-    const result = await store.runWrite(
-      "thread-1",
-      async () => {
-        called = true;
-        return Result.ok(null);
-      },
-      never,
-    );
-
-    expect(result.isErr() && result.error._tag).toBe("WriteNotStarted");
-    expect(called).toBe(false);
     expect(store.get("thread-1")?.runState).toBe("idle");
     expect(await readdir(`${path}.writes`)).toEqual([]);
   });
@@ -504,7 +528,7 @@ describe("ThreadStore.runWrite", () => {
         await store.setSessionId("thread-1", "session-1");
         return Result.ok(null);
       },
-      never,
+      neverUnknown,
     );
 
     expect(store.get("thread-1")).toMatchObject({
@@ -524,7 +548,7 @@ describe("ThreadStore.runWrite", () => {
         called = true;
         return Result.ok(null);
       },
-      never,
+      neverUnknown,
     );
 
     expect(result.isErr() && result.error._tag).toBe("ThreadNotFound");
@@ -541,12 +565,17 @@ class Rejected extends TaggedError("Rejected")<{ message: string }> {}
 const isSendUncertain = (error: SendUncertain | Rejected) =>
   error._tag === "SendUncertain";
 
-const never = () => false;
+const neverUnknown = () => false;
 
 const ENTRY = {
   threadId: "thread-1",
   model: "claude-sonnet-5",
   worktree: "/work/tree",
+};
+
+const BOTH_UPDATES = {
+  sessionId: "session-1",
+  reviewerThreadIds: ["reviewer-1"],
 };
 
 const SAVED_RECORD = {
