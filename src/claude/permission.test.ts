@@ -83,19 +83,19 @@ describe("promptFor calls that must default to no", () => {
     {
       name: "a command",
       call: call("Bash", { command: "ls" }, COMMAND),
-      expected: "Deny",
+      expected: "Allow",
     },
     {
       name: "another tool",
       call: call("WebFetch", {}, null),
-      expected: "Deny",
+      expected: "Allow",
     },
     {
       name: "a plan",
       call: call("ExitPlanMode", {}, null),
-      expected: "Keep planning",
+      expected: "Approve",
     },
-  ])("asks about $name as a question opening on $expected", ({
+  ])("asks about $name as free text that approves only on typing $expected", ({
     call,
     expected,
   }) => {
@@ -103,8 +103,48 @@ describe("promptFor calls that must default to no", () => {
 
     expect(prompt.method).toBe("item/tool/requestUserInput");
     expect(prompt.params.questions).toMatchObject([
-      { options: [{ label: expected }, {}] },
+      {
+        question: expect.stringContaining(`Type "${expected}" to approve`),
+        isOther: true,
+        options: null,
+      },
     ]);
+  });
+
+  test.each([
+    { name: "the approving word", typed: "Allow", expected: "allow" },
+    {
+      name: "the approving word in other case and spacing",
+      typed: " allow ",
+      expected: "allow",
+    },
+    { name: "a choice number", typed: "2", expected: "deny" },
+    { name: "the refusing word", typed: "Deny", expected: "deny" },
+    { name: "an empty answer", typed: "", expected: "deny" },
+  ])("answers $expected to $name", ({ typed, expected }) => {
+    const prompt = promptFor(
+      { ...call("WebFetch", {}, null), defaultToNo: true },
+      TARGET,
+    );
+
+    expect(
+      prompt.decide({ answers: { approval: { answers: [typed] } } }).behavior,
+    ).toBe(expected);
+  });
+
+  test("leaves plan mode only when the approving word is typed", () => {
+    const prompt = promptFor(
+      { ...call("ExitPlanMode", {}, null), defaultToNo: true },
+      TARGET,
+    );
+
+    const typed = prompt.decide({
+      answers: { plan: { answers: ["approve"] } },
+    });
+    const numbered = prompt.decide({ answers: { plan: { answers: ["1"] } } });
+
+    expect(typed.behavior).toBe("allow");
+    expect(numbered.behavior).toBe("deny");
   });
 });
 

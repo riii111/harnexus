@@ -110,12 +110,13 @@ const planPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
       id: PLAN_QUESTION,
       header: "Plan",
       question:
-        typeof call.input.plan === "string"
+        (typeof call.input.plan === "string"
           ? `${call.input.plan}\n\nStart implementing this plan?`
-          : "Claude has finished planning. Start implementing?",
+          : "Claude has finished planning. Start implementing?") +
+        typedApproval(call, APPROVE_PLAN),
       isOther: true,
       isSecret: false,
-      options: refusalFirst(call, [
+      options: choicesFor(call, [
         { label: APPROVE_PLAN, description: "Leave plan mode and implement" },
         { label: KEEP_PLANNING, description: "Stay in plan mode" },
       ]),
@@ -124,7 +125,7 @@ const planPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
   decide: (answer) => {
     const [chosen] = answersTo(answer, PLAN_QUESTION);
     if (chosen === undefined) return unanswered(call);
-    if (chosen === APPROVE_PLAN) {
+    if (isChoice(chosen, APPROVE_PLAN)) {
       return {
         behavior: "allow",
         updatedPermissions: [
@@ -134,10 +135,9 @@ const planPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
     }
     return {
       behavior: "deny",
-      message:
-        chosen === KEEP_PLANNING
-          ? "The user wants to keep planning."
-          : `The user wants changes to the plan: ${chosen}`,
+      message: isChoice(chosen, KEEP_PLANNING)
+        ? "The user wants to keep planning."
+        : `The user wants changes to the plan: ${chosen}`,
     };
   },
 });
@@ -148,13 +148,14 @@ const toolPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
     {
       id: APPROVAL_QUESTION,
       header: "Approval",
-      question: [
-        call.title ?? `Allow Claude to use ${call.toolName}?`,
-        JSON.stringify(call.input, null, 2),
-      ].join("\n\n"),
-      isOther: false,
+      question:
+        [
+          call.title ?? `Allow Claude to use ${call.toolName}?`,
+          JSON.stringify(call.input, null, 2),
+        ].join("\n\n") + typedApproval(call, ALLOW),
+      isOther: call.defaultToNo,
       isSecret: false,
-      options: refusalFirst(call, [
+      options: choicesFor(call, [
         { label: ALLOW, description: "Run this tool call once" },
         { label: DENY, description: "Refuse this tool call" },
       ]),
@@ -163,7 +164,7 @@ const toolPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
   decide: (answer) => {
     const [chosen] = answersTo(answer, APPROVAL_QUESTION);
     if (chosen === undefined) return unanswered(call);
-    return chosen === ALLOW ? { behavior: "allow" } : declined(call);
+    return isChoice(chosen, ALLOW) ? { behavior: "allow" } : declined(call);
   },
 });
 
@@ -180,9 +181,17 @@ const decideApproval = (call: ToolCall, answer: unknown): PermissionResult => {
   return accepted ? { behavior: "allow" } : declined(call);
 };
 
-// The app selects the first option, so a call that must default to no lists its refusal first.
-const refusalFirst = <T>(call: ToolCall, [approve, refuse]: [T, T]) =>
-  call.defaultToNo ? [refuse, approve] : [approve, refuse];
+// The app picks and submits a choice on a single number key, so a call that must default to no offers no choices and approves only when the approving word is typed.
+const choicesFor = <T>(call: ToolCall, choices: T[]) =>
+  call.defaultToNo ? null : choices;
+
+const typedApproval = (call: ToolCall, word: string) =>
+  call.defaultToNo
+    ? `\n\nType "${word}" to approve. Any other answer refuses.`
+    : "";
+
+const isChoice = (chosen: string, label: string) =>
+  chosen.trim().toLowerCase() === label.toLowerCase();
 
 const multiSelectQuestion = (asked: AskedQuestion) =>
   [
