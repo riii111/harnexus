@@ -401,7 +401,12 @@ describe("turn/steer", () => {
     expect(turnsCompleted(sent)).toEqual(["completed"]);
   });
 
-  test("keeps the turn open through the Claude turn that runs a steer taken too late", async () => {
+  test.each([
+    { name: "queued when Claude ended its turn", queued: 1 },
+    { name: "sent after Claude wrote its result", queued: 0 },
+  ])("keeps the turn open through the Claude turn that runs a steer $name", async ({
+    queued,
+  }) => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
 
@@ -410,7 +415,7 @@ describe("turn/steer", () => {
     turns.steerTurn(steer(30, "turn-1", "also this"));
     const [prompt, steered] = await readPrompts(claude, 2);
     claude.emit(sdk(answer("msg-1", "first")));
-    claude.emit(sdk(success([prompt?.uuid], 1)));
+    claude.emit(sdk(success([prompt?.uuid], queued)));
     await settle();
     expect(turnsCompleted(sent)).toEqual([]);
     claude.emit(sdk(answer("msg-2", "second")));
@@ -422,8 +427,24 @@ describe("turn/steer", () => {
     expect(claude.closes()).toBe(0);
   });
 
-  // user_message_uuids holds at most 64 sends, so a steer Claude took can go unnamed.
-  test("ends the turn and closes Claude when nothing is queued but a steer went unnamed", async () => {
+  // user_message_uuids holds at most 64 sends and user_message_uuid only the last, so a steer Claude took can go unnamed.
+  test.each<{ name: string; taken: (uuid: string | undefined) => object }>([
+    {
+      name: "a full list",
+      taken: (uuid) => ({
+        user_message_uuids: [
+          uuid,
+          ...Array.from({ length: 63 }, (_, i) => `uuid-${i}`),
+        ],
+      }),
+    },
+    {
+      name: "only the last uuid",
+      taken: (uuid) => ({ user_message_uuid: uuid }),
+    },
+  ])("ends the turn and closes Claude when nothing is queued and $name leaves a steer unnamed", async ({
+    taken,
+  }) => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
 
@@ -431,7 +452,17 @@ describe("turn/steer", () => {
     await until(() => claude.started());
     turns.steerTurn(steer(30, "turn-1", "also this"));
     const [prompt] = await readPrompts(claude, 2);
-    claude.emit(sdk(success([prompt?.uuid], 0)));
+    claude.emit(
+      sdk(
+        result({
+          subtype: "success",
+          is_error: false,
+          result: "done",
+          queued_turn_count: 0,
+          ...taken(prompt?.uuid),
+        }),
+      ),
+    );
     await until(() => turnCompleted(sent) !== undefined);
 
     expect(turnsCompleted(sent)).toEqual(["completed"]);

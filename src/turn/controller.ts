@@ -573,16 +573,20 @@ export const createTurnController = ({
   };
 };
 
-// The turn waits only when the CLI counts a queued send, which promises another result; the uuid lists are capped and may name only the last send, so they narrow the pending steers but never keep the turn open alone.
+// A list under its cap names every send the turn took, so a steer it leaves out runs as a later turn, even one that reached Claude after this result was written.
+// A capped list or the single last uuid may leave out a steer already taken, so the turn then waits only when the CLI counts a queued send, which promises another result.
 // A failed result ends the turn, since the steer's run would otherwise hide its error.
 const awaitsSteer = (active: ActiveTurn, result: SDKResultMessage) => {
+  const listed = result.user_message_uuids;
   const taken =
-    result.user_message_uuids ??
+    listed ??
     (result.user_message_uuid === undefined ? [] : [result.user_message_uuid]);
   for (const uuid of taken) active.pendingSteers.delete(uuid);
   if (active.state?.interrupting) return false;
   if (result.subtype !== "success" || result.is_error) return false;
-  return (result.queued_turn_count ?? 0) > 0 && active.pendingSteers.size > 0;
+  if (active.pendingSteers.size === 0) return false;
+  const complete = listed !== undefined && listed.length < TAKEN_UUIDS_LIMIT;
+  return complete || (result.queued_turn_count ?? 0) > 0;
 };
 
 const resumeFrom = (sessionId: string | null) =>
@@ -607,3 +611,6 @@ const isTextItem = (item: unknown): item is { type: "text"; text: string } =>
   typeof item.text === "string";
 
 const INVALID_REQUEST = -32600;
+
+// The SDK documents user_message_uuids as holding at most this many entries.
+const TAKEN_UUIDS_LIMIT = 64;
