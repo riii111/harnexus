@@ -88,6 +88,8 @@ const serialize = (entry: LogEvent) => {
 const serializeTurn = (entry: TurnEvent) => {
   switch (entry.step) {
     case "started":
+    case "queued":
+    case "outcome_unknown":
       return { event: entry.event, step: entry.step };
     case "finished":
       return {
@@ -106,6 +108,7 @@ const serializeTurn = (entry: TurnEvent) => {
     case "interrupt_failed":
     case "session_not_saved":
     case "run_state_not_saved":
+    case "message_id_not_saved":
       return { event: entry.event, step: entry.step, error: entry.error };
   }
 };

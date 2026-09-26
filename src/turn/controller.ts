@@ -9,6 +9,7 @@ import type {
   ClaudeSessionSettings,
   startClaudeSession,
 } from "../claude/session.ts";
+import type { createCodexLink } from "../mcp/codex-link.ts";
 import type { UserInput } from "../render/protocol.ts";
 import {
   finishTurn,
@@ -32,7 +33,7 @@ import {
 
 // Only steps, turn statuses, refusal reasons and error tags are logged, never thread ids or text.
 export type TurnEvent =
-  | { event: "claude_turn"; step: "started" }
+  | { event: "claude_turn"; step: "started" | "queued" | "outcome_unknown" }
   | {
       event: "claude_turn";
       step: "finished";
@@ -48,7 +49,10 @@ export type TurnEvent =
   | { event: "claude_turn"; step: "interrupt_failed"; error: InterruptTag }
   | {
       event: "claude_turn";
-      step: "session_not_saved" | "run_state_not_saved";
+      step:
+        | "session_not_saved"
+        | "run_state_not_saved"
+        | "message_id_not_saved";
       error: StoreTag;
     };
 
@@ -57,6 +61,11 @@ type SessionStart = Awaited<ReturnType<typeof startClaudeSession>>;
 type ClaudeSession = InferOk<SessionStart>;
 
 type StartSession = (settings: ClaudeSessionSettings) => Promise<SessionStart>;
+
+type CodexLink = Pick<
+  ReturnType<typeof createCodexLink>,
+  "server" | "allowedTools" | "hasUnsettledWrite"
+>;
 
 type ErrorTag<R> = InferErr<Awaited<R>> extends { _tag: infer T } ? T : never;
 
@@ -77,6 +86,7 @@ type FailureTag =
 type StoreTag =
   | ErrorTag<ReturnType<ThreadStore["register"]>>
   | ErrorTag<ReturnType<ThreadStore["setSession"]>>
+  | ErrorTag<ReturnType<ThreadStore["addMessageId"]>>
   | "ThreadNotFound"
   | "WriteOutcomeUnknown"
   | "WriteNotStarted"
@@ -86,9 +96,17 @@ type StoreTag =
 type SessionSlot = {
   session: ClaudeSession;
   pendingInterrupt: Promise<void> | null;
+  link: CodexLink;
 };
 
-type ActiveTurn = { threadId: string; state: TurnState | null };
+// link is the thread tool server of the session the turn ran on, read when the turn ends to see whether a write was left undecided.
+type ActiveTurn = {
+  threadId: string;
+  state: TurnState | null;
+  link: CodexLink | null;
+};
+
+type TextInput = { items: UserInput[]; text: string };
 
 class BridgeClosing extends TaggedError("BridgeClosing")<{
   message: string;
@@ -98,10 +116,15 @@ class StreamEnded extends TaggedError("StreamEnded")<{
   message: string;
 }> {}
 
+class LinkWriteUnsettled extends TaggedError("LinkWriteUnsettled")<{
+  message: string;
+}> {}
+
 // A thread keeps one Claude session across turns; a session that fails is dropped and the next turn resumes it from the stored session id.
 export const createTurnController = ({
   store,
   startSession,
+  openLink,
   send,
   log,
   now = Date.now,
@@ -109,6 +132,7 @@ export const createTurnController = ({
 }: {
   store: ThreadStore;
   startSession: StartSession;
+  openLink: (threadId: string) => CodexLink;
   send: (message: object) => void;
   log: (event: TurnEvent) => void;
   now?: () => number;
@@ -120,9 +144,13 @@ export const createTurnController = ({
   const activeTurns = new Map<string, ActiveTurn>();
   // A session id Claude reported but the store failed to save still resumes the conversation while the bridge runs.
   const sessionIds = new Map<string, string>();
+  // Message ids accepted but not yet saved, so a copy arriving while the first waits or runs is caught too.
+  const acceptedMessageIds = new Map<string, Set<string>>();
+  const turnsInFlight = new Map<string, number>();
   let closed = false;
 
   // fallbackCwd is the thread's directory as last reported by the server, used when a Codex thread switches to Claude.
+  // A turn/start on a busy thread, such as a reviewer's reply, waits in the store's per-thread queue instead of being refused.
   const startTurn = (
     { id, params }: AppRequest,
     fallbackCwd: string | undefined,
@@ -146,15 +174,20 @@ export const createTurnController = ({
       refuse(id, "bridge_closing");
       return;
     }
-    if (activeTurns.has(threadId)) {
-      refuse(id, "turn_running");
+    const messageId = clientMessageId(params);
+    if (messageId !== null && isDelivered(threadId, messageId)) {
+      refuse(id, "duplicate_message");
       return;
     }
-    const active: ActiveTurn = { threadId, state: null };
-    activeTurns.set(threadId, active);
-    void runTurn(id, checked.thread, active, input.items, input.text).then(() =>
-      release(active),
-    );
+    if (messageId !== null) acceptMessage(threadId, messageId);
+    const inFlight = turnsInFlight.get(threadId) ?? 0;
+    if (inFlight > 0) log({ event: "claude_turn", step: "queued" });
+    turnsInFlight.set(threadId, inFlight + 1);
+    void runTurn(id, checked.thread, threadId, input, messageId).then(() => {
+      const left = (turnsInFlight.get(threadId) ?? 1) - 1;
+      if (left === 0) turnsInFlight.delete(threadId);
+      else turnsInFlight.set(threadId, left);
+    });
   };
 
   // The reply comes first so the app sees it before the interrupted turn completes; a failed interrupt stops Claude by closing the session.
@@ -200,22 +233,26 @@ export const createTurnController = ({
     for (const [threadId, slot] of sessions) dropSession(threadId, slot);
   };
 
-  // A failed turn is shown to the user, who decides whether to send it again, so no turn outcome is treated as unknown here; only a crash leaves the marker.
+  // A failed turn is shown to the user, who decides whether to send it again, so no turn outcome is treated as unknown here; only a crash or a thread tool write left undecided leaves the marker.
   const runTurn = async (
     requestId: AppRequest["id"],
     thread: Thread,
-    active: ActiveTurn,
-    input: UserInput[],
-    text: string,
+    threadId: string,
+    input: TextInput,
+    messageId: string | null,
   ) => {
-    const threadId = active.threadId;
     if (store.get(threadId) === undefined) {
       const registered = await store.register({
         threadId,
         model: thread.model,
         worktree: thread.cwd,
       });
-      if (registered.isErr()) {
+      // A turn accepted just before this one may have registered the thread first.
+      if (
+        registered.isErr() &&
+        registered.error._tag !== "ThreadAlreadyRegistered"
+      ) {
+        forgetMessage(threadId, messageId);
         refuse(requestId, "thread_not_saved", registered.error);
         return;
       }
@@ -225,14 +262,34 @@ export const createTurnController = ({
     const ran = await store.runWrite(
       threadId,
       async (record) => {
+        if (closed) {
+          forgetMessage(threadId, messageId);
+          refuse(requestId, "bridge_closing");
+          return Result.ok();
+        }
         responded = true;
-        await streamTurn(requestId, record, active, input, text);
-        return Result.ok();
+        const active: ActiveTurn = { threadId, state: null, link: null };
+        activeTurns.set(threadId, active);
+        await recordMessage(threadId, messageId);
+        await streamTurn(requestId, record, active, input, messageId);
+        release(active);
+        return active.link?.hasUnsettledWrite()
+          ? Result.err(
+              new LinkWriteUnsettled({
+                message: "a thread tool write has an unknown outcome",
+              }),
+            )
+          : Result.ok();
       },
-      () => false,
+      (error) => error._tag === "LinkWriteUnsettled",
     );
     if (ran.isOk()) return;
+    if (ran.error._tag === "LinkWriteUnsettled") {
+      log({ event: "claude_turn", step: "outcome_unknown" });
+      return;
+    }
     if (!responded) {
+      forgetMessage(threadId, messageId);
       // The store's message says why, such as an earlier turn whose outcome is unknown.
       refuse(requestId, "thread_busy", ran.error, ran.error.message);
       return;
@@ -244,12 +301,44 @@ export const createTurnController = ({
     });
   };
 
+  const isDelivered = (threadId: string, messageId: string) =>
+    (acceptedMessageIds.get(threadId)?.has(messageId) ?? false) ||
+    (store.get(threadId)?.messageIds.includes(messageId) ?? false);
+
+  const acceptMessage = (threadId: string, messageId: string) => {
+    const ids = acceptedMessageIds.get(threadId) ?? new Set<string>();
+    acceptedMessageIds.set(threadId, ids.add(messageId));
+  };
+
+  // A message refused before it ran may be sent again.
+  const forgetMessage = (threadId: string, messageId: string | null) => {
+    if (messageId === null) return;
+    const ids = acceptedMessageIds.get(threadId);
+    ids?.delete(messageId);
+    if (ids?.size === 0) acceptedMessageIds.delete(threadId);
+  };
+
+  // An id the store failed to save still stops a copy while the bridge runs.
+  const recordMessage = async (threadId: string, messageId: string | null) => {
+    if (messageId === null) return;
+    const saved = await store.addMessageId(threadId, messageId);
+    if (saved.isErr()) {
+      log({
+        event: "claude_turn",
+        step: "message_id_not_saved",
+        error: saved.error._tag,
+      });
+      return;
+    }
+    forgetMessage(threadId, messageId);
+  };
+
   const streamTurn = async (
     requestId: AppRequest["id"],
     record: ThreadRecord,
     active: ActiveTurn,
-    input: UserInput[],
-    text: string,
+    input: TextInput,
+    messageId: string | null,
   ) => {
     const threadId = record.threadId;
     const started = openTurn({
@@ -261,7 +350,10 @@ export const createTurnController = ({
     apply(active, started);
     send({ id: requestId, result: { turn: started.turn } });
     log({ event: "claude_turn", step: "started" });
-    apply(active, renderUserInput(started.state, input, null, now()));
+    apply(
+      active,
+      renderUserInput(started.state, input.items, messageId, now()),
+    );
 
     await waitForPendingInterrupt(threadId);
     if (active.state?.interrupting) {
@@ -273,11 +365,12 @@ export const createTurnController = ({
       fail(active, slot.error);
       return;
     }
+    active.link = slot.value.link;
     if (active.state?.interrupting) {
       finish(active, { status: "interrupted" }, null);
       return;
     }
-    const sent = slot.value.session.send(text);
+    const sent = slot.value.session.send(input.text);
     if (sent.isErr()) {
       dropSession(threadId, slot.value);
       fail(active, sent.error);
@@ -330,11 +423,15 @@ export const createTurnController = ({
         new BridgeClosing({ message: refusalMessage("bridge_closing") }),
       );
     }
+    // Each session gets its own thread tool server, since one server instance serves one Claude process.
+    const link = openLink(record.threadId);
     // TODO: clear a stored session id that Claude can no longer resume in P11a, which decides how a missing session is shown; until then every turn of that thread fails the same way.
     const started = await startSession({
       cwd: record.worktree,
       model: record.model,
       ...resumeFrom(sessionIds.get(record.threadId) ?? record.sessionId),
+      mcpServers: { [link.server.name]: link.server },
+      allowedTools: link.allowedTools,
       onToolDeclined: (toolUseId) => {
         const active = activeTurns.get(record.threadId);
         if (active?.state) {
@@ -353,6 +450,7 @@ export const createTurnController = ({
     const slot: SessionSlot = {
       session: started.value,
       pendingInterrupt: null,
+      link,
     };
     sessions.set(record.threadId, slot);
     return Result.ok(slot);
@@ -460,7 +558,13 @@ export const createTurnController = ({
 const resumeFrom = (sessionId: string | null) =>
   sessionId === null ? {} : { resume: sessionId };
 
-const textInput = (value: unknown) => {
+const clientMessageId = (params: Record<string, unknown>) =>
+  typeof params.clientUserMessageId === "string" &&
+  params.clientUserMessageId !== ""
+    ? params.clientUserMessageId
+    : null;
+
+const textInput = (value: unknown): TextInput | null => {
   if (!Array.isArray(value) || value.length === 0) return null;
   const texts: string[] = [];
   for (const item of value) {

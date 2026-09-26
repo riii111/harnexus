@@ -2,11 +2,13 @@ import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import { openServerPipes, type Signals } from "../boundary/process.ts";
 import { startClaudeSession } from "../claude/session.ts";
+import { createCodexLink } from "../mcp/codex-link.ts";
 import { createLineInjector } from "../rpc/inject.ts";
 import { createLineRewriter } from "../rpc/line-rewriter.ts";
 import { createObserver } from "../rpc/observe.ts";
 import { type RelayObserver, relayStreams } from "../rpc/relay.ts";
 import { createRouter } from "../rpc/route.ts";
+import { attachServerRequests } from "../rpc/server-requests.ts";
 import { loadShutdownGraceMs, loadStatePath } from "../shared/config.ts";
 import { openThreadStore } from "../state/thread-store.ts";
 import { createTurnController } from "../turn/controller.ts";
@@ -79,9 +81,17 @@ async function withClaude(relay: {
     return plain;
   }
   const appInjector = createLineInjector(process.stdout);
+  // The bridge's own requests to the server are answered before the router reads the server output, so their responses never reach the app.
+  const serverCalls = attachServerRequests(relay);
   const turns = createTurnController({
     store: store.value,
     startSession: startClaudeSession,
+    openLink: (callerThreadId) =>
+      createCodexLink({
+        callerThreadId,
+        store: store.value,
+        request: serverCalls.request,
+      }),
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });
@@ -89,13 +99,13 @@ async function withClaude(relay: {
   const appRewriter = createLineRewriter(router.fromApp);
   const serverRewriter = createLineRewriter(router.fromServer);
   process.stdin.on("error", (error) => appRewriter.destroy(error));
-  relay.serverOutput.on("error", () => serverRewriter.end());
   return {
     streams: {
       ...relay,
       input: process.stdin.pipe(appRewriter),
       output: appInjector.stream,
-      serverOutput: relay.serverOutput.pipe(serverRewriter),
+      serverInput: serverCalls.serverInput,
+      serverOutput: serverCalls.serverOutput.pipe(serverRewriter),
     },
     closeAll: turns.closeAll,
   };

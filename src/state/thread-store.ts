@@ -21,6 +21,8 @@ type ThreadMapping = {
   readonly model: string;
   readonly worktree: string;
   readonly reviewerThreadIds: readonly string[];
+  // The app's clientUserMessageId of the latest turns, so a message delivered again after a reconnect or restart is not run twice.
+  readonly messageIds: readonly string[];
 };
 
 export type ThreadRecord = ThreadMapping & { readonly runState: RunState };
@@ -234,7 +236,12 @@ const createThreadStore = (
                 message: `thread ${entry.threadId} is already registered`,
               }),
             )
-          : Result.ok({ ...entry, sessionId: null, reviewerThreadIds: [] }),
+          : Result.ok({
+              ...entry,
+              sessionId: null,
+              reviewerThreadIds: [],
+              messageIds: [],
+            }),
       ),
 
     setSession: (threadId: string, sessionId: string) =>
@@ -253,6 +260,18 @@ const createThreadStore = (
                 ...mapping.reviewerThreadIds,
                 reviewerThreadId,
               ],
+            },
+      ),
+
+    addMessageId: (threadId: string, messageId: string) =>
+      update(threadId, (mapping) =>
+        mapping.messageIds.includes(messageId)
+          ? mapping
+          : {
+              ...mapping,
+              messageIds: [...mapping.messageIds, messageId].slice(
+                -MESSAGE_ID_LIMIT,
+              ),
             },
       ),
 
@@ -363,8 +382,14 @@ const serializeState = (mappings: ReadonlyMap<string, ThreadMapping>) =>
 
 const readState = (value: unknown): ThreadMapping[] | null => {
   if (!isObject(value) || value.version !== STATE_VERSION) return null;
-  const threads = value.threads;
-  if (!Array.isArray(threads) || !threads.every(isThreadMapping)) return null;
+  if (!Array.isArray(value.threads)) return null;
+  // Files written before message ids were kept have none.
+  const threads = value.threads.map((thread) =>
+    isObject(thread) && !("messageIds" in thread)
+      ? { ...thread, messageIds: [] }
+      : thread,
+  );
+  if (!threads.every(isThreadMapping)) return null;
   const ids = new Set(threads.map((mapping) => mapping.threadId));
   return ids.size === threads.length ? threads.map(pickMappingFields) : null;
 };
@@ -375,6 +400,7 @@ const pickMappingFields = (mapping: ThreadMapping): ThreadMapping => ({
   model: mapping.model,
   worktree: mapping.worktree,
   reviewerThreadIds: [...mapping.reviewerThreadIds],
+  messageIds: [...mapping.messageIds],
 });
 
 const isThreadMapping = (value: unknown): value is ThreadMapping =>
@@ -384,7 +410,9 @@ const isThreadMapping = (value: unknown): value is ThreadMapping =>
   isNonEmptyString(value.model) &&
   isNonEmptyString(value.worktree) &&
   Array.isArray(value.reviewerThreadIds) &&
-  value.reviewerThreadIds.every(isNonEmptyString);
+  value.reviewerThreadIds.every(isNonEmptyString) &&
+  Array.isArray(value.messageIds) &&
+  value.messageIds.every(isNonEmptyString);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -395,3 +423,5 @@ const isNonEmptyString = (value: unknown): value is string =>
 const STATE_VERSION = 1;
 
 const MARKER_SUFFIX = ".running";
+
+const MESSAGE_ID_LIMIT = 64;

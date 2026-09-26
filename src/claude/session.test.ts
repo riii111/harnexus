@@ -27,6 +27,7 @@ describe("startClaudeSession options", () => {
       permissionMode: "default",
       includePartialMessages: true,
       mcpServers: {},
+      allowedTools: [],
     });
     expect(claude.options().resume).toBeUndefined();
   });
@@ -42,16 +43,21 @@ describe("startClaudeSession options", () => {
     });
   });
 
-  test("resumes the given session with the given MCP servers", async () => {
+  test("resumes the given session with the given MCP servers and their allowed tools", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const mcpServers = { harnexus: { command: "harnexus-mcp" } };
+    const allowedTools = ["mcp__harnexus__read"];
 
     await startClaudeSession(
-      { ...SETTINGS, resume: "session-1", mcpServers },
+      { ...SETTINGS, resume: "session-1", mcpServers, allowedTools },
       claude.runtime,
     );
 
-    expect(claude.options()).toMatchObject({ resume: "session-1", mcpServers });
+    expect(claude.options()).toMatchObject({
+      resume: "session-1",
+      mcpServers,
+      allowedTools,
+    });
   });
 
   test("keeps API billing variables away from Claude", async () => {

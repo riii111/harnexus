@@ -38,6 +38,7 @@ describe("openThreadStore", () => {
     await store.setSession("thread-1", "session-1");
     await store.addReviewer("thread-1", "reviewer-1");
     await store.setModel("thread-1", "claude-opus-5-5");
+    await store.addMessageId("thread-1", "message-1");
 
     const reopened = await openStore();
 
@@ -47,8 +48,20 @@ describe("openThreadStore", () => {
       model: "claude-opus-5-5",
       worktree: "/work/tree",
       reviewerThreadIds: ["reviewer-1"],
+      messageIds: ["message-1"],
       runState: "idle",
     });
+  });
+
+  test("loads a file saved before message ids were kept with none", async () => {
+    await writeFile(
+      path,
+      JSON.stringify({ version: 1, threads: [SAVED_RECORD] }),
+    );
+
+    const store = await openStore();
+
+    expect(store.get("thread-1")?.messageIds).toEqual([]);
   });
 
   test.each([
@@ -122,6 +135,21 @@ describe("ThreadStore", () => {
     await store.addReviewer("thread-1", "reviewer-1");
 
     expect(store.get("thread-1")?.reviewerThreadIds).toEqual(["reviewer-1"]);
+  });
+
+  test("keeps each message id once and only the latest 64", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    for (let index = 0; index < 70; index += 1) {
+      await store.addMessageId("thread-1", `message-${index}`);
+    }
+    await store.addMessageId("thread-1", "message-69");
+
+    const ids = store.get("thread-1")?.messageIds ?? [];
+
+    expect(ids).toHaveLength(64);
+    expect(ids[0]).toBe("message-6");
+    expect(ids.at(-1)).toBe("message-69");
   });
 
   test("keeps the previous state when a write fails before the rename", async () => {
