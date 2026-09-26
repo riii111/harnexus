@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
+import { type Node, SyntaxKind } from "typescript/unstable/ast";
 import { API } from "typescript/unstable/async";
 
 type Area = "bootstrap" | "conversation" | "presentation" | "infra" | "runtime";
@@ -182,7 +183,7 @@ export const p = f;`,
 
   test.each([
     {
-      name: "source code using a testing helper",
+      name: "a testing helper",
       files: {
         "conversation/a.ts": `import { t } from "../infra/codex/testing/t.ts";
 export const a = t;`,
@@ -193,21 +194,7 @@ export const a = t;`,
       ],
     },
     {
-      name: "a reference that cannot be resolved",
-      files: {
-        "conversation/a.ts": `import "./missing.ts";`,
-      },
-      expected: ['conversation/a.ts -> "./missing.ts": cannot be resolved'],
-    },
-    {
-      name: "a file placed directly under src",
-      files: {
-        "helpers.ts": "export const h = 1;",
-      },
-      expected: ["helpers.ts: lies outside the areas of src/"],
-    },
-    {
-      name: "a reference to a file outside src",
+      name: "a file outside src",
       files: {
         "runtime/r.ts": `import { x } from "../../test/x.ts";
 export const r = x;`,
@@ -217,12 +204,52 @@ export const r = x;`,
         "runtime/r.ts -> ../test/x.ts: target lies outside the areas of src/",
       ],
     },
-  ])("reports $name", async ({ files, expected }) => {
+  ])("reports a reference to $name", async ({ files, expected }) => {
     const references = await collectReferences(await writeProject(files));
 
     const problems = checkDependencies(references, []);
 
     expect(problems).toEqual(expected);
+  });
+
+  test.each([
+    {
+      name: "an import of a missing file",
+      files: {
+        "conversation/a.ts": `import "./missing.ts";`,
+      },
+      expected: ['conversation/a.ts -> "./missing.ts": cannot be resolved'],
+    },
+    {
+      name: "a require call",
+      files: {
+        "runtime/r.ts": `export const m = require("../conversation/m.ts");`,
+        "conversation/m.ts": "export const m = 1;",
+      },
+      expected: [
+        'runtime/r.ts -> "require("../conversation/m.ts")": cannot be resolved',
+      ],
+    },
+  ])("reports $name as unresolvable", async ({ files, expected }) => {
+    const references = await collectReferences(await writeProject(files));
+
+    const problems = checkDependencies(references, []);
+
+    expect(problems).toEqual(expected);
+  });
+
+  test.each([
+    { name: "a file directly under src", path: "helpers.ts" },
+    { name: "a TSX file directly under src", path: "helpers.tsx" },
+    { name: "a file in an unknown folder", path: "helpers/h.ts" },
+  ])("reports $name as outside the areas", async ({ path }) => {
+    const references = await collectReferences(
+      await writeProject({ [path]: "export const h = 1;" }),
+    );
+
+    const problems = checkDependencies(references, []);
+
+    expect(problems).toEqual([`${path}: lies outside the areas of src/`]);
   });
 
   test.each([
@@ -311,8 +338,9 @@ const checkDependencies = (
 const brokenRule = (from: string, to: string) => {
   const fromArea = areaOf(from);
   const toArea = areaOf(to);
-  if (fromArea === undefined || toArea === undefined)
-    return "target lies outside the areas of src/";
+  // A source outside the areas is already reported as a file, so only its placement is flagged.
+  if (fromArea === undefined) return undefined;
+  if (toArea === undefined) return "target lies outside the areas of src/";
   if (isTestCode(to))
     return "source code may not reference tests or testing helpers";
   if (!ALLOWED[fromArea].includes(toArea))
@@ -336,7 +364,7 @@ const areaOf = (path: string) => {
 };
 
 const isTestCode = (path: string) =>
-  path.endsWith(".test.ts") || path.split("/").includes("testing");
+  /\.test\.[cm]?tsx?$/.test(path) || path.split("/").includes("testing");
 
 // Resolution goes through the checker, so extensionless and type-only specifiers resolve exactly as tsc sees them.
 const collectReferences = async (root: string) => {
@@ -365,6 +393,14 @@ const collectReferences = async (root: string) => {
         });
         continue;
       }
+      for (const call of requireCalls(source)) {
+        references.push({
+          kind: "import",
+          from: path,
+          specifier: call,
+          to: undefined,
+        });
+      }
       const symbols = await project.checker.getSymbolAtLocation([
         ...source.imports,
       ]);
@@ -389,14 +425,39 @@ const collectReferences = async (root: string) => {
   }
 };
 
-const isPackage = (root: string, target: string) => {
-  const path = relative(root, target);
-  return path.startsWith("..") || path.split("/").includes("node_modules");
+// SourceFile.imports leaves out require() in TypeScript files, which Bun still runs, so every call is reported as unresolvable.
+const requireCalls = (source: Node) => {
+  const calls: string[] = [];
+  const visit = (node: Node): undefined => {
+    if (node.kind === SyntaxKind.CallExpression) {
+      const callee = (node as Node & { expression: Node }).expression;
+      if (
+        callee.kind === SyntaxKind.Identifier &&
+        "text" in callee &&
+        callee.text === "require"
+      )
+        calls.push(`require(${sourceText(source, node)})`);
+    }
+    node.forEachChild(visit);
+  };
+  visit(source);
+  return calls;
 };
+
+const sourceText = (source: Node, call: Node) => {
+  const args = (call as Node & { arguments: readonly Node[] }).arguments;
+  const text = "text" in source ? String(source.text) : "";
+  return args.map((arg) => text.slice(arg.pos, arg.end).trim()).join(", ");
+};
+
+const isPackage = (root: string, target: string) =>
+  relative(root, target).split("/").includes("node_modules");
 
 const sourceFiles = async (src: string) => {
   const files: string[] = [];
-  for await (const path of new Bun.Glob("**/*.ts").scan({ cwd: src })) {
+  for await (const path of new Bun.Glob("**/*.{ts,tsx,mts,cts}").scan({
+    cwd: src,
+  })) {
     if (!isTestCode(path)) files.push(join(src, path));
   }
   return files.sort();
@@ -424,7 +485,7 @@ const TSCONFIG = JSON.stringify({
     noEmit: true,
     types: [],
   },
-  include: ["**/*.ts"],
+  include: ["**/*.ts", "**/*.tsx"],
 });
 
 let tmp: string;
