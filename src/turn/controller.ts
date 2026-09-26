@@ -49,10 +49,7 @@ export type TurnEvent =
   | { event: "claude_turn"; step: "interrupt_failed"; error: InterruptTag }
   | {
       event: "claude_turn";
-      step:
-        | "session_not_saved"
-        | "run_state_not_saved"
-        | "message_id_not_saved";
+      step: "session_not_saved" | "run_state_not_saved";
       error: StoreTag;
     };
 
@@ -64,7 +61,7 @@ type StartSession = (settings: ClaudeSessionSettings) => Promise<SessionStart>;
 
 type CodexLink = Pick<
   ReturnType<typeof createCodexLink>,
-  "server" | "allowedTools" | "hasUnsettledWrite"
+  "server" | "allowedTools" | "hasUnsettledWrite" | "cancelQueuedWrites"
 >;
 
 type ErrorTag<R> = InferErr<Awaited<R>> extends { _tag: infer T } ? T : never;
@@ -207,6 +204,7 @@ export const createTurnController = ({
     active.state = markInterrupting(active.state);
     send({ id, result: {} });
     const slot = sessions.get(threadId);
+    slot?.link.cancelQueuedWrites();
     if (slot === undefined || repeated || slot.pendingInterrupt !== null) {
       return;
     }
@@ -267,12 +265,19 @@ export const createTurnController = ({
           refuse(requestId, "bridge_closing");
           return Result.ok();
         }
+        // Without the saved id a restart could run the same message again, so the turn does not start.
+        const saved = await recordMessage(threadId, messageId);
+        if (saved.isErr()) {
+          forgetMessage(threadId, messageId);
+          refuse(requestId, "message_not_saved", saved.error);
+          return Result.ok();
+        }
         responded = true;
         const active: ActiveTurn = { threadId, state: null, link: null };
         activeTurns.set(threadId, active);
-        await recordMessage(threadId, messageId);
         await streamTurn(requestId, record, active, input, messageId);
         release(active);
+        active.link?.cancelQueuedWrites();
         return active.link?.hasUnsettledWrite()
           ? Result.err(
               new LinkWriteUnsettled({
@@ -318,19 +323,11 @@ export const createTurnController = ({
     if (ids?.size === 0) acceptedMessageIds.delete(threadId);
   };
 
-  // An id the store failed to save still stops a copy while the bridge runs.
   const recordMessage = async (threadId: string, messageId: string | null) => {
-    if (messageId === null) return;
+    if (messageId === null) return Result.ok();
     const saved = await store.addMessageId(threadId, messageId);
-    if (saved.isErr()) {
-      log({
-        event: "claude_turn",
-        step: "message_id_not_saved",
-        error: saved.error._tag,
-      });
-      return;
-    }
-    forgetMessage(threadId, messageId);
+    if (saved.isOk()) forgetMessage(threadId, messageId);
+    return saved;
   };
 
   const streamTurn = async (

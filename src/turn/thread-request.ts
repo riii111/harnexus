@@ -73,6 +73,8 @@ const REFUSAL_MESSAGES = {
   no_running_turn: "no running Claude turn matches turnId",
   bridge_closing: "the bridge is shutting down",
   thread_not_saved: "the Claude thread could not be saved",
+  message_not_saved:
+    "the message id could not be saved, so the message was not run to avoid running it twice",
   thread_busy: "the Claude thread cannot start a turn",
   unsupported_request: "this request is not supported on a Claude thread yet",
 } as const;

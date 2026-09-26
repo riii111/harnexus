@@ -6,8 +6,10 @@ import {
 import { Result, TaggedError } from "better-result";
 import { z } from "zod";
 import { parseJson } from "../boundary/json.ts";
+import type { DelegationWatch } from "../link/delegations.ts";
 import type { ServerRequest } from "../rpc/server-requests.ts";
 import { createSerialQueue } from "../state/serial-queue.ts";
+import { isClaudeModel } from "../turn/models.ts";
 
 // The subset of the thread store the link reads and writes; the real store satisfies it structurally.
 type LinkStore = {
@@ -27,14 +29,20 @@ export const createCodexLink = ({
   callerThreadId,
   store,
   request,
+  delegations,
+  createdThreadWaitMs = CREATED_THREAD_WAIT_MS,
 }: {
   callerThreadId: string;
   store: LinkStore;
   request: ServerRequest;
+  delegations: Pick<DelegationWatch, "expect">;
+  createdThreadWaitMs?: number;
 }) => {
   const writes = createSerialQueue();
   let unknownWrite: string | null = null;
   let writesInFlight = 0;
+  // Bumped when the turn that queued writes stops, since the SDK's cancel notice never reaches a tool handler's signal.
+  let generation = 0;
 
   const callApp = async (
     name: AppTool,
@@ -71,9 +79,15 @@ export const createCodexLink = ({
     name: AppTool,
     args: Record<string, unknown>,
     targets: readonly string[],
-    extra: unknown,
-    onSuccess: (result: ToolResult) => Promise<ToolResult> = async (result) =>
-      result,
+    {
+      queuedIn = generation,
+      onSuccess = async (result) => result,
+      beforeSend = () => {},
+    }: {
+      queuedIn?: number;
+      onSuccess?: (result: ToolResult) => Promise<ToolResult>;
+      beforeSend?: () => void;
+    } = {},
   ) =>
     writes.run(CODEX_APP_SERVER, async () => {
       if (unknownWrite !== null) {
@@ -82,14 +96,11 @@ export const createCodexLink = ({
         );
       }
       // A write queued behind another is dropped once its turn is stopped, since nobody is left to act on its result.
-      if (isAborted(extra)) {
-        return failure(
-          `The turn was stopped before ${name} was sent, so it was not sent.`,
-        );
-      }
+      if (queuedIn !== generation) return notSentAfterStop(name);
       const refusal = refuseTargets(targets, { allowSelf: false });
       if (refusal !== null) return failure(refusal);
       writesInFlight += 1;
+      beforeSend();
       try {
         const called = await callApp(name, args, WRITE_TIMEOUT_MS);
         if (called.isErr()) {
@@ -109,13 +120,78 @@ export const createCodexLink = ({
       }
     });
 
+  // Without a model the app would give the reviewer this thread's Claude model, and the bridge would then run the reviewer as Claude.
+  const createThread = async (
+    args: Record<string, unknown> & { model?: string | undefined },
+  ) => {
+    const queuedIn = generation;
+    const model = await reviewerModel(args.model);
+    if ("refusal" in model) return failure(model.refusal);
+    if (queuedIn !== generation) return notSentAfterStop("create_thread");
+    const watch: { created: CreatedThread | null } = { created: null };
+    const result = await write(
+      "create_thread",
+      { ...args, model: model.model },
+      [],
+      {
+        queuedIn,
+        beforeSend: () => {
+          watch.created = delegations.expect(callerThreadId);
+        },
+        onSuccess: (answer) => recordReviewer(answer, watch.created),
+      },
+    );
+    watch.created?.cancel();
+    return result;
+  };
+
+  const reviewerModel = async (
+    requested: string | undefined,
+  ): Promise<{ model: string } | { refusal: string }> => {
+    if (requested !== undefined) {
+      return isClaudeModel(requested)
+        ? {
+            refusal:
+              "A reviewer runs on a Codex model. Leave model out to use the app's default Codex model.",
+          }
+        : { model: requested };
+    }
+    let cursor: string | null = null;
+    for (let page = 0; page < MAX_MODEL_PAGES; page += 1) {
+      const listed = await request(
+        "model/list",
+        cursor === null ? {} : { cursor },
+        { timeoutMs: CALL_TIMEOUT_MS },
+      );
+      if (listed.isErr()) {
+        return {
+          refusal: `Cannot read the Codex models to choose the reviewer's model (${listed.error.message}); nothing was created.`,
+        };
+      }
+      const models = readModelPage(listed.value);
+      if (models.defaultModel !== null) return { model: models.defaultModel };
+      if (models.nextCursor === null) break;
+      cursor = models.nextCursor;
+    }
+    return {
+      refusal:
+        "The Codex app lists no default model; give create_thread a Codex model. Nothing was created.",
+    };
+  };
+
   // A created thread that cannot be named or saved as a reviewer is out of reach but real, so it is treated like an unknown outcome to prevent a duplicate.
-  const recordReviewer = async (result: ToolResult) => {
-    const threadId = createdThreadId(result);
+  const recordReviewer = async (
+    result: ToolResult,
+    created: CreatedThread | null,
+  ) => {
+    const threadId =
+      createdThreadId(result) ??
+      (await created?.wait(createdThreadWaitMs)) ??
+      null;
     if (threadId === null) {
       unknownWrite = "create_thread";
       return failure(
-        "The thread was created, but its id could not be read from the app's answer, so it is not usable as a reviewer. Do not create another; ask the user to check the app.",
+        "The thread was created, but its id could not be learned from the app, so it is not usable as a reviewer. Do not create another; ask the user to check the app.",
       );
     }
     const added = await store.addReviewer(callerThreadId, threadId);
@@ -125,7 +201,16 @@ export const createCodexLink = ({
         `Thread ${threadId} was created but could not be saved as your reviewer (${added.error.message}). Do not create another; ask the user to check the app.`,
       );
     }
-    return result;
+    // The app's own answer carries only a provisional id, so the real one is what the model must use from here on.
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Created reviewer thread ${threadId}. Use this threadId with wait_threads, read_thread and send_message_to_thread.`,
+        },
+      ],
+      structuredContent: { threadId },
+    } satisfies ToolResult;
   };
 
   // Messaging this thread itself would start a turn behind the one making the call, so it may only be read and waited on.
@@ -162,10 +247,15 @@ export const createCodexLink = ({
         prompt: z.string().min(1),
         target: CREATE_TARGET,
         title: z.string().optional(),
-        model: z.string().optional(),
+        model: z
+          .string()
+          .optional()
+          .describe(
+            "A Codex model for the reviewer; leave it out to use the app's default Codex model.",
+          ),
         thinking: z.string().optional(),
       },
-      (args, extra) => write("create_thread", args, [], extra, recordReviewer),
+      (args) => createThread(args),
     ),
     tool(
       "send_message_to_thread",
@@ -176,8 +266,7 @@ export const createCodexLink = ({
         model: z.string().optional(),
         thinking: z.string().optional(),
       },
-      (args, extra) =>
-        write("send_message_to_thread", args, [args.threadId], extra),
+      (args) => write("send_message_to_thread", args, [args.threadId]),
     ),
     tool(
       "read_thread",
@@ -225,6 +314,9 @@ export const createCodexLink = ({
     ),
     // A turn that ends while a write is still waiting for its answer cannot know the outcome either, so both count; the turn runner turns this into the thread's outcome-unknown state so a restart does not repeat the turn.
     hasUnsettledWrite: () => unknownWrite !== null || writesInFlight > 0,
+    cancelQueuedWrites: () => {
+      generation += 1;
+    },
   };
 };
 
@@ -234,6 +326,8 @@ type AppTool =
   | "send_message_to_thread";
 
 const READ_TOOLS = ["list_projects", "read_thread", "wait_threads"] as const;
+
+type CreatedThread = ReturnType<DelegationWatch["expect"]>;
 
 type ToolResult = Awaited<ReturnType<SdkMcpToolDefinition["handler"]>>;
 
@@ -308,6 +402,23 @@ const createdThreadId = (result: ToolResult) => {
   return null;
 };
 
+// The server's own model/list, which never includes the Claude models the bridge adds for the app.
+const readModelPage = (value: unknown) => {
+  const page = isRecord(value) ? value : {};
+  const data = Array.isArray(page.data) ? page.data : [];
+  const found = data.find(
+    (model): model is { model: string } =>
+      isRecord(model) &&
+      model.isDefault === true &&
+      typeof model.model === "string" &&
+      !isClaudeModel(model.model),
+  );
+  return {
+    defaultModel: found?.model ?? null,
+    nextCursor: typeof page.nextCursor === "string" ? page.nextCursor : null,
+  };
+};
+
 const findThreadIdField = (value: unknown): string | null => {
   if (!isRecord(value)) return null;
   const record = value as { threadId?: unknown; thread?: { id?: unknown } };
@@ -318,13 +429,11 @@ const findThreadIdField = (value: unknown): string | null => {
   return typeof nested === "string" && nested !== "" ? nested : null;
 };
 
-const isAborted = (extra: unknown) =>
-  isRecord(extra) &&
-  extra.signal instanceof AbortSignal &&
-  extra.signal.aborted;
-
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const notSentAfterStop = (name: AppTool) =>
+  failure(`The turn was stopped before ${name} was sent, so it was not sent.`);
 
 const failure = (text: string): ToolResult => ({
   content: [{ type: "text", text }],
@@ -335,6 +444,8 @@ const CODEX_APP_SERVER = "codex_app";
 const CALL_TIMEOUT_MS = 60_000;
 const WRITE_TIMEOUT_MS = 120_000;
 const MAX_WAIT_MS = 600_000;
+const CREATED_THREAD_WAIT_MS = 30_000;
+const MAX_MODEL_PAGES = 10;
 const WAIT_MARGIN_MS = 30_000;
 // TODO: replace each type with z.literal once P8b records the enum values on the app; until then the three forms the app defines are kept and the app checks the values.
 const CREATE_TARGET = z

@@ -45,6 +45,52 @@ describe("Codex threads", () => {
   });
 });
 
+describe("turn/start of a thread created by create_thread", () => {
+  test("reports the thread that asked for it and still passes the line to the server", () => {
+    const { router, calls } = setup();
+    const line = encode({
+      id: 7,
+      method: "turn/start",
+      params: {
+        threadId: "th-reviewer",
+        input: [],
+        toolOutput: {
+          name: "create_thread",
+          namespace: "codex_app",
+          output:
+            "<codex_delegation>\n  <source_thread_id>th-claude</source_thread_id>\n</codex_delegation>",
+        },
+      },
+    });
+
+    const routed = router.fromApp(line);
+
+    expect(routed).toBe(line);
+    expect(calls).toEqual([["delegated", "th-claude", "th-reviewer"]]);
+  });
+
+  test("reports nothing for another tool's output", () => {
+    const { router, calls } = setup();
+
+    router.fromApp(
+      encode({
+        id: 7,
+        method: "turn/start",
+        params: {
+          threadId: "th-other",
+          input: [],
+          toolOutput: {
+            name: "fork_thread",
+            output: "<source_thread_id>th-claude</source_thread_id>",
+          },
+        },
+      }),
+    );
+
+    expect(calls).toEqual([]);
+  });
+});
+
 describe("model/list", () => {
   test("appends the Claude models to the last page", () => {
     const { router } = setup();
@@ -402,6 +448,7 @@ const setup = (claudeThreads: string[] = []) => {
       reject: (request, message) => calls.push(["reject", request, message]),
     },
     (event) => events.push(event),
+    (source, threadId) => calls.push(["delegated", source, threadId]),
   );
   return { router, calls, events };
 };

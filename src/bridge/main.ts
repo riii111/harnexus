@@ -2,6 +2,7 @@ import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import { openServerPipes, type Signals } from "../boundary/process.ts";
 import { startClaudeSession } from "../claude/session.ts";
+import { createDelegationWatch } from "../link/delegations.ts";
 import { createCodexLink } from "../mcp/codex-link.ts";
 import { createLineInjector } from "../rpc/inject.ts";
 import { createLineRewriter } from "../rpc/line-rewriter.ts";
@@ -83,6 +84,7 @@ async function withClaude(relay: {
   const appInjector = createLineInjector(process.stdout);
   // The bridge's own requests to the server are answered before the router reads the server output, so their responses never reach the app.
   const serverCalls = attachServerRequests(relay);
+  const delegations = createDelegationWatch();
   const turns = createTurnController({
     store: store.value,
     startSession: startClaudeSession,
@@ -91,11 +93,12 @@ async function withClaude(relay: {
         callerThreadId,
         store: store.value,
         request: serverCalls.request,
+        delegations,
       }),
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });
-  const router = createRouter(turns, logger.log);
+  const router = createRouter(turns, logger.log, delegations.observe);
   const appRewriter = createLineRewriter(router.fromApp);
   const serverRewriter = createLineRewriter(router.fromServer);
   process.stdin.on("error", (error) => appRewriter.destroy(error));

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Result, TaggedError } from "better-result";
+import { createDelegationWatch } from "../link/delegations.ts";
 import type {
   ServerRequest,
   ServerRequestError,
@@ -87,9 +88,87 @@ describe("createCodexLink tools", () => {
     expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
     expect(sent.isError).toBeFalsy();
     expect(requests.map((request) => request.params.arguments)).toEqual([
-      { prompt: "review", target: TARGET },
+      { prompt: "review", target: TARGET, model: "gpt-fixture" },
       { threadId: REVIEWER, prompt: "again" },
     ]);
+  });
+
+  test("learns the created thread from the app's first turn on it when the answer has only a provisional id", async () => {
+    const delegations = createDelegationWatch();
+    const { client, store } = await connect({
+      delegations,
+      answer: (params) => {
+        if (params.tool === "create_thread") {
+          delegations.observe("thread-elsewhere", OTHER_REVIEWER);
+          delegations.observe(CALLER, REVIEWER);
+        }
+        return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
+      },
+    });
+
+    const created = await client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review", target: TARGET },
+    });
+
+    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
+    expect(created.structuredContent).toEqual({ threadId: REVIEWER });
+    expect(text(created)).toContain(REVIEWER);
+  });
+
+  test("refuses a Claude model for a reviewer without calling the app", async () => {
+    const { client, requests, modelLists } = await connect();
+
+    const created = await client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review", target: TARGET, model: "claude-sonnet-5" },
+    });
+
+    expect(created.isError).toBe(true);
+    expect(requests).toEqual([]);
+    expect(modelLists).toEqual([]);
+  });
+
+  test("creates nothing when the app's default model cannot be read", async () => {
+    const { client, link, requests } = await connect({
+      models: () => Result.err(unanswered()),
+    });
+
+    const created = await client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review", target: TARGET },
+    });
+
+    expect(created.isError).toBe(true);
+    expect(requests).toEqual([]);
+    expect(link.hasUnsettledWrite()).toBe(false);
+  });
+
+  test("reads later model pages until it finds the default Codex model", async () => {
+    const { client, requests, modelLists } = await connect({
+      models: (params) =>
+        Result.ok(
+          params.cursor === undefined
+            ? {
+                data: [{ model: "claude-sonnet-5", isDefault: true }],
+                nextCursor: "page-2",
+              }
+            : {
+                data: [{ model: "gpt-later", isDefault: true }],
+                nextCursor: null,
+              },
+        ),
+      answer: () =>
+        Result.ok(textAnswer(JSON.stringify({ threadId: REVIEWER }))),
+    });
+
+    await client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review", target: TARGET },
+    });
+
+    expect(modelLists).toEqual([{}, { cursor: "page-2" }]);
+    expect(requests[0]?.params.arguments.model).toBe("gpt-later");
   });
 
   test("allows reading and waiting on its own thread but not messaging it", async () => {
@@ -378,7 +457,7 @@ describe("createCodexLink write outcomes", () => {
     expect(requests).toHaveLength(1);
   });
 
-  test("drops a queued write whose call was cancelled without sending it", async () => {
+  test("drops a write queued before the turn stopped without sending it", async () => {
     let release: (value: Result<unknown, ServerRequestError>) => void =
       () => {};
     const { client, link, requests } = await connect({
@@ -390,24 +469,28 @@ describe("createCodexLink write outcomes", () => {
     });
     const first = send(client);
     await waitUntil(() => requests.length === 1);
-    const cancel = new AbortController();
-
-    const second = client.callTool(
-      {
-        name: "send_message_to_thread",
-        arguments: { threadId: REVIEWER, prompt: "hi" },
-      },
-      undefined,
-      { signal: cancel.signal },
-    );
-    cancel.abort();
-    await expect(second).rejects.toThrow();
-    release(Result.ok(textAnswer("sent")));
-    await first;
+    const second = send(client);
     await new Promise((resolve) => setTimeout(resolve, 20));
 
+    link.cancelQueuedWrites();
+    release(Result.ok(textAnswer("sent")));
+    await first;
+
+    expect(text(await second)).toContain("stopped");
     expect(requests).toHaveLength(1);
     expect(link.hasUnsettledWrite()).toBe(false);
+  });
+
+  test("still sends a write made after the stop", async () => {
+    const { client, link, requests } = await connect({
+      reviewers: { [CALLER]: [REVIEWER] },
+    });
+
+    link.cancelQueuedWrites();
+    const sent = await send(client);
+
+    expect(sent.isError).toBeFalsy();
+    expect(requests).toHaveLength(1);
   });
 
   test("reports a write still waiting for its answer as unsettled, as when a turn is stopped mid-call", async () => {
@@ -437,8 +520,14 @@ const connect = async ({
   reviewers = {},
   callerRegistered = true,
   addReviewerFails = false,
+  delegations = createDelegationWatch(),
+  models = () => Result.ok(DEFAULT_MODELS),
   answer = () => Result.ok(textAnswer("ok")),
 }: {
+  delegations?: ReturnType<typeof createDelegationWatch>;
+  models?: (
+    params: Record<string, unknown>,
+  ) => Result<unknown, ServerRequestError>;
   caller?: string;
   reviewers?: Record<string, string[]>;
   callerRegistered?: boolean;
@@ -454,18 +543,29 @@ const connect = async ({
     addReviewerFails,
   );
   const requests: RecordedRequest[] = [];
+  const modelLists: unknown[] = [];
   const request: ServerRequest = async (method, params, { timeoutMs }) => {
+    if (method === "model/list") {
+      modelLists.push(params);
+      return models(params as Record<string, unknown>);
+    }
     const call = params as CallParams;
     requests.push({ method, params: call, timeoutMs });
     return answer(call);
   };
-  const link = createCodexLink({ callerThreadId: caller, store, request });
+  const link = createCodexLink({
+    callerThreadId: caller,
+    store,
+    request,
+    delegations,
+    createdThreadWaitMs: 20,
+  });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   await link.server.instance.connect(serverTransport);
   const client = new Client({ name: "test", version: "0" });
   await client.connect(clientTransport);
-  return { client, link, store, requests };
+  return { client, link, store, requests, modelLists };
 };
 
 const fakeStore = (
@@ -557,6 +657,17 @@ type RecordedRequest = {
 };
 
 const CALLER = "thread-caller";
+const DEFAULT_MODELS = {
+  data: [
+    { id: "gpt-other", model: "gpt-other", isDefault: false },
+    { id: "gpt-fixture", model: "gpt-fixture", isDefault: true },
+  ],
+  nextCursor: null,
+};
+const PROVISIONAL = {
+  clientThreadId: "client-new-thread:019a0000-0000-7000-8000-0000000000cc",
+  hostId: "local",
+};
 const TARGET = {
   type: "project",
   projectId: "project-1",

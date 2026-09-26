@@ -531,6 +531,34 @@ describe("clientUserMessageId", () => {
     expect(second.started()).toBe(false);
   });
 
+  test("refuses a message whose id cannot be saved without starting Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    let writes = 0;
+    const { turns, sent, store } = await harness([claude], {
+      files: {
+        writeState: async (target, content) =>
+          ++writes === 2 ? diskFull(target) : writeFileAtomic(target, content),
+      },
+    });
+
+    turns.startTurn(withMessageId(turnStart(10, "reply"), "m-1"), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    await settle();
+
+    expect(sent).toEqual([
+      {
+        id: 10,
+        error: {
+          code: -32600,
+          message:
+            "the message id could not be saved, so the message was not run to avoid running it twice",
+        },
+      },
+    ]);
+    expect(claude.started()).toBe(false);
+    expect(store.get(THREAD)?.runState).toBe("idle");
+  });
+
   test("accepts a message again after it was refused before running", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     let writes = 0;
@@ -590,6 +618,28 @@ describe("thread tools", () => {
       step: "outcome_unknown",
     });
     expect(responseTo(sent, 11)?.error.message).toContain("unknown outcome");
+  });
+
+  test("cancel their queued writes when the turn is stopped", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
+    const { turns, cancels } = await harness([claude]);
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    expect(cancels()).toBe(0);
+
+    turns.interruptTurn(interrupt(20, "turn-1"));
+
+    expect(cancels()).toBe(1);
+  });
+
+  test("cancel their queued writes when the turn finishes", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store, cancels } = await harness([claude]);
+
+    await completeTurn(turns, sent, claude, 10);
+    await until(() => store.get(THREAD)?.runState === "idle");
+
+    expect(cancels()).toBe(1);
   });
 
   test("clear the run state after a turn whose writes were all decided", async () => {
@@ -703,6 +753,7 @@ const harness = async (
   const events: TurnEvent[] = [];
   const settings: ClaudeSessionSettings[] = [];
   const links: string[] = [];
+  let cancels = 0;
   let turnCount = 0;
   const turns = createTurnController({
     store,
@@ -712,6 +763,9 @@ const harness = async (
         server: createSdkMcpServer({ name: "codex_link", tools: [] }),
         allowedTools: ALLOWED_TOOLS,
         hasUnsettledWrite: unsettledWrite,
+        cancelQueuedWrites: () => {
+          cancels += 1;
+        },
       };
     },
     send: (message) => {
@@ -730,7 +784,15 @@ const harness = async (
     newTurnId: () => `turn-${++turnCount}`,
   });
   if (adopt) turns.adopt(THREAD, { model: MODEL, cwd: dir });
-  return { turns, sent, events, store, settings, links };
+  return {
+    turns,
+    sent,
+    events,
+    store,
+    settings,
+    links,
+    cancels: () => cancels,
+  };
 };
 
 const completeTurn = async (
@@ -796,7 +858,6 @@ const firstPrompt = async (prompt: AsyncIterable<SDKUserMessage> | null) => {
   return next.done === true ? null : next.value.message.content;
 };
 
-// Reads the prompts Claude has received so far without waiting for the input to end.
 const promptsUntil = async (
   claude: ReturnType<typeof fakeClaude>,
   count: number,

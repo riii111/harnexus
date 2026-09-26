@@ -1,4 +1,5 @@
 import { parseJson } from "../boundary/json.ts";
+import { delegationSource } from "../link/delegations.ts";
 import { isClaudeModel, withClaudeModels } from "../turn/models.ts";
 import {
   type AppRequest,
@@ -33,6 +34,7 @@ type Pending =
 export const createRouter = (
   turns: Turns,
   log: (event: RouteEvent) => void,
+  onDelegated: (sourceThreadId: string, threadId: string) => void,
 ) => {
   const pending = new Map<AppRequest["id"], Pending>();
   // A Codex thread switched to Claude by turn/start needs a working directory that the request itself may not carry.
@@ -53,6 +55,7 @@ export const createRouter = (
       case "thread/resume":
         return routeThreadOpen(line, message, request);
       case "turn/start":
+        noteDelegation(params);
         if (
           !isClaudeModel(requestedModel(params)) &&
           !turns.isClaudeThread(params.threadId)
@@ -77,6 +80,14 @@ export const createRouter = (
         return null;
       default:
         return line;
+    }
+  };
+
+  // The first turn/start of a thread made by create_thread is the only place its real id meets the thread that asked for it.
+  const noteDelegation = (params: Record<string, unknown>) => {
+    const source = delegationSource(params);
+    if (source !== null && typeof params.threadId === "string") {
+      onDelegated(source, params.threadId);
     }
   };
 
