@@ -121,13 +121,17 @@ describe("createCodexLink tools", () => {
     });
   });
 
-  test("prefers a thread id in the structured answer", async () => {
+  test.each([
+    { name: "a thread id", structured: { threadId: REVIEWER } },
+    { name: "a nested thread id", structured: { thread: { id: REVIEWER } } },
+  ])("prefers $name in the structured answer over one in the text", async ({
+    structured,
+  }) => {
     const { client, store } = await connect({
-      caller: UUID_CALLER,
       answer: () =>
         Result.ok({
-          ...textAnswer(`Created from ${OTHER_UUID}`),
-          structuredContent: { threadId: REVIEWER },
+          ...textAnswer(JSON.stringify({ threadId: OTHER_REVIEWER })),
+          structuredContent: structured,
         }),
     });
 
@@ -136,27 +140,7 @@ describe("createCodexLink tools", () => {
       arguments: { prompt: "review", target: TARGET },
     });
 
-    expect(store.reviewers(UUID_CALLER)).toEqual([REVIEWER]);
-  });
-
-  test("does not take a provisional id for the created thread", async () => {
-    const { client, link, store } = await connect({
-      answer: () =>
-        Result.ok(
-          textAnswer(
-            JSON.stringify({ clientThreadId: REVIEWER, status: "queued" }),
-          ),
-        ),
-    });
-
-    const created = await client.callTool({
-      name: "create_thread",
-      arguments: { prompt: "review", target: TARGET },
-    });
-
-    expect(created.isError).toBe(true);
-    expect(store.reviewers(CALLER)).toEqual([]);
-    expect(link.hasUnsettledWrite()).toBe(true);
+    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
   });
 
   test("refuses a target outside the forms the app defines without calling it", async () => {
@@ -264,26 +248,23 @@ describe("createCodexLink write outcomes", () => {
     ]);
   });
 
-  test("treats an answer with an item missing its text as an unknown outcome", async () => {
+  test.each([
+    {
+      name: "an item missing its text",
+      answer: { content: [{ type: "text" }] },
+    },
+    { name: "no content", answer: { unexpected: true } },
+  ])("treats an answer to a write with $name as an unknown outcome", async ({
+    answer,
+  }) => {
     const { client, link } = await connect({
       reviewers: { [CALLER]: [REVIEWER] },
-      answer: () => Result.ok({ content: [{ type: "text" }] }),
+      answer: () => Result.ok(answer),
     });
 
     const sent = await send(client);
 
     expect(sent.isError).toBe(true);
-    expect(link.hasUnsettledWrite()).toBe(true);
-  });
-
-  test("treats a malformed answer to a write as an unknown outcome", async () => {
-    const { client, link } = await connect({
-      reviewers: { [CALLER]: [REVIEWER] },
-      answer: () => Result.ok({ unexpected: true }),
-    });
-
-    await send(client);
-
     expect(link.hasUnsettledWrite()).toBe(true);
   });
 
@@ -313,9 +294,17 @@ describe("createCodexLink write outcomes", () => {
     expect(link.hasUnsettledWrite()).toBe(false);
   });
 
-  test("stops writing when a created thread cannot be identified", async () => {
+  test.each([
+    {
+      name: "only a provisional id",
+      body: JSON.stringify({ clientThreadId: REVIEWER, status: "queued" }),
+    },
+    { name: "no single thread id", body: "Created two: a and b" },
+  ])("stops writing when a created thread's answer has $name", async ({
+    body,
+  }) => {
     const { client, link, store } = await connect({
-      answer: () => Result.ok(textAnswer("Created two: a and b")),
+      answer: () => Result.ok(textAnswer(body)),
     });
 
     const created = await client.callTool({
@@ -391,13 +380,11 @@ describe("createCodexLink write outcomes", () => {
 });
 
 const connect = async ({
-  caller = CALLER,
   reviewers = {},
   callerRegistered = true,
   addReviewerFails = false,
   answer = () => Result.ok(textAnswer("ok")),
 }: {
-  caller?: string;
   reviewers?: Record<string, string[]>;
   callerRegistered?: boolean;
   addReviewerFails?: boolean;
@@ -408,7 +395,7 @@ const connect = async ({
     | Promise<Result<unknown, ServerRequestError>>;
 } = {}) => {
   const store = fakeStore(
-    callerRegistered ? { [caller]: [], ...reviewers } : reviewers,
+    callerRegistered ? { [CALLER]: [], ...reviewers } : reviewers,
     addReviewerFails,
   );
   const requests: RecordedRequest[] = [];
@@ -417,7 +404,7 @@ const connect = async ({
     requests.push({ method, params: call, timeoutMs });
     return answer(call);
   };
-  const link = createCodexLink({ callerThreadId: caller, store, request });
+  const link = createCodexLink({ callerThreadId: CALLER, store, request });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   await link.server.instance.connect(serverTransport);
@@ -520,8 +507,6 @@ const TARGET = {
   projectId: "project-1",
   environment: { type: "local" },
 };
-const UUID_CALLER = "019a0000-0000-7000-8000-0000000000aa";
-const OTHER_UUID = "019a0000-0000-7000-8000-0000000000bb";
 const REVIEWER = "019a0000-0000-7000-8000-000000000001";
 const OTHER_WORKER = "thread-other-worker";
 const OTHER_REVIEWER = "thread-other-reviewer";

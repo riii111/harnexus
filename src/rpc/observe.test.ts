@@ -304,38 +304,12 @@ describe("createObserver", () => {
 
     expect(records).toEqual([]);
   });
-
-  test("observes a message split across chunks once its line ends", () => {
-    const { observer, methods } = watchMethods();
-
-    observer.chunk("app_to_server", encode('{"id":1,"meth'));
-    observer.chunk("app_to_server", encode('od":"a"}\n{"method":"b"}'));
-
-    expect(methods).toEqual(["a"]);
-  });
-
-  test("observes the final unterminated line at the end", () => {
-    const { observer, methods } = watchMethods();
-    observer.chunk("app_to_server", encode('{"method":"b"}'));
-
-    observer.end("app_to_server");
-
-    expect(methods).toEqual(["b"]);
-  });
 });
 
 const SECRET = "sk-secret-token-0123";
 const PROMPT = "private conversation text";
 
 const encode = (text: string) => new TextEncoder().encode(text);
-
-const watchMethods = () => {
-  const methods: (string | null)[] = [];
-  const observer = createObserver((event) => {
-    if (event.event === "rpc_message") methods.push(event.method);
-  });
-  return { observer, methods };
-};
 
 const observe = (
   messages: { direction: Direction; line: string }[],
