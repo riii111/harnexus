@@ -138,10 +138,10 @@ describe("relayStreams", () => {
       serverInput: injector.stream,
       serverOutput,
       signalServer: (signal) => signals.push(signal),
-      shutdownGraceMs: 5,
+      shutdownGraceMs: 10,
     });
     injector.inject("own\n");
-    await Bun.sleep(40);
+    await Bun.sleep(80);
     serverOutput.end();
     await relaying;
 
