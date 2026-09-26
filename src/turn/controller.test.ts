@@ -410,7 +410,7 @@ describe("turn/steer", () => {
     turns.steerTurn(steer(30, "turn-1", "also this"));
     const [prompt, steered] = await readPrompts(claude, 2);
     claude.emit(sdk(answer("msg-1", "first")));
-    claude.emit(sdk(success([prompt?.uuid])));
+    claude.emit(sdk(success([prompt?.uuid], 1)));
     await settle();
     expect(turnsCompleted(sent)).toEqual([]);
     claude.emit(sdk(answer("msg-2", "second")));
@@ -420,6 +420,22 @@ describe("turn/steer", () => {
     expect(turnsCompleted(sent)).toEqual(["completed"]);
     expect(turnCompleted(sent).items).toMatchObject([{ text: "second" }]);
     expect(claude.closes()).toBe(0);
+  });
+
+  // user_message_uuids holds at most 64 sends, so a steer Claude took can go unnamed.
+  test("ends the turn and closes Claude when nothing is queued but a steer went unnamed", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    turns.steerTurn(steer(30, "turn-1", "also this"));
+    const [prompt] = await readPrompts(claude, 2);
+    claude.emit(sdk(success([prompt?.uuid], 0)));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnsCompleted(sent)).toEqual(["completed"]);
+    expect(claude.closes()).toBe(1);
   });
 
   test("fails the turn and closes Claude when the Claude turn before a queued steer fails", async () => {
@@ -437,6 +453,7 @@ describe("turn/steer", () => {
           is_error: true,
           result: "rate limited",
           user_message_uuids: [prompt?.uuid],
+          queued_turn_count: 1,
         }),
       ),
     );
@@ -457,7 +474,7 @@ describe("turn/steer", () => {
     await until(() => claude.started());
     turns.steerTurn(steer(30, "turn-1", "also this"));
     const [prompt, steered] = await readPrompts(claude, 2);
-    claude.emit(sdk(success([prompt?.uuid])));
+    claude.emit(sdk(success([prompt?.uuid], 1)));
     await settle();
     expect(turnsCompleted(sent)).toEqual([]);
     turns.interruptTurn(interrupt(20, "turn-1"));
@@ -592,6 +609,55 @@ describe("model changes", () => {
     await until(() => second.started());
 
     expect(settings[1]).toMatchObject({ model: OTHER_MODEL, resume: "se-1" });
+  });
+
+  test("leave a turn accepted before the change on its model while it waits for an earlier stop", async () => {
+    const gate = createGate();
+    const first = fakeClaude(SUBSCRIPTION, {
+      stillQueued: ["uuid-queued"],
+      interruptAnswered: gate.promise,
+    });
+    const second = fakeClaude(SUBSCRIPTION);
+    const third = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings } = await harness([first, second, third]);
+    await interruptBeforeReceipt(turns, sent, first);
+
+    turns.startTurn(turnStart(11, "again"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    turns.changeModel(THREAD, OTHER_MODEL);
+    gate.open();
+    await until(() => second.started());
+    second.emit(sdk(success()));
+    await until(() => turnsCompleted(sent).length === 2);
+    await completeTurn(turns, sent, third, 12);
+
+    expect(settings.map((session) => session.model)).toEqual([
+      MODEL,
+      MODEL,
+      OTHER_MODEL,
+    ]);
+  });
+
+  test("save a model picked while the thread's first turn registers it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const firstWrite = createGate();
+    let writes = 0;
+    const { turns, store } = await harness([claude], {
+      files: {
+        writeState: async (target, content) => {
+          if (++writes === 1) await firstWrite.promise;
+          return writeFileAtomic(target, content);
+        },
+      },
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => writes === 1);
+    turns.changeModel(THREAD, OTHER_MODEL);
+    firstWrite.open();
+    await until(() => store.get(THREAD)?.model === OTHER_MODEL);
+
+    expect(turns.threadOf(THREAD)?.model).toBe(OTHER_MODEL);
   });
 
   test("leave the running turn on its model", async () => {
@@ -961,13 +1027,14 @@ const toolError = (toolUseId: string) => ({
   parent_tool_use_id: null,
 });
 
-// The CLI names the sends a turn took; leaving them out stands for an older CLI.
-const success = (taken?: (string | undefined)[]) =>
+// The CLI names the sends a turn took and counts those still queued; leaving them out stands for an older CLI.
+const success = (taken?: (string | undefined)[], queued?: number) =>
   result({
     subtype: "success",
     is_error: false,
     result: "done",
     ...(taken !== undefined && { user_message_uuids: taken }),
+    ...(queued !== undefined && { queued_turn_count: queued }),
   });
 
 const result = (fields: object) => ({

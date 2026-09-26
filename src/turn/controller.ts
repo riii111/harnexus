@@ -212,7 +212,11 @@ export const createTurnController = ({
     if (thread === undefined || thread.model === model) return;
     models.set(threadId, model);
     log({ event: "claude_turn", step: "model_changed" });
-    if (store.get(threadId) === undefined) return;
+    // A thread not yet registered saves this model when its first turn registers it.
+    if (store.get(threadId) !== undefined) saveModel(threadId, model);
+  };
+
+  const saveModel = (threadId: string, model: string) => {
     void store.setModel(threadId, model).then((saved) => {
       if (saved.isErr()) {
         log({
@@ -287,13 +291,18 @@ export const createTurnController = ({
         return;
       }
       adopted.delete(threadId);
+      // A model picked while the thread was being registered is saved now, since the registration carried the earlier one.
+      const picked = models.get(threadId);
+      if (picked !== undefined && picked !== thread.model) {
+        saveModel(threadId, picked);
+      }
     }
     let responded = false;
     const ran = await store.runWrite(
       threadId,
       async (record) => {
         responded = true;
-        await streamTurn(requestId, record, active, input, text);
+        await streamTurn(requestId, record, thread.model, active, input, text);
         return Result.ok();
       },
       () => false,
@@ -314,6 +323,7 @@ export const createTurnController = ({
   const streamTurn = async (
     requestId: AppRequest["id"],
     record: ThreadRecord,
+    model: string,
     active: ActiveTurn,
     input: UserInput[],
     text: string,
@@ -335,7 +345,7 @@ export const createTurnController = ({
       finish(active, { status: "interrupted" }, null);
       return;
     }
-    const slot = await sessionFor(record);
+    const slot = await sessionFor(record, model);
     if (slot.isErr()) {
       fail(active, slot.error);
       return;
@@ -394,7 +404,7 @@ export const createTurnController = ({
         continue;
       }
       apply(active, renderSdkMessage(active.state, message, now()));
-      // A result that does not name the sends it took, as from an older CLI, may leave a steer to run later, so the session goes with it rather than leak that run into the next turn; after a stop, the interrupt receipt decides instead.
+      // A steer no result accounted for may still run later, so the session goes with it rather than leak that run into the next turn; after a stop, the interrupt receipt decides instead.
       if (
         active.state.finished &&
         !active.state.interrupting &&
@@ -415,13 +425,13 @@ export const createTurnController = ({
     await sessions.get(threadId)?.pendingInterrupt;
   };
 
+  // model is the one the turn was accepted with, since a change that arrives while the turn waits applies to the next turn.
   const sessionFor = async (
     record: ThreadRecord,
+    model: string,
   ): Promise<Result<SessionSlot, InferErr<SessionStart> | BridgeClosing>> => {
-    const model = models.get(record.threadId) ?? record.model;
     const existing = sessions.get(record.threadId);
     if (existing?.model === model) return Result.ok(existing);
-    // A changed model restarts Claude, and the new session resumes the conversation.
     if (existing !== undefined) dropSession(record.threadId, existing);
     if (closed) {
       return Result.err(
@@ -563,16 +573,16 @@ export const createTurnController = ({
   };
 };
 
-// Only the steers a result names were taken, so any other is still queued; a result that names none cannot tell and ends the turn, and so does a failed one, whose error would otherwise be hidden by the steer's run.
+// The turn waits only when the CLI counts a queued send, which promises another result; the uuid lists are capped and may name only the last send, so they narrow the pending steers but never keep the turn open alone.
+// A failed result ends the turn, since the steer's run would otherwise hide its error.
 const awaitsSteer = (active: ActiveTurn, result: SDKResultMessage) => {
-  if (active.state?.interrupting) return false;
-  if (result.subtype !== "success" || result.is_error) return false;
   const taken =
     result.user_message_uuids ??
     (result.user_message_uuid === undefined ? [] : [result.user_message_uuid]);
-  if (taken.length === 0) return false;
   for (const uuid of taken) active.pendingSteers.delete(uuid);
-  return active.pendingSteers.size > 0;
+  if (active.state?.interrupting) return false;
+  if (result.subtype !== "success" || result.is_error) return false;
+  return (result.queued_turn_count ?? 0) > 0 && active.pendingSteers.size > 0;
 };
 
 const resumeFrom = (sessionId: string | null) =>
