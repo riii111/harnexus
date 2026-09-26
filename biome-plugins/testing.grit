@@ -1,0 +1,95 @@
+language js
+
+// When changing what a rule detects, add the violating and allowed cases it lacks to test/testing-lint.test.ts.
+// Calls are matched by callee and arguments, so type arguments and extra options such as a timeout do not hide them.
+or {
+  JsCallExpression(callee=$inner) as $nested where {
+    $inner <: or {
+      `describe`,
+      JsCallExpression(callee=`describe.each`)
+    },
+    $nested <: within JsCallExpression(callee=$outer) as $parent where {
+      $parent <: not $nested,
+      $outer <: or {
+        `describe`,
+        JsCallExpression(callee=`describe.each`)
+      }
+    } ,
+    register_diagnostic(span=$nested, message="Do not nest describe blocks. Split them side by side, named after the target.")
+  },
+  JsCallExpression(callee=$each, arguments=JsCallArguments(args=[
+    $table, ...
+  ])) where {
+    $each <: or {
+      `test.each`,
+      `it.each`,
+      `describe.each`
+    },
+    $table <: `[$rows]`,
+    $rows <: some JsArrayExpression() as $row,
+    register_diagnostic(span=$row, message="Use object rows with a name instead of tuple rows. Keep the table and title inline instead of moving them to a variable.")
+  },
+  // Only a string or a template without substitutions is read; any other title is left to review.
+  JsCallExpression(callee=$registered, arguments=JsCallArguments(args=[
+    $title, ...
+  ])) where {
+    $registered <: JsCallExpression(callee=$each),
+    $each <: or {
+      `test.each`,
+      `it.each`,
+      `describe.each`
+    },
+    $title <: or {
+      JsStringLiteralExpression(),
+      JsTemplateExpression(elements=$parts) where {
+        $parts <: not some JsTemplateElement()
+      }
+    },
+    // %% prints a literal percent sign, so only an odd run of % before a specifier counts.
+    $title <: r"(?s)(?:.*[^%])?(?:%%)*%[spdifjo#].*",
+    register_diagnostic(span=$title, message="Embed a row property such as $name instead of a positional specifier. Keep the table and title inline instead of moving them to a variable.")
+  },
+  JsCallExpression(callee=$registered, arguments=JsCallArguments(args=[
+    $title, ...
+  ])) where {
+    $registered <: JsCallExpression(callee=$each, arguments=JsCallArguments(args=[
+      $table, ...
+    ])),
+    $each <: or {
+      `test.each`,
+      `it.each`,
+      `describe.each`
+    },
+    $table <: `[$rows]`,
+    $rows <: some JsObjectExpression(),
+    $title <: or {
+      JsStringLiteralExpression(),
+      JsTemplateExpression(elements=$parts) where {
+        $parts <: not some JsTemplateElement()
+      }
+    },
+    $title <: not r"(?s).*\$[A-Za-z_][A-Za-z0-9_]*.*",
+    register_diagnostic(span=$title, message="Embed a row property such as $name in the title so each case is named. Keep the table and title inline instead of moving them to a variable.")
+  },
+  or {
+    JsForOfStatement(),
+    JsForInStatement(),
+    JsForStatement(),
+    JsWhileStatement(),
+    JsDoWhileStatement(),
+    `$_.forEach($_)`,
+    `$_.map($_)`
+  } as $loop where {
+    $loop <: contains JsCallExpression(callee=$register) where {
+      $register <: or {
+        `test`,
+        `it`,
+        `describe`,
+        `test.each`,
+        `it.each`,
+        `describe.each`
+      }
+    },
+    register_diagnostic(span=$loop, message="Register parametrized tests with test.each instead of a loop.")
+  }
+}
