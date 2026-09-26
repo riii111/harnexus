@@ -18,6 +18,7 @@ describe("relayStreams", () => {
       output: output.stream,
       serverInput: echo,
       serverOutput: echo,
+      stopServer: IGNORE_SIGNALS,
       observer: createObserver(logger.log, { maxLineBytes: 64 * 1024 }),
     });
 
@@ -51,6 +52,7 @@ describe("relayStreams", () => {
       output: output.stream,
       serverInput: echo,
       serverOutput: echo,
+      stopServer: IGNORE_SIGNALS,
     });
 
     expect(output.bytes().equals(Buffer.concat(chunks))).toBe(true);
@@ -67,6 +69,7 @@ describe("relayStreams", () => {
       output: output.stream,
       serverInput: serverInput.stream,
       serverOutput,
+      stopServer: IGNORE_SIGNALS,
     });
     input.end("to server\n");
     serverOutput.end("to app\n");
@@ -86,6 +89,7 @@ describe("relayStreams", () => {
       output: collector().stream,
       serverInput: serverInput.stream,
       serverOutput,
+      stopServer: IGNORE_SIGNALS,
     });
     input.end();
     await once(serverInput.stream, "finish");
@@ -105,8 +109,7 @@ describe("relayStreams", () => {
       output: collector().stream,
       serverInput: collector().stream,
       serverOutput,
-      signalServer: (signal) => signals.push(signal),
-      shutdownGraceMs: 20,
+      stopServer: { signal: (signal) => signals.push(signal), graceMs: 20 },
     });
     input.end();
     await Bun.sleep(100);
@@ -132,8 +135,7 @@ describe("relayStreams", () => {
       output: collector().stream,
       serverInput: injector.stream,
       serverOutput,
-      signalServer: (signal) => signals.push(signal),
-      shutdownGraceMs: 20,
+      stopServer: { signal: (signal) => signals.push(signal), graceMs: 20 },
     });
     injector.inject("own\n");
     await Bun.sleep(120);
@@ -153,8 +155,7 @@ describe("relayStreams", () => {
       output: collector().stream,
       serverInput: collector().stream,
       serverOutput,
-      signalServer: (signal) => signals.push(signal),
-      shutdownGraceMs: 50,
+      stopServer: { signal: (signal) => signals.push(signal), graceMs: 50 },
     });
     input.end();
     serverOutput.end();
@@ -179,6 +180,7 @@ describe("relayStreams", () => {
       output: broken,
       serverInput: serverInput.stream,
       serverOutput,
+      stopServer: IGNORE_SIGNALS,
     });
     serverOutput.write("lost\n");
     await once(serverInput.stream, "finish");
@@ -190,6 +192,8 @@ describe("relayStreams", () => {
 });
 
 const SECRET = "sk-secret-token-0123";
+
+const IGNORE_SIGNALS = { signal: () => {}, graceMs: 5000 };
 
 const collector = ({ delayMs = 0, highWaterMark = 16 * 1024 } = {}) => {
   const chunks: Uint8Array[] = [];

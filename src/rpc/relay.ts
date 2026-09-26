@@ -7,8 +7,6 @@ export type RelayObserver = {
   end: (direction: Direction) => void;
 };
 
-const DEFAULT_SHUTDOWN_GRACE_MS = 5000;
-
 // The server is not a child here, so the relay ends on its output EOF instead of its exit.
 export const relayStreams = ({
   input,
@@ -16,16 +14,14 @@ export const relayStreams = ({
   serverInput,
   serverOutput,
   observer,
-  signalServer,
-  shutdownGraceMs = DEFAULT_SHUTDOWN_GRACE_MS,
+  stopServer: { signal: signalServer, graceMs },
 }: {
   input: Readable;
   output: Writable;
   serverInput: Writable;
   serverOutput: Readable;
   observer?: RelayObserver;
-  signalServer?: (signal: Signals) => void;
-  shutdownGraceMs?: number;
+  stopServer: { signal: (signal: Signals) => void; graceMs: number };
 }) =>
   new Promise<void>((resolve) => {
     const timers: ReturnType<typeof setTimeout>[] = [];
@@ -36,15 +32,13 @@ export const relayStreams = ({
       if (!serverInput.writableEnded && !serverInput.destroyed) {
         serverInput.end();
       }
-      if (stopping || signalServer === undefined) return;
+      if (stopping) return;
       stopping = true;
       timers.push(
         setTimeout(() => {
           signalServer("SIGTERM");
-          timers.push(
-            setTimeout(() => signalServer("SIGKILL"), shutdownGraceMs),
-          );
-        }, shutdownGraceMs),
+          timers.push(setTimeout(() => signalServer("SIGKILL"), graceMs));
+        }, graceMs),
       );
     };
     const settle = () => {

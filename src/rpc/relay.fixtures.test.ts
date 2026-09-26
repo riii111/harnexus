@@ -77,6 +77,7 @@ const replay = async (path: string, records: FixtureRecord[]) => {
     output: output.stream,
     serverInput: server.stdin,
     serverOutput: server.stdout,
+    stopServer: { signal: () => {}, graceMs: 5000 },
     observer: createObserver(createLogger((line) => log.push(line)).log),
   });
   let expectedBytes = 0;

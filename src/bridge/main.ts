@@ -31,7 +31,10 @@ if (pipes.isErr()) {
 }
 
 logger.log({ event: "bridge_started" });
-const shutdownGraceMs = loadShutdownGraceMs(process.env);
+const stopServer = {
+  signal: signalServer,
+  graceMs: loadShutdownGraceMs(process.env),
+};
 const claude = await withClaude({
   ...pipes.value,
   observer: createObserver(logger.log),
@@ -43,15 +46,11 @@ for (const signal of BRIDGE_SIGNALS) {
     process.exit(128 + constants.signals[signal]);
   });
 }
-await relayStreams({ ...claude.streams, signalServer, shutdownGraceMs });
+await relayStreams({ ...claude.streams, stopServer });
 logger.log({ event: "server_closed" });
 claude.closeAll();
 pipes.value.serverInput.destroy();
-await stopLingeringServer({
-  isRunning: server.isRunning,
-  signal: signalServer,
-  graceMs: shutdownGraceMs,
-});
+await stopLingeringServer({ isRunning: server.isRunning, ...stopServer });
 process.exit(0);
 
 function signalServer(signal: Signals) {
