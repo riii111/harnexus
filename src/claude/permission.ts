@@ -8,6 +8,8 @@ export type ToolCall = {
   item: ToolItem | null;
   title: string | undefined;
   reason: string | undefined;
+  // Set by the SDK when the prompt must open on its refusal and never approve on a single keystroke.
+  defaultToNo: boolean;
 };
 
 export type PromptTarget = {
@@ -24,13 +26,14 @@ export type AppPrompt = {
   decide: (answer: unknown) => PermissionResult;
 };
 
-// The app's permission request carries only network and file system grants, so tools without their own approval ask a yes/no question instead.
+// The app's permission request carries only network and file system grants, so tools without their own approval ask a yes/no question instead; so does a call that must default to no, since the app's approval prompts choose their own default.
 export const promptFor = (call: ToolCall, target: PromptTarget): AppPrompt => {
   if (call.toolName === ASK_USER_QUESTION) {
     const questions = askedQuestions(call.input);
     if (questions !== null) return questionsPrompt(call, questions, target);
   }
   if (call.toolName === EXIT_PLAN_MODE) return planPrompt(call, target);
+  if (call.defaultToNo) return toolPrompt(call, target);
   if (call.item?.type === "commandExecution") {
     return commandPrompt(call, call.item, target);
   }
@@ -68,7 +71,7 @@ const fileChangePrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
   decide: (answer) => decideApproval(call, answer),
 });
 
-// Claude's AskUserQuestion reads answers keyed by question text, with several choices joined by commas.
+// Claude's AskUserQuestion reads answers keyed by question text, with several choices joined by commas; the app's choices are single-select, so a multi-select question is asked as free text listing its choices.
 const questionsPrompt = (
   call: ToolCall,
   questions: AskedQuestion[],
@@ -80,10 +83,10 @@ const questionsPrompt = (
     questions.map((asked, index) => ({
       id: questionId(index),
       header: asked.header,
-      question: asked.question,
+      question: asked.multiSelect ? multiSelectQuestion(asked) : asked.question,
       isOther: true,
       isSecret: false,
-      options: asked.options,
+      options: asked.multiSelect ? null : asked.options,
     })),
   ),
   decide: (answer) => {
@@ -111,10 +114,10 @@ const planPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
           : "Claude has finished planning. Start implementing?",
       isOther: true,
       isSecret: false,
-      options: [
+      options: refusalFirst(call, [
         { label: APPROVE_PLAN, description: "Leave plan mode and implement" },
         { label: KEEP_PLANNING, description: "Stay in plan mode" },
-      ],
+      ]),
     },
   ]),
   decide: (answer) => {
@@ -150,10 +153,10 @@ const toolPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
       ].join("\n\n"),
       isOther: false,
       isSecret: false,
-      options: [
+      options: refusalFirst(call, [
         { label: ALLOW, description: "Run this tool call once" },
         { label: DENY, description: "Refuse this tool call" },
-      ],
+      ]),
     },
   ]),
   decide: (answer) => {
@@ -175,6 +178,21 @@ const decideApproval = (call: ToolCall, answer: unknown): PermissionResult => {
     (isObject(decision) && "acceptWithExecpolicyAmendment" in decision);
   return accepted ? { behavior: "allow" } : declined(call);
 };
+
+// The app selects the first option, so a call that must default to no lists its refusal first.
+const refusalFirst = <T>(call: ToolCall, [approve, refuse]: [T, T]) =>
+  call.defaultToNo ? [refuse, approve] : [approve, refuse];
+
+const multiSelectQuestion = (asked: AskedQuestion) =>
+  [
+    asked.question,
+    asked.options
+      .map(({ label, description }) =>
+        description === "" ? `- ${label}` : `- ${label}: ${description}`,
+      )
+      .join("\n"),
+    "Answer with one or more of these, separated by commas.",
+  ].join("\n\n");
 
 const itemParams = (target: PromptTarget) => ({
   threadId: target.threadId,
@@ -217,6 +235,7 @@ const askedQuestions = (input: Record<string, unknown>) => {
     asked.push({
       question: question.question,
       header: question.header,
+      multiSelect: question.multiSelect === true,
       options: question.options.filter(isOption).map((option) => ({
         label: option.label,
         description:
@@ -250,6 +269,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 type AskedQuestion = {
   question: string;
   header: string;
+  multiSelect: boolean;
   options: { label: string; description: string }[];
 };
 

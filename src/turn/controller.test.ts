@@ -342,6 +342,17 @@ describe("permission mode", () => {
 
     expect(claude.modes()).toEqual([expected]);
   });
+
+  test("runs a turn without a mode in the mode picked earlier", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude]);
+
+    turns.selectMode(THREAD, "plan");
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.modes().length === 1);
+
+    expect(claude.modes()).toEqual(["plan"]);
+  });
 });
 
 describe("session ids", () => {

@@ -45,11 +45,15 @@ export const checkThread = (
 
 export const refusalMessage = (refusal: Refusal) => REFUSAL_MESSAGES[refusal];
 
-// The app's plan mode maps to Claude's; every other mode, or none, runs Claude with approvals as usual.
-export const requestedPermissionMode = (
+export type Mode = "plan" | "default";
+
+export const requestedMode = (
   params: Record<string, unknown>,
-): "plan" | "default" =>
-  collaborationMode(params)?.mode === "plan" ? "plan" : "default";
+): Mode | undefined => {
+  const mode = collaborationMode(params)?.mode;
+  if (typeof mode !== "string") return undefined;
+  return mode === "plan" ? "plan" : "default";
+};
 
 // Spelling differences such as a trailing slash do not change the directory; symlinks are not resolved, since that needs the file system.
 const isSameDirectory = (a: string, b: string) => resolve(a) === resolve(b);

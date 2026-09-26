@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AppRequest } from "../turn/thread-request.ts";
+import type { AppRequest, Mode } from "../turn/thread-request.ts";
 import { createRouter, type RouteEvent } from "./route.ts";
 
 describe("Codex threads", () => {
@@ -263,7 +263,7 @@ describe("thread/settings/update", () => {
       threadId: "th-claude",
       approvalPolicy: "never",
     });
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([["selectMode", "th-claude", "default"]]);
   });
 
   // The app sends its previous collaboration mode along with the model just picked, as observed with App 26.924.
@@ -281,7 +281,7 @@ describe("thread/settings/update", () => {
     );
 
     expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
-    expect(calls).toEqual([]);
+    expect(calls).toEqual([["selectMode", "th-claude", "default"]]);
   });
 
   test.each([
@@ -358,6 +358,21 @@ describe("thread/settings/update", () => {
     expect(calls).toEqual([]);
   });
 
+  test("keeps plan mode picked for a Claude thread from the server", () => {
+    const { router, calls } = setup(["th-claude"]);
+
+    const forwarded = router.fromApp(
+      settingsUpdate({
+        collaborationMode: { mode: "plan", settings: { model: CLAUDE } },
+      }),
+    );
+    const out = parse(router.fromServer(settingsNotice("default")));
+
+    expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
+    expect(calls).toEqual([["selectMode", "th-claude", "plan"]]);
+    expect(out.params.threadSettings.collaborationMode.mode).toBe("plan");
+  });
+
   test("reports the Claude model in the server's settings notice", () => {
     const { router } = setup(["th-claude"]);
     const notice = encode({
@@ -386,6 +401,18 @@ describe("thread/settings/update", () => {
 const CLAUDE = "claude-sonnet-5";
 const BRIDGE_REQUEST = "harnexus-1";
 
+const settingsNotice = (mode: string) =>
+  encode({
+    method: "thread/settings/updated",
+    params: {
+      threadId: "th-claude",
+      threadSettings: {
+        model: "gpt-fixture",
+        collaborationMode: { mode, settings: { model: "gpt-fixture" } },
+      },
+    },
+  });
+
 const settingsUpdate = (change: object) =>
   encode({
     id: 8,
@@ -399,6 +426,7 @@ const setup = (claudeThreads: string[] = []) => {
   const threads = new Map(
     claudeThreads.map((id) => [id, { model: CLAUDE, cwd: "/fixture/work" }]),
   );
+  const modes = new Map<string, Mode>();
   const router = createRouter(
     {
       isClaudeThread: (threadId) =>
@@ -416,6 +444,11 @@ const setup = (claudeThreads: string[] = []) => {
         calls.push(["answerRequest", response]);
         return response.id === BRIDGE_REQUEST;
       },
+      selectMode: (threadId, mode) => {
+        calls.push(["selectMode", threadId, mode]);
+        modes.set(threadId, mode);
+      },
+      modeOf: (threadId) => modes.get(threadId),
     },
     (event) => events.push(event),
   );

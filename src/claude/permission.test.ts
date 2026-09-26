@@ -78,6 +78,69 @@ describe("promptFor requests", () => {
   });
 });
 
+describe("promptFor calls that must default to no", () => {
+  test.each([
+    {
+      name: "a command",
+      call: call("Bash", { command: "ls" }, COMMAND),
+      expected: "Deny",
+    },
+    {
+      name: "another tool",
+      call: call("WebFetch", {}, null),
+      expected: "Deny",
+    },
+    {
+      name: "a plan",
+      call: call("ExitPlanMode", {}, null),
+      expected: "Keep planning",
+    },
+  ])("asks about $name as a question opening on $expected", ({
+    call,
+    expected,
+  }) => {
+    const prompt = promptFor({ ...call, defaultToNo: true }, TARGET);
+
+    expect(prompt.method).toBe("item/tool/requestUserInput");
+    expect(prompt.params.questions).toMatchObject([
+      { options: [{ label: expected }, {}] },
+    ]);
+  });
+});
+
+describe("promptFor multi-select questions", () => {
+  test("asks as free text listing the choices", () => {
+    const input = { questions: [{ ...QUESTION, multiSelect: true }] };
+
+    const prompt = promptFor(call("AskUserQuestion", input, null), TARGET);
+
+    expect(prompt.params.questions).toEqual([
+      {
+        id: "question-1",
+        header: "Library",
+        question: expect.stringContaining("- zod: schemas\n- valibot"),
+        isOther: true,
+        isSecret: false,
+        options: null,
+      },
+    ]);
+  });
+
+  test("returns the typed answer as the choices", () => {
+    const input = { questions: [{ ...QUESTION, multiSelect: true }] };
+    const prompt = promptFor(call("AskUserQuestion", input, null), TARGET);
+
+    const decision = prompt.decide({
+      answers: { "question-1": { answers: ["zod, valibot"] } },
+    });
+
+    expect(decision).toEqual({
+      behavior: "allow",
+      updatedInput: { ...input, answers: { "Which library?": "zod, valibot" } },
+    });
+  });
+});
+
 describe("promptFor decisions", () => {
   test.each([
     { name: "accept", decision: "accept", expected: "allow" },
@@ -206,7 +269,14 @@ const call = (
   input: Record<string, unknown>,
   item: ToolItem | null,
   reason?: string,
-): ToolCall => ({ toolName, input, item, title: undefined, reason });
+): ToolCall => ({
+  toolName,
+  input,
+  item,
+  title: undefined,
+  reason,
+  defaultToNo: false,
+});
 
 const TARGET = {
   threadId: "th-1",

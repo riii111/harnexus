@@ -32,9 +32,10 @@ import { createAppRequests } from "./app-requests.ts";
 import {
   type AppRequest,
   checkThread,
+  type Mode,
   type Refusal,
   refusalMessage,
-  requestedPermissionMode,
+  requestedMode,
   type Thread,
 } from "./thread-request.ts";
 
@@ -129,6 +130,8 @@ export const createTurnController = ({
   const activeTurns = new Map<string, ActiveTurn>();
   // A session id Claude reported but the store failed to save still resumes the conversation while the bridge runs.
   const sessionIds = new Map<string, string>();
+  // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
+  const modes = new Map<string, Mode>();
   const appRequests = createAppRequests({ send, now });
   let closed = false;
 
@@ -165,7 +168,10 @@ export const createTurnController = ({
     const turn = {
       input: input.items,
       text: input.text,
-      permissionMode: requestedPermissionMode(params),
+      permissionMode: selectMode(
+        threadId,
+        requestedMode(params) ?? modes.get(threadId) ?? "default",
+      ),
     };
     void runTurn(id, checked.thread, active, turn).then(() => release(active));
   };
@@ -206,6 +212,11 @@ export const createTurnController = ({
       dropSession(threadId, slot);
       finish(active, { status: "interrupted" }, null);
     });
+  };
+
+  const selectMode = (threadId: string, mode: Mode) => {
+    modes.set(threadId, mode);
+    return mode;
   };
 
   // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
@@ -397,6 +408,7 @@ export const createTurnController = ({
           item,
           title: options.title,
           reason: options.decisionReason,
+          defaultToNo: options.defaultToNo === true,
         },
         {
           threadId,
@@ -521,6 +533,8 @@ export const createTurnController = ({
     closeAll,
     reject,
     answerRequest: appRequests.answer,
+    selectMode,
+    modeOf: (threadId: string) => modes.get(threadId),
     isClaudeThread: (threadId: unknown) =>
       typeof threadId === "string" && threadOf(threadId) !== undefined,
     threadOf,

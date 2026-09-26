@@ -3,8 +3,10 @@ import { isClaudeModel, withClaudeModels } from "../turn/models.ts";
 import {
   type AppRequest,
   checkThread,
+  type Mode,
   type Refusal,
   refusalMessage,
+  requestedMode,
   requestedModel,
   type Thread,
 } from "../turn/thread-request.ts";
@@ -21,6 +23,8 @@ type Turns = {
   interruptTurn: (request: AppRequest) => void;
   reject: (request: AppRequest, message: string) => void;
   answerRequest: (response: Record<string, unknown>) => boolean;
+  selectMode: (threadId: string, mode: Mode) => void;
+  modeOf: (threadId: string) => Mode | undefined;
 };
 
 type RefusedMethod = (typeof REFUSED_METHODS)[number];
@@ -133,6 +137,8 @@ export const createRouter = (
       return null;
     }
     if (known === undefined) turns.adopt(threadId, checked.thread);
+    const mode = requestedMode(params);
+    if (mode !== undefined) turns.selectMode(threadId, mode);
     if (!("model" in params) && !("collaborationMode" in params)) return line;
     const { model: _model, collaborationMode: _mode, ...rest } = params;
     return encode({ ...message, params: rest });
@@ -189,13 +195,15 @@ export const createRouter = (
     });
   };
 
-  // The server keeps its own model for a Claude thread, so the app would otherwise show that model after any settings change.
+  // The server keeps its own model and mode for a Claude thread, and the app shows what this notice reports after any settings change.
   const rewriteSettingsUpdated = (message: Record<string, unknown>) => {
     const params = isObject(message.params) ? message.params : {};
+    const threadId =
+      typeof params.threadId === "string" ? params.threadId : undefined;
     const model =
-      typeof params.threadId === "string"
-        ? turns.threadOf(params.threadId)?.model
-        : undefined;
+      threadId === undefined ? undefined : turns.threadOf(threadId)?.model;
+    const selected =
+      threadId === undefined ? undefined : turns.modeOf(threadId);
     const settings = params.threadSettings;
     if (model === undefined || !isObject(settings)) return null;
     const mode = settings.collaborationMode;
@@ -210,6 +218,7 @@ export const createRouter = (
             isObject(mode.settings) && {
               collaborationMode: {
                 ...mode,
+                ...(selected !== undefined && { mode: selected }),
                 settings: { ...mode.settings, model },
               },
             }),
