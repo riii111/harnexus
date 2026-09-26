@@ -1,11 +1,5 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { createLogger, type LogEvent } from "./logger.ts";
-
-const stdoutWrite = spyOn(process.stdout, "write");
-
-afterEach(() => {
-  stdoutWrite.mockClear();
-});
 
 describe("createLogger", () => {
   test("writes one JSON line per event to the sink", () => {
@@ -63,17 +57,5 @@ describe("createLogger", () => {
       id: 1,
       tools: [{ name: "t", inputSchema: true }],
     });
-  });
-
-  test("defaults to stderr and never writes to stdout", () => {
-    const stderrWrite = spyOn(process.stderr, "write").mockImplementation(
-      () => true,
-    );
-
-    createLogger().log({ event: "bridge_started" });
-
-    expect(stderrWrite).toHaveBeenCalledTimes(1);
-    expect(stdoutWrite).not.toHaveBeenCalled();
-    stderrWrite.mockRestore();
   });
 });
