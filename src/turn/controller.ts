@@ -11,12 +11,12 @@ import type {
 } from "../claude/session.ts";
 import type { UserInput } from "../render/protocol.ts";
 import {
-  finishTurn,
   markInterrupting,
   markToolDeclined,
-  startTurn as openTurn,
   type Rendered,
   renderSdkMessage,
+  renderTurnCompleted,
+  renderTurnStarted,
   renderUserInput,
   type TurnOutcome,
   type TurnState,
@@ -252,7 +252,7 @@ export const createTurnController = ({
     text: string,
   ) => {
     const threadId = record.threadId;
-    const started = openTurn({
+    const started = renderTurnStarted({
       threadId,
       turnId: newTurnId(),
       cwd: record.worktree,
@@ -403,7 +403,7 @@ export const createTurnController = ({
     error: FailureTag | null,
   ) => {
     if (active.state === null || active.state.finished) return;
-    apply(active, finishTurn(active.state, outcome, now()), error);
+    apply(active, renderTurnCompleted(active.state, outcome, now()), error);
   };
 
   const release = (active: ActiveTurn) => {

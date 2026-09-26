@@ -49,7 +49,7 @@ export const markToolDeclined = (
         declinedToolUseIds: [...state.declinedToolUseIds, toolUseId],
       };
 
-export const startTurn = (params: {
+export const renderTurnStarted = (params: {
   threadId: string;
   turnId: string;
   cwd: string;
@@ -163,7 +163,7 @@ export const renderSdkMessage = (
 };
 
 // Called directly for an interrupt or a stream failure, where no result message closes the turn.
-export const finishTurn = (
+export const renderTurnCompleted = (
   state: TurnState,
   outcome: TurnOutcome,
   now: number,
