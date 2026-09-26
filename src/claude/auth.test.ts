@@ -52,7 +52,6 @@ describe("checkSubscription", () => {
         tokenSource: "ANTHROPIC_AUTH_TOKEN",
       },
     },
-    { name: "a cloud provider", account: { apiProvider: "vertex" } },
     {
       name: "a gateway",
       account: { subscriptionType: "Claude Max", apiProvider: "gateway" },

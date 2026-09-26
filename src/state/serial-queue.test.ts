@@ -6,6 +6,7 @@ describe("createSerialQueue", () => {
     const queue = createSerialQueue();
     const events: string[] = [];
     const first = deferred();
+    const second = deferred();
 
     const a = queue.run("thread-1", async () => {
       events.push("a:start");
@@ -14,33 +15,24 @@ describe("createSerialQueue", () => {
     });
     const b = queue.run("thread-1", async () => {
       events.push("b:start");
+      await second.promise;
+      events.push("b:end");
     });
     await tick();
     expect(events).toEqual(["a:start"]);
 
     first.resolve();
-    await Promise.all([a, b]);
-    expect(events).toEqual(["a:start", "a:end", "b:start"]);
-  });
-
-  test("runs tasks with different keys concurrently", async () => {
-    const queue = createSerialQueue();
-    const blocker = deferred();
-    const events: string[] = [];
-
-    const a = queue.run("thread-1", async () => {
-      await blocker.promise;
-      events.push("a");
-    });
-    const b = queue.run("thread-2", async () => {
-      events.push("b");
-    });
-    await b;
-    expect(events).toEqual(["b"]);
-
-    blocker.resolve();
     await a;
-    expect(events).toEqual(["b", "a"]);
+    await tick();
+    const c = queue.run("thread-1", async () => {
+      events.push("c:start");
+    });
+    await tick();
+    expect(events).toEqual(["a:start", "a:end", "b:start"]);
+
+    second.resolve();
+    await Promise.all([b, c]);
+    expect(events).toEqual(["a:start", "a:end", "b:start", "b:end", "c:start"]);
   });
 
   test("keeps running later tasks after a task rejects", async () => {

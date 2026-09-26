@@ -8,6 +8,7 @@ import type {
 import type {
   AgentMessageItem,
   AppNotification,
+  AppNotificationBody,
   ThreadItem,
   ToolItem,
   Turn,
@@ -496,12 +497,9 @@ const itemCompleted = (draft: Draft, item: ThreadItem, now: number) =>
 const notify = (
   draft: Draft,
   now: number,
-  notification: DistributiveOmit<AppNotification, "emittedAtMs">,
+  notification: AppNotificationBody,
 ) => {
-  draft.notifications.push({
-    ...notification,
-    emittedAtMs: now,
-  } as AppNotification);
+  draft.notifications.push({ ...notification, emittedAtMs: now });
 };
 
 // Item ids only need to be unique within the thread, and the turn id already is.
@@ -588,7 +586,3 @@ type StreamDelta = Extract<
   StreamEvent,
   { type: "content_block_delta" }
 >["delta"];
-
-type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
-  ? Omit<T, K>
-  : never;
