@@ -162,6 +162,24 @@ export const renderSdkMessage = (
   return seal(draft);
 };
 
+// A steer Claude had not taken when its turn ended runs as Claude's next turn, which the app sees as the same turn, so this result closes nothing but its own items.
+export const continueAfterResult = (
+  state: TurnState,
+  result: SDKResultMessage,
+  now: number,
+): Rendered => {
+  if (state.finished) return { state, notifications: [] };
+  const draft = open(state);
+  correctDenials(
+    draft,
+    result.permission_denials.map((denial) => denial.tool_use_id),
+    now,
+  );
+  closeBlocks(draft, now);
+  flushPending(draft, null, now);
+  return seal(draft);
+};
+
 // Called directly for an interrupt or a stream failure, where no result message closes the turn.
 export const finishTurn = (
   state: TurnState,

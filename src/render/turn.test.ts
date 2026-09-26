@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  SDKMessage,
+  SDKResultMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import type { AppNotification, ThreadItem } from "./protocol.ts";
 import {
+  continueAfterResult,
   markInterrupting,
   markToolDeclined,
   type Rendered,
@@ -397,6 +401,51 @@ describe("turn end", () => {
     expect(
       renderSdkMessage(rendered.state, sdk(success()), NOW).notifications,
     ).toEqual([]);
+  });
+});
+
+describe("continueAfterResult", () => {
+  test("corrects denials and keeps the turn open for the Claude turn that follows", () => {
+    const before = run([
+      assistant("msg-1", [
+        toolUse("tool-1", "Edit", {
+          file_path: "/secret/a",
+          old_string: "o",
+          new_string: "n",
+        }),
+      ]),
+      toolResult("tool-1", "denied by rule", true),
+      ...streamedText("msg-2", ["first"], "end_turn"),
+    ]);
+
+    const continued = continueAfterResult(
+      before.state,
+      result({
+        subtype: "success",
+        is_error: false,
+        result: "done",
+        permission_denials: [
+          { tool_name: "Edit", tool_use_id: "tool-1", tool_input: {} },
+        ],
+      }) as unknown as SDKResultMessage,
+      NOW,
+    );
+    const after = renderSdkMessage(
+      continued.state,
+      sdk(success()),
+      NOW,
+    ).notifications;
+
+    expect(continued.state.finished).toBe(false);
+    expect(
+      completedItems(continued).flatMap((item) =>
+        item.type === "fileChange" ? [item.status] : [],
+      ),
+    ).toEqual(["declined"]);
+    expect(turnCompleted(continued)).toBeUndefined();
+    expect(turnCompleted({ notifications: after })).toMatchObject({
+      status: "completed",
+    });
   });
 });
 

@@ -125,7 +125,7 @@ describe("threads with a Claude model", () => {
   test.each([
     { method: "turn/start", expected: "startTurn" },
     { method: "turn/interrupt", expected: "interruptTurn" },
-    { method: "turn/steer", expected: "reject" },
+    { method: "turn/steer", expected: "steerTurn" },
     { method: "review/start", expected: "reject" },
     { method: "thread/compact/start", expected: "reject" },
   ])("hands $method of a Claude thread to $expected instead of the server", ({
@@ -139,26 +139,12 @@ describe("threads with a Claude model", () => {
     expect(calls.map(([name]) => name)).toEqual([expected]);
   });
 
-  test.each([
-    {
-      name: "another model",
-      change: { model: "claude-opus-5-5" },
-      expected: "model_change",
-    },
-    {
-      name: "another working directory",
-      change: { cwd: "/elsewhere" },
-      expected: "directory_change",
-    },
-  ])("refuses a resume of a Claude thread with $name as $expected", ({
-    change,
-    expected,
-  }) => {
+  test("refuses a resume of a Claude thread in another working directory", () => {
     const { router, calls, events } = setup(["th-claude"]);
     const line = encode({
       id: 4,
       method: "thread/resume",
-      params: { threadId: "th-claude", ...change },
+      params: { threadId: "th-claude", cwd: "/elsewhere" },
     });
 
     expect(router.fromApp(line)).toBeNull();
@@ -167,9 +153,26 @@ describe("threads with a Claude model", () => {
       {
         event: "claude_request_refused",
         method: "thread/resume",
-        reason: expected,
+        reason: "directory_change",
       },
     ]);
+  });
+
+  test("moves a resumed Claude thread to the Claude model it names and hides it from the server", () => {
+    const { router, calls } = setup(["th-claude"]);
+
+    const forwarded = router.fromApp(
+      encode({
+        id: 4,
+        method: "thread/resume",
+        params: { threadId: "th-claude", model: OTHER_CLAUDE },
+      }),
+    );
+    const out = parse(router.fromServer(threadResponse(4, "th-claude")));
+
+    expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
+    expect(calls).toEqual([["changeModel", "th-claude", OTHER_CLAUDE]]);
+    expect(out.result.model).toBe(OTHER_CLAUDE);
   });
 
   test("forwards a resume of a Claude thread in its own directory", () => {
@@ -258,7 +261,7 @@ describe("thread/settings/update", () => {
         model: CLAUDE,
         collaborationMode: {
           mode: "default",
-          settings: { model: "claude-opus-5-5" },
+          settings: { model: OTHER_CLAUDE },
         },
       }),
     );
@@ -268,16 +271,28 @@ describe("thread/settings/update", () => {
   });
 
   test.each([
-    { name: "another model", change: { model: "claude-opus-5-5" } },
+    { name: "alone", change: { model: OTHER_CLAUDE } },
     {
-      name: "another model beside a collaboration mode naming the thread's",
+      name: "beside a stale collaboration mode",
       change: {
-        model: "claude-opus-5-5",
+        model: OTHER_CLAUDE,
         collaborationMode: { mode: "default", settings: { model: CLAUDE } },
       },
     },
+  ])("moves a Claude thread to another Claude model picked $name without telling the server", ({
+    change,
+  }) => {
+    const { router, calls } = setup(["th-claude"]);
+
+    const forwarded = router.fromApp(settingsUpdate(change));
+
+    expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
+    expect(calls).toEqual([["changeModel", "th-claude", OTHER_CLAUDE]]);
+  });
+
+  test.each([
     {
-      name: "another model in the collaboration mode alone",
+      name: "a Codex model in the collaboration mode alone",
       change: {
         collaborationMode: { mode: "default", settings: { model: "gpt-x" } },
       },
@@ -373,6 +388,7 @@ describe("thread/settings/update", () => {
 });
 
 const CLAUDE = "claude-sonnet-5";
+const OTHER_CLAUDE = "claude-opus-5-5";
 
 const settingsUpdate = (change: object) =>
   encode({
@@ -396,8 +412,14 @@ const setup = (claudeThreads: string[] = []) => {
         calls.push(["adopt", threadId, thread]);
         threads.set(threadId, thread);
       },
+      changeModel: (threadId, model) => {
+        calls.push(["changeModel", threadId, model]);
+        const thread = threads.get(threadId);
+        if (thread !== undefined) threads.set(threadId, { ...thread, model });
+      },
       startTurn: (request: AppRequest, cwd) =>
         calls.push(["startTurn", request, cwd]),
+      steerTurn: (request) => calls.push(["steerTurn", request]),
       interruptTurn: (request) => calls.push(["interruptTurn", request]),
       reject: (request, message) => calls.push(["reject", request, message]),
     },
