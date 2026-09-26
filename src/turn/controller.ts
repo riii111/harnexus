@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   type InferErr,
   type InferOk,
@@ -15,6 +16,7 @@ import {
   markInterrupting,
   markToolDeclined,
   type Rendered,
+  renderInterimResult,
   renderSdkMessage,
   renderTurnCompleted,
   renderTurnStarted,
@@ -34,7 +36,15 @@ import {
 
 // Only steps, turn statuses, refusal reasons and error tags are logged, never thread ids or text.
 export type TurnEvent =
-  | { event: "claude_turn"; step: "started" | "queued" | "outcome_unknown" }
+  | {
+      event: "claude_turn";
+      step:
+        | "started"
+        | "queued"
+        | "outcome_unknown"
+        | "steered"
+        | "model_changed";
+    }
   | {
       event: "claude_turn";
       step: "finished";
@@ -50,7 +60,7 @@ export type TurnEvent =
   | { event: "claude_turn"; step: "interrupt_failed"; error: InterruptTag }
   | {
       event: "claude_turn";
-      step: "session_not_saved" | "run_state_not_saved";
+      step: "session_not_saved" | "model_not_saved" | "run_state_not_saved";
       error: StoreTag;
     };
 
@@ -82,13 +92,15 @@ type FailureTag =
   | InferErr<StreamedMessage>["_tag"]
   | InterruptTag
   | BridgeClosing["_tag"]
-  | StreamEnded["_tag"];
+  | StreamEnded["_tag"]
+  | "SteerUnconfirmed";
 
 // runWrite is generic in the operation's error, so the store's own tags are listed; a new tag there fails to compile here.
 type StoreTag =
   | ErrorTag<ReturnType<ThreadStore["register"]>>
   | ErrorTag<ReturnType<ThreadStore["setSessionId"]>>
   | ErrorTag<ReturnType<ThreadStore["addMessageId"]>>
+  | ErrorTag<ReturnType<ThreadStore["setModel"]>>
   | "ThreadNotFound"
   | "WriteOutcomeUnknown"
   | "WriteNotStarted"
@@ -97,15 +109,21 @@ type StoreTag =
 // A session is not reused until its interrupt reports whether a send is still queued, which can arrive after the interrupted turn has ended.
 type SessionSlot = {
   session: ClaudeSession;
+  model: string;
   pendingInterrupt: Promise<void> | null;
   link: CodexLink;
 };
 
 // link is the thread tool server of the session the turn ran on, read when the turn ends to see whether a write was left undecided.
+// Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken.
 type ActiveTurn = {
   threadId: string;
   state: TurnState | null;
   link: CodexLink | null;
+  slot: SessionSlot | null;
+  unsentSteers: string[];
+  pendingSteers: Set<string>;
+  steers: number;
 };
 
 type TextInput = { items: UserInput[]; text: string };
@@ -144,8 +162,9 @@ export const createTurnController = ({
   const adopted = new Map<string, Thread>();
   const sessions = new Map<string, SessionSlot>();
   const activeTurns = new Map<string, ActiveTurn>();
-  // A session id Claude reported but the store failed to save still resumes the conversation while the bridge runs.
+  // A session id or model the store failed to save still applies while the bridge runs.
   const sessionIds = new Map<string, string>();
+  const models = new Map<string, string>();
   // Message ids accepted but not yet saved, so a copy arriving while the first waits or runs is caught too.
   const acceptedMessageIds = new Map<string, Set<string>>();
   const turnsInFlight = new Map<string, number>();
@@ -182,6 +201,7 @@ export const createTurnController = ({
       return;
     }
     if (messageId !== null) acceptMessage(threadId, messageId);
+    changeModel(threadId, checked.thread.model);
     const inFlight = turnsInFlight.get(threadId) ?? 0;
     if (inFlight > 0) log({ event: "claude_turn", step: "queued" });
     turnsInFlight.set(threadId, inFlight + 1);
@@ -189,6 +209,63 @@ export const createTurnController = ({
       const left = (turnsInFlight.get(threadId) ?? 1) - 1;
       if (left === 0) turnsInFlight.delete(threadId);
       else turnsInFlight.set(threadId, left);
+    });
+  };
+
+  // Claude takes a steer at its next tool boundary, or runs it as its next turn when the running one has ended, and either way the app turn stays open until Claude has taken it.
+  const steerTurn = ({ id, params }: AppRequest) => {
+    const active = activeTurns.get(String(params.threadId));
+    const state = active?.state;
+    if (
+      active === undefined ||
+      state == null ||
+      state.finished ||
+      state.interrupting ||
+      state.turnId !== params.expectedTurnId
+    ) {
+      refuse(id, "no_running_turn");
+      return;
+    }
+    const input = textInput(params.input);
+    if (input === null) {
+      refuse(id, "text_only");
+      return;
+    }
+    if (active.steers >= MAX_STEERS_PER_TURN) {
+      refuse(id, "too_many_steers");
+      return;
+    }
+    if (active.slot === null) {
+      active.unsentSteers.push(input.text);
+    } else if (sendSteer(active, active.slot, input.text).isErr()) {
+      refuse(id, "steer_not_sent");
+      return;
+    }
+    active.steers += 1;
+    send({ id, result: { turnId: state.turnId } });
+    log({ event: "claude_turn", step: "steered" });
+    apply(active, renderUserInput(state, input.items, null, now()));
+  };
+
+  // A running turn keeps its model; the next turn restarts Claude on the new one and resumes the same conversation.
+  const changeModel = (threadId: string, model: string) => {
+    const thread = threadOf(threadId);
+    if (thread === undefined || thread.model === model) return;
+    models.set(threadId, model);
+    log({ event: "claude_turn", step: "model_changed" });
+    // A thread not yet registered saves this model when its first turn registers it.
+    if (store.get(threadId) !== undefined) saveModel(threadId, model);
+  };
+
+  const saveModel = (threadId: string, model: string) => {
+    void store.setModel(threadId, model).then((saved) => {
+      if (saved.isErr()) {
+        log({
+          event: "claude_turn",
+          step: "model_not_saved",
+          error: saved.error._tag,
+        });
+      }
     });
   };
 
@@ -268,6 +345,11 @@ export const createTurnController = ({
         return;
       }
       adopted.delete(threadId);
+      // A model picked while the thread was being registered is saved now, since the registration carried the earlier one.
+      const picked = models.get(threadId);
+      if (picked !== undefined && picked !== store.get(threadId)?.model) {
+        saveModel(threadId, picked);
+      }
     }
     let responded = false;
     const ran = await store.runWrite(
@@ -286,9 +368,24 @@ export const createTurnController = ({
           return Result.ok();
         }
         responded = true;
-        const active: ActiveTurn = { threadId, state: null, link: null };
+        const active: ActiveTurn = {
+          threadId,
+          state: null,
+          link: null,
+          slot: null,
+          unsentSteers: [],
+          pendingSteers: new Set(),
+          steers: 0,
+        };
         activeTurns.set(threadId, active);
-        await streamTurn(requestId, record, active, input, messageId);
+        await streamTurn(
+          requestId,
+          record,
+          thread.model,
+          active,
+          input,
+          messageId,
+        );
         release(active);
         active.link?.stopWrites();
         return active.link?.hasUnsettledWrite()
@@ -346,6 +443,7 @@ export const createTurnController = ({
   const streamTurn = async (
     requestId: AppRequest["id"],
     record: ThreadRecord,
+    model: string,
     active: ActiveTurn,
     input: TextInput,
     messageId: string | null,
@@ -370,7 +468,7 @@ export const createTurnController = ({
       finish(active, { status: "interrupted" }, null);
       return;
     }
-    const slot = await sessionFor(record);
+    const slot = await sessionFor(record, model);
     if (slot.isErr()) {
       fail(active, slot.error);
       return;
@@ -386,6 +484,15 @@ export const createTurnController = ({
       dropSession(threadId, slot.value);
       fail(active, sent.error);
       return;
+    }
+    active.slot = slot.value;
+    for (const steer of active.unsentSteers.splice(0)) {
+      const steered = sendSteer(active, slot.value, steer);
+      if (steered.isErr()) {
+        dropSession(threadId, slot.value);
+        fail(active, steered.error);
+        return;
+      }
     }
     let sessionId = sessionIds.get(threadId) ?? record.sessionId;
     while (active.state !== null && !active.state.finished) {
@@ -416,19 +523,52 @@ export const createTurnController = ({
           });
         }
       }
-      apply(active, renderSdkMessage(active.state, received.value, now()));
+      const message = received.value;
+      const steers =
+        message.type === "result" ? steersAfter(active, message) : "none";
+      if (message.type === "result" && steers !== "none") {
+        apply(active, renderInterimResult(active.state, message, now()));
+        if (steers === "queued") continue;
+        // The steer may never run, so the user is told to send it again, and the session goes so a late run cannot leak into the next turn.
+        dropSession(threadId, slot.value);
+        finish(
+          active,
+          { status: "failed", message: STEER_UNCONFIRMED },
+          "SteerUnconfirmed",
+        );
+        return;
+      }
+      apply(active, renderSdkMessage(active.state, message, now()));
+      // A failed result leaves its steers unrun, so the session goes with them rather than run them into the next turn; after a stop, the interrupt receipt decides instead.
+      if (
+        active.state.finished &&
+        !active.state.interrupting &&
+        active.pendingSteers.size > 0
+      ) {
+        dropSession(threadId, slot.value);
+      }
     }
+  };
+
+  const sendSteer = (active: ActiveTurn, slot: SessionSlot, text: string) => {
+    const sent = slot.session.send(text);
+    if (sent.isOk()) active.pendingSteers.add(sent.value);
+    return sent;
   };
 
   const waitForPendingInterrupt = async (threadId: string) => {
     await sessions.get(threadId)?.pendingInterrupt;
   };
 
+  // model is the one the turn was accepted with, since a change that arrives while the turn waits applies to the next turn.
+  // model is the one the turn was accepted with, since a change that arrives while the turn waits applies to the next turn.
   const sessionFor = async (
     record: ThreadRecord,
+    model: string,
   ): Promise<Result<SessionSlot, InferErr<SessionStart> | BridgeClosing>> => {
     const existing = sessions.get(record.threadId);
-    if (existing !== undefined) return Result.ok(existing);
+    if (existing?.model === model) return Result.ok(existing);
+    if (existing !== undefined) dropSession(record.threadId, existing);
     if (closed) {
       return Result.err(
         new BridgeClosing({ message: refusalMessage("bridge_closing") }),
@@ -439,7 +579,7 @@ export const createTurnController = ({
     // TODO: clear a stored session id that Claude can no longer resume in P11a, which decides how a missing session is shown; until then every turn of that thread fails the same way.
     const started = await startSession({
       cwd: record.worktree,
-      model: record.model,
+      model,
       ...resumeFrom(sessionIds.get(record.threadId) ?? record.sessionId),
       mcpServers: { [link.server.name]: link.server },
       allowedTools: link.allowedTools,
@@ -460,6 +600,7 @@ export const createTurnController = ({
     }
     const slot: SessionSlot = {
       session: started.value,
+      model,
       pendingInterrupt: null,
       link,
     };
@@ -528,9 +669,14 @@ export const createTurnController = ({
 
   const threadOf = (threadId: string): Thread | undefined => {
     const record = store.get(threadId);
-    return record === undefined
-      ? adopted.get(threadId)
-      : { model: record.model, cwd: record.worktree };
+    const thread =
+      record === undefined
+        ? adopted.get(threadId)
+        : { model: record.model, cwd: record.worktree };
+    const model = models.get(threadId);
+    return thread === undefined || model === undefined
+      ? thread
+      : { ...thread, model };
   };
 
   const refuse = (
@@ -554,7 +700,9 @@ export const createTurnController = ({
 
   return {
     startTurn,
+    steerTurn,
     interruptTurn,
+    changeModel,
     closeAll,
     reject,
     isClaudeThread: (threadId: unknown) =>
@@ -564,6 +712,25 @@ export const createTurnController = ({
       if (store.get(threadId) === undefined) adopted.set(threadId, thread);
     },
   };
+};
+
+// A list under its cap names every send the turn took, so a steer it leaves out runs as a later turn, even one that reached Claude after this result was written; a queued send the CLI counts promises that turn too.
+// A capped list or the single last uuid of an older CLI may leave out a steer already taken, so with nothing counted as queued whether the steer runs is unknown.
+// A failed result ends the turn, since the steer's run would otherwise hide its error.
+const steersAfter = (
+  active: ActiveTurn,
+  result: SDKResultMessage,
+): "none" | "queued" | "unknown" => {
+  const listed = result.user_message_uuids;
+  const taken =
+    listed ??
+    (result.user_message_uuid === undefined ? [] : [result.user_message_uuid]);
+  for (const uuid of taken) active.pendingSteers.delete(uuid);
+  if (active.state?.interrupting) return "none";
+  if (result.subtype !== "success" || result.is_error) return "none";
+  if (active.pendingSteers.size === 0) return "none";
+  const complete = listed !== undefined && listed.length < TAKEN_UUIDS_LIMIT;
+  return complete || (result.queued_turn_count ?? 0) > 0 ? "queued" : "unknown";
 };
 
 const resumeFrom = (sessionId: string | null) =>
@@ -594,3 +761,12 @@ const isTextItem = (item: unknown): item is { type: "text"; text: string } =>
   typeof item.text === "string";
 
 const INVALID_REQUEST = -32600;
+
+// The SDK documents user_message_uuids as holding at most this many entries.
+const TAKEN_UUIDS_LIMIT = 64;
+
+// With the prompt, a turn's sends stay under the list cap, so the list names each of them.
+const MAX_STEERS_PER_TURN = TAKEN_UUIDS_LIMIT - 2;
+
+const STEER_UNCONFIRMED =
+  "Claude may not have received the last steer; send it again if it was not answered";
