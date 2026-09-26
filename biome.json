@@ -20,7 +20,7 @@
   },
   "overrides": [
     {
-      "includes": ["src/**", "!src/boundary/**"],
+      "includes": ["src/**", "!src/**/*.boundary.ts"],
       "plugins": ["./biome-plugins/no-throw-try-catch.grit"]
     },
     {
