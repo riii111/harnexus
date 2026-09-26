@@ -42,6 +42,38 @@ type SchemaShape =
   | SchemaShape[]
   | { [key: string]: SchemaShape };
 
+export const serializeObservationEvent = (entry: ObservationEvent) => {
+  switch (entry.event) {
+    case "rpc_message":
+      return {
+        event: entry.event,
+        direction: entry.direction,
+        kind: entry.kind,
+        method: entry.method,
+        id: entry.id,
+        ...(entry.mcpStartup !== null && {
+          mcpStartup: {
+            server: entry.mcpStartup.server,
+            status: entry.mcpStartup.status,
+            failure: entry.mcpStartup.failure,
+          },
+        }),
+        ...(entry.tools.length > 0 && {
+          tools: entry.tools.map(({ name, inputSchema }) => ({
+            name,
+            inputSchema,
+          })),
+        }),
+      };
+    case "rpc_unobserved":
+      return {
+        event: entry.event,
+        direction: entry.direction,
+        reason: entry.reason,
+      };
+  }
+};
+
 const DEFAULT_MAX_LINE_BYTES = 8 * 1024 * 1024;
 
 // The relayed bytes are never altered; this only reads a copy of each chunk.

@@ -17,6 +17,15 @@ export type RouteEvent =
   | { event: "model_id_collision"; model: string }
   | { event: "claude_request_refused"; method: RefusedMethod; reason: Refusal };
 
+export const serializeRouteEvent = (entry: RouteEvent) => {
+  switch (entry.event) {
+    case "claude_request_refused":
+      return { event: entry.event, method: entry.method, reason: entry.reason };
+    case "model_id_collision":
+      return { event: entry.event, model: entry.model };
+  }
+};
+
 type Turns = {
   isClaudeThread: (threadId: unknown) => boolean;
   threadOf: (threadId: string) => Thread | undefined;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createLogger } from "../shared/logger.ts";
-import { createObserver } from "./observe.ts";
+import { createObserver, serializeObservationEvent } from "./observe.ts";
 import type { Direction } from "./relay.ts";
 
 describe("createObserver", () => {
@@ -317,7 +317,10 @@ const observe = (
   options: { maxLineBytes?: number } = {},
 ) => {
   const lines: string[] = [];
-  const logger = createLogger((line) => lines.push(line));
+  const logger = createLogger(
+    (line) => lines.push(line),
+    serializeObservationEvent,
+  );
   const observer = createObserver(logger.log, options);
   for (const { direction, line } of messages) {
     observer.chunk(direction, encode(line));
