@@ -2,9 +2,9 @@ language js
 
 or {
   JsThrowStatement() as $node where {
-    register_diagnostic(span=$node, message="Return Result.err instead of throw. Convert thrown exceptions in src/boundary/.")
+    register_diagnostic(span=$node, message="Return Result.err instead of throw. Convert thrown exceptions in a *.boundary.ts file.")
   },
   JsCatchClause() as $node where {
-    register_diagnostic(span=$node, message="Use Result.try or Result.tryPromise in src/boundary/ instead of try-catch.")
+    register_diagnostic(span=$node, message="Use Result.try or Result.tryPromise in a *.boundary.ts file instead of try-catch.")
   }
 }
