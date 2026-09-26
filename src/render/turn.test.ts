@@ -400,7 +400,7 @@ describe("renderSdkMessage turn end", () => {
   });
 });
 
-describe("renderSdkMessage replay", () => {
+describe("renderSdkMessage determinism", () => {
   test("renders the same notifications for the same messages", () => {
     const messages = [
       ...streamedText("msg-1", ["a"], null),
@@ -410,6 +410,20 @@ describe("renderSdkMessage replay", () => {
     ];
 
     expect(run(messages).notifications).toEqual(run(messages).notifications);
+  });
+
+  test("stamps notifications with the given time, not the clock", () => {
+    const messages = [...streamedText("msg-1", ["a"], "end_turn"), success()];
+
+    const stamps = run(messages).notifications.map((n) => n.emittedAtMs);
+
+    expect({ first: stamps[0], last: stamps.at(-1) }).toEqual({
+      first: NOW,
+      last: NOW + messages.length,
+    });
+    expect(
+      stamps.filter((at) => at < NOW || at > NOW + messages.length),
+    ).toEqual([]);
   });
 });
 
