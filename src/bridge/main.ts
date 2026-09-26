@@ -1,7 +1,7 @@
 import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import { openServerPipes } from "../boundary/process.ts";
-import { startClaudeSession } from "../claude/session.ts";
+import { claudeSessionExists, startClaudeSession } from "../claude/session.ts";
 import { createLineInjector } from "../rpc/inject.ts";
 import { createLineRewriter } from "../rpc/line-rewriter.ts";
 import { createObserver } from "../rpc/observe.ts";
@@ -84,6 +84,7 @@ async function withClaude(relay: {
     store: store.value,
     request: serverCalls.request,
     startSession: startClaudeSession,
+    findSession: claudeSessionExists,
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });

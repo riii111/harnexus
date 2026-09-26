@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { UUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,7 +17,11 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { failingQuery, fakeClaude } from "../boundary/testing/fake-claude.ts";
-import { type ClaudeSessionSettings, startClaudeSession } from "./session.ts";
+import {
+  type ClaudeSessionSettings,
+  claudeSessionExists,
+  startClaudeSession,
+} from "./session.ts";
 
 describe("startClaudeSession options", () => {
   test("loads every settings source with the Claude Code preset in the worktree", async () => {
@@ -411,6 +422,81 @@ describe("startClaudeSession started session", () => {
     expect(switched.isOk()).toBe(true);
     expect(late.isErr() && late.error._tag).toBe("ClaudeSessionClosed");
     expect(claude.modes()).toEqual(["plan"]);
+  });
+});
+
+describe("claudeSessionExists", () => {
+  let configDir: string;
+
+  beforeEach(() => {
+    configDir = mkdtempSync(join(tmpdir(), "harnexus-claude-config-"));
+  });
+
+  afterEach(() => {
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  test.each([
+    { name: "a readable record", mode: 0o600 },
+    { name: "a record the bridge cannot read", mode: 0o000 },
+  ])("finds $name by its file name", async ({ mode }) => {
+    const record = join(configDir, "projects", "-work-tree", "se-1.jsonl");
+    mkdirSync(join(configDir, "projects", "-work-tree"), { recursive: true });
+    writeFileSync(record, "{}\n");
+    chmodSync(record, mode);
+
+    const found = await claudeSessionExists("se-1", configDir);
+
+    expect(found.isOk() && found.value).toBe(true);
+  });
+
+  test.each([
+    { name: "no projects folder", projects: [] as string[] },
+    { name: "project folders without it", projects: ["-work-tree", "-other"] },
+  ])("reports a record missing from $name as missing", async ({ projects }) => {
+    for (const project of projects) {
+      mkdirSync(join(configDir, "projects", project), { recursive: true });
+      writeFileSync(join(configDir, "projects", project, "se-2.jsonl"), "");
+    }
+
+    const found = await claudeSessionExists("se-1", configDir);
+
+    expect(found.isOk() && found.value).toBe(false);
+  });
+
+  test("finds a record in a project folder reached through a symbolic link", async () => {
+    const linked = join(configDir, "elsewhere");
+    mkdirSync(linked);
+    writeFileSync(join(linked, "se-1.jsonl"), "{}\n");
+    mkdirSync(join(configDir, "projects"));
+    symlinkSync(linked, join(configDir, "projects", "-work-tree"));
+
+    const found = await claudeSessionExists("se-1", configDir);
+
+    expect(found.isOk() && found.value).toBe(true);
+  });
+
+  test("skips a file beside the project folders", async () => {
+    const project = join(configDir, "projects", "-work-tree");
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(configDir, "projects", ".DS_Store"), "");
+    writeFileSync(join(project, "se-1.jsonl"), "{}\n");
+
+    const found = await claudeSessionExists("se-1", configDir);
+
+    expect(found.isOk() && found.value).toBe(true);
+  });
+
+  test("reports a project folder it cannot list as an error rather than missing", async () => {
+    const project = join(configDir, "projects", "-work-tree");
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, "se-1.jsonl"), "{}\n");
+    chmodSync(project, 0o000);
+
+    const found = await claudeSessionExists("se-1", configDir);
+    chmodSync(project, 0o700);
+
+    expect(found.isErr() && found.error._tag).toBe("FileReadFailed");
   });
 });
 

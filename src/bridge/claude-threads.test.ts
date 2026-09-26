@@ -51,6 +51,22 @@ describe("connectClaudeThreads", () => {
     });
     expect(sessions()).toBe(1);
   });
+
+  test("asks the server to keep a Claude thread on disk when its first turn runs", async () => {
+    const { requests, started } = await workerA();
+
+    await started();
+
+    expect(requests).toContainEqual({
+      method: "thread/inject_items",
+      params: {
+        threadId: WORKER_A,
+        items: [
+          expect.objectContaining({ type: "message", role: "developer" }),
+        ],
+      },
+    });
+  });
 });
 
 const workerA = async () => {
@@ -61,8 +77,11 @@ const workerA = async () => {
   const settings: ClaudeSessionSettings[] = [];
   const sent: Sent[] = [];
   let linesBeforeAnswer: object[] = [];
-  const request: ServerRequest = async (method) => {
+  const requests: { method: string; params: unknown }[] = [];
+  const request: ServerRequest = async (method, params) => {
+    requests.push({ method, params });
     if (method === "model/list") return Result.ok(MODELS);
+    if (method === "thread/inject_items") return Result.ok({});
     for (const line of linesBeforeAnswer) fromApp(line);
     return Result.ok({
       content: [{ type: "text", text: JSON.stringify(PROVISIONAL) }],
@@ -75,6 +94,7 @@ const workerA = async () => {
       settings.push(session);
       return startClaudeSession(session, claude.runtime);
     },
+    findSession: async () => Result.ok(true),
     send: (message) => sent.push(message),
     log: () => {},
   });
@@ -95,6 +115,11 @@ const workerA = async () => {
   return {
     store,
     sent,
+    requests,
+    started: async () => {
+      await until(() => claude.started());
+      threads.closeAll();
+    },
     createThreadAfter,
     sessions: () => settings.length,
   };

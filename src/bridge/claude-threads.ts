@@ -12,12 +12,14 @@ export const connectClaudeThreads = ({
   store,
   request,
   startSession,
+  findSession,
   send,
   log,
 }: {
   store: ThreadStore;
   request: ServerRequest;
   startSession: Controller["startSession"];
+  findSession: Controller["findSession"];
   send: (message: object) => void;
   log: (event: TurnEvent | RouteEvent) => void;
 }) => {
@@ -25,6 +27,13 @@ export const connectClaudeThreads = ({
   const turns = createTurnController({
     store,
     startSession,
+    findSession,
+    materializeThread: (threadId) =>
+      request(
+        "thread/inject_items",
+        { threadId, items: [THREAD_NOTE] },
+        { timeoutMs: INJECT_TIMEOUT_MS },
+      ),
     openLink: (callerThreadId) =>
       createCodexLink({ callerThreadId, store, request, delegations }),
     send,
@@ -33,3 +42,17 @@ export const connectClaudeThreads = ({
   const router = createRouter(turns, log, delegations.observe);
   return { router, closeAll: turns.closeAll };
 };
+
+// The server writes a thread to disk only once it holds some history, and Claude turns never reach it, so without this item the app cannot reopen a Claude thread after a restart; the note carries no conversation text.
+const THREAD_NOTE = {
+  type: "message",
+  role: "developer",
+  content: [
+    {
+      type: "input_text",
+      text: "This thread runs on Claude through Harnexus; its conversation is kept in Claude's session record.",
+    },
+  ],
+};
+
+const INJECT_TIMEOUT_MS = 30_000;

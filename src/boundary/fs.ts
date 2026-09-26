@@ -140,6 +140,20 @@ export const listFileNames = (path: string) =>
       new FileReadFailed({ path, cause, message: `cannot list ${path}` }),
   });
 
+export const listDirectoryIfExists = (path: string) =>
+  Result.tryPromise({
+    try: async () => {
+      try {
+        return await readdir(path);
+      } catch (cause) {
+        if (isMissingFile(cause) || isNotDirectory(cause)) return null;
+        throw cause;
+      }
+    },
+    catch: (cause) =>
+      new FileReadFailed({ path, cause, message: `cannot list ${path}` }),
+  });
+
 // Only a failed open means nothing was created; any later failure is FileSyncFailed, because the file already exists and must be cleaned up by the caller.
 export const createEmptyFile = (path: string) =>
   Result.gen(async function* () {
@@ -221,6 +235,9 @@ const syncDirectory = async (path: string) => {
 
 const isMissingFile = (cause: unknown) =>
   cause instanceof Error && "code" in cause && cause.code === "ENOENT";
+
+const isNotDirectory = (cause: unknown) =>
+  cause instanceof Error && "code" in cause && cause.code === "ENOTDIR";
 
 const OWNER_ONLY = 0o600;
 

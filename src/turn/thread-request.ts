@@ -85,5 +85,7 @@ const REFUSAL_MESSAGES = {
   message_not_saved:
     "the message id could not be saved, so the message was not run to avoid running it twice",
   thread_busy: "the Claude thread cannot start a turn",
+  outcome_unknown:
+    "the previous Claude turn on this thread stopped before its outcome was known; check what that turn did, such as changed files or messages to other threads, then send a message yourself to continue",
   unsupported_request: "this request is not supported on a Claude thread yet",
 } as const;

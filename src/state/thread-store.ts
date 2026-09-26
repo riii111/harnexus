@@ -236,7 +236,7 @@ const createThreadStore = (
             }),
       ),
 
-    setSessionId: (threadId: string, sessionId: string) =>
+    setSessionId: (threadId: string, sessionId: string | null) =>
       update(threadId, (mapping) => ({ ...mapping, sessionId })),
 
     setModel: (threadId: string, model: string) =>
