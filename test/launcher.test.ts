@@ -379,6 +379,36 @@ describe("app-server shutdown", () => {
   );
 });
 
+describe("leftover processes", () => {
+  test(
+    "are killed even when the bridge outlives its launcher",
+    async () => {
+      const { env, reportPath } = setup({ FAKE_CODEX_MODE: "wait" });
+      const proc = spawnLauncher(["app-server"], {
+        cwd: dir,
+        env,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      await readReport(reportPath);
+      const [bridge] = childPids(proc.pid);
+      if (bridge === undefined) return expect.unreachable("no bridge started");
+      // A stopped bridge cannot exit on the end of Codex's output, as a hung one would not.
+      process.kill(bridge, "SIGSTOP");
+      proc.kill("SIGKILL");
+      await proc.exited;
+      expect(isAlive(bridge)).toBe(true);
+
+      killLeftovers();
+      for (let i = 0; i < 100 && isAlive(bridge); i++) await Bun.sleep(20);
+
+      expect(isAlive(bridge)).toBe(false);
+    },
+    TIMEOUT,
+  );
+});
+
 describe("app-server output at exit", () => {
   test(
     "delivers every byte Codex wrote before exiting to an app that keeps reading slowly",
@@ -502,6 +532,7 @@ const launch = (
     stderr: "pipe",
   });
 
+// Each launcher leads its own process group, which Codex, the bridge and anything they start stay in after the launcher is gone.
 const spawnLauncher = <
   const In extends Bun.SpawnOptions.Writable,
   const Out extends Bun.SpawnOptions.Readable,
@@ -510,49 +541,41 @@ const spawnLauncher = <
   args: string[],
   options: Bun.SpawnOptions.SpawnOptions<In, Out, Err>,
 ) => {
-  const proc = Bun.spawn([LAUNCHER, ...args], options);
+  const proc = Bun.spawn([LAUNCHER, ...args], { ...options, detached: true });
   launched.push(proc);
   return proc;
 };
 
-// A failed or timed-out test leaves its launcher running, and Codex and the bridge outlive it once reparented, so every process started from this run's directory is killed with its descendants; exited launchers are skipped, since their pids may belong to other processes by now.
+// A failed or timed-out test leaves processes in its launcher's group, reparented once the launcher ends; a group led by a process other than its live launcher was formed after the launcher's group emptied and its id was reused, so it is left alone.
 const killLeftovers = () => {
-  const table = processTable();
-  const doomed = new Set<number>(
-    launched
-      .filter((proc) => proc.exitCode === null && proc.signalCode === null)
-      .map((proc) => proc.pid),
+  const running = new Map(
+    launched.map((proc) => [
+      proc.pid,
+      proc.exitCode === null && proc.signalCode === null,
+    ]),
   );
-  for (const { pid, command } of table) {
-    if (command.includes(`${dir}/`)) doomed.add(pid);
-  }
-  for (let added = true; added; ) {
-    added = false;
-    for (const { pid, ppid } of table) {
-      if (!doomed.has(pid) && doomed.has(ppid)) {
-        doomed.add(pid);
-        added = true;
-      }
+  const table = processTable();
+  const reused = new Set(
+    table
+      .filter(({ pid, pgid }) => pid === pgid && running.get(pid) === false)
+      .map(({ pgid }) => pgid),
+  );
+  for (const { pid, pgid } of table) {
+    if (running.has(pgid) && !reused.has(pgid)) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {}
     }
-  }
-  for (const pid of doomed) {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {}
   }
 };
 
 const processTable = () =>
-  Bun.spawnSync(["ps", "-A", "-ww", "-o", "pid=,ppid=,command="])
+  Bun.spawnSync(["ps", "-A", "-o", "pid=,pgid="])
     .stdout.toString()
     .split("\n")
-    .map((line) => /^\s*(\d+)\s+(\d+)\s(.*)$/.exec(line))
+    .map((line) => /^\s*(\d+)\s+(\d+)\s*$/.exec(line))
     .filter((match) => match !== null)
-    .map(([, pid, ppid, command]) => ({
-      pid: Number(pid),
-      ppid: Number(ppid),
-      command: command ?? "",
-    }));
+    .map(([, pid, pgid]) => ({ pid: Number(pid), pgid: Number(pgid) }));
 
 const finish = async (proc: ReturnType<typeof launch>) => {
   const [stdout, stderr] = await Promise.all([
