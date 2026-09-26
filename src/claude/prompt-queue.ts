@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
 // The SDK reads this stream for the whole session; a message pushed mid-turn joins the running turn at a tool boundary or queues a new turn, and its uuid is how an interrupt reports it as still queued.
-export const createInputQueue = () => {
+export const createPromptQueue = () => {
   const queued: SDKUserMessage[] = [];
   let ended = false;
   let wake: (() => void) | null = null;
