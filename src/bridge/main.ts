@@ -17,10 +17,10 @@ import { serverFromEnv, stopLingeringServer } from "./supervise.ts";
 const SERVER_OUTPUT_FD = 3;
 const SERVER_INPUT_FD = 4;
 
-// Handled so Claude processes are closed before exit; Codex still learns of the exit from EOF on its input as before.
+// Handled so Claude processes are closed before exit; the server still learns of the exit from EOF on its input as before.
 const BRIDGE_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
 
-// Codex is not a child of this process, so its exit status goes to the app and is not observable here.
+// The server is not a child of this process, so its exit status goes to the app and is not observable here.
 const logger = createBridgeLogger(process.env);
 const server = serverFromEnv(process.env);
 
@@ -66,7 +66,7 @@ function signalServer(signal: Signal) {
   }
 }
 
-// Without its thread store the bridge offers no Claude model and relays everything, so Codex keeps working.
+// Without its thread store the bridge offers no Claude model and relays everything, so Codex threads keep working.
 async function withClaude(relay: {
   serverInput: Writable;
   serverOutput: Readable;
