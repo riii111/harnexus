@@ -1,7 +1,7 @@
 import { Result } from "better-result";
 import { type Signals, signalProcess } from "../boundary/process.ts";
 
-export const SERVER_PID_ENV = "HARNEXUS_SERVER_PID";
+const SERVER_PID_ENV = "HARNEXUS_SERVER_PID";
 
 // Codex is alive only while it is still this process's parent; without a pid from the launcher nothing is ever signaled, so a reparented bridge cannot mistake launchd or a reused pid for Codex.
 export const watchServer = (

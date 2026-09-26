@@ -1,11 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Result, TaggedError } from "better-result";
-import type {
-  ServerRequest,
-  ServerRequestError,
-} from "../rpc/server-requests.ts";
+import { type InferErr, Result, TaggedError } from "better-result";
+import type { ServerRequest } from "../rpc/server-requests.ts";
 import { createCodexLink } from "./codex-link.ts";
 
 describe("createCodexLink tools", () => {
@@ -500,6 +497,8 @@ const waitUntil = async (condition: () => boolean) => {
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
 };
+
+type ServerRequestError = InferErr<Awaited<ReturnType<ServerRequest>>>;
 
 type CallParams = {
   threadId: string;

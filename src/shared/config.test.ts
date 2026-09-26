@@ -1,16 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import {
-  LOG_PATH_ENV,
-  loadLogPath,
-  loadShutdownGraceMs,
-  loadStatePath,
-  SHUTDOWN_GRACE_ENV,
-} from "./config.ts";
+import { loadLogPath, loadShutdownGraceMs, loadStatePath } from "./config.ts";
 
 describe("loadLogPath", () => {
   test.each([
     { name: "unset", env: {} },
-    { name: "empty", env: { [LOG_PATH_ENV]: "" } },
+    { name: "empty", env: { HARNEXUS_LOG_PATH: "" } },
   ])("returns null when the variable is $name", ({ env }) => {
     const path = loadLogPath(env);
 
@@ -18,13 +12,13 @@ describe("loadLogPath", () => {
   });
 
   test("returns an absolute path", () => {
-    const path = loadLogPath({ [LOG_PATH_ENV]: "/var/log/x.log" });
+    const path = loadLogPath({ HARNEXUS_LOG_PATH: "/var/log/x.log" });
 
     expect(path.isOk() && path.value).toBe("/var/log/x.log");
   });
 
   test("rejects a relative path", () => {
-    const path = loadLogPath({ [LOG_PATH_ENV]: "x.log" });
+    const path = loadLogPath({ HARNEXUS_LOG_PATH: "x.log" });
 
     expect(path.isErr() && path.error._tag).toBe("LogPathNotAbsolute");
   });
@@ -57,7 +51,9 @@ describe("loadStatePath", () => {
 
 describe("loadShutdownGraceMs", () => {
   test("accepts a positive integer", () => {
-    expect(loadShutdownGraceMs({ [SHUTDOWN_GRACE_ENV]: "200" })).toBe(200);
+    expect(loadShutdownGraceMs({ HARNEXUS_SHUTDOWN_GRACE_MS: "200" })).toBe(
+      200,
+    );
   });
 
   test.each([
@@ -68,6 +64,8 @@ describe("loadShutdownGraceMs", () => {
     { name: "fractional", value: "1.5" },
     { name: "non-numeric", value: "x" },
   ])("falls back to 5000 when the value is $name", ({ value }) => {
-    expect(loadShutdownGraceMs({ [SHUTDOWN_GRACE_ENV]: value })).toBe(5000);
+    expect(loadShutdownGraceMs({ HARNEXUS_SHUTDOWN_GRACE_MS: value })).toBe(
+      5000,
+    );
   });
 });

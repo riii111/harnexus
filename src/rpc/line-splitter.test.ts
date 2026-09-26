@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createLineSplitter, type LineEvent } from "./line-splitter.ts";
+import { createLineSplitter } from "./line-splitter.ts";
 
 const bytes = (text: string) => new TextEncoder().encode(text);
 
@@ -64,3 +64,5 @@ describe("createLineSplitter", () => {
     ).toBe("abc");
   });
 });
+
+type LineEvent = Parameters<Parameters<typeof createLineSplitter>[1]>[0];

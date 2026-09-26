@@ -12,12 +12,12 @@ export type ClaudeQuery = Pick<
   "next" | "interrupt" | "accountInfo" | "close"
 >;
 
-export type RunQuery = (params: {
+type RunQuery = (params: {
   prompt: AsyncIterable<SDKUserMessage>;
   options: Options;
 }) => ClaudeQuery;
 
-export type ResolveSettings = (options: {
+type ResolveSettings = (options: {
   cwd: string;
   settingSources: SettingSource[];
 }) => Promise<{ effective: Pick<Settings, "env"> }>;

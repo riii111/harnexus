@@ -1,11 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { type InferErr, Result } from "better-result";
 import type { signalProcess } from "../boundary/process.ts";
-import {
-  SERVER_PID_ENV,
-  stopLingeringServer,
-  watchServer,
-} from "./supervise.ts";
+import { stopLingeringServer, watchServer } from "./supervise.ts";
 
 describe("stopLingeringServer", () => {
   test("sends no signal to a server that exits within the grace period", async () => {
@@ -53,7 +49,7 @@ describe("watchServer", () => {
   test("never signals when Codex exited before the bridge started and launchd became the parent", async () => {
     const sent: [number, string][] = [];
     const server = watchServer(
-      { [SERVER_PID_ENV]: "4242" },
+      { HARNEXUS_SERVER_PID: "4242" },
       { parentPid: () => 1, send: record(sent) },
     );
     const started = Date.now();
@@ -80,7 +76,7 @@ describe("watchServer", () => {
   ])("never signals when the launcher passes $name", ({ value }) => {
     const sent: [number, string][] = [];
     const server = watchServer(
-      { [SERVER_PID_ENV]: value },
+      { HARNEXUS_SERVER_PID: value },
       { parentPid: () => 1, send: record(sent) },
     );
 
@@ -92,7 +88,7 @@ describe("watchServer", () => {
   test("signals the launcher's pid while Codex is still the parent", () => {
     const sent: [number, string][] = [];
     const server = watchServer(
-      { [SERVER_PID_ENV]: "4242" },
+      { HARNEXUS_SERVER_PID: "4242" },
       { parentPid: () => 4242, send: record(sent) },
     );
 
@@ -103,7 +99,7 @@ describe("watchServer", () => {
 
   test("reports a signal the system refuses as a failure with its errno code", () => {
     const server = watchServer(
-      { [SERVER_PID_ENV]: "4242" },
+      { HARNEXUS_SERVER_PID: "4242" },
       { parentPid: () => 4242, send: refuse("EPERM") },
     );
 

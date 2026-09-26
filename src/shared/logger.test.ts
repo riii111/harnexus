@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { createLogger, type LogEvent } from "./logger.ts";
+import { createLogger } from "./logger.ts";
 
 const stdoutWrite = spyOn(process.stdout, "write");
 
@@ -95,3 +95,5 @@ describe("createLogger", () => {
     stderrWrite.mockRestore();
   });
 });
+
+type LogEvent = Parameters<ReturnType<typeof createLogger>["log"]>[0];

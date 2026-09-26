@@ -6,9 +6,9 @@ import type {
   ToolItem,
 } from "./protocol.ts";
 
-export type ToolUse = { name: string; input: unknown };
+type ToolUse = { name: string; input: unknown };
 
-export type ToolResult = {
+type ToolResult = {
   content: unknown;
   isError: boolean;
   declined: boolean;

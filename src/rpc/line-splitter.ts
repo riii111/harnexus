@@ -1,6 +1,4 @@
-export type LineEvent =
-  | { kind: "line"; bytes: Uint8Array }
-  | { kind: "oversized" };
+type LineEvent = { kind: "line"; bytes: Uint8Array } | { kind: "oversized" };
 
 // A line over maxLineBytes is reported once and skipped up to its newline, so a huge message is never held in memory.
 export const createLineSplitter = (

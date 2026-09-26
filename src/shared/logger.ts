@@ -7,7 +7,7 @@ import type { TurnEvent } from "../turn/controller.ts";
 import type { loadStatePath } from "./config.ts";
 
 // serialize() copies only known fields, so request bodies, conversations, code and credentials cannot reach the log even through a widened object.
-export type LogEvent =
+type LogEvent =
   | { event: "bridge_started" }
   | { event: "bridge_startup_failed"; reason: StartupFailure }
   | { event: "log_file_unavailable"; reason: LogFileFailure }
