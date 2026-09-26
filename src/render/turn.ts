@@ -9,6 +9,7 @@ import type {
   AgentMessageItem,
   AppNotification,
   AppNotificationBody,
+  FunctionCallOutputItem,
   ThreadItem,
   ToolItem,
   Turn,
@@ -76,6 +77,23 @@ export const renderTurnStarted = (params: {
     params: { threadId: draft.threadId, turn },
   });
   return { ...seal(draft), turn };
+};
+
+export const renderToolOutput = (
+  state: TurnState,
+  output: Omit<FunctionCallOutputItem, "type" | "id">,
+  now: number,
+): Rendered => {
+  if (state.finished) return { state, notifications: [] };
+  const draft = open(state);
+  const item: ThreadItem = {
+    type: "functionCallOutput",
+    id: nextItemId(draft),
+    ...output,
+  };
+  itemStarted(draft, item, now);
+  itemCompleted(draft, item, now);
+  return seal(draft);
 };
 
 // Used for the opening prompt and for each steer, since both appear as user messages in the thread.

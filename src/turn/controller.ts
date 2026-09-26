@@ -15,6 +15,7 @@ import type {
   ClaudeSessionSettings,
   startClaudeSession,
 } from "../claude/session.ts";
+import { delegatedMessage } from "../link/delegations.ts";
 import type { createCodexLink } from "../mcp/codex-link.ts";
 import type { UserInput } from "../render/protocol.ts";
 import {
@@ -23,6 +24,7 @@ import {
   type Rendered,
   renderInterimResult,
   renderSdkMessage,
+  renderToolOutput,
   renderToolRequest,
   renderTurnCompleted,
   renderTurnStarted,
@@ -53,7 +55,8 @@ export type TurnEvent =
         | "queued"
         | "outcome_unknown"
         | "steered"
-        | "model_changed";
+        | "model_changed"
+        | "idle_closed";
     }
   | {
       event: "claude_turn";
@@ -137,7 +140,18 @@ type ActiveTurn = {
   steers: number;
 };
 
-type TextInput = { items: UserInput[]; text: string };
+// answered is set when the app got the turn as soon as it was accepted, so a turn that cannot run is shown as failed rather than refused.
+type TurnRequest = { id: AppRequest["id"]; turnId: string; answered: boolean };
+
+type TextInput = {
+  items: UserInput[];
+  toolOutput: ToolOutput | null;
+  text: string;
+};
+
+type ToolOutput = NonNullable<
+  ReturnType<typeof delegatedMessage>
+>["toolOutput"];
 
 type TurnInput = TextInput & { permissionMode: PermissionMode };
 
@@ -162,6 +176,7 @@ export const createTurnController = ({
   log,
   now = Date.now,
   newTurnId = () => `harnexus-turn-${randomUUID()}`,
+  idleSessionMs = IDLE_SESSION_MS,
 }: {
   store: ThreadStore;
   startSession: StartSession;
@@ -170,6 +185,7 @@ export const createTurnController = ({
   log: (event: TurnEvent) => void;
   now?: () => number;
   newTurnId?: () => string;
+  idleSessionMs?: number;
 }) => {
   // Threads created with a Claude model are saved to the store only on their first turn, so a thread never used leaves nothing behind.
   const adopted = new Map<string, Thread>();
@@ -183,11 +199,12 @@ export const createTurnController = ({
   const turnsInFlight = new Map<string, number>();
   // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
   const modes = new Map<string, Mode>();
+  const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const appRequests = createAppRequests({ send, now });
   let closed = false;
 
   // fallbackCwd is the thread's directory as last reported by the server, used when a Codex thread switches to Claude.
-  // A turn/start on a busy thread, such as a reviewer's reply, waits in the store's per-thread queue instead of being refused.
+  // A turn/start on a busy thread, such as a reviewer's reply, waits in the store's per-thread queue instead of being refused; its sender gives up long before the running turn may end, so it is answered on acceptance.
   const startTurn = (
     { id, params }: AppRequest,
     fallbackCwd: string | undefined,
@@ -202,7 +219,16 @@ export const createTurnController = ({
       refuse(id, checked.refusal);
       return;
     }
-    const input = textInput(params.input);
+    const delegated = delegatedMessage(params);
+    const owner =
+      delegated?.sourceThreadId == null
+        ? undefined
+        : store.reviewerOwner(delegated.sourceThreadId);
+    if (owner !== undefined && owner !== threadId) {
+      refuse(id, "reply_to_other_worker");
+      return;
+    }
+    const input = textInput(params.input, delegated);
     if (input === null) {
       refuse(id, "text_only");
       return;
@@ -218,6 +244,7 @@ export const createTurnController = ({
     }
     if (messageId !== null) acceptMessage(threadId, messageId);
     changeModel(threadId, checked.thread.model);
+    cancelIdleClose(threadId);
     const inFlight = turnsInFlight.get(threadId) ?? 0;
     if (inFlight > 0) log({ event: "claude_turn", step: "queued" });
     turnsInFlight.set(threadId, inFlight + 1);
@@ -228,11 +255,51 @@ export const createTurnController = ({
         requestedMode(params) ?? modes.get(threadId) ?? "default",
       ),
     };
-    void runTurn(id, checked.thread, threadId, turn, messageId).then(() => {
-      const left = (turnsInFlight.get(threadId) ?? 1) - 1;
-      if (left === 0) turnsInFlight.delete(threadId);
-      else turnsInFlight.set(threadId, left);
-    });
+    const request = { id, turnId: newTurnId(), answered: inFlight > 0 };
+    if (request.answered) {
+      const waiting = renderTurnStarted({
+        threadId,
+        turnId: request.turnId,
+        cwd: checked.thread.cwd,
+        now: now(),
+      });
+      send({ id, result: { turn: waiting.turn } });
+    }
+    void runTurn(request, checked.thread, threadId, turn, messageId).then(
+      () => {
+        const left = (turnsInFlight.get(threadId) ?? 1) - 1;
+        if (left > 0) {
+          turnsInFlight.set(threadId, left);
+          return;
+        }
+        turnsInFlight.delete(threadId);
+        scheduleIdleClose(threadId);
+      },
+    );
+  };
+
+  // Each worker keeps its own Claude process, so an idle one is closed; without a session id its next turn could not resume the conversation, so it stays.
+  const scheduleIdleClose = (threadId: string) => {
+    cancelIdleClose(threadId);
+    const timer = setTimeout(() => {
+      idleTimers.delete(threadId);
+      const slot = sessions.get(threadId);
+      if (slot === undefined) return;
+      if (
+        (sessionIds.get(threadId) ?? store.get(threadId)?.sessionId) == null
+      ) {
+        return;
+      }
+      dropSession(threadId, slot);
+      log({ event: "claude_turn", step: "idle_closed" });
+    }, idleSessionMs);
+    timer.unref();
+    idleTimers.set(threadId, timer);
+  };
+
+  const cancelIdleClose = (threadId: string) => {
+    clearTimeout(idleTimers.get(threadId));
+    idleTimers.delete(threadId);
   };
 
   // Claude takes a steer at its next tool boundary, or runs it as its next turn when the running one has ended, and either way the app turn stays open until Claude has taken it.
@@ -249,7 +316,7 @@ export const createTurnController = ({
       refuse(id, "no_running_turn");
       return;
     }
-    const input = textInput(params.input);
+    const input = textInput(params.input, null);
     if (input === null) {
       refuse(id, "text_only");
       return;
@@ -339,18 +406,20 @@ export const createTurnController = ({
   // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
   const closeAll = () => {
     closed = true;
+    for (const threadId of [...idleTimers.keys()]) cancelIdleClose(threadId);
     appRequests.cancel(null);
     for (const [threadId, slot] of sessions) dropSession(threadId, slot);
   };
 
   // A failed turn is shown to the user, who decides whether to send it again, so no turn outcome is treated as unknown here; only a crash or a thread tool write left undecided leaves the marker.
   const runTurn = async (
-    requestId: AppRequest["id"],
+    request: TurnRequest,
     thread: Thread,
     threadId: string,
     input: TurnInput,
     messageId: string | null,
   ) => {
+    const queued = { threadId, thread, input, messageId };
     if (store.get(threadId) === undefined) {
       const registered = await store.register({
         threadId,
@@ -362,7 +431,7 @@ export const createTurnController = ({
         registered.error._tag !== "ThreadAlreadyRegistered"
       ) {
         forgetMessage(threadId, messageId);
-        refuse(requestId, "thread_not_saved", registered.error);
+        refuseTurn(request, queued, "thread_not_saved", registered.error);
         return;
       }
       // A turn accepted just before this one may have registered the thread first, with its own model and directory.
@@ -371,7 +440,7 @@ export const createTurnController = ({
         saved === undefined ? null : savedThreadChange(thread, saved);
       if (change !== null) {
         forgetMessage(threadId, messageId);
-        refuse(requestId, change);
+        refuseTurn(request, queued, change);
         return;
       }
       adopted.delete(threadId);
@@ -387,14 +456,14 @@ export const createTurnController = ({
       async (record) => {
         if (closed) {
           forgetMessage(threadId, messageId);
-          refuse(requestId, "bridge_closing");
+          refuseTurn(request, queued, "bridge_closing");
           return Result.ok();
         }
         // Without the saved id a restart could run the same message again, so the turn does not start.
         const saved = await recordMessage(threadId, messageId);
         if (saved.isErr()) {
           forgetMessage(threadId, messageId);
-          refuse(requestId, "message_not_saved", saved.error);
+          refuseTurn(request, queued, "message_not_saved", saved.error);
           return Result.ok();
         }
         responded = true;
@@ -409,7 +478,7 @@ export const createTurnController = ({
         };
         activeTurns.set(threadId, active);
         await streamTurn(
-          requestId,
+          request,
           record,
           thread.model,
           active,
@@ -436,7 +505,7 @@ export const createTurnController = ({
     if (!responded) {
       forgetMessage(threadId, messageId);
       // The store's message says why, such as an earlier turn whose outcome is unknown.
-      refuse(requestId, "thread_busy", ran.error, ran.error.message);
+      refuseTurn(request, queued, "thread_busy", ran.error, ran.error.message);
       return;
     }
     log({
@@ -444,6 +513,50 @@ export const createTurnController = ({
       step: "run_state_not_saved",
       error: ran.error._tag,
     });
+  };
+
+  const refuseTurn = (
+    request: TurnRequest,
+    {
+      threadId,
+      thread,
+      input,
+      messageId,
+    }: {
+      threadId: string;
+      thread: Thread;
+      input: TextInput;
+      messageId: string | null;
+    },
+    reason: Refusal,
+    cause: { _tag: StoreTag } | null = null,
+    message: string = refusalMessage(reason),
+  ) => {
+    if (!request.answered) {
+      refuse(request.id, reason, cause, message);
+      return;
+    }
+    logRefusal(reason, cause);
+    const started = renderTurnStarted({
+      threadId,
+      turnId: request.turnId,
+      cwd: thread.cwd,
+      now: now(),
+    });
+    const shown = renderInput(started.state, input, messageId);
+    const failed = renderTurnCompleted(
+      shown.state,
+      { status: "failed", message },
+      now(),
+    );
+    // The thread's status belongs to the turn running ahead of this one, if any.
+    for (const notification of [
+      ...started.notifications,
+      ...shown.notifications,
+      ...failed.notifications,
+    ]) {
+      if (notification.method !== "thread/status/changed") send(notification);
+    }
   };
 
   const isDelivered = (threadId: string, messageId: string) =>
@@ -471,7 +584,7 @@ export const createTurnController = ({
   };
 
   const streamTurn = async (
-    requestId: AppRequest["id"],
+    request: TurnRequest,
     record: ThreadRecord,
     model: string,
     active: ActiveTurn,
@@ -481,17 +594,15 @@ export const createTurnController = ({
     const threadId = record.threadId;
     const started = renderTurnStarted({
       threadId,
-      turnId: newTurnId(),
+      turnId: request.turnId,
       cwd: record.worktree,
       now: now(),
     });
     apply(active, started);
-    send({ id: requestId, result: { turn: started.turn } });
+    if (!request.answered)
+      send({ id: request.id, result: { turn: started.turn } });
     log({ event: "claude_turn", step: "started" });
-    apply(
-      active,
-      renderUserInput(started.state, input.items, messageId, now()),
-    );
+    apply(active, renderInput(started.state, input, messageId));
 
     await waitForPendingInterrupt(threadId);
     if (active.state?.interrupting) {
@@ -587,6 +698,28 @@ export const createTurnController = ({
         dropSession(threadId, slot.value);
       }
     }
+  };
+
+  const renderInput = (
+    state: TurnState,
+    input: TextInput,
+    messageId: string | null,
+  ): Rendered => {
+    const delegated =
+      input.toolOutput === null
+        ? { state, notifications: [] }
+        : renderToolOutput(state, input.toolOutput, now());
+    if (input.items.length === 0) return delegated;
+    const typed = renderUserInput(
+      delegated.state,
+      input.items,
+      messageId,
+      now(),
+    );
+    return {
+      state: typed.state,
+      notifications: [...delegated.notifications, ...typed.notifications],
+    };
   };
 
   const sendSteer = (active: ActiveTurn, slot: SessionSlot, text: string) => {
@@ -778,13 +911,16 @@ export const createTurnController = ({
     message: string = refusalMessage(reason),
   ) => {
     reject({ id }, message);
+    logRefusal(reason, cause);
+  };
+
+  const logRefusal = (reason: Refusal, cause: { _tag: StoreTag } | null) =>
     log({
       event: "claude_turn",
       step: "refused",
       reason,
       error: cause?._tag ?? null,
     });
-  };
 
   // The router logs its own refusals, so this only answers the app.
   const reject = ({ id }: Pick<AppRequest, "id">, message: string) =>
@@ -816,6 +952,7 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
     case "outcome_unknown":
     case "steered":
     case "model_changed":
+    case "idle_closed":
       return { event: entry.event, step: entry.step };
     case "finished":
       return {
@@ -867,14 +1004,22 @@ const clientMessageId = (params: Record<string, unknown>) =>
     ? params.clientUserMessageId
     : null;
 
-const textInput = (value: unknown): TextInput | null => {
-  if (!Array.isArray(value) || value.length === 0) return null;
-  const texts: string[] = [];
-  for (const item of value) {
+const textInput = (
+  value: unknown,
+  delegated: { text: string; toolOutput: ToolOutput } | null,
+): TextInput | null => {
+  const items = Array.isArray(value) ? value : [];
+  if (items.length === 0 && delegated === null) return null;
+  const texts = delegated === null ? [] : [delegated.text];
+  for (const item of items) {
     if (!isTextItem(item)) return null;
     texts.push(item.text);
   }
-  return { items: value as UserInput[], text: texts.join("\n") };
+  return {
+    items: items as UserInput[],
+    toolOutput: delegated?.toolOutput ?? null,
+    text: texts.join("\n"),
+  };
 };
 
 const isTextItem = (item: unknown): item is { type: "text"; text: string } =>
@@ -886,6 +1031,8 @@ const isTextItem = (item: unknown): item is { type: "text"; text: string } =>
   typeof item.text === "string";
 
 const INVALID_REQUEST = -32600;
+
+const IDLE_SESSION_MS = 10 * 60_000;
 
 const NO_TURN = "no Claude turn is running to ask the app for approval";
 

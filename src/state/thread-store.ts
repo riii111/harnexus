@@ -53,6 +53,12 @@ class ThreadAlreadyRegistered extends TaggedError("ThreadAlreadyRegistered")<{
   message: string;
 }> {}
 
+class ReviewerTaken extends TaggedError("ReviewerTaken")<{
+  threadId: string;
+  reviewerThreadId: string;
+  message: string;
+}> {}
+
 class WriteOutcomeUnknown extends TaggedError("WriteOutcomeUnknown")<{
   threadId: string;
   message: string;
@@ -125,6 +131,8 @@ const createThreadStore = (
   const runStates = new Map<string, RunState>(
     unknownThreadIds.map((threadId) => [threadId, "outcomeUnknown"]),
   );
+  // A reviewer is claimed as soon as its worker learns of it, so a reply arriving before or while it is saved is already traced to that worker; a claim whose save failed stays, as that worker still created the thread.
+  const claimedReviewers = new Map<string, string>();
   const threadQueue = createSerialQueue();
   const fileQueue = createSerialQueue();
 
@@ -234,18 +242,60 @@ const createThreadStore = (
     setModel: (threadId: string, model: string) =>
       update(threadId, (mapping) => ({ ...mapping, model })),
 
-    addReviewer: (threadId: string, reviewerThreadId: string) =>
-      update(threadId, (mapping) =>
-        mapping.reviewerThreadIds.includes(reviewerThreadId)
-          ? mapping
-          : {
-              ...mapping,
-              reviewerThreadIds: [
-                ...mapping.reviewerThreadIds,
+    // A reviewer answers one worker only, so a reply can be traced back to that worker; a Claude thread is a worker of its own.
+    addReviewer: async (threadId: string, reviewerThreadId: string) => {
+      const claimed = claimedReviewers.get(reviewerThreadId);
+      if (claimed === undefined) {
+        claimedReviewers.set(reviewerThreadId, threadId);
+      }
+      const added = await persistThenCommit<ThreadNotFound | ReviewerTaken>(
+        (current) => {
+          const mapping = current.get(threadId);
+          if (mapping === undefined) return Result.err(notFound(threadId));
+          if (mapping.reviewerThreadIds.includes(reviewerThreadId)) {
+            return Result.ok(mapping);
+          }
+          const taken = takenReviewer(
+            current,
+            claimed,
+            threadId,
+            reviewerThreadId,
+          );
+          if (taken !== null) {
+            return Result.err(
+              new ReviewerTaken({
+                threadId,
                 reviewerThreadId,
-              ],
-            },
-      ),
+                message: `thread ${reviewerThreadId} is ${taken}`,
+              }),
+            );
+          }
+          return Result.ok({
+            ...mapping,
+            reviewerThreadIds: [...mapping.reviewerThreadIds, reviewerThreadId],
+          });
+        },
+      );
+      const refused =
+        added.isErr() &&
+        (added.error._tag === "ReviewerTaken" ||
+          added.error._tag === "ThreadNotFound");
+      if (added.isOk() || (refused && claimed === undefined)) {
+        claimedReviewers.delete(reviewerThreadId);
+      }
+      return added;
+    },
+
+    claimReviewer: (threadId: string, reviewerThreadId: string) => {
+      const taken =
+        claimedReviewers.has(reviewerThreadId) ||
+        takenReviewer(mappings, undefined, threadId, reviewerThreadId) !== null;
+      if (!taken) claimedReviewers.set(reviewerThreadId, threadId);
+    },
+
+    reviewerOwner: (reviewerThreadId: string) =>
+      ownerIn(mappings, reviewerThreadId) ??
+      claimedReviewers.get(reviewerThreadId),
 
     addMessageId: (threadId: string, messageId: string) =>
       update(threadId, (mapping) =>
@@ -313,6 +363,31 @@ const createThreadStore = (
         }
       }),
   };
+};
+
+const takenReviewer = (
+  mappings: ReadonlyMap<string, ThreadMapping>,
+  claimedBy: string | undefined,
+  threadId: string,
+  reviewerThreadId: string,
+) => {
+  if (mappings.has(reviewerThreadId)) return "a Claude thread";
+  const owner = ownerIn(mappings, reviewerThreadId) ?? claimedBy;
+  return owner === undefined || owner === threadId
+    ? null
+    : "another thread's reviewer";
+};
+
+const ownerIn = (
+  mappings: ReadonlyMap<string, ThreadMapping>,
+  reviewerThreadId: string,
+) => {
+  for (const mapping of mappings.values()) {
+    if (mapping.reviewerThreadIds.includes(reviewerThreadId)) {
+      return mapping.threadId;
+    }
+  }
+  return undefined;
 };
 
 const notFound = (threadId: string) =>

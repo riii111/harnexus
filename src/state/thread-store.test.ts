@@ -146,6 +146,118 @@ describe("ThreadStore", () => {
     expect(store.get("thread-1")?.reviewerThreadIds).toEqual(["reviewer-1"]);
   });
 
+  test("names the one worker a reviewer belongs to", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+    await store.addReviewer("thread-1", "reviewer-1");
+    await store.addReviewer("thread-2", "reviewer-2");
+
+    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
+    expect(store.reviewerOwner("reviewer-2")).toBe("thread-2");
+    expect(store.reviewerOwner("thread-1")).toBeUndefined();
+  });
+
+  test("traces a reviewer to its worker while it is being saved and refuses it to another", async () => {
+    const gated = gatedWrite();
+    const store = await openStore({ writeState: gated.write });
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+    const held = gated.hold();
+    const first = store.addReviewer("thread-1", "reviewer-1");
+    await held.entered;
+
+    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
+    const second = store.addReviewer("thread-2", "reviewer-1");
+    held.release();
+
+    const [added, refused] = await Promise.all([first, second]);
+    expect(added.isOk() && added.value.reviewerThreadIds).toEqual([
+      "reviewer-1",
+    ]);
+    expect(refused.isErr() && refused.error._tag).toBe("ReviewerTaken");
+    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
+  });
+
+  test("keeps a reviewer whose save failed traced to its worker and refuses it to another", async () => {
+    let failWrites = false;
+    const store = await openStore({
+      writeState: (target, content) =>
+        failWrites ? failingWrite(target) : writeFileAtomic(target, content),
+    });
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+    failWrites = true;
+
+    const added = await store.addReviewer("thread-1", "reviewer-1");
+    const other = await store.addReviewer("thread-2", "reviewer-1");
+
+    expect(added.isErr() && added.error._tag).toBe("StatePersistFailed");
+    expect(other.isErr() && other.error._tag).toBe("ReviewerTaken");
+    expect(store.get("thread-1")?.reviewerThreadIds).toEqual([]);
+    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
+  });
+
+  test("traces a claimed reviewer to its worker before it is added and keeps it through the add", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+
+    store.claimReviewer("thread-1", "reviewer-1");
+    store.claimReviewer("thread-2", "reviewer-1");
+
+    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
+    const refused = await store.addReviewer("thread-2", "reviewer-1");
+    const added = await store.addReviewer("thread-1", "reviewer-1");
+    expect(refused.isErr() && refused.error._tag).toBe("ReviewerTaken");
+    expect(added.isOk() && added.value.reviewerThreadIds).toEqual([
+      "reviewer-1",
+    ]);
+    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
+  });
+
+  test("never claims a Claude thread as a reviewer", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+
+    store.claimReviewer("thread-2", "thread-1");
+
+    expect(store.reviewerOwner("thread-1")).toBeUndefined();
+  });
+
+  test("releases the claim on a Claude thread it refused as a reviewer", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+
+    const added = await store.addReviewer("thread-2", "thread-1");
+
+    expect(added.isErr() && added.error._tag).toBe("ReviewerTaken");
+    expect(store.reviewerOwner("thread-1")).toBeUndefined();
+  });
+
+  test.each([
+    { name: "another worker's reviewer", reviewer: "reviewer-1" },
+    { name: "a Claude thread", reviewer: "thread-1" },
+  ])("refuses to add $name as a reviewer and keeps it unchanged", async ({
+    reviewer,
+  }) => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+    const first = await store.addReviewer("thread-1", "reviewer-1");
+    expect(first.isOk() && first.value.reviewerThreadIds).toEqual([
+      "reviewer-1",
+    ]);
+
+    const added = await store.addReviewer("thread-2", reviewer);
+
+    expect(added.isErr() && added.error._tag).toBe("ReviewerTaken");
+    expect(store.get("thread-2")?.reviewerThreadIds).toEqual([]);
+    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
+  });
+
   test("keeps each message id once and only the latest 64", async () => {
     const store = await openStore();
     await store.register(ENTRY);
