@@ -28,6 +28,7 @@ import {
   checkThread,
   type Refusal,
   refusalMessage,
+  savedThreadChange,
   type Thread,
 } from "./thread-request.ts";
 
@@ -245,13 +246,21 @@ export const createTurnController = ({
         model: thread.model,
         worktree: thread.cwd,
       });
-      // A turn accepted just before this one may have registered the thread first.
       if (
         registered.isErr() &&
         registered.error._tag !== "ThreadAlreadyRegistered"
       ) {
         forgetMessage(threadId, messageId);
         refuse(requestId, "thread_not_saved", registered.error);
+        return;
+      }
+      // A turn accepted just before this one may have registered the thread first, with its own model and directory.
+      const saved = threadOf(threadId);
+      const change =
+        saved === undefined ? null : savedThreadChange(thread, saved);
+      if (change !== null) {
+        forgetMessage(threadId, messageId);
+        refuse(requestId, change);
         return;
       }
       adopted.delete(threadId);

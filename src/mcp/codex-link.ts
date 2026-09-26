@@ -184,10 +184,10 @@ export const createCodexLink = ({
     result: ToolResult,
     created: CreatedThread | null,
   ) => {
+    const answered = createdThreadId(result);
+    if (answered !== null) created?.claim(answered);
     const threadId =
-      createdThreadId(result) ??
-      (await created?.wait(createdThreadWaitMs)) ??
-      null;
+      answered ?? (await created?.wait(createdThreadWaitMs)) ?? null;
     if (threadId === null) {
       unknownWrite = "create_thread";
       return failure(

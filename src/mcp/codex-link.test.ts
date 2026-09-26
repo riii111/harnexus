@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Result, TaggedError } from "better-result";
 import { createDelegationWatch } from "../link/delegations.ts";
+import { createRouter } from "../rpc/route.ts";
 import type {
   ServerRequest,
   ServerRequestError,
@@ -114,6 +117,36 @@ describe("createCodexLink tools", () => {
     expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
     expect(created.structuredContent).toEqual({ threadId: REVIEWER });
     expect(text(created)).toContain(REVIEWER);
+  });
+
+  test("never takes the late first turn of a thread an earlier answer already named", async () => {
+    const delegations = createDelegationWatch();
+    let creates = 0;
+    const { client, store, link } = await connect({
+      delegations,
+      answer: (params) => {
+        if (params.tool !== "create_thread") return Result.ok(textAnswer("ok"));
+        creates += 1;
+        if (creates === 1) {
+          return Result.ok(textAnswer(JSON.stringify({ threadId: REVIEWER })));
+        }
+        delegations.observe(CALLER, REVIEWER);
+        return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
+      },
+    });
+
+    await client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review", target: TARGET },
+    });
+    const second = await client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review again", target: TARGET },
+    });
+
+    expect(second.isError).toBe(true);
+    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
+    expect(link.hasUnsettledWrite()).toBe(true);
   });
 
   test("refuses a Claude model for a reviewer without calling the app", async () => {
@@ -258,6 +291,41 @@ describe("createCodexLink tools", () => {
 
     expect(created.isError).toBe(true);
     expect(requests).toEqual([]);
+  });
+});
+
+describe("createCodexLink over the app's turn for the created thread", () => {
+  test("saves the thread the app starts for the call as the reviewer", async () => {
+    const delegations = createDelegationWatch();
+    const router = createRouter(
+      CODEX_ONLY_TURNS,
+      () => {},
+      delegations.observe,
+    );
+    const forwarded: (Buffer | null)[] = [];
+    const { client, store } = await connect({
+      caller: "th-fixture-claude",
+      delegations,
+      answer: () => {
+        for (const line of appLines("create-thread-delegation.jsonl")) {
+          forwarded.push(router.fromApp(line));
+        }
+        return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
+      },
+    });
+
+    const created = await client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review", target: TARGET },
+    });
+
+    expect(created.structuredContent).toEqual({
+      threadId: "th-fixture-reviewer",
+    });
+    expect(store.reviewers("th-fixture-claude")).toEqual([
+      "th-fixture-reviewer",
+    ]);
+    expect(forwarded).toEqual(appLines("create-thread-delegation.jsonl"));
   });
 });
 
@@ -656,6 +724,24 @@ type RecordedRequest = {
   timeoutMs: number;
 };
 
+const appLines = (file: string) =>
+  readFileSync(join(FIXTURE_DIR, file), "utf8")
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => JSON.parse(line))
+    .filter((record) => record.direction === "app_to_server")
+    .map((record) => Buffer.from(`${JSON.stringify(record.message)}\n`));
+
+const CODEX_ONLY_TURNS: Parameters<typeof createRouter>[0] = {
+  isClaudeThread: () => false,
+  threadOf: () => undefined,
+  adopt: () => expect.unreachable("no Claude thread in this session"),
+  startTurn: () => expect.unreachable("no Claude thread in this session"),
+  interruptTurn: () => expect.unreachable("no Claude thread in this session"),
+  reject: () => expect.unreachable("no Claude thread in this session"),
+};
+
+const FIXTURE_DIR = join(import.meta.dir, "../../test/fixtures/app-server");
 const CALLER = "thread-caller";
 const DEFAULT_MODELS = {
   data: [

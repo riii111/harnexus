@@ -421,6 +421,32 @@ describe("refused requests", () => {
     ]);
   });
 
+  test("refuses a turn asking for another directory that lost the race to register the thread", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings } = await harness([claude], {
+      adopt: false,
+    });
+    const request = turnStart(10, "hello");
+    const first = {
+      ...request,
+      params: { ...request.params, model: MODEL, cwd: dir },
+    };
+
+    turns.startTurn(first, undefined);
+    turns.startTurn(
+      { ...first, id: 11, params: { ...first.params, cwd: "/elsewhere" } },
+      undefined,
+    );
+    await until(() => responseTo(sent, 11) !== undefined);
+    await until(() => claude.started());
+
+    expect(responseTo(sent, 11)?.error.message).toBe(
+      "changing the working directory of a Claude thread is not supported yet",
+    );
+    expect(settings).toHaveLength(1);
+    expect(settings[0]).toMatchObject({ cwd: dir });
+  });
+
   test("switches a Codex thread to Claude only when its directory is known", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, settings } = await harness([claude], {

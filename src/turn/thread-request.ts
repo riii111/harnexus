@@ -44,6 +44,15 @@ export const checkThread = (
     : { thread: { model, cwd } };
 };
 
+// A turn checked before another turn saved the thread would otherwise run on the settings that turn saved.
+export const savedThreadChange = (
+  requested: Thread,
+  saved: Thread,
+): Refusal | null => {
+  if (requested.model !== saved.model) return "model_change";
+  return isSameDirectory(requested.cwd, saved.cwd) ? null : "directory_change";
+};
+
 export const refusalMessage = (refusal: Refusal) => REFUSAL_MESSAGES[refusal];
 
 const requestsPlanMode = (params: Record<string, unknown>) => {
