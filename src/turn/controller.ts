@@ -165,10 +165,12 @@ export const createTurnController = ({
       refuse(id, "no running Claude turn matches turnId");
       return;
     }
+    // A repeated stop is answered without asking Claude again, since the first interrupt already decides what happens to the session.
+    const repeated = entry.state.interrupting;
     entry.state = markInterrupting(entry.state);
     send({ id, result: {} });
     const session = sessions.get(threadId);
-    if (session === undefined) return;
+    if (session === undefined || repeated) return;
     // A send still queued in Claude would run after the interrupt, and an old CLI cannot say whether one is, so either way the session is closed and the next turn resumes it.
     const settled = session.interrupt().then((interrupted) => {
       interrupting.delete(session);

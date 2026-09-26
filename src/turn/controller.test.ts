@@ -214,6 +214,7 @@ describe("turn/interrupt", () => {
   });
 
   test("waits for a late interrupt receipt before the next turn reuses the session", async () => {
+    const gate = createGate();
     const first = fakeClaude(SUBSCRIPTION, {
       stillQueued: ["uuid-queued"],
       interruptAnswered: gate.promise,
@@ -286,6 +287,20 @@ describe("turn/interrupt", () => {
 
     expect(responseTo(sent, 20)?.error).toBeDefined();
     expect(claude.interrupts()).toBe(0);
+  });
+
+  test("asks Claude once when the stop is sent twice", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    turns.interruptTurn(interrupt(20, "turn-1"));
+    turns.interruptTurn(interrupt(21, "turn-1"));
+    await until(() => claude.interrupts() === 1);
+
+    expect(responseTo(sent, 21)).toEqual({ id: 21, result: {} });
+    expect(claude.interrupts()).toBe(1);
   });
 
   test("refuses a turn id that is not running", async () => {
@@ -376,7 +391,7 @@ describe("refused requests", () => {
 });
 
 describe("closeAll", () => {
-  test("stops Claude, ends the running turn and refuses new ones", async () => {
+  test("stops Claude and ends the running turn as failed", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
 
@@ -384,11 +399,22 @@ describe("closeAll", () => {
     await until(() => claude.started());
     turns.closeAll();
     await until(() => turnCompleted(sent) !== undefined);
-    turns.startTurn(turnStart(11, "again"), undefined);
 
     expect(claude.closes()).toBe(1);
     expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
-    expect(responseTo(sent, 11)?.error).toBeDefined();
+  });
+
+  test("refuses a turn that arrives after closing", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.closeAll();
+    turns.startTurn(turnStart(11, "again"), undefined);
+
+    expect(responseTo(sent, 11)?.error.message).toBe(
+      "the bridge is shutting down",
+    );
+    expect(claude.started()).toBe(false);
   });
 });
 
@@ -408,12 +434,6 @@ const createGate = () => {
   });
   return { promise, open };
 };
-
-let gate = createGate();
-
-beforeEach(() => {
-  gate = createGate();
-});
 
 const THREAD = "th-fixture-1";
 const MODEL = "claude-sonnet-5";
