@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createLogger, type LogEvent } from "./logger.ts";
+import { createLogger } from "./logger.ts";
 
 describe("createLogger", () => {
   test("writes one JSON line per event to the sink", () => {
@@ -13,6 +13,24 @@ describe("createLogger", () => {
     expect(JSON.parse(lines[0] ?? "")).toMatchObject({
       event: "server_signaled",
       signal: "SIGTERM",
+    });
+  });
+
+  test("records a failed server signal with its errno code", () => {
+    const lines: string[] = [];
+    const logger = createLogger((line) => lines.push(line));
+
+    logger.log({
+      event: "server_signal_failed",
+      signal: "SIGKILL",
+      code: "EPERM",
+    });
+
+    const { time: _time, ...record } = JSON.parse(lines[0] ?? "");
+    expect(record).toEqual({
+      event: "server_signal_failed",
+      signal: "SIGKILL",
+      code: "EPERM",
     });
   });
 
@@ -59,3 +77,5 @@ describe("createLogger", () => {
     });
   });
 });
+
+type LogEvent = Parameters<ReturnType<typeof createLogger>["log"]>[0];

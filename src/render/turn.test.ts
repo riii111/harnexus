@@ -8,8 +8,8 @@ import {
   markToolDeclined,
   type Rendered,
   renderSdkMessage,
+  renderTurnStarted,
   renderUserInput,
-  startTurn,
 } from "./turn.ts";
 
 describe("renderSdkMessage text", () => {
@@ -478,7 +478,7 @@ describe("turn rendering against recorded app-server sessions", () => {
   });
 
   test("renders a user message as recorded", () => {
-    const { state } = startTurn({
+    const { state } = renderTurnStarted({
       threadId: "th-fixture-1",
       turnId: "tu-fixture-1",
       cwd: "/fixture/work",
@@ -501,7 +501,7 @@ describe("turn rendering against recorded app-server sessions", () => {
   });
 
   test("renders an interrupted turn as recorded except for the message it closes", () => {
-    let { state, notifications } = startTurn({
+    let { state, notifications } = renderTurnStarted({
       threadId: "th-fixture-1",
       turnId: "tu-fixture-2",
       cwd: "/fixture/work",
@@ -583,7 +583,7 @@ const TIME_KEYS = new Set([
 ]);
 
 const begin = (): Rendered => {
-  const started = startTurn({
+  const started = renderTurnStarted({
     threadId: "th-1",
     turnId: "tu-1",
     cwd: "/fixture/work",
@@ -625,7 +625,7 @@ const deepFreeze = <T>(value: T): T => {
 };
 
 const runRecorded = (turnId: string, messages: object[]) => {
-  let { state, notifications } = startTurn({
+  let { state, notifications } = renderTurnStarted({
     threadId: "th-fixture-1",
     turnId,
     cwd: "/fixture/work",

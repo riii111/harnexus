@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createLineSplitter, type LineEvent } from "./line-splitter.ts";
+import { createLineSplitter } from "./line-splitter.ts";
 
 describe("createLineSplitter", () => {
   test("joins a line split across chunks", () => {
@@ -57,3 +57,5 @@ const split = (chunks: string[], maxLineBytes = 1024) => {
       : "<oversized>",
   );
 };
+
+type LineEvent = Parameters<Parameters<typeof createLineSplitter>[1]>[0];

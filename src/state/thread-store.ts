@@ -12,6 +12,7 @@ import {
   writeFileAtomic,
 } from "../boundary/fs.ts";
 import { parseJson } from "../boundary/json.ts";
+import { isObject } from "../shared/object.ts";
 import { createSerialQueue } from "./serial-queue.ts";
 
 // Only identifiers are kept, so the file never holds conversation text.
@@ -237,7 +238,7 @@ const createThreadStore = (
           : Result.ok({ ...entry, sessionId: null, reviewerThreadIds: [] }),
       ),
 
-    setSession: (threadId: string, sessionId: string) =>
+    setSessionId: (threadId: string, sessionId: string) =>
       update(threadId, (mapping) => ({ ...mapping, sessionId })),
 
     setModel: (threadId: string, model: string) =>
@@ -387,9 +388,6 @@ const isThreadMapping = (value: unknown): value is ThreadMapping =>
   isNonEmptyString(value.worktree) &&
   Array.isArray(value.reviewerThreadIds) &&
   value.reviewerThreadIds.every(isNonEmptyString);
-
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value !== "";
