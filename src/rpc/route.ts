@@ -20,6 +20,7 @@ type Turns = {
   startTurn: (request: AppRequest, fallbackCwd: string | undefined) => void;
   interruptTurn: (request: AppRequest) => void;
   reject: (request: AppRequest, message: string) => void;
+  answerRequest: (response: Record<string, unknown>) => boolean;
 };
 
 type RefusedMethod = (typeof REFUSED_METHODS)[number];
@@ -40,7 +41,11 @@ export const createRouter = (
 
   const fromApp = (line: Buffer): Buffer | null => {
     const message = parseMessage(line);
-    if (message === null || typeof message.method !== "string") return line;
+    if (message === null) return line;
+    // The app's answers to the bridge's own prompts never reach the server, which did not ask them.
+    if (typeof message.method !== "string") {
+      return turns.answerRequest(message) ? null : line;
+    }
     const id = message.id;
     if (typeof id !== "string" && typeof id !== "number") return line;
     const params = isObject(message.params) ? message.params : {};

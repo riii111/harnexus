@@ -1,6 +1,7 @@
 import type {
   AccountInfo,
   Options,
+  PermissionMode,
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -38,6 +39,7 @@ export const fakeClaude = (
   let options: Options | null = null;
   let prompt: AsyncIterable<SDKUserMessage> | null = null;
   let interrupts = 0;
+  const modes: PermissionMode[] = [];
   let closes = 0;
   const deliver = (item: Delivery) => {
     const resolve = waiting;
@@ -62,6 +64,9 @@ export const fakeClaude = (
       return stillQueued === undefined
         ? undefined
         : { still_queued: stillQueued };
+    },
+    setPermissionMode: async (mode) => {
+      modes.push(mode);
     },
     accountInfo: async () => {
       if (account instanceof Error) throw account;
@@ -100,6 +105,7 @@ export const fakeClaude = (
     end: () => deliver({ done: true, value: undefined }),
     fail: (error: Error) => deliver(error),
     interrupts: () => interrupts,
+    modes: () => modes,
     closes: () => closes,
   };
 };

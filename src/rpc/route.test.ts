@@ -230,6 +230,23 @@ describe("threads with a Claude model", () => {
   });
 });
 
+describe("app responses", () => {
+  test("hands an answer to the bridge's own request to the turns and not to the server", () => {
+    const { router, calls } = setup(["th-claude"]);
+    const answer = { id: BRIDGE_REQUEST, result: { decision: "accept" } };
+
+    expect(router.fromApp(encode(answer))).toBeNull();
+    expect(calls).toEqual([["answerRequest", answer]]);
+  });
+
+  test("forwards an answer to the server's request unchanged", () => {
+    const { router } = setup(["th-claude"]);
+    const line = encode({ id: 1, result: { decision: "accept" } });
+
+    expect(router.fromApp(line)).toEqual(line);
+  });
+});
+
 describe("thread/settings/update", () => {
   test("drops a Claude thread's own model before the server sees it", () => {
     const { router, calls } = setup(["th-claude"]);
@@ -280,12 +297,6 @@ describe("thread/settings/update", () => {
       name: "another model in the collaboration mode alone",
       change: {
         collaborationMode: { mode: "default", settings: { model: "gpt-x" } },
-      },
-    },
-    {
-      name: "plan mode",
-      change: {
-        collaborationMode: { mode: "plan", settings: { model: CLAUDE } },
       },
     },
     { name: "another working directory", change: { cwd: "/elsewhere" } },
@@ -373,6 +384,7 @@ describe("thread/settings/update", () => {
 });
 
 const CLAUDE = "claude-sonnet-5";
+const BRIDGE_REQUEST = "harnexus-1";
 
 const settingsUpdate = (change: object) =>
   encode({
@@ -400,6 +412,10 @@ const setup = (claudeThreads: string[] = []) => {
         calls.push(["startTurn", request, cwd]),
       interruptTurn: (request) => calls.push(["interruptTurn", request]),
       reject: (request, message) => calls.push(["reject", request, message]),
+      answerRequest: (response) => {
+        calls.push(["answerRequest", response]);
+        return response.id === BRIDGE_REQUEST;
+      },
     },
     (event) => events.push(event),
   );

@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
+import type {
+  CanUseTool,
+  PermissionMode,
+} from "@anthropic-ai/claude-agent-sdk";
 import {
   type InferErr,
   type InferOk,
   Result,
   TaggedError,
 } from "better-result";
+import { promptFor } from "../claude/permission.ts";
 import type {
   ClaudeSessionSettings,
   startClaudeSession,
@@ -17,16 +22,19 @@ import {
   startTurn as openTurn,
   type Rendered,
   renderSdkMessage,
+  renderToolRequest,
   renderUserInput,
   type TurnOutcome,
   type TurnState,
 } from "../render/turn.ts";
 import type { ThreadRecord, ThreadStore } from "../state/thread-store.ts";
+import { createAppRequests } from "./app-requests.ts";
 import {
   type AppRequest,
   checkThread,
   type Refusal,
   refusalMessage,
+  requestedPermissionMode,
   type Thread,
 } from "./thread-request.ts";
 
@@ -68,6 +76,7 @@ type InterruptTag = ErrorTag<ReturnType<ClaudeSession["interrupt"]>>;
 type FailureTag =
   | ErrorTag<SessionStart>
   | ErrorTag<ReturnType<ClaudeSession["send"]>>
+  | ErrorTag<ReturnType<ClaudeSession["setPermissionMode"]>>
   | InferErr<StreamedMessage>["_tag"]
   | InterruptTag
   | BridgeClosing["_tag"]
@@ -120,6 +129,7 @@ export const createTurnController = ({
   const activeTurns = new Map<string, ActiveTurn>();
   // A session id Claude reported but the store failed to save still resumes the conversation while the bridge runs.
   const sessionIds = new Map<string, string>();
+  const appRequests = createAppRequests({ send, now });
   let closed = false;
 
   // fallbackCwd is the thread's directory as last reported by the server, used when a Codex thread switches to Claude.
@@ -152,9 +162,12 @@ export const createTurnController = ({
     }
     const active: ActiveTurn = { threadId, state: null };
     activeTurns.set(threadId, active);
-    void runTurn(id, checked.thread, active, input.items, input.text).then(() =>
-      release(active),
-    );
+    const turn = {
+      input: input.items,
+      text: input.text,
+      permissionMode: requestedPermissionMode(params),
+    };
+    void runTurn(id, checked.thread, active, turn).then(() => release(active));
   };
 
   // The reply comes first so the app sees it before the interrupted turn completes; a failed interrupt stops Claude by closing the session.
@@ -173,6 +186,7 @@ export const createTurnController = ({
     const repeated = active.state.interrupting;
     active.state = markInterrupting(active.state);
     send({ id, result: {} });
+    appRequests.cancel(threadId);
     const slot = sessions.get(threadId);
     if (slot === undefined || repeated || slot.pendingInterrupt !== null) {
       return;
@@ -197,6 +211,7 @@ export const createTurnController = ({
   // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
   const closeAll = () => {
     closed = true;
+    appRequests.cancel(null);
     for (const [threadId, slot] of sessions) dropSession(threadId, slot);
   };
 
@@ -205,8 +220,7 @@ export const createTurnController = ({
     requestId: AppRequest["id"],
     thread: Thread,
     active: ActiveTurn,
-    input: UserInput[],
-    text: string,
+    turn: TurnInput,
   ) => {
     const threadId = active.threadId;
     if (store.get(threadId) === undefined) {
@@ -226,7 +240,7 @@ export const createTurnController = ({
       threadId,
       async (record) => {
         responded = true;
-        await streamTurn(requestId, record, active, input, text);
+        await streamTurn(requestId, record, active, turn);
         return Result.ok();
       },
       () => false,
@@ -248,8 +262,7 @@ export const createTurnController = ({
     requestId: AppRequest["id"],
     record: ThreadRecord,
     active: ActiveTurn,
-    input: UserInput[],
-    text: string,
+    turn: TurnInput,
   ) => {
     const threadId = record.threadId;
     const started = openTurn({
@@ -261,7 +274,7 @@ export const createTurnController = ({
     apply(active, started);
     send({ id: requestId, result: { turn: started.turn } });
     log({ event: "claude_turn", step: "started" });
-    apply(active, renderUserInput(started.state, input, null, now()));
+    apply(active, renderUserInput(started.state, turn.input, null, now()));
 
     await waitForPendingInterrupt(threadId);
     if (active.state?.interrupting) {
@@ -273,11 +286,20 @@ export const createTurnController = ({
       fail(active, slot.error);
       return;
     }
+    // Claude leaves plan mode when a plan is approved, so the mode the app asks for is set again on every turn.
+    const mode = await slot.value.session.setPermissionMode(
+      turn.permissionMode,
+    );
+    if (mode.isErr()) {
+      dropSession(threadId, slot.value);
+      fail(active, mode.error);
+      return;
+    }
     if (active.state?.interrupting) {
       finish(active, { status: "interrupted" }, null);
       return;
     }
-    const sent = slot.value.session.send(text);
+    const sent = slot.value.session.send(turn.text);
     if (sent.isErr()) {
       dropSession(threadId, slot.value);
       fail(active, sent.error);
@@ -335,12 +357,7 @@ export const createTurnController = ({
       cwd: record.worktree,
       model: record.model,
       ...resumeFrom(sessionIds.get(record.threadId) ?? record.sessionId),
-      onToolDeclined: (toolUseId) => {
-        const active = activeTurns.get(record.threadId);
-        if (active?.state) {
-          active.state = markToolDeclined(active.state, toolUseId);
-        }
-      },
+      canUseTool: approveTool(record.threadId),
     });
     if (started.isErr()) return Result.err(started.error);
     // Shutdown may have happened while Claude was starting.
@@ -356,6 +373,59 @@ export const createTurnController = ({
     };
     sessions.set(record.threadId, slot);
     return Result.ok(slot);
+  };
+
+  // Only a call inside a running turn reaches the app; the SDK reports no message when a call is refused here, so the refusal is recorded on the turn to show its item as declined.
+  const approveTool =
+    (threadId: string): CanUseTool =>
+    async (toolName, input, options) => {
+      const active = activeTurns.get(threadId);
+      const state = active?.state;
+      if (active === undefined || !state || state.interrupting) {
+        return declineTool(active, options.toolUseID, NO_TURN);
+      }
+      const block = { id: options.toolUseID, name: toolName, input };
+      // A subagent's call has no item in the thread, so its prompt carries an id of its own.
+      if (options.agentID === undefined) {
+        apply(active, renderToolRequest(state, block, now()));
+      }
+      const item = active.state?.tools[options.toolUseID]?.item ?? null;
+      const prompt = promptFor(
+        {
+          toolName,
+          input,
+          item,
+          title: options.title,
+          reason: options.decisionReason,
+        },
+        {
+          threadId,
+          turnId: state.turnId,
+          itemId: item?.id ?? `${state.turnId}-${options.toolUseID}`,
+          now: now(),
+        },
+      );
+      const answer = await appRequests.ask(
+        threadId,
+        prompt.method,
+        prompt.params,
+        options.signal,
+      );
+      const decision = prompt.decide(answer);
+      return decision.behavior === "deny"
+        ? declineTool(active, options.toolUseID, decision.message)
+        : decision;
+    };
+
+  const declineTool = (
+    active: ActiveTurn | undefined,
+    toolUseId: string,
+    message: string,
+  ) => {
+    if (active?.state) {
+      active.state = markToolDeclined(active.state, toolUseId);
+    }
+    return { behavior: "deny" as const, message };
   };
 
   // The app may start the next turn as soon as it sees turn/completed, so the thread stops counting as active then; the store's per-thread queue still holds that turn until this one's marker is cleared.
@@ -406,9 +476,11 @@ export const createTurnController = ({
     apply(active, finishTurn(active.state, outcome, now()), error);
   };
 
+  // A prompt still open when its turn ends can no longer change what Claude did, so it is closed with the turn.
   const release = (active: ActiveTurn) => {
     if (activeTurns.get(active.threadId) === active) {
       activeTurns.delete(active.threadId);
+      appRequests.cancel(active.threadId);
     }
   };
 
@@ -448,6 +520,7 @@ export const createTurnController = ({
     interruptTurn,
     closeAll,
     reject,
+    answerRequest: appRequests.answer,
     isClaudeThread: (threadId: unknown) =>
       typeof threadId === "string" && threadOf(threadId) !== undefined,
     threadOf,
@@ -455,6 +528,12 @@ export const createTurnController = ({
       if (store.get(threadId) === undefined) adopted.set(threadId, thread);
     },
   };
+};
+
+type TurnInput = {
+  input: UserInput[];
+  text: string;
+  permissionMode: PermissionMode;
 };
 
 const resumeFrom = (sessionId: string | null) =>
@@ -479,3 +558,5 @@ const isTextItem = (item: unknown): item is { type: "text"; text: string } =>
   typeof item.text === "string";
 
 const INVALID_REQUEST = -32600;
+
+const NO_TURN = "no Claude turn is running to ask the app for approval";

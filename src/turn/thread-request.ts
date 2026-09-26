@@ -20,7 +20,7 @@ export const requestedModel = (params: Record<string, unknown>) => {
 };
 
 // fallbackCwd is where the server last reported a Codex thread, since a request that switches it to Claude may not carry its directory.
-// TODO: accept a model or working directory change in P10, which restarts the Claude session for it; plan mode waits for the plan approval relay in P9.
+// TODO: accept a model or working directory change in P10, which restarts the Claude session for it.
 export const checkThread = (
   params: Record<string, unknown>,
   known: Thread | undefined,
@@ -31,7 +31,6 @@ export const checkThread = (
   if (known !== undefined && model !== known.model) {
     return { refusal: "model_change" };
   }
-  if (requestsPlanMode(params)) return { refusal: "plan_mode" };
   if (known !== undefined) {
     return typeof params.cwd === "string" &&
       !isSameDirectory(params.cwd, known.cwd)
@@ -46,10 +45,11 @@ export const checkThread = (
 
 export const refusalMessage = (refusal: Refusal) => REFUSAL_MESSAGES[refusal];
 
-const requestsPlanMode = (params: Record<string, unknown>) => {
-  const mode = collaborationMode(params)?.mode;
-  return mode !== undefined && mode !== "default";
-};
+// The app's plan mode maps to Claude's; every other mode, or none, runs Claude with approvals as usual.
+export const requestedPermissionMode = (
+  params: Record<string, unknown>,
+): "plan" | "default" =>
+  collaborationMode(params)?.mode === "plan" ? "plan" : "default";
 
 // Spelling differences such as a trailing slash do not change the directory; symlinks are not resolved, since that needs the file system.
 const isSameDirectory = (a: string, b: string) => resolve(a) === resolve(b);
@@ -64,7 +64,6 @@ const REFUSAL_MESSAGES = {
   missing_thread: "the request needs a threadId",
   codex_model: "a Claude thread cannot switch to a Codex model",
   model_change: "changing the model of a Claude thread is not supported yet",
-  plan_mode: "Claude threads do not support plan mode yet",
   directory_change:
     "changing the working directory of a Claude thread is not supported yet",
   directory_unknown: "the working directory of this thread is unknown",

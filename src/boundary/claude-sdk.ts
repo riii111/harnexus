@@ -1,5 +1,6 @@
 import type {
   Options,
+  PermissionMode,
   Query,
   SDKUserMessage,
   SettingSource,
@@ -9,7 +10,7 @@ import { Result, TaggedError } from "better-result";
 
 export type ClaudeQuery = Pick<
   Query,
-  "next" | "interrupt" | "accountInfo" | "close"
+  "next" | "interrupt" | "setPermissionMode" | "accountInfo" | "close"
 >;
 
 export type RunQuery = (params: {
@@ -50,6 +51,13 @@ class ClaudeStreamFailed extends TaggedError("ClaudeStreamFailed")<{
 }> {}
 
 class ClaudeInterruptFailed extends TaggedError("ClaudeInterruptFailed")<{
+  cause: unknown;
+  message: string;
+}> {}
+
+class ClaudePermissionModeFailed extends TaggedError(
+  "ClaudePermissionModeFailed",
+)<{
   cause: unknown;
   message: string;
 }> {}
@@ -111,6 +119,19 @@ export const interruptQuery = (query: ClaudeQuery) =>
       new ClaudeInterruptFailed({
         cause,
         message: "cannot interrupt the Claude turn",
+      }),
+  });
+
+export const setQueryPermissionMode = (
+  query: ClaudeQuery,
+  mode: PermissionMode,
+) =>
+  Result.tryPromise({
+    try: () => query.setPermissionMode(mode),
+    catch: (cause) =>
+      new ClaudePermissionModeFailed({
+        cause,
+        message: `cannot switch Claude to the ${mode} permission mode`,
       }),
   });
 
