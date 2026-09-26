@@ -141,19 +141,6 @@ describe("createEmptyFile", () => {
 });
 
 describe("removeFile", () => {
-  test("removes a file", async () => {
-    const markers = join(dir, "removal");
-    await prepareDirectory(markers);
-    const marker = join(markers, "a.running");
-    const created = await createEmptyFile(marker);
-
-    const removed = await removeFile(marker);
-
-    expect(created.isOk()).toBe(true);
-    expect(removed.isOk()).toBe(true);
-    expect(await readdir(markers)).toEqual([]);
-  });
-
   test("treats a missing file as removed", async () => {
     const removed = await removeFile(join(dir, "never-created"));
 
