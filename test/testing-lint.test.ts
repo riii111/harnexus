@@ -60,6 +60,40 @@ describe("testing lint rules", () => {
       expected: [{ line: 1, rule: LOOP }],
     },
     {
+      name: "typed tuple rows with a positional specifier",
+      source: `test.each<[string, number]>([["a", 1]])("does %s", () => {});`,
+      expected: [
+        { line: 1, rule: TUPLE },
+        { line: 1, rule: SPECIFIER },
+      ],
+    },
+    {
+      name: "typed object rows whose title embeds no property",
+      source: `test.each<{ name: string }>([{ name: "a" }])("does something", () => {});`,
+      expected: [{ line: 1, rule: MISSING_NAME }],
+    },
+    {
+      name: "a typed describe.each nested in a describe",
+      source: `describe("outer", () => {
+  describe.each<{ name: string }>([{ name: "a" }])("inner $name", () => {});
+});`,
+      expected: [{ line: 2, rule: NESTED }],
+    },
+    {
+      name: "a describe with a timeout nested in a describe",
+      source: `describe("outer", () => {
+  describe("inner", () => {}, 1000);
+});`,
+      expected: [{ line: 2, rule: NESTED }],
+    },
+    {
+      name: "a test.each registered in a loop",
+      source: `for (const name of ["a"]) {
+  test.each([{ name }])("does $name", () => {});
+}`,
+      expected: [{ line: 1, rule: LOOP }],
+    },
+    {
       name: "a focused test",
       source: `test.only("a", () => {});`,
       expected: [{ line: 1, rule: "lint/suspicious/noFocusedTests" }],
@@ -100,6 +134,15 @@ describe("b", () => {});`,
     {
       name: "a title that embeds the input value itself",
       source: `test.each([{ signal: "SIGTERM" }])("forwards $signal", () => {});`,
+    },
+    {
+      name: "a title passed through a variable",
+      source: `const title = "does $name";
+test.each([{ name: "a" }])(title, () => {});`,
+    },
+    {
+      name: "an escaped percent sign before a specifier letter",
+      source: `test.each([{ name: "a" }])("does $name with %%s", () => {});`,
     },
     {
       name: "a percent sign in a plain test title",
