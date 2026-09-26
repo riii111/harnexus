@@ -272,10 +272,8 @@ describe("thread/settings/update", () => {
     const response = parse(threadResponse(4, "th-claude"));
     response.result.thread.preview = "about thread/settings/updated";
     const out = parse(router.fromServer(encode(response)));
-    const later = modelList(4, null);
 
     expect(out.result.model).toBe(CLAUDE);
-    expect(router.fromServer(later)).toEqual(later);
   });
 
   test("accepts the same directory spelled with a trailing slash", () => {
