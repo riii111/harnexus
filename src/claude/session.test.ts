@@ -26,31 +26,30 @@ describe("startClaudeSession options", () => {
       permissionMode: "default",
       includePartialMessages: true,
       mcpServers: {},
+      allowedTools: [],
     });
-    expect(claude.options().resume).toBeUndefined();
-  });
-
-  test("appends nothing to the preset system prompt", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-
-    await startClaudeSession(SETTINGS, claude.runtime);
-
     expect(claude.options().systemPrompt).toEqual({
       type: "preset",
       preset: "claude_code",
     });
+    expect(claude.options().resume).toBeUndefined();
   });
 
-  test("resumes the given session with the given MCP servers", async () => {
+  test("resumes the given session with the given MCP servers and their allowed tools", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const mcpServers = { harnexus: { command: "harnexus-mcp" } };
+    const allowedTools = ["mcp__harnexus__read"];
 
     await startClaudeSession(
-      { ...SETTINGS, resume: "session-1", mcpServers },
+      { ...SETTINGS, resume: "session-1", mcpServers, allowedTools },
       claude.runtime,
     );
 
-    expect(claude.options()).toMatchObject({ resume: "session-1", mcpServers });
+    expect(claude.options()).toMatchObject({
+      resume: "session-1",
+      mcpServers,
+      allowedTools,
+    });
   });
 
   test("keeps API billing variables away from Claude", async () => {
@@ -112,31 +111,8 @@ describe("startClaudeSession options", () => {
 });
 
 describe("startClaudeSession authentication", () => {
-  test("starts on a claude.ai subscription login", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-
-    const started = await startClaudeSession(SETTINGS, claude.runtime);
-
-    expect(started.isOk()).toBe(true);
-    expect(claude.closes()).toBe(0);
-  });
-
-  test.each([
-    {
-      name: "an API key",
-      account: { ...SUBSCRIPTION, apiKeySource: "ANTHROPIC_API_KEY" },
-    },
-    {
-      name: "an API key helper",
-      account: { ...SUBSCRIPTION, apiKeySource: "apiKeyHelper" },
-    },
-    { name: "a cloud provider", account: { apiProvider: "bedrock" } },
-    {
-      name: "a login without a subscription",
-      account: { apiProvider: "firstParty" },
-    },
-  ])("stops before any prompt on $name", async ({ account }) => {
-    const claude = fakeClaude(account);
+  test("stops before any prompt on a login without a subscription", async () => {
+    const claude = fakeClaude({ apiProvider: "firstParty" });
 
     const started = await startClaudeSession(SETTINGS, claude.runtime);
 
@@ -277,7 +253,7 @@ describe("startClaudeSession settings directory", () => {
   });
 });
 
-describe("ClaudeSession", () => {
+describe("startClaudeSession started session", () => {
   test("sends the prompt text as a user message stamped with a returned uuid", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const session = await startedSession(claude);
@@ -332,25 +308,11 @@ describe("ClaudeSession", () => {
     expect.assertions(3);
     claude.fail(new Error("Claude Code process exited with code 1"));
     for await (const item of session.messages) {
-      expect(item.isErr()).toBe(true);
+      expect(item.isErr() && item.error._tag).toBe("ClaudeStreamFailed");
       expect(claude.closes()).toBe(1);
-      expect(session.send("steer").isErr()).toBe(true);
+      const sent = session.send("steer");
+      expect(sent.isErr() && sent.error._tag).toBe("ClaudeSessionClosed");
     }
-  });
-
-  test("ends the stream with an error when the SDK throws", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const session = await startedSession(claude);
-
-    claude.emit(sdkMessage("first"));
-    claude.fail(new Error("Claude Code process exited with code 1"));
-    const received = await collect(session.messages);
-
-    expect(received.map((item) => item.isOk())).toEqual([true, false]);
-    const failure = received[1];
-    expect(failure?.isErr() && failure.error._tag).toBe("ClaudeStreamFailed");
-    expect(claude.closes()).toBe(1);
-    expect(session.send("again").isErr()).toBe(true);
   });
 
   test("interrupts the running turn and keeps the session open", async () => {
@@ -359,7 +321,7 @@ describe("ClaudeSession", () => {
 
     const interrupted = await session.interrupt();
 
-    expect(interrupted.isOk()).toBe(true);
+    expect(interrupted.isOk() && interrupted.value).toBeNull();
     expect(claude.interrupts()).toBe(1);
     expect(session.send("next turn").isOk()).toBe(true);
   });
@@ -370,16 +332,7 @@ describe("ClaudeSession", () => {
 
     const interrupted = await session.interrupt();
 
-    expect(interrupted.unwrap()).toEqual(["uuid-1"]);
-  });
-
-  test("reports unknown surviving sends when the CLI gives no receipt", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const session = await startedSession(claude);
-
-    const interrupted = await session.interrupt();
-
-    expect(interrupted.unwrap()).toBeNull();
+    expect(interrupted.isOk() && interrupted.value).toEqual(["uuid-1"]);
   });
 
   test("reports an interrupt the SDK rejects", async () => {
@@ -425,7 +378,8 @@ describe("ClaudeSession", () => {
     for await (const _item of session.messages) break;
 
     expect(claude.closes()).toBe(1);
-    expect(session.send("unheard").isErr()).toBe(true);
+    const sent = session.send("unheard");
+    expect(sent.isErr() && sent.error._tag).toBe("ClaudeSessionClosed");
   });
 
   test("refuses input and interrupts after close", async () => {

@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type {
-  AccountInfo,
-  CanUseTool,
-  SDKMessage,
-  SDKUserMessage,
+import {
+  type AccountInfo,
+  type CanUseTool,
+  createSdkMcpServer,
+  type SDKMessage,
+  type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
 import { FileWriteFailed, writeFileAtomic } from "../boundary/fs.ts";
@@ -593,16 +594,6 @@ describe("refused requests", () => {
     expect(claude.started()).toBe(false);
   });
 
-  test("refuses a second turn while one is running", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
-
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    turns.startTurn(turnStart(11, "again"), undefined);
-
-    expect(responseTo(sent, 11)?.error).toBeDefined();
-  });
-
   test("answers a rejected request with the given message", async () => {
     const { turns, sent } = await harness([]);
 
@@ -611,6 +602,32 @@ describe("refused requests", () => {
     expect(sent).toEqual([
       { id: 12, error: { code: -32600, message: "not yet" } },
     ]);
+  });
+
+  test("refuses a turn asking for another directory that lost the race to register the thread", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings } = await harness([claude], {
+      adopt: false,
+    });
+    const request = turnStart(10, "hello");
+    const first = {
+      ...request,
+      params: { ...request.params, model: MODEL, cwd: dir },
+    };
+
+    turns.startTurn(first, undefined);
+    turns.startTurn(
+      { ...first, id: 11, params: { ...first.params, cwd: "/elsewhere" } },
+      undefined,
+    );
+    await until(() => responseTo(sent, 11) !== undefined);
+    await until(() => claude.started());
+
+    expect(responseTo(sent, 11)?.error.message).toBe(
+      "changing the working directory of a Claude thread is not supported yet",
+    );
+    expect(settings).toHaveLength(1);
+    expect(settings[0]).toMatchObject({ cwd: dir });
   });
 
   test("switches a Codex thread to Claude only when its directory is known", async () => {
@@ -630,6 +647,223 @@ describe("refused requests", () => {
 
     expect(responseTo(sent, 10)?.error).toBeDefined();
     expect(settings[0]).toMatchObject({ cwd: dir, model: MODEL });
+  });
+});
+
+describe("turn/start arriving on a busy thread", () => {
+  test("waits for the running turn and then continues the same Claude session", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings, events } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    turns.startTurn(turnStart(11, "reply"), undefined);
+    await settle();
+    expect(responseTo(sent, 11)).toBeUndefined();
+    claude.emit(sdk(answer("msg-1", "hi")));
+    claude.emit(sdk(success()));
+    await until(() => responseTo(sent, 11) !== undefined);
+    claude.emit(sdk(answer("msg-2", "ok")));
+    claude.emit(sdk(success()));
+    await until(() => turnsCompleted(sent).length === 2);
+
+    expect(responseTo(sent, 11)?.result.turn).toMatchObject({ id: "turn-2" });
+    expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
+    expect(await promptsUntil(claude, 2)).toEqual(["hello", "reply"]);
+    expect(settings).toHaveLength(1);
+    expect(events).toContainEqual({ event: "claude_turn", step: "queued" });
+  });
+
+  test("refuses a waiting turn once the bridge is closing", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    turns.startTurn(turnStart(11, "reply"), undefined);
+    turns.closeAll();
+    await until(() => responseTo(sent, 11) !== undefined);
+
+    expect(turnsCompleted(sent)).toEqual(["failed"]);
+    expect(responseTo(sent, 11)).toEqual({
+      id: 11,
+      error: { code: -32600, message: "the bridge is shutting down" },
+    });
+  });
+});
+
+describe("clientUserMessageId", () => {
+  test("refuses a copy of a message that is still waiting to run", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    turns.startTurn(withMessageId(turnStart(11, "reply"), "m-1"), undefined);
+    turns.startTurn(withMessageId(turnStart(12, "reply"), "m-1"), undefined);
+    claude.emit(sdk(success()));
+    await until(() => responseTo(sent, 11) !== undefined);
+    claude.emit(sdk(success()));
+    await until(() => turnsCompleted(sent).length === 2);
+    await settle();
+
+    expect(responseTo(sent, 11)?.result).toBeDefined();
+    expect(responseTo(sent, 12)).toEqual(DUPLICATE(12));
+    expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
+    const user = completedItems(sent).filter(
+      (item) => item.type === "userMessage",
+    );
+    expect(user.map((item) => item.clientId)).toEqual([null, "m-1"]);
+  });
+
+  test("refuses a message delivered again after the bridge restarts", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const before = await harness([first]);
+    before.turns.startTurn(
+      withMessageId(turnStart(10, "reply"), "m-1"),
+      undefined,
+    );
+    await until(() => responseTo(before.sent, 10) !== undefined);
+    first.emit(sdk(success()));
+    await until(() => before.store.get(THREAD)?.runState === "idle");
+    expect(turnsCompleted(before.sent)).toEqual(["completed"]);
+    const second = fakeClaude(SUBSCRIPTION);
+
+    const after = await harness([second]);
+    after.turns.startTurn(
+      withMessageId(turnStart(11, "reply"), "m-1"),
+      undefined,
+    );
+    await settle();
+
+    expect(after.sent).toEqual([DUPLICATE(11)]);
+    expect(second.started()).toBe(false);
+  });
+
+  test("refuses a message whose id cannot be saved without starting Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    let writes = 0;
+    const { turns, sent, store } = await harness([claude], {
+      files: {
+        writeState: async (target, content) =>
+          ++writes === 2 ? diskFull(target) : writeFileAtomic(target, content),
+      },
+    });
+
+    turns.startTurn(withMessageId(turnStart(10, "reply"), "m-1"), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    await settle();
+
+    expect(sent).toEqual([
+      {
+        id: 10,
+        error: {
+          code: -32600,
+          message:
+            "the message id could not be saved, so the message was not run to avoid running it twice",
+        },
+      },
+    ]);
+    expect(claude.started()).toBe(false);
+    expect(store.get(THREAD)?.runState).toBe("idle");
+  });
+
+  test("accepts a message again after it was refused before running", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    let writes = 0;
+    const { turns, sent } = await harness([claude], {
+      files: {
+        writeState: async (target, content) =>
+          ++writes === 1 ? diskFull(target) : writeFileAtomic(target, content),
+      },
+    });
+
+    turns.startTurn(withMessageId(turnStart(10, "reply"), "m-1"), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    turns.startTurn(withMessageId(turnStart(11, "reply"), "m-1"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+
+    expect(responseTo(sent, 10)?.error).toBeDefined();
+    expect(responseTo(sent, 11)?.result.turn).toMatchObject({
+      status: "inProgress",
+    });
+  });
+});
+
+describe("thread tools", () => {
+  test("give each Claude session its own thread tool server and allowed tools", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings, links } = await harness([first, second]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => first.started());
+    first.fail(new Error("socket closed"));
+    await until(() => turnCompleted(sent) !== undefined);
+    await completeTurn(turns, sent, second, 11);
+
+    expect(links).toEqual([THREAD, THREAD]);
+    expect(settings[0]?.allowedTools).toEqual(ALLOWED_TOOLS);
+    expect(Object.keys(settings[0]?.mcpServers ?? {})).toEqual(["codex_link"]);
+    expect(settings[1]?.mcpServers?.codex_link).not.toBe(
+      settings[0]?.mcpServers?.codex_link,
+    );
+  });
+
+  test("leave the thread as outcome unknown after a turn with an undecided write and refuse the next turn", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store, events } = await harness([claude], {
+      unsettledWrite: () => true,
+    });
+
+    await completeTurn(turns, sent, claude, 10);
+    await until(() => store.get(THREAD)?.runState !== "running");
+    turns.startTurn(turnStart(11, "again"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+
+    expect(store.get(THREAD)?.runState).toBe("outcomeUnknown");
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "outcome_unknown",
+    });
+    expect(responseTo(sent, 11)?.error.message).toContain("unknown outcome");
+  });
+
+  test("stop taking writes when the turn is stopped", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
+    const { turns, gates } = await harness([claude]);
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    expect(gates).toEqual(["accept"]);
+
+    turns.interruptTurn(interrupt(20, "turn-1"));
+
+    expect(gates).toEqual(["accept", "stop"]);
+  });
+
+  test("stop taking writes when a turn finishes and take them again for the next turn", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store, gates } = await harness([claude]);
+
+    await completeTurn(turns, sent, claude, 10);
+    await until(() => store.get(THREAD)?.runState === "idle");
+    expect(gates).toEqual(["accept", "stop"]);
+    await completeTurn(turns, sent, claude, 11);
+    await until(() => gates.length === 4);
+
+    expect(gates).toEqual(["accept", "stop", "accept", "stop"]);
+  });
+
+  test("clear the run state after a turn whose writes were all decided", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store } = await harness([claude], {
+      unsettledWrite: () => false,
+    });
+
+    await completeTurn(turns, sent, claude, 10);
+    await until(() => store.get(THREAD)?.runState !== "running");
+
+    expect(store.get(THREAD)?.runState).toBe("idle");
   });
 });
 
@@ -751,11 +985,13 @@ const harness = async (
     files = {},
     beforeStart = Promise.resolve(),
     onSend = () => {},
+    unsettledWrite = () => false,
   }: {
     adopt?: boolean;
     files?: Parameters<typeof openThreadStore>[1];
     beforeStart?: Promise<void>;
     onSend?: (message: Sent) => void;
+    unsettledWrite?: () => boolean;
   } = {},
 ) => {
   const opened = await openThreadStore(join(dir, "threads.json"), files);
@@ -764,9 +1000,21 @@ const harness = async (
   const sent: Sent[] = [];
   const events: TurnEvent[] = [];
   const settings: ClaudeSessionSettings[] = [];
+  const links: string[] = [];
+  const gates: string[] = [];
   let turnCount = 0;
   const turns = createTurnController({
     store,
+    openLink: (threadId) => {
+      links.push(threadId);
+      return {
+        server: createSdkMcpServer({ name: "codex_link", tools: [] }),
+        allowedTools: ALLOWED_TOOLS,
+        hasUnsettledWrite: unsettledWrite,
+        stopWrites: () => gates.push("stop"),
+        acceptWrites: () => gates.push("accept"),
+      };
+    },
     send: (message) => {
       sent.push(message);
       onSend(message);
@@ -783,7 +1031,15 @@ const harness = async (
     newTurnId: () => `turn-${++turnCount}`,
   });
   if (adopt) turns.adopt(THREAD, { model: MODEL, cwd: dir });
-  return { turns, sent, events, store, settings };
+  return {
+    turns,
+    sent,
+    events,
+    store,
+    settings,
+    links,
+    gates,
+  };
 };
 
 const completeTurn = async (
@@ -808,6 +1064,11 @@ const turnStart = (id: number, text: string) => ({
   } as Record<string, unknown>,
 });
 
+const withMessageId = (
+  request: ReturnType<typeof turnStart>,
+  clientUserMessageId: string,
+) => ({ ...request, params: { ...request.params, clientUserMessageId } });
+
 const interrupt = (id: number, turnId: string) => ({
   id,
   params: { threadId: THREAD, turnId },
@@ -815,6 +1076,16 @@ const interrupt = (id: number, turnId: string) => ({
 
 // Long enough for a turn that was wrongly accepted to reach Claude.
 const settle = () => Bun.sleep(20);
+
+const DUPLICATE = (id: number) => ({
+  id,
+  error: {
+    code: -32600,
+    message: "this message was already delivered to the Claude thread",
+  },
+});
+
+const ALLOWED_TOOLS = ["mcp__codex_link__read_thread"];
 
 const REFUSED = (id: number) => ({
   id,
@@ -832,6 +1103,22 @@ const firstPrompt = async (prompt: AsyncIterable<SDKUserMessage> | null) => {
   if (prompt === null) return null;
   const next = await prompt[Symbol.asyncIterator]().next();
   return next.done === true ? null : next.value.message.content;
+};
+
+const promptsUntil = async (
+  claude: ReturnType<typeof fakeClaude>,
+  count: number,
+) => {
+  const prompt = claude.prompt();
+  if (prompt === null) return [];
+  const iterator = prompt[Symbol.asyncIterator]();
+  const texts: unknown[] = [];
+  while (texts.length < count) {
+    const next = await iterator.next();
+    if (next.done === true) break;
+    texts.push(next.value.message.content);
+  }
+  return texts;
 };
 
 const responseTo = (sent: Sent[], id: number) =>

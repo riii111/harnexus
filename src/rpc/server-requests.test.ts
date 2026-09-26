@@ -34,7 +34,8 @@ describe("attachServerRequests", () => {
     server.output.write('{"id":"harnexus-1","result":{}}\n');
     server.output.end();
 
-    expect((await answer).isOk()).toBe(true);
+    const result = await answer;
+    expect(result.isOk() && result.value).toEqual({});
     expect(await appOutput).toBe(
       '{"id":"harnexus-9","result":{}}\n{"id":"harnexus-1","method":"x","result":{}}\n',
     );

@@ -34,6 +34,8 @@ export type ClaudeSessionSettings = {
   model: string;
   resume?: string;
   mcpServers?: Record<string, McpServerConfig>;
+  // Tools that run without asking, on top of the user's own allow rules.
+  allowedTools?: string[];
   canUseTool: CanUseTool;
 };
 
@@ -88,6 +90,7 @@ const sessionOptions = (
   canUseTool: settings.canUseTool,
   includePartialMessages: true,
   mcpServers: settings.mcpServers ?? {},
+  allowedTools: settings.allowedTools ?? [],
   ...(settings.resume === undefined ? {} : { resume: settings.resume }),
 });
 

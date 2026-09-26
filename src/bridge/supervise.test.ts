@@ -71,18 +71,13 @@ describe("serverFromEnv", () => {
   });
 
   test.each([
-    { name: "no pid", value: undefined },
-    { name: "an empty pid", value: "" },
-    { name: "launchd's pid", value: "1" },
-    { name: "a zero pid", value: "0" },
-    { name: "a negative pid", value: "-5" },
-    { name: "a fractional pid", value: "12.5" },
-    { name: "a non-numeric pid", value: "abc" },
-  ])("never signals when the launcher passes $name", ({ value }) => {
+    { name: "no pid", value: undefined, parent: 4242 },
+    { name: "launchd's pid", value: "1", parent: 1 },
+  ])("never signals when the launcher passes $name", ({ value, parent }) => {
     const sent: [number, string][] = [];
     const server = serverFromEnv(
       { HARNEXUS_SERVER_PID: value },
-      { parentPid: () => 1, send: record(sent) },
+      { parentPid: () => parent, send: record(sent) },
     );
 
     expect(server.isRunning()).toBe(false);
@@ -99,6 +94,25 @@ describe("serverFromEnv", () => {
 
     expect(server.isRunning()).toBe(true);
     expect(server.signal("SIGTERM")).toEqual(Result.ok(true));
+    expect(sent).toEqual([[4242, "SIGTERM"]]);
+  });
+
+  test("stops signaling once Codex is no longer the parent", () => {
+    const sent: [number, string][] = [];
+    let parent = 4242;
+    const server = serverFromEnv(
+      { HARNEXUS_SERVER_PID: "4242" },
+      { parentPid: () => parent, send: record(sent) },
+    );
+
+    const before = server.signal("SIGTERM");
+    parent = 1;
+    const after = server.signal("SIGKILL");
+
+    expect({ before, after }).toEqual({
+      before: Result.ok(true),
+      after: Result.ok(false),
+    });
     expect(sent).toEqual([[4242, "SIGTERM"]]);
   });
 

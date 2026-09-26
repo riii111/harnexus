@@ -91,6 +91,8 @@ const serialize = (entry: LogEvent) => {
 const serializeTurn = (entry: TurnEvent) => {
   switch (entry.step) {
     case "started":
+    case "queued":
+    case "outcome_unknown":
       return { event: entry.event, step: entry.step };
     case "finished":
       return {

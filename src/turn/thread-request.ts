@@ -44,6 +44,15 @@ export const checkThread = (
     : { thread: { model, cwd } };
 };
 
+// A turn checked before another turn saved the thread would otherwise run on the settings that turn saved.
+export const savedThreadChange = (
+  requested: Thread,
+  saved: Thread,
+): Refusal | null => {
+  if (requested.model !== saved.model) return "model_change";
+  return isSameDirectory(requested.cwd, saved.cwd) ? null : "directory_change";
+};
+
 export const refusalMessage = (refusal: Refusal) => REFUSAL_MESSAGES[refusal];
 
 export type Mode = "plan" | "default";
@@ -70,10 +79,12 @@ const REFUSAL_MESSAGES = {
     "changing the working directory of a Claude thread is not supported yet",
   directory_unknown: "the working directory of this thread is unknown",
   text_only: "Claude threads accept text input only",
-  turn_running: "a Claude turn is already running on this thread",
+  duplicate_message: "this message was already delivered to the Claude thread",
   no_running_turn: "no running Claude turn matches turnId",
   bridge_closing: "the bridge is shutting down",
   thread_not_saved: "the Claude thread could not be saved",
+  message_not_saved:
+    "the message id could not be saved, so the message was not run to avoid running it twice",
   thread_busy: "the Claude thread cannot start a turn",
   unsupported_request: "this request is not supported on a Claude thread yet",
 } as const;
