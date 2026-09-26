@@ -615,7 +615,7 @@ const run = (messages: object[]) => {
   return { state, notifications: all };
 };
 
-// Freezing the input state makes any in-place change to a state the caller still holds throw.
+// Callers may keep earlier states, so rendering must not mutate its input.
 const deepFreeze = <T>(value: T): T => {
   if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
     Object.freeze(value);
