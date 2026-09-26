@@ -1,7 +1,8 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import { Result, TaggedError } from "better-result";
+import { isObject } from "../shared/object.ts";
 
-export type Signals = NodeJS.Signals;
+export type Signal = NodeJS.Signals;
 
 class ServerPipesUnavailable extends TaggedError("ServerPipesUnavailable")<{
   cause: unknown;
@@ -26,11 +27,12 @@ export const openServerPipes = (
 
 class ProcessSignalFailed extends TaggedError("ProcessSignalFailed")<{
   pid: number;
+  code: string | null;
   cause: unknown;
   message: string;
 }> {}
 
-export const signalProcess = (pid: number, signal: Signals) =>
+export const signalProcess = (pid: number, signal: Signal) =>
   Result.try({
     try: () => {
       process.kill(pid, signal);
@@ -38,6 +40,8 @@ export const signalProcess = (pid: number, signal: Signals) =>
     catch: (cause) =>
       new ProcessSignalFailed({
         pid,
+        code:
+          isObject(cause) && typeof cause.code === "string" ? cause.code : null,
         cause,
         message: `cannot send ${signal} to ${pid}`,
       }),

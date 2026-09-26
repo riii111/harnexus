@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { Result } from "better-result";
+import { type InferErr, Result } from "better-result";
+import type { signalProcess } from "../boundary/process.ts";
 import {
-  SERVER_PID_ENV,
+  type ServerSignalEvent,
+  serverFromEnv,
+  signalWithLog,
   stopLingeringServer,
-  watchServer,
 } from "./supervise.ts";
 
 describe("stopLingeringServer", () => {
@@ -48,11 +50,11 @@ describe("stopLingeringServer", () => {
   });
 });
 
-describe("watchServer", () => {
+describe("serverFromEnv", () => {
   test("never signals when Codex exited before the bridge started and launchd became the parent", async () => {
     const sent: [number, string][] = [];
-    const server = watchServer(
-      { [SERVER_PID_ENV]: "4242" },
+    const server = serverFromEnv(
+      { HARNEXUS_SERVER_PID: "4242" },
       { parentPid: () => 1, send: record(sent) },
     );
     const started = Date.now();
@@ -78,26 +80,77 @@ describe("watchServer", () => {
     { name: "a non-numeric pid", value: "abc" },
   ])("never signals when the launcher passes $name", ({ value }) => {
     const sent: [number, string][] = [];
-    const server = watchServer(
-      { [SERVER_PID_ENV]: value },
+    const server = serverFromEnv(
+      { HARNEXUS_SERVER_PID: value },
       { parentPid: () => 1, send: record(sent) },
     );
 
     expect(server.isRunning()).toBe(false);
-    expect(server.signal("SIGTERM")).toBe(false);
+    expect(server.signal("SIGTERM")).toEqual(Result.ok(false));
     expect(sent).toEqual([]);
   });
 
   test("signals the launcher's pid while Codex is still the parent", () => {
     const sent: [number, string][] = [];
-    const server = watchServer(
-      { [SERVER_PID_ENV]: "4242" },
+    const server = serverFromEnv(
+      { HARNEXUS_SERVER_PID: "4242" },
       { parentPid: () => 4242, send: record(sent) },
     );
 
     expect(server.isRunning()).toBe(true);
-    expect(server.signal("SIGTERM")).toBe(true);
+    expect(server.signal("SIGTERM")).toEqual(Result.ok(true));
     expect(sent).toEqual([[4242, "SIGTERM"]]);
+  });
+
+  test("reports a signal the system refuses as a failure with its errno code", () => {
+    const server = serverFromEnv(
+      { HARNEXUS_SERVER_PID: "4242" },
+      { parentPid: () => 4242, send: refuse("EPERM") },
+    );
+
+    const sent = server.signal("SIGTERM");
+
+    expect(sent.isErr() && sent.error.code).toBe("EPERM");
+  });
+});
+
+describe("signalWithLog", () => {
+  test.each<{
+    name: string;
+    parentPid: number;
+    send: typeof signalProcess;
+    expected: ServerSignalEvent[];
+  }>([
+    {
+      name: "a delivered signal",
+      parentPid: 4242,
+      send: record([]),
+      expected: [{ event: "server_signaled", signal: "SIGTERM" }],
+    },
+    {
+      name: "a signal the system refuses",
+      parentPid: 4242,
+      send: refuse("EPERM"),
+      expected: [
+        { event: "server_signal_failed", signal: "SIGTERM", code: "EPERM" },
+      ],
+    },
+    {
+      name: "a server that is no longer the parent",
+      parentPid: 1,
+      send: record([]),
+      expected: [],
+    },
+  ])("logs the outcome of $name", ({ parentPid, send, expected }) => {
+    const logged: ServerSignalEvent[] = [];
+    const server = serverFromEnv(
+      { HARNEXUS_SERVER_PID: "4242" },
+      { parentPid: () => parentPid, send },
+    );
+
+    signalWithLog(server, (entry) => logged.push(entry))("SIGTERM");
+
+    expect(logged).toEqual(expected);
   });
 });
 
@@ -105,3 +158,12 @@ const record = (sent: [number, string][]) => (pid: number, signal: string) => {
   sent.push([pid, signal]);
   return Result.ok(undefined);
 };
+
+const refuse = (code: string) => (pid: number) =>
+  Result.err({
+    _tag: "ProcessSignalFailed",
+    pid,
+    code,
+    cause: null,
+    message: `cannot signal ${pid}`,
+  } as InferErr<ReturnType<typeof signalProcess>>);
