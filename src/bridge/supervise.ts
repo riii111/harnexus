@@ -3,6 +3,10 @@ import { type Signal, signalProcess } from "../boundary/process.ts";
 
 const SERVER_PID_ENV = "HARNEXUS_SERVER_PID";
 
+export type ServerSignalEvent =
+  | { event: "server_signaled"; signal: Signal }
+  | { event: "server_signal_failed"; signal: Signal; code: string | null };
+
 // The server is alive only while it is still this process's parent; without a pid from the launcher nothing is ever signaled, so a reparented bridge cannot mistake launchd or a reused pid for the server.
 export const serverFromEnv = (
   env: NodeJS.ProcessEnv,
@@ -23,6 +27,21 @@ export const serverFromEnv = (
       isRunning() ? send(pid, signal).map(() => true) : Result.ok(false),
   };
 };
+
+// The errno code tells a refused signal (EPERM) apart from a server that exited just before it (ESRCH).
+export const signalWithLog =
+  (
+    server: Pick<ReturnType<typeof serverFromEnv>, "signal">,
+    log: (entry: ServerSignalEvent) => void,
+  ) =>
+  (signal: Signal) => {
+    const sent = server.signal(signal);
+    if (sent.isErr()) {
+      log({ event: "server_signal_failed", signal, code: sent.error.code });
+    } else if (sent.value) {
+      log({ event: "server_signaled", signal });
+    }
+  };
 
 // The server can close stdout and keep running, and once the relay ends the bridge is the only process left to stop it.
 export const stopLingeringServer = async ({

@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { type InferErr, Result } from "better-result";
 import type { signalProcess } from "../boundary/process.ts";
-import { serverFromEnv, stopLingeringServer } from "./supervise.ts";
+import {
+  type ServerSignalEvent,
+  serverFromEnv,
+  signalWithLog,
+  stopLingeringServer,
+} from "./supervise.ts";
 
 describe("stopLingeringServer", () => {
   test("sends no signal to a server that exits within the grace period", async () => {
@@ -106,6 +111,46 @@ describe("serverFromEnv", () => {
     const sent = server.signal("SIGTERM");
 
     expect(sent.isErr() && sent.error.code).toBe("EPERM");
+  });
+});
+
+describe("signalWithLog", () => {
+  test.each<{
+    name: string;
+    parentPid: number;
+    send: typeof signalProcess;
+    expected: ServerSignalEvent[];
+  }>([
+    {
+      name: "a delivered signal",
+      parentPid: 4242,
+      send: record([]),
+      expected: [{ event: "server_signaled", signal: "SIGTERM" }],
+    },
+    {
+      name: "a signal the system refuses",
+      parentPid: 4242,
+      send: refuse("EPERM"),
+      expected: [
+        { event: "server_signal_failed", signal: "SIGTERM", code: "EPERM" },
+      ],
+    },
+    {
+      name: "a server that is no longer the parent",
+      parentPid: 1,
+      send: record([]),
+      expected: [],
+    },
+  ])("logs the outcome of $name", ({ parentPid, send, expected }) => {
+    const logged: ServerSignalEvent[] = [];
+    const server = serverFromEnv(
+      { HARNEXUS_SERVER_PID: "4242" },
+      { parentPid: () => parentPid, send },
+    );
+
+    signalWithLog(server, (entry) => logged.push(entry))("SIGTERM");
+
+    expect(logged).toEqual(expected);
   });
 });
 

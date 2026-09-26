@@ -1,6 +1,6 @@
 import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
-import { openServerPipes, type Signal } from "../boundary/process.ts";
+import { openServerPipes } from "../boundary/process.ts";
 import { startClaudeSession } from "../claude/session.ts";
 import { createLineInjector } from "../rpc/inject.ts";
 import { createLineRewriter } from "../rpc/line-rewriter.ts";
@@ -11,7 +11,11 @@ import { loadShutdownGraceMs, loadStatePath } from "../shared/config.ts";
 import { openThreadStore } from "../state/thread-store.ts";
 import { createTurnController } from "../turn/controller.ts";
 import { createBridgeLogger } from "./logging.ts";
-import { serverFromEnv, stopLingeringServer } from "./supervise.ts";
+import {
+  serverFromEnv,
+  signalWithLog,
+  stopLingeringServer,
+} from "./supervise.ts";
 
 // Must match bin/harnexus-codex.
 const SERVER_OUTPUT_FD = 3;
@@ -32,7 +36,7 @@ if (pipes.isErr()) {
 
 logger.log({ event: "bridge_started" });
 const stopServer = {
-  signal: signalServer,
+  signal: signalWithLog(server, logger.log),
   graceMs: loadShutdownGraceMs(process.env),
 };
 const claude = await withClaude({
@@ -52,19 +56,6 @@ claude.closeAll();
 pipes.value.serverInput.destroy();
 await stopLingeringServer({ isRunning: server.isRunning, ...stopServer });
 process.exit(0);
-
-function signalServer(signal: Signal) {
-  const sent = server.signal(signal);
-  if (sent.isErr()) {
-    logger.log({
-      event: "server_signal_failed",
-      signal,
-      code: sent.error.code,
-    });
-  } else if (sent.value) {
-    logger.log({ event: "server_signaled", signal });
-  }
-}
 
 // Without its thread store the bridge offers no Claude model and relays everything, so Codex threads keep working.
 async function withClaude(relay: {
