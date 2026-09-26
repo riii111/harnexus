@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,10 +15,7 @@ import {
   FileWriteFailed,
   writeFileAtomic,
 } from "../boundary/fs.ts";
-import {
-  failingSessionRead,
-  fakeClaude,
-} from "../boundary/testing/fake-claude.ts";
+import { fakeClaude } from "../boundary/testing/fake-claude.ts";
 import {
   type ClaudeSessionSettings,
   claudeSessionExists,
@@ -493,6 +490,32 @@ describe("a thread whose last turn has an unknown outcome", () => {
     expect(refusedStarted).toBe(false);
     expect(after.settings[0]).toMatchObject({ resume: "se-1" });
     expect(turnsCompleted(after.sent)).toEqual(["completed"]);
+  });
+
+  test("counts only the user's own messages toward continuing, not another thread's", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const before = await harness([first], { unsettledWrite: () => true });
+    await completeTurn(before.turns, before.sent, first, 10);
+    await until(() => before.store.get(THREAD)?.runState === "outcomeUnknown");
+    const second = fakeClaude(SUBSCRIPTION);
+
+    const after = await harness([second]);
+    for (const request of [
+      reply(11, THREAD, NEW_REVIEWER),
+      turnStart(12, "what happened?"),
+      reply(13, THREAD, NEW_REVIEWER),
+    ]) {
+      after.turns.startTurn(request, undefined);
+      await until(() => responseTo(after.sent, request.id) !== undefined);
+    }
+    const repliesStarted = second.started();
+    await completeTurn(after.turns, after.sent, second, 14);
+
+    expect(
+      [11, 12, 13].map((id) => responseTo(after.sent, id)?.error.message),
+    ).toEqual([OUTCOME_UNKNOWN, OUTCOME_UNKNOWN, OUTCOME_UNKNOWN]);
+    expect(repliesStarted).toBe(false);
+    expect(turnsCompleted(after.sent).at(-1)).toBe("completed");
   });
 
   test("keeps refusing while the unknown state cannot be cleared", async () => {
@@ -1980,13 +2003,9 @@ const harness = async (
   let turnCount = 0;
   const turns = createTurnController({
     store,
-    findSession: async (sessionId, cwd) =>
+    findSession: async (sessionId) =>
       sessionLookupFails
-        ? claudeSessionExists(
-            sessionId,
-            cwd,
-            failingSessionRead(new Error("permission denied")),
-          )
+        ? claudeSessionExists(sessionId, await unlistableConfigDir())
         : Result.ok(!missingSessions.includes(sessionId)),
     materializeThread: async (threadId) => {
       materialized.push(threadId);
@@ -2088,7 +2107,15 @@ const DUPLICATE = (id: number) => ({
 const ALLOWED_TOOLS = ["mcp__codex_link__read_thread"];
 
 const OUTCOME_UNKNOWN =
-  "the previous Claude turn on this thread stopped before it was known whether its message to another thread was sent; check that thread, then send again to continue";
+  "the previous Claude turn on this thread stopped before its outcome was known; check what that turn did, such as changed files or messages to other threads, then send a message yourself to continue";
+
+// A projects entry that is a file cannot be listed, as an unreadable folder cannot.
+const unlistableConfigDir = async () => {
+  const configDir = join(dir, "claude-config");
+  await mkdir(configDir, { recursive: true });
+  await writeFile(join(configDir, "projects"), "");
+  return configDir;
+};
 
 const REFUSED = (id: number) => ({
   id,

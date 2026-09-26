@@ -1,6 +1,7 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import {
   type CanUseTool,
-  getSessionInfo,
   type McpServerConfig,
   type Options,
   type PermissionMode,
@@ -18,12 +19,11 @@ import {
   interruptQuery,
   nextMessage,
   openQuery,
-  type ReadSessionInfo,
   readAccount,
   readSettingsEnv,
-  sessionRecordExists,
   setQueryPermissionMode,
 } from "../boundary/claude-sdk.ts";
+import { listDirectoryIfExists } from "../boundary/fs.ts";
 import {
   checkSettingsEnv,
   checkSubscription,
@@ -73,12 +73,25 @@ export const startClaudeSession = (
     return Result.ok(createSession(claude, prompt));
   });
 
-// Claude keeps a conversation in a file under its config directory, which the user may delete or move to another machine.
+// Claude keeps a conversation as <session id>.jsonl in a project folder under its config directory, which the user may delete or move to another machine.
+// The SDK's lookup reports an unreadable record as missing, so absence is concluded only when every project folder could be listed without finding the file.
 export const claudeSessionExists = (
   sessionId: string,
-  cwd: string,
-  read: ReadSessionInfo = getSessionInfo,
-) => sessionRecordExists(read, sessionId, cwd);
+  configDir: string = claudeConfigDir(process.env),
+) =>
+  Result.gen(async function* () {
+    const projectsDir = join(configDir, "projects");
+    const projects = yield* Result.await(listDirectoryIfExists(projectsDir));
+    const fileName = `${sessionId}.jsonl`;
+    for (const project of projects ?? []) {
+      if (!project.isDirectory) continue;
+      const files = yield* Result.await(
+        listDirectoryIfExists(join(projectsDir, project.name)),
+      );
+      if (files?.some((file) => file.name === fileName)) return Result.ok(true);
+    }
+    return Result.ok(false);
+  });
 
 // Codex instructions and the app's history are never appended to the preset system prompt.
 const sessionOptions = (
@@ -150,6 +163,9 @@ async function* readMessages(
     close();
   }
 }
+
+const claudeConfigDir = (env: NodeJS.ProcessEnv) =>
+  env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
 
 const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 

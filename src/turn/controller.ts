@@ -94,7 +94,6 @@ type StartSession = (settings: ClaudeSessionSettings) => Promise<SessionStart>;
 
 type FindSession = (
   sessionId: string,
-  cwd: string,
 ) => ReturnType<typeof claudeSessionExists>;
 
 type MaterializeThread = (
@@ -229,7 +228,7 @@ export const createTurnController = ({
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   // Threads the server was asked to keep on disk while this bridge runs; one note per run is enough, and a failed request is retried at the next turn.
   const materialized = new Set<string>();
-  // Threads whose unknown outcome the user was told of, so their next message is taken as the decision to continue.
+  // Threads whose unknown outcome the user was told of by refusing their own message, so their next own message is taken as the decision to continue; a message from another thread never is.
   const warnedUnknown = new Set<string>();
   const appRequests = createAppRequests({ send, now });
   let closed = false;
@@ -477,7 +476,8 @@ export const createTurnController = ({
         saveModel(threadId, picked);
       }
     }
-    if (warnedUnknown.has(threadId)) {
+    const typedByUser = input.toolOutput === null;
+    if (typedByUser && warnedUnknown.has(threadId)) {
       const cleared = await store.resolveOutcomeUnknown(threadId);
       if (cleared.isErr()) {
         forgetMessage(threadId, messageId);
@@ -544,7 +544,7 @@ export const createTurnController = ({
       forgetMessage(threadId, messageId);
       // Re-running could repeat a write that already landed, so the user decides by sending again after being told.
       if (ran.error._tag === "WriteOutcomeUnknown") {
-        warnedUnknown.add(threadId);
+        if (typedByUser) warnedUnknown.add(threadId);
         refuseTurn(request, queued, "outcome_unknown", ran.error);
         return;
       }
@@ -807,7 +807,7 @@ export const createTurnController = ({
       );
     }
     const resume = sessionIdOf(record.threadId);
-    if (resume !== null && !(await sessionFound(resume, record.worktree))) {
+    if (resume !== null && !(await sessionFound(resume))) {
       forgetSession(record.threadId);
       return Result.err(
         new SessionMissing({
@@ -850,8 +850,8 @@ export const createTurnController = ({
       : (store.get(threadId)?.sessionId ?? null);
 
   // A record that cannot be looked up is left for Claude to resume, which reports its own failure.
-  const sessionFound = async (sessionId: string, cwd: string) => {
-    const found = await findSession(sessionId, cwd);
+  const sessionFound = async (sessionId: string) => {
+    const found = await findSession(sessionId);
     return found.isErr() || found.value;
   };
 

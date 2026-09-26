@@ -28,11 +28,6 @@ export type ClaudeSdk = {
   resolveSettings: ResolveSettings;
 };
 
-export type ReadSessionInfo = (
-  sessionId: string,
-  options?: { dir?: string },
-) => Promise<unknown>;
-
 class ClaudeSettingsUnavailable extends TaggedError(
   "ClaudeSettingsUnavailable",
 )<{
@@ -67,13 +62,6 @@ class ClaudePermissionModeFailed extends TaggedError(
   message: string;
 }> {}
 
-class ClaudeSessionLookupFailed extends TaggedError(
-  "ClaudeSessionLookupFailed",
-)<{
-  cause: unknown;
-  message: string;
-}> {}
-
 export type { ClaudeStreamFailed };
 
 // resolveSettings merges the same files as the CLI without starting it, but skips an admin policyHelper.
@@ -89,23 +77,6 @@ export const readSettingsEnv = (
       new ClaudeSettingsUnavailable({
         cause,
         message: "cannot read the Claude settings",
-      }),
-  });
-
-// A session saved under another spelling of the directory is still found by searching every project.
-export const sessionRecordExists = (
-  read: ReadSessionInfo,
-  sessionId: string,
-  dir: string,
-) =>
-  Result.tryPromise({
-    try: async () =>
-      (await read(sessionId, { dir })) !== undefined ||
-      (await read(sessionId)) !== undefined,
-    catch: (cause) =>
-      new ClaudeSessionLookupFailed({
-        cause,
-        message: "cannot look up the Claude session record",
       }),
   });
 

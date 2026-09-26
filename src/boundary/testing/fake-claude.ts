@@ -5,7 +5,7 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { ClaudeQuery, ClaudeSdk, ReadSessionInfo } from "../claude-sdk.ts";
+import type { ClaudeQuery, ClaudeSdk } from "../claude-sdk.ts";
 
 type Delivery = IteratorResult<SDKMessage, void> | Error;
 
@@ -111,11 +111,5 @@ export const fakeClaude = (
 export const failingQuery =
   (error: Error): ClaudeSdk["query"] =>
   () => {
-    throw error;
-  };
-
-export const failingSessionRead =
-  (error: Error): ReadSessionInfo =>
-  async () => {
     throw error;
   };

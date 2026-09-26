@@ -140,6 +140,25 @@ export const listFileNames = (path: string) =>
       new FileReadFailed({ path, cause, message: `cannot list ${path}` }),
   });
 
+// A missing directory is null rather than an error, since it means there is nothing in it.
+export const listDirectoryIfExists = (path: string) =>
+  Result.tryPromise({
+    try: async () => {
+      try {
+        const entries = await readdir(path, { withFileTypes: true });
+        return entries.map((entry) => ({
+          name: entry.name,
+          isDirectory: entry.isDirectory(),
+        }));
+      } catch (cause) {
+        if (isMissingFile(cause)) return null;
+        throw cause;
+      }
+    },
+    catch: (cause) =>
+      new FileReadFailed({ path, cause, message: `cannot list ${path}` }),
+  });
+
 // Only a failed open means nothing was created; any later failure is FileSyncFailed, because the file already exists and must be cleaned up by the caller.
 export const createEmptyFile = (path: string) =>
   Result.gen(async function* () {
