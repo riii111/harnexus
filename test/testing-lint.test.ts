@@ -157,11 +157,15 @@ test.each([{ name: "a" }])(title, () => {});`,
 
 const NESTED =
   "Do not nest describe blocks. Split them side by side, named after the target.";
-const TUPLE = "Use object rows with a name instead of tuple rows.";
+const KEEP_INLINE =
+  " Keep the table and title inline instead of moving them to a variable.";
+const TUPLE = `Use object rows with a name instead of tuple rows.${KEEP_INLINE}`;
 const SPECIFIER =
-  "Embed a row property such as $name instead of a positional specifier.";
+  "Embed a row property such as $name instead of a positional specifier." +
+  KEEP_INLINE;
 const MISSING_NAME =
-  "Embed a row property such as $name in the title so each case is named.";
+  "Embed a row property such as $name in the title so each case is named." +
+  KEEP_INLINE;
 const LOOP = "Register parametrized tests with test.each instead of a loop.";
 const TARGET_CATEGORIES = new Set([
   "plugin",

@@ -1,5 +1,6 @@
 language js
 
+// When changing what a rule detects, add the violating and allowed cases it lacks to test/testing-lint.test.ts.
 // Calls are matched by callee and arguments, so type arguments and extra options such as a timeout do not hide them.
 or {
   JsCallExpression(callee=$inner) as $nested where {
@@ -26,7 +27,7 @@ or {
     },
     $table <: `[$rows]`,
     $rows <: some JsArrayExpression() as $row,
-    register_diagnostic(span=$row, message="Use object rows with a name instead of tuple rows.")
+    register_diagnostic(span=$row, message="Use object rows with a name instead of tuple rows. Keep the table and title inline instead of moving them to a variable.")
   },
   // Only a title written as a literal is read; a title passed through a variable is left to review.
   JsCallExpression(callee=$registered, arguments=JsCallArguments(args=[
@@ -44,7 +45,7 @@ or {
     },
     // %% prints a literal percent sign, so only an odd run of % before a specifier counts.
     $title <: r"(?s)(?:.*[^%])?(?:%%)*%[spdifjo#].*",
-    register_diagnostic(span=$title, message="Embed a row property such as $name instead of a positional specifier.")
+    register_diagnostic(span=$title, message="Embed a row property such as $name instead of a positional specifier. Keep the table and title inline instead of moving them to a variable.")
   },
   JsCallExpression(callee=$registered, arguments=JsCallArguments(args=[
     $title, ...
@@ -61,7 +62,7 @@ or {
     $rows <: some JsObjectExpression(),
     $title <: JsStringLiteralExpression(),
     $title <: not r"(?s).*\$[A-Za-z_][A-Za-z0-9_]*.*",
-    register_diagnostic(span=$title, message="Embed a row property such as $name in the title so each case is named.")
+    register_diagnostic(span=$title, message="Embed a row property such as $name in the title so each case is named. Keep the table and title inline instead of moving them to a variable.")
   },
   or {
     JsForOfStatement(),
