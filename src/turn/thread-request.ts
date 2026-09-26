@@ -73,6 +73,8 @@ const REFUSAL_MESSAGES = {
     "changing the working directory of a Claude thread is not supported",
   directory_unknown: "the working directory of this thread is unknown",
   text_only: "Claude threads accept text input only",
+  reply_to_other_worker:
+    "this message comes from a reviewer of another Claude thread",
   duplicate_message: "this message was already delivered to the Claude thread",
   no_running_turn: "no running Claude turn matches the turn id",
   steer_not_sent: "the Claude turn ended before the steer reached it",

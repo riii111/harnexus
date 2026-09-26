@@ -1,3 +1,5 @@
+import { isObject } from "../shared/object.ts";
+
 export type DelegationWatch = ReturnType<typeof createDelegationWatch>;
 
 // The app answers create_thread with a provisional id only; the real thread id first appears in the turn/start the app sends to the new thread, whose tool output names the thread that asked for it.
@@ -68,6 +70,44 @@ export const delegationSource = (params: Record<string, unknown>) => {
   const body = JSON.stringify(output.output) ?? "";
   return SOURCE_THREAD.exec(body)?.[1] ?? null;
 };
+
+// A message from another thread arrives as the output of the codex_app call that sent it, in place of typed input; only an output made of text can reach Claude.
+export const delegatedMessage = (params: Record<string, unknown>) => {
+  const output = params.toolOutput;
+  if (
+    !isObject(output) ||
+    typeof output.name !== "string" ||
+    !DELEGATING_TOOLS.has(output.name)
+  ) {
+    return null;
+  }
+  const text = outputText(output.output);
+  return text === null
+    ? null
+    : { text, sourceThreadId: SOURCE_THREAD.exec(text)?.[1] ?? null };
+};
+
+const outputText = (body: unknown) => {
+  if (typeof body === "string") return body;
+  if (!Array.isArray(body) || body.length === 0) return null;
+  const texts: string[] = [];
+  for (const item of body) {
+    if (
+      !isObject(item) ||
+      item.type !== "input_text" ||
+      typeof item.text !== "string"
+    ) {
+      return null;
+    }
+    texts.push(item.text);
+  }
+  return texts.join("\n");
+};
+
+const DELEGATING_TOOLS: ReadonlySet<string> = new Set([
+  "create_thread",
+  "send_message_to_thread",
+]);
 
 const SOURCE_THREAD =
   /<source_thread_id>\s*([0-9A-Za-z_-]+)\s*<\/source_thread_id>/;

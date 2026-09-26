@@ -53,6 +53,12 @@ class ThreadAlreadyRegistered extends TaggedError("ThreadAlreadyRegistered")<{
   message: string;
 }> {}
 
+class ReviewerTaken extends TaggedError("ReviewerTaken")<{
+  threadId: string;
+  reviewerThreadId: string;
+  message: string;
+}> {}
+
 class WriteOutcomeUnknown extends TaggedError("WriteOutcomeUnknown")<{
   threadId: string;
   message: string;
@@ -251,18 +257,32 @@ const createThreadStore = (
     setModel: (threadId: string, model: string) =>
       update(threadId, (mapping) => ({ ...mapping, model })),
 
+    // A reviewer answers one worker only, so a reply can be traced back to that worker; a Claude thread is not taken as a reviewer either.
     addReviewer: (threadId: string, reviewerThreadId: string) =>
-      update(threadId, (mapping) =>
-        mapping.reviewerThreadIds.includes(reviewerThreadId)
-          ? mapping
-          : {
-              ...mapping,
-              reviewerThreadIds: [
-                ...mapping.reviewerThreadIds,
-                reviewerThreadId,
-              ],
-            },
-      ),
+      persistThenCommit<ThreadNotFound | ReviewerTaken>((current) => {
+        const mapping = current.get(threadId);
+        if (mapping === undefined) return Result.err(notFound(threadId));
+        if (mapping.reviewerThreadIds.includes(reviewerThreadId)) {
+          return Result.ok(mapping);
+        }
+        const owner = ownerIn(current, reviewerThreadId);
+        if (owner !== undefined || current.has(reviewerThreadId)) {
+          return Result.err(
+            new ReviewerTaken({
+              threadId,
+              reviewerThreadId,
+              message: `thread ${reviewerThreadId} is ${owner === undefined ? "a Claude thread" : "another thread's reviewer"}`,
+            }),
+          );
+        }
+        return Result.ok({
+          ...mapping,
+          reviewerThreadIds: [...mapping.reviewerThreadIds, reviewerThreadId],
+        });
+      }),
+
+    reviewerOwner: (reviewerThreadId: string) =>
+      ownerIn(mappings, reviewerThreadId),
 
     addMessageId: (threadId: string, messageId: string) =>
       update(threadId, (mapping) =>
@@ -330,6 +350,18 @@ const createThreadStore = (
         }
       }),
   };
+};
+
+const ownerIn = (
+  mappings: ReadonlyMap<string, ThreadMapping>,
+  reviewerThreadId: string,
+) => {
+  for (const mapping of mappings.values()) {
+    if (mapping.reviewerThreadIds.includes(reviewerThreadId)) {
+      return mapping.threadId;
+    }
+  }
+  return undefined;
 };
 
 const notFound = (threadId: string) =>

@@ -15,6 +15,7 @@ import type {
   ClaudeSessionSettings,
   startClaudeSession,
 } from "../claude/session.ts";
+import { delegatedMessage } from "../link/delegations.ts";
 import type { createCodexLink } from "../mcp/codex-link.ts";
 import type { UserInput } from "../render/protocol.ts";
 import {
@@ -52,7 +53,8 @@ export type TurnEvent =
         | "queued"
         | "outcome_unknown"
         | "steered"
-        | "model_changed";
+        | "model_changed"
+        | "idle_closed";
     }
   | {
       event: "claude_turn";
@@ -161,6 +163,7 @@ export const createTurnController = ({
   log,
   now = Date.now,
   newTurnId = () => `harnexus-turn-${randomUUID()}`,
+  idleSessionMs = IDLE_SESSION_MS,
 }: {
   store: ThreadStore;
   startSession: StartSession;
@@ -169,6 +172,7 @@ export const createTurnController = ({
   log: (event: TurnEvent) => void;
   now?: () => number;
   newTurnId?: () => string;
+  idleSessionMs?: number;
 }) => {
   // Threads created with a Claude model are saved to the store only on their first turn, so a thread never used leaves nothing behind.
   const adopted = new Map<string, Thread>();
@@ -182,6 +186,7 @@ export const createTurnController = ({
   const turnsInFlight = new Map<string, number>();
   // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
   const modes = new Map<string, Mode>();
+  const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const appRequests = createAppRequests({ send, now });
   let closed = false;
 
@@ -201,7 +206,17 @@ export const createTurnController = ({
       refuse(id, checked.refusal);
       return;
     }
-    const input = textInput(params.input);
+    // A reviewer answers only the worker that created it, so its message to any other Claude thread is refused.
+    const delegated = delegatedMessage(params);
+    const owner =
+      delegated?.sourceThreadId == null
+        ? undefined
+        : store.reviewerOwner(delegated.sourceThreadId);
+    if (owner !== undefined && owner !== threadId) {
+      refuse(id, "reply_to_other_worker");
+      return;
+    }
+    const input = textInput(params.input, delegated?.text ?? null);
     if (input === null) {
       refuse(id, "text_only");
       return;
@@ -217,6 +232,7 @@ export const createTurnController = ({
     }
     if (messageId !== null) acceptMessage(threadId, messageId);
     changeModel(threadId, checked.thread.model);
+    cancelIdleClose(threadId);
     const inFlight = turnsInFlight.get(threadId) ?? 0;
     if (inFlight > 0) log({ event: "claude_turn", step: "queued" });
     turnsInFlight.set(threadId, inFlight + 1);
@@ -229,9 +245,37 @@ export const createTurnController = ({
     };
     void runTurn(id, checked.thread, threadId, turn, messageId).then(() => {
       const left = (turnsInFlight.get(threadId) ?? 1) - 1;
-      if (left === 0) turnsInFlight.delete(threadId);
-      else turnsInFlight.set(threadId, left);
+      if (left > 0) {
+        turnsInFlight.set(threadId, left);
+        return;
+      }
+      turnsInFlight.delete(threadId);
+      scheduleIdleClose(threadId);
     });
+  };
+
+  // Each worker keeps its own Claude process, so one left idle is closed and its next turn resumes the conversation; without a session id there is nothing to resume, so it stays.
+  const scheduleIdleClose = (threadId: string) => {
+    cancelIdleClose(threadId);
+    const timer = setTimeout(() => {
+      idleTimers.delete(threadId);
+      const slot = sessions.get(threadId);
+      if (slot === undefined) return;
+      if (
+        (sessionIds.get(threadId) ?? store.get(threadId)?.sessionId) == null
+      ) {
+        return;
+      }
+      dropSession(threadId, slot);
+      log({ event: "claude_turn", step: "idle_closed" });
+    }, idleSessionMs);
+    timer.unref();
+    idleTimers.set(threadId, timer);
+  };
+
+  const cancelIdleClose = (threadId: string) => {
+    clearTimeout(idleTimers.get(threadId));
+    idleTimers.delete(threadId);
   };
 
   // Claude takes a steer at its next tool boundary, or runs it as its next turn when the running one has ended, and either way the app turn stays open until Claude has taken it.
@@ -248,7 +292,7 @@ export const createTurnController = ({
       refuse(id, "no_running_turn");
       return;
     }
-    const input = textInput(params.input);
+    const input = textInput(params.input, null);
     if (input === null) {
       refuse(id, "text_only");
       return;
@@ -338,6 +382,7 @@ export const createTurnController = ({
   // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
   const closeAll = () => {
     closed = true;
+    for (const threadId of [...idleTimers.keys()]) cancelIdleClose(threadId);
     appRequests.cancel(null);
     for (const [threadId, slot] of sessions) dropSession(threadId, slot);
   };
@@ -834,14 +879,22 @@ const clientMessageId = (params: Record<string, unknown>) =>
     ? params.clientUserMessageId
     : null;
 
-const textInput = (value: unknown): TextInput | null => {
-  if (!Array.isArray(value) || value.length === 0) return null;
+const textInput = (
+  value: unknown,
+  delegated: string | null,
+): TextInput | null => {
+  const typed = Array.isArray(value) ? value : [];
+  const items =
+    delegated === null
+      ? typed
+      : [{ type: "text", text: delegated, text_elements: [] }, ...typed];
+  if (items.length === 0) return null;
   const texts: string[] = [];
-  for (const item of value) {
+  for (const item of items) {
     if (!isTextItem(item)) return null;
     texts.push(item.text);
   }
-  return { items: value as UserInput[], text: texts.join("\n") };
+  return { items: items as UserInput[], text: texts.join("\n") };
 };
 
 const isTextItem = (item: unknown): item is { type: "text"; text: string } =>
@@ -853,6 +906,8 @@ const isTextItem = (item: unknown): item is { type: "text"; text: string } =>
   typeof item.text === "string";
 
 const INVALID_REQUEST = -32600;
+
+const IDLE_SESSION_MS = 10 * 60_000;
 
 const NO_TURN = "no Claude turn is running to ask the app for approval";
 

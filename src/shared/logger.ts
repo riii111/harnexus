@@ -95,6 +95,7 @@ const serializeTurn = (entry: TurnEvent) => {
     case "outcome_unknown":
     case "steered":
     case "model_changed":
+    case "idle_closed":
       return { event: entry.event, step: entry.step };
     case "finished":
       return {

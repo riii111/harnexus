@@ -146,6 +146,39 @@ describe("ThreadStore", () => {
     expect(store.get("thread-1")?.reviewerThreadIds).toEqual(["reviewer-1"]);
   });
 
+  test("names the one worker a reviewer belongs to", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+    await store.addReviewer("thread-1", "reviewer-1");
+    await store.addReviewer("thread-2", "reviewer-2");
+
+    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
+    expect(store.reviewerOwner("reviewer-2")).toBe("thread-2");
+    expect(store.reviewerOwner("thread-1")).toBeUndefined();
+  });
+
+  test.each([
+    { name: "another worker's reviewer", reviewer: "reviewer-1" },
+    { name: "a Claude thread", reviewer: "thread-1" },
+  ])("refuses to add $name as a reviewer and keeps it unchanged", async ({
+    reviewer,
+  }) => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+    const first = await store.addReviewer("thread-1", "reviewer-1");
+    expect(first.isOk() && first.value.reviewerThreadIds).toEqual([
+      "reviewer-1",
+    ]);
+
+    const added = await store.addReviewer("thread-2", reviewer);
+
+    expect(added.isErr() && added.error._tag).toBe("ReviewerTaken");
+    expect(store.get("thread-2")?.reviewerThreadIds).toEqual([]);
+    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
+  });
+
   test("keeps each message id once and only the latest 64", async () => {
     const store = await openStore();
     await store.register(ENTRY);
