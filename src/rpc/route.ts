@@ -1,39 +1,40 @@
 import { parseJson } from "../boundary/json.ts";
-import type { AppRequest } from "../turn/controller.ts";
-import { isSameDirectory } from "../turn/directory.ts";
+import { isClaudeModel, withClaudeModels } from "../turn/models.ts";
 import {
-  isClaudeModel,
+  type AppRequest,
+  checkThread,
+  type Refusal,
+  refusalMessage,
   requestedModel,
-  requestsUnsupportedMode,
-  withClaudeModels,
-} from "../turn/models.ts";
+  type Thread,
+} from "../turn/thread-request.ts";
 
-export type RouteEvent = { event: "model_id_collision"; model: string };
+export type RouteEvent =
+  | { event: "model_id_collision"; model: string }
+  | { event: "claude_request_refused"; method: RefusedMethod; reason: Refusal };
 
 type Turns = {
   isClaudeThread: (threadId: unknown) => boolean;
   threadOf: (threadId: string) => Thread | undefined;
   adopt: (threadId: string, thread: Thread) => void;
-  startTurn: (request: AppRequest, cwd: string | undefined) => void;
+  startTurn: (request: AppRequest, fallbackCwd: string | undefined) => void;
   interruptTurn: (request: AppRequest) => void;
-  refuse: (request: AppRequest, message: string) => void;
+  reject: (request: AppRequest, message: string) => void;
 };
 
-type Thread = { model: string; cwd: string };
-
-type RequestId = string | number;
+type RefusedMethod = (typeof REFUSED_METHODS)[number];
 
 // createdModel is the Claude model a thread/start asked for, which the server never sees.
 type Pending =
   | { kind: "modelList" }
-  | { kind: "thread"; createdModel: string | null };
+  | { kind: "threadOpen"; createdModel: string | null };
 
 // Lines that are not Claude requests pass as the same bytes; server requests and app responses share ids with the other direction, so only lines with a method are read as app requests and only lines without one as server responses.
 export const createRouter = (
   turns: Turns,
   log: (event: RouteEvent) => void,
 ) => {
-  const pending = new Map<RequestId, Pending>();
+  const pending = new Map<AppRequest["id"], Pending>();
   // A Codex thread switched to Claude by turn/start needs a working directory that the request itself may not carry.
   const cwds = new Map<string, string>();
 
@@ -72,10 +73,7 @@ export const createRouter = (
       case "review/start":
       case "thread/compact/start":
         if (!turns.isClaudeThread(params.threadId)) return line;
-        turns.refuse(
-          request,
-          `${message.method} is not supported on a Claude thread yet`,
-        );
+        refuse(message.method, request, "unsupported_request");
         return null;
       default:
         return line;
@@ -89,40 +87,26 @@ export const createRouter = (
     request: AppRequest,
   ) => {
     const { id, params } = request;
-    const refusal =
-      message.method === "thread/resume" ? resumeRefusal(params) : null;
-    if (refusal !== null) {
-      turns.refuse(request, refusal);
-      return null;
+    const known =
+      message.method === "thread/resume" && typeof params.threadId === "string"
+        ? turns.threadOf(params.threadId)
+        : undefined;
+    if (known !== undefined) {
+      const checked = checkThread(params, known, undefined);
+      if ("refusal" in checked) {
+        refuse("thread/resume", request, checked.refusal);
+        return null;
+      }
     }
     const created =
       message.method === "thread/start" && isClaudeModel(params.model);
     pending.set(id, {
-      kind: "thread",
+      kind: "threadOpen",
       createdModel: created ? String(params.model) : null,
     });
     if (!isClaudeModel(params.model)) return line;
     const { model: _model, ...rest } = params;
     return encode({ ...message, params: rest });
-  };
-
-  // TODO: accept a model or directory change on resume in P10, together with the same change through turn/start.
-  const resumeRefusal = (params: Record<string, unknown>) => {
-    const known =
-      typeof params.threadId === "string"
-        ? turns.threadOf(params.threadId)
-        : undefined;
-    if (known === undefined) return null;
-    if (typeof params.model === "string" && params.model !== known.model) {
-      return "changing the model of a Claude thread is not supported yet";
-    }
-    if (
-      typeof params.cwd === "string" &&
-      !isSameDirectory(params.cwd, known.cwd)
-    ) {
-      return "changing the working directory of a Claude thread is not supported yet";
-    }
-    return null;
   };
 
   // Settings that do not reach Claude, such as the approval policy, still go to the server; only what Claude would have to follow is checked.
@@ -134,34 +118,33 @@ export const createRouter = (
     const { params } = request;
     const threadId = params.threadId;
     if (typeof threadId !== "string") return line;
-    const model = requestedModel(params);
     const known = turns.threadOf(threadId);
-    if (known === undefined && !isClaudeModel(model)) return line;
-    const cwd = cwdOf(params);
-    const thread =
-      known ?? (cwd === undefined ? undefined : { model: String(model), cwd });
-    if (thread === undefined) {
-      turns.refuse(request, "the working directory of this thread is unknown");
+    if (known === undefined && !isClaudeModel(requestedModel(params))) {
+      return line;
+    }
+    const checked = checkThread(params, known, cwdOf(params));
+    if ("refusal" in checked) {
+      refuse("thread/settings/update", request, checked.refusal);
       return null;
     }
-    // TODO: accept a model or directory change in P10, which restarts the Claude session for it.
-    const refusal =
-      model !== undefined && model !== thread.model
-        ? "changing the model of a Claude thread is not supported yet"
-        : requestsUnsupportedMode(params)
-          ? "Claude threads do not support plan mode yet"
-          : typeof params.cwd === "string" &&
-              !isSameDirectory(params.cwd, thread.cwd)
-            ? "changing the working directory of a Claude thread is not supported yet"
-            : null;
-    if (refusal !== null) {
-      turns.refuse(request, refusal);
-      return null;
-    }
-    if (known === undefined) turns.adopt(threadId, thread);
+    if (known === undefined) turns.adopt(threadId, checked.thread);
     if (!("model" in params) && !("collaborationMode" in params)) return line;
     const { model: _model, collaborationMode: _mode, ...rest } = params;
     return encode({ ...message, params: rest });
+  };
+
+  const refuse = (
+    method: RefusedMethod,
+    request: AppRequest,
+    reason: Refusal,
+  ) => {
+    turns.reject(
+      request,
+      reason === "unsupported_request"
+        ? `${method} is not supported on a Claude thread yet`
+        : refusalMessage(reason),
+    );
+    log({ event: "claude_request_refused", method, reason });
   };
 
   // The substring check only skips parsing; the method decides, since a response can carry the same text in its thread history.
@@ -246,6 +229,14 @@ export const createRouter = (
 };
 
 const SETTINGS_UPDATED = "thread/settings/updated";
+
+const REFUSED_METHODS = [
+  "thread/resume",
+  "thread/settings/update",
+  "turn/steer",
+  "review/start",
+  "thread/compact/start",
+] as const;
 
 const parseMessage = (line: Buffer) => {
   const parsed = parseJson(line.toString("utf8"));

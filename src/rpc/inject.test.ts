@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { type PassThrough, Writable } from "node:stream";
-import {
-  createLineInjector,
-  createLineRewriter,
-  createOwnResponseFilter,
-} from "./inject.ts";
+import { Writable } from "node:stream";
+import { createLineInjector } from "./inject.ts";
 
 describe("createLineInjector", () => {
   test("writes an injected line at once on a line boundary", async () => {
@@ -74,42 +70,6 @@ describe("createLineInjector", () => {
   });
 });
 
-describe("createOwnResponseFilter", () => {
-  test("drops own lines split across chunks and keeps every other byte", async () => {
-    const own: string[] = [];
-    const filter = createOwnResponseFilter(
-      (line) => line.includes("OWN"),
-      (line) => own.push(line.toString()),
-    );
-    const output = collect(filter);
-
-    filter.write("keep 1\nO");
-    filter.write("WN reply\nkeep 2\npar");
-    filter.end("tial");
-    const text = await output;
-
-    expect(text).toBe("keep 1\nkeep 2\npartial");
-    expect(own).toEqual(["OWN reply\n"]);
-  });
-});
-
-describe("createLineRewriter", () => {
-  test("replaces or drops whole lines however the chunks split them", async () => {
-    const rewriter = createLineRewriter((line) => {
-      const text = line.toString();
-      if (text.startsWith("drop")) return null;
-      return Buffer.from(text.toUpperCase());
-    });
-    const output = collect(rewriter);
-
-    rewriter.write("keep\ndr");
-    rewriter.write("op me\nlast");
-    rewriter.end(" part");
-
-    expect(await output).toBe("KEEP\nlast part");
-  });
-});
-
 const sink = (delayMs = 0) => {
   const chunks: Buffer[] = [];
   const stream = new Writable({
@@ -127,9 +87,3 @@ const sink = (delayMs = 0) => {
 
 const write = (stream: Writable, text: string) =>
   new Promise<void>((resolve) => stream.write(text, () => resolve()));
-
-const collect = async (stream: PassThrough | NodeJS.ReadableStream) => {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks).toString();
-};

@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { Result, TaggedError } from "better-result";
-import type { ClaudeSessionSettings } from "../claude/session.ts";
+import {
+  type InferErr,
+  type InferOk,
+  Result,
+  TaggedError,
+} from "better-result";
+import type {
+  ClaudeSessionSettings,
+  startClaudeSession,
+} from "../claude/session.ts";
 import type { UserInput } from "../render/protocol.ts";
 import {
   finishTurn,
@@ -15,56 +22,79 @@ import {
   type TurnState,
 } from "../render/turn.ts";
 import type { ThreadRecord, ThreadStore } from "../state/thread-store.ts";
-import { isSameDirectory } from "./directory.ts";
 import {
-  isClaudeModel,
-  requestedModel,
-  requestsUnsupportedMode,
-} from "./models.ts";
+  type AppRequest,
+  checkThread,
+  type Refusal,
+  refusalMessage,
+  type Thread,
+} from "./thread-request.ts";
 
-type ClaudeSession = {
-  messages: AsyncIterator<Result<SDKMessage, Failure>, void>;
-  send: (text: string) => Result<string, Failure>;
-  interrupt: () => Promise<Result<string[] | null, Failure>>;
-  close: () => void;
+// Only steps, turn statuses, refusal reasons and error tags are logged, never thread ids or text.
+export type TurnEvent =
+  | { event: "claude_turn"; step: "started" }
+  | {
+      event: "claude_turn";
+      step: "finished";
+      status: TurnOutcome["status"];
+      error: FailureTag | null;
+    }
+  | {
+      event: "claude_turn";
+      step: "refused";
+      reason: Refusal;
+      error: StoreTag | null;
+    }
+  | { event: "claude_turn"; step: "interrupt_failed"; error: InterruptTag }
+  | {
+      event: "claude_turn";
+      step: "session_not_saved" | "run_state_not_saved";
+      error: StoreTag;
+    };
+
+type SessionStart = Awaited<ReturnType<typeof startClaudeSession>>;
+
+type ClaudeSession = InferOk<SessionStart>;
+
+type StartSession = (settings: ClaudeSessionSettings) => Promise<SessionStart>;
+
+type ErrorTag<R> = InferErr<Awaited<R>> extends { _tag: infer T } ? T : never;
+
+type StreamedMessage =
+  ClaudeSession["messages"] extends AsyncGenerator<infer R> ? R : never;
+
+type InterruptTag = ErrorTag<ReturnType<ClaudeSession["interrupt"]>>;
+
+type FailureTag =
+  | ErrorTag<SessionStart>
+  | ErrorTag<ReturnType<ClaudeSession["send"]>>
+  | InferErr<StreamedMessage>["_tag"]
+  | InterruptTag
+  | BridgeClosing["_tag"]
+  | StreamEnded["_tag"];
+
+// runWrite is generic in the operation's error, so the store's own tags are listed; a new tag there fails to compile here.
+type StoreTag =
+  | ErrorTag<ReturnType<ThreadStore["register"]>>
+  | ErrorTag<ReturnType<ThreadStore["setSession"]>>
+  | "ThreadNotFound"
+  | "WriteOutcomeUnknown"
+  | "WriteNotStarted"
+  | "RunStateNotSaved";
+
+// A session is not reused until its interrupt reports whether a send is still queued, which can arrive after the interrupted turn has ended.
+type SessionSlot = {
+  session: ClaudeSession;
+  pendingInterrupt: Promise<void> | null;
 };
 
-type StartSession = (
-  settings: ClaudeSessionSettings,
-) => Promise<Result<ClaudeSession, Failure>>;
-
-// Only the step and an error tag or turn status are logged, never thread ids or text.
-export type TurnEvent = {
-  event: "claude_turn";
-  step: TurnStep;
-  detail: string | null;
-};
-
-export type AppRequest = {
-  id: RequestId;
-  params: Record<string, unknown>;
-};
-
-type TurnStep =
-  | "refused"
-  | "started"
-  | "finished"
-  | "session_not_saved"
-  | "run_state_not_saved";
-
-type RequestId = string | number;
-
-type Failure = { _tag: string; message: string };
-
-type Thread = { model: string; cwd: string };
-
-type Running = {
-  threadId: string;
-  turnId: string | null;
-  state: TurnState | null;
-};
+type ActiveTurn = { threadId: string; state: TurnState | null };
 
 class BridgeClosing extends TaggedError("BridgeClosing")<{
+  message: string;
+}> {}
+
+class StreamEnded extends TaggedError("StreamEnded")<{
   message: string;
 }> {}
 
@@ -86,120 +116,99 @@ export const createTurnController = ({
 }) => {
   // Threads created with a Claude model are saved to the store only on their first turn, so a thread never used leaves nothing behind.
   const adopted = new Map<string, Thread>();
-  const sessions = new Map<string, ClaudeSession>();
-  const running = new Map<string, Running>();
-  // A session is not reused until its interrupt reports whether a send is still queued, which can arrive after the interrupted turn has ended.
-  const interrupting = new Map<ClaudeSession, Promise<void>>();
+  const sessions = new Map<string, SessionSlot>();
+  const activeTurns = new Map<string, ActiveTurn>();
   // A session id Claude reported but the store failed to save still resumes the conversation while the bridge runs.
   const sessionIds = new Map<string, string>();
   let closed = false;
 
-  // cwd is the thread's directory as last reported by the server, used when a Codex thread switches to Claude.
-  const startTurn = ({ id, params }: AppRequest, cwd: string | undefined) => {
+  // fallbackCwd is the thread's directory as last reported by the server, used when a Codex thread switches to Claude.
+  const startTurn = (
+    { id, params }: AppRequest,
+    fallbackCwd: string | undefined,
+  ) => {
     const threadId = params.threadId;
     if (typeof threadId !== "string") {
-      refuse(id, "turn/start needs a threadId");
+      refuse(id, "missing_thread");
       return;
     }
-    const known = threadOf(threadId);
-    const model = requestedModel(params) ?? known?.model;
-    if (!isClaudeModel(model)) {
-      refuse(id, "a Claude thread cannot switch to a Codex model");
-      return;
-    }
-    // TODO: follow a model change within Claude in P10, which decides how the running session picks it up.
-    if (known !== undefined && model !== known.model) {
-      refuse(id, "changing the Claude model of a thread is not supported yet");
-      return;
-    }
-    if (requestsUnsupportedMode(params)) {
-      refuse(id, "Claude threads do not support plan mode yet");
-      return;
-    }
-    // TODO: follow a working directory change in P10 together with the model change, since both need a new session.
-    if (
-      known !== undefined &&
-      typeof params.cwd === "string" &&
-      !isSameDirectory(params.cwd, known.cwd)
-    ) {
-      refuse(
-        id,
-        "changing the working directory of a Claude thread is not supported yet",
-      );
-      return;
-    }
-    const thread = known ?? (cwd === undefined ? undefined : { model, cwd });
-    if (thread === undefined) {
-      refuse(id, "the working directory of this thread is unknown");
+    const checked = checkThread(params, threadOf(threadId), fallbackCwd);
+    if ("refusal" in checked) {
+      refuse(id, checked.refusal);
       return;
     }
     const input = textInput(params.input);
     if (input === null) {
-      refuse(id, "Claude threads accept text input only");
+      refuse(id, "text_only");
       return;
     }
     if (closed) {
-      refuse(id, BRIDGE_CLOSING);
+      refuse(id, "bridge_closing");
       return;
     }
-    if (running.has(threadId)) {
-      refuse(id, "a Claude turn is already running on this thread");
+    if (activeTurns.has(threadId)) {
+      refuse(id, "turn_running");
       return;
     }
-    const entry: Running = { threadId, turnId: null, state: null };
-    running.set(threadId, entry);
-    void runTurn(id, threadId, thread, entry, input.items, input.text).then(
-      () => release(entry),
+    const active: ActiveTurn = { threadId, state: null };
+    activeTurns.set(threadId, active);
+    void runTurn(id, checked.thread, active, input.items, input.text).then(() =>
+      release(active),
     );
   };
 
   // The reply comes first so the app sees it before the interrupted turn completes; a failed interrupt stops Claude by closing the session.
   const interruptTurn = ({ id, params }: AppRequest) => {
     const threadId = String(params.threadId);
-    const entry = running.get(threadId);
+    const active = activeTurns.get(threadId);
     if (
-      entry?.state == null ||
-      entry.state.finished ||
-      entry.turnId !== params.turnId
+      active?.state == null ||
+      active.state.finished ||
+      active.state.turnId !== params.turnId
     ) {
-      refuse(id, "no running Claude turn matches turnId");
+      refuse(id, "no_running_turn");
       return;
     }
     // A stop while the session already has an interrupt in flight, from this turn or an earlier one, is answered without asking Claude again; that interrupt decides the session, and a turn that has not sent yet stops before sending.
-    const repeated = entry.state.interrupting;
-    entry.state = markInterrupting(entry.state);
+    const repeated = active.state.interrupting;
+    active.state = markInterrupting(active.state);
     send({ id, result: {} });
-    const session = sessions.get(threadId);
-    if (session === undefined || repeated || interrupting.has(session)) return;
+    const slot = sessions.get(threadId);
+    if (slot === undefined || repeated || slot.pendingInterrupt !== null) {
+      return;
+    }
     // A send still queued in Claude would run after the interrupt, and an old CLI cannot say whether one is, so either way the session is closed and the next turn resumes it.
-    const settled = session.interrupt().then((interrupted) => {
-      if (interrupting.get(session) === settled) interrupting.delete(session);
-      const stopped =
-        interrupted.isOk() &&
-        interrupted.value !== null &&
-        interrupted.value.length === 0;
-      if (stopped) return;
-      dropSession(threadId, session);
-      finish(entry, { status: "interrupted" });
+    slot.pendingInterrupt = slot.session.interrupt().then((interrupted) => {
+      slot.pendingInterrupt = null;
+      if (interrupted.isErr()) {
+        log({
+          event: "claude_turn",
+          step: "interrupt_failed",
+          error: interrupted.error._tag,
+        });
+      } else if (interrupted.value?.length === 0) {
+        return;
+      }
+      dropSession(threadId, slot);
+      finish(active, { status: "interrupted" }, null);
     });
-    interrupting.set(session, settled);
   };
 
-  // Closing ends each running turn's message stream, so no Claude process outlives the bridge.
+  // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
   const closeAll = () => {
     closed = true;
-    for (const [threadId, session] of sessions) dropSession(threadId, session);
+    for (const [threadId, slot] of sessions) dropSession(threadId, slot);
   };
 
   // A failed turn is shown to the user, who decides whether to send it again, so no turn outcome is treated as unknown here; only a crash leaves the marker.
   const runTurn = async (
-    requestId: RequestId,
-    threadId: string,
+    requestId: AppRequest["id"],
     thread: Thread,
-    entry: Running,
+    active: ActiveTurn,
     input: UserInput[],
     text: string,
   ) => {
+    const threadId = active.threadId;
     if (store.get(threadId) === undefined) {
       const registered = await store.register({
         threadId,
@@ -207,7 +216,7 @@ export const createTurnController = ({
         worktree: thread.cwd,
       });
       if (registered.isErr()) {
-        refuse(requestId, registered.error.message);
+        refuse(requestId, "thread_not_saved", registered.error);
         return;
       }
       adopted.delete(threadId);
@@ -217,26 +226,28 @@ export const createTurnController = ({
       threadId,
       async (record) => {
         responded = true;
-        await executeTurn(requestId, record, entry, input, text);
+        await streamTurn(requestId, record, active, input, text);
         return Result.ok();
       },
       () => false,
     );
     if (ran.isOk()) return;
-    if (!responded) refuse(requestId, ran.error.message);
-    else {
-      log({
-        event: "claude_turn",
-        step: "run_state_not_saved",
-        detail: ran.error._tag,
-      });
+    if (!responded) {
+      // The store's message says why, such as an earlier turn whose outcome is unknown.
+      refuse(requestId, "thread_busy", ran.error, ran.error.message);
+      return;
     }
+    log({
+      event: "claude_turn",
+      step: "run_state_not_saved",
+      error: ran.error._tag,
+    });
   };
 
-  const executeTurn = async (
-    requestId: RequestId,
+  const streamTurn = async (
+    requestId: AppRequest["id"],
     record: ThreadRecord,
-    entry: Running,
+    active: ActiveTurn,
     input: UserInput[],
     text: string,
   ) => {
@@ -247,56 +258,49 @@ export const createTurnController = ({
       cwd: record.worktree,
       now: now(),
     });
-    entry.turnId = started.turn.id;
-    apply(entry, started);
+    apply(active, started);
     send({ id: requestId, result: { turn: started.turn } });
-    log({ event: "claude_turn", step: "started", detail: null });
-    apply(entry, renderUserInput(started.state, input, null, now()));
+    log({ event: "claude_turn", step: "started" });
+    apply(active, renderUserInput(started.state, input, null, now()));
 
-    await interruptSettled(threadId);
-    if (entry.state?.interrupting) {
-      finish(entry, { status: "interrupted" });
+    await waitForPendingInterrupt(threadId);
+    if (active.state?.interrupting) {
+      finish(active, { status: "interrupted" }, null);
       return;
     }
-    const session = await sessionFor(record);
-    if (session.isErr()) {
-      finish(
-        entry,
-        entry.state?.interrupting
-          ? { status: "interrupted" }
-          : { status: "failed", message: session.error.message },
-      );
+    const slot = await sessionFor(record);
+    if (slot.isErr()) {
+      fail(active, slot.error);
       return;
     }
-    if (entry.state?.interrupting) {
-      finish(entry, { status: "interrupted" });
+    if (active.state?.interrupting) {
+      finish(active, { status: "interrupted" }, null);
       return;
     }
-    const sent = session.value.send(text);
+    const sent = slot.value.session.send(text);
     if (sent.isErr()) {
-      dropSession(threadId, session.value);
-      finish(entry, { status: "failed", message: sent.error.message });
+      dropSession(threadId, slot.value);
+      fail(active, sent.error);
       return;
     }
     let sessionId = sessionIds.get(threadId) ?? record.sessionId;
-    while (entry.state !== null && !entry.state.finished) {
-      const next = await session.value.messages.next();
-      const message = next.done === true ? STREAM_ENDED : next.value;
-      if (typeof message === "string" || message.isErr()) {
-        dropSession(threadId, session.value);
-        finish(
-          entry,
-          entry.state.interrupting
-            ? { status: "interrupted" }
-            : {
-                status: "failed",
-                message:
-                  typeof message === "string" ? message : message.error.message,
-              },
-        );
+    while (active.state !== null && !active.state.finished) {
+      const next = await slot.value.session.messages.next();
+      // A stream that ends without a result is reported like a stream failure.
+      const received =
+        next.done === true
+          ? Result.err(
+              new StreamEnded({
+                message: "Claude stopped before the turn finished",
+              }),
+            )
+          : next.value;
+      if (received.isErr()) {
+        dropSession(threadId, slot.value);
+        fail(active, received.error);
         return;
       }
-      const current = message.value.session_id;
+      const current = received.value.session_id;
       if (current !== undefined && current !== sessionId) {
         sessionId = current;
         sessionIds.set(threadId, current);
@@ -305,24 +309,27 @@ export const createTurnController = ({
           log({
             event: "claude_turn",
             step: "session_not_saved",
-            detail: saved.error._tag,
+            error: saved.error._tag,
           });
         }
       }
-      apply(entry, renderSdkMessage(entry.state, message.value, now()));
+      apply(active, renderSdkMessage(active.state, received.value, now()));
     }
   };
 
-  const interruptSettled = async (threadId: string) => {
-    const existing = sessions.get(threadId);
-    if (existing !== undefined) await interrupting.get(existing);
+  const waitForPendingInterrupt = async (threadId: string) => {
+    await sessions.get(threadId)?.pendingInterrupt;
   };
 
-  const sessionFor = async (record: ThreadRecord) => {
+  const sessionFor = async (
+    record: ThreadRecord,
+  ): Promise<Result<SessionSlot, InferErr<SessionStart> | BridgeClosing>> => {
     const existing = sessions.get(record.threadId);
     if (existing !== undefined) return Result.ok(existing);
     if (closed) {
-      return Result.err(new BridgeClosing({ message: BRIDGE_CLOSING }));
+      return Result.err(
+        new BridgeClosing({ message: refusalMessage("bridge_closing") }),
+      );
     }
     // TODO: clear a stored session id that Claude can no longer resume in P11a, which decides how a missing session is shown; until then every turn of that thread fails the same way.
     const started = await startSession({
@@ -330,41 +337,72 @@ export const createTurnController = ({
       model: record.model,
       ...resumeFrom(sessionIds.get(record.threadId) ?? record.sessionId),
       onToolDeclined: (toolUseId) => {
-        const entry = running.get(record.threadId);
-        if (entry?.state)
-          entry.state = markToolDeclined(entry.state, toolUseId);
+        const active = activeTurns.get(record.threadId);
+        if (active?.state) {
+          active.state = markToolDeclined(active.state, toolUseId);
+        }
       },
     });
-    if (started.isErr()) return started;
+    if (started.isErr()) return Result.err(started.error);
     // Shutdown may have happened while Claude was starting.
     if (closed) {
       started.value.close();
-      return Result.err(new BridgeClosing({ message: BRIDGE_CLOSING }));
+      return Result.err(
+        new BridgeClosing({ message: refusalMessage("bridge_closing") }),
+      );
     }
-    sessions.set(record.threadId, started.value);
-    return started;
+    const slot: SessionSlot = {
+      session: started.value,
+      pendingInterrupt: null,
+    };
+    sessions.set(record.threadId, slot);
+    return Result.ok(slot);
   };
 
-  // The app may start the next turn as soon as it sees turn/completed, so the thread stops counting as running then; the store's per-thread queue still holds that turn until this one's marker is cleared.
-  const apply = (entry: Running, rendered: Rendered) => {
-    entry.state = rendered.state;
-    if (rendered.state.finished) release(entry);
+  // The app may start the next turn as soon as it sees turn/completed, so the thread stops counting as active then; the store's per-thread queue still holds that turn until this one's marker is cleared.
+  const apply = (active: ActiveTurn, rendered: Rendered) => {
+    active.state = rendered.state;
+    if (rendered.state.finished) release(active);
     for (const notification of rendered.notifications) send(notification);
   };
 
-  const finish = (entry: Running, outcome: TurnOutcome) => {
-    if (entry.state === null || entry.state.finished) return;
-    apply(entry, finishTurn(entry.state, outcome, now()));
-    log({ event: "claude_turn", step: "finished", detail: outcome.status });
+  // A turn the user already stopped ends as interrupted whatever went wrong afterwards.
+  const fail = (
+    active: ActiveTurn,
+    error: { _tag: FailureTag; message: string },
+  ) =>
+    finish(
+      active,
+      active.state?.interrupting
+        ? { status: "interrupted" }
+        : { status: "failed", message: error.message },
+      error._tag,
+    );
+
+  const finish = (
+    active: ActiveTurn,
+    outcome: TurnOutcome,
+    error: FailureTag | null,
+  ) => {
+    if (active.state === null || active.state.finished) return;
+    apply(active, finishTurn(active.state, outcome, now()));
+    log({
+      event: "claude_turn",
+      step: "finished",
+      status: outcome.status,
+      error,
+    });
   };
 
-  const release = (entry: Running) => {
-    if (running.get(entry.threadId) === entry) running.delete(entry.threadId);
+  const release = (active: ActiveTurn) => {
+    if (activeTurns.get(active.threadId) === active) {
+      activeTurns.delete(active.threadId);
+    }
   };
 
-  const dropSession = (threadId: string, session: ClaudeSession) => {
-    if (sessions.get(threadId) === session) sessions.delete(threadId);
-    session.close();
+  const dropSession = (threadId: string, slot: SessionSlot) => {
+    if (sessions.get(threadId) === slot) sessions.delete(threadId);
+    slot.session.close();
   };
 
   const threadOf = (threadId: string): Thread | undefined => {
@@ -374,16 +412,30 @@ export const createTurnController = ({
       : { model: record.model, cwd: record.worktree };
   };
 
-  const refuse = (id: RequestId, message: string) => {
-    send({ id, error: { code: INVALID_REQUEST, message } });
-    log({ event: "claude_turn", step: "refused", detail: null });
+  const refuse = (
+    id: AppRequest["id"],
+    reason: Refusal,
+    cause: { _tag: StoreTag } | null = null,
+    message: string = refusalMessage(reason),
+  ) => {
+    reject({ id }, message);
+    log({
+      event: "claude_turn",
+      step: "refused",
+      reason,
+      error: cause?._tag ?? null,
+    });
   };
+
+  // The router logs its own refusals, so this only answers the app.
+  const reject = ({ id }: Pick<AppRequest, "id">, message: string) =>
+    send({ id, error: { code: INVALID_REQUEST, message } });
 
   return {
     startTurn,
     interruptTurn,
     closeAll,
-    refuse: ({ id }: AppRequest, message: string) => refuse(id, message),
+    reject,
     isClaudeThread: (threadId: unknown) =>
       typeof threadId === "string" && threadOf(threadId) !== undefined,
     threadOf,
@@ -415,7 +467,3 @@ const isTextItem = (item: unknown): item is { type: "text"; text: string } =>
   typeof item.text === "string";
 
 const INVALID_REQUEST = -32600;
-
-const BRIDGE_CLOSING = "the bridge is shutting down";
-
-const STREAM_ENDED = "Claude stopped before the turn finished";

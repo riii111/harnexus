@@ -70,16 +70,20 @@ describe("turn/start on a Claude thread", () => {
     expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
   });
 
-  test("accepts the next turn as soon as the previous one completes", async () => {
+  test("accepts the next turn sent while the app receives turn/completed", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
+    let startNext = () => {};
+    const { turns, sent } = await harness([claude], {
+      onSend: (message) => {
+        if (message.method === "turn/completed") startNext();
+      },
+    });
+    startNext = () => turns.startTurn(turnStart(11, "again"), undefined);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => responseTo(sent, 10) !== undefined);
     claude.emit(sdk(answer("msg-1", "hi")));
     claude.emit(sdk(success()));
-    await until(() => turnCompleted(sent) !== undefined);
-    turns.startTurn(turnStart(11, "again"), undefined);
     await until(() => responseTo(sent, 11) !== undefined);
 
     expect(responseTo(sent, 11)?.result.turn).toMatchObject({ id: "turn-2" });
@@ -124,7 +128,7 @@ describe("turn/start on a Claude thread", () => {
     expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
   });
 
-  test("resumes the stored session after the stream fails", async () => {
+  test("resumes the session after the stream fails", async () => {
     const first = fakeClaude(SUBSCRIPTION);
     const second = fakeClaude(SUBSCRIPTION);
     const { turns, sent, settings } = await harness([first, second]);
@@ -164,7 +168,7 @@ describe("session ids", () => {
     expect(events).toContainEqual({
       event: "claude_turn",
       step: "session_not_saved",
-      detail: "StatePersistFailed",
+      error: "StatePersistFailed",
     });
     expect(settings[1]).toMatchObject({ resume: "se-1" });
   });
@@ -192,16 +196,17 @@ describe("turn/interrupt", () => {
     expect(claude.closes()).toBe(0);
   });
 
-  test.each([
-    { name: "a send still queued", stillQueued: ["uuid-queued"] },
-    { name: "no receipt from an older CLI", stillQueued: undefined },
-  ])("closes Claude when the interrupt leaves $name", async ({
-    stillQueued,
+  test.each<{ name: string; options: Parameters<typeof fakeClaude>[1] }>([
+    { name: "a send still queued", options: { stillQueued: ["uuid-queued"] } },
+    { name: "no receipt from an older CLI", options: {} },
+    {
+      name: "an error",
+      options: { interruptError: new Error("no control channel") },
+    },
+  ])("closes Claude after an interrupt that answers with $name", async ({
+    options,
   }) => {
-    const claude = fakeClaude(
-      SUBSCRIPTION,
-      stillQueued === undefined ? {} : { stillQueued: [...stillQueued] },
-    );
+    const claude = fakeClaude(SUBSCRIPTION, options);
     const { turns, sent } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
@@ -305,21 +310,6 @@ describe("turn/interrupt", () => {
     expect(turnCompleted(sent)).toMatchObject({ status: "interrupted" });
   });
 
-  test("closes Claude when the interrupt fails", async () => {
-    const claude = fakeClaude(SUBSCRIPTION, {
-      interruptError: new Error("no control channel"),
-    });
-    const { turns, sent } = await harness([claude]);
-
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
-    turns.interruptTurn(interrupt(20, "turn-1"));
-    await until(() => turnCompleted(sent) !== undefined);
-
-    expect(turnCompleted(sent)).toMatchObject({ status: "interrupted" });
-    expect(claude.closes()).toBe(1);
-  });
-
   test("refuses a turn that already completed", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
@@ -342,8 +332,10 @@ describe("turn/interrupt", () => {
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => claude.started());
     turns.interruptTurn(interrupt(20, "turn-1"));
-    turns.interruptTurn(interrupt(21, "turn-1"));
     await until(() => claude.interrupts() === 1);
+    await settle();
+    turns.interruptTurn(interrupt(21, "turn-1"));
+    await settle();
 
     expect(responseTo(sent, 21)).toEqual({ id: 21, result: {} });
     expect(claude.interrupts()).toBe(1);
@@ -393,8 +385,9 @@ describe("refused requests", () => {
       { ...request, params: { ...request.params, ...override } },
       undefined,
     );
+    await settle();
 
-    expect(responseTo(sent, 10)?.error.code).toBe(-32600);
+    expect(sent).toEqual([REFUSED(10)]);
     expect(claude.started()).toBe(false);
   });
 
@@ -408,12 +401,14 @@ describe("refused requests", () => {
     expect(responseTo(sent, 11)?.error).toBeDefined();
   });
 
-  test("answers a refused request with an error", async () => {
+  test("answers a rejected request with the given message", async () => {
     const { turns, sent } = await harness([]);
 
-    turns.refuse({ id: 12, params: { threadId: THREAD } }, "not yet");
+    turns.reject({ id: 12 }, "not yet");
 
-    expect(responseTo(sent, 12)?.error).toBeDefined();
+    expect(sent).toEqual([
+      { id: 12, error: { code: -32600, message: "not yet" } },
+    ]);
   });
 
   test("switches a Codex thread to Claude only when its directory is known", async () => {
@@ -456,10 +451,14 @@ describe("closeAll", () => {
 
     turns.closeAll();
     turns.startTurn(turnStart(11, "again"), undefined);
+    await settle();
 
-    expect(responseTo(sent, 11)?.error.message).toBe(
-      "the bridge is shutting down",
-    );
+    expect(sent).toEqual([
+      {
+        id: 11,
+        error: { code: -32600, message: "the bridge is shutting down" },
+      },
+    ]);
     expect(claude.started()).toBe(false);
   });
 });
@@ -513,10 +512,12 @@ const harness = async (
     adopt = true,
     files = {},
     beforeStart = Promise.resolve(),
+    onSend = () => {},
   }: {
     adopt?: boolean;
     files?: Parameters<typeof openThreadStore>[1];
     beforeStart?: Promise<void>;
+    onSend?: (message: Sent) => void;
   } = {},
 ) => {
   const opened = await openThreadStore(join(dir, "threads.json"), files);
@@ -528,7 +529,10 @@ const harness = async (
   let turnCount = 0;
   const turns = createTurnController({
     store,
-    send: (message) => sent.push(message),
+    send: (message) => {
+      sent.push(message);
+      onSend(message);
+    },
     log: (event) => events.push(event),
     startSession: async (session) => {
       const fake = fakes[settings.length];
@@ -569,6 +573,14 @@ const turnStart = (id: number, text: string) => ({
 const interrupt = (id: number, turnId: string) => ({
   id,
   params: { threadId: THREAD, turnId },
+});
+
+// Long enough for a turn that was wrongly accepted to reach Claude.
+const settle = () => Bun.sleep(20);
+
+const REFUSED = (id: number) => ({
+  id,
+  error: { code: -32600, message: expect.any(String) },
 });
 
 const until = async (condition: () => boolean) => {

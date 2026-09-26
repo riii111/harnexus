@@ -1,7 +1,10 @@
+import type { InferErr } from "better-result";
 import type { Signals } from "../boundary/process.ts";
 import type { ObservationEvent } from "../rpc/observe.ts";
 import type { RouteEvent } from "../rpc/route.ts";
+import type { openThreadStore } from "../state/thread-store.ts";
 import type { TurnEvent } from "../turn/controller.ts";
+import type { loadStatePath } from "./config.ts";
 
 // serialize() copies only known fields, so request bodies, conversations, code and credentials cannot reach the log even through a widened object.
 export type LogEvent =
@@ -10,7 +13,7 @@ export type LogEvent =
   | { event: "log_file_unavailable"; reason: LogFileFailure }
   | { event: "server_closed" }
   | { event: "server_signaled"; signal: Signals }
-  | { event: "claude_unavailable"; reason: string }
+  | { event: "claude_unavailable"; reason: ClaudeUnavailable }
   | { event: "bridge_signaled"; signal: Signals }
   | ObservationEvent
   | TurnEvent
@@ -19,6 +22,10 @@ export type LogEvent =
 type StartupFailure = "ServerPipesUnavailable";
 
 type LogFileFailure = "LogPathNotAbsolute" | "LogFileOpenFailed";
+
+type ClaudeUnavailable =
+  | InferErr<ReturnType<typeof loadStatePath>>["_tag"]
+  | InferErr<Awaited<ReturnType<typeof openThreadStore>>>["_tag"];
 
 export type LogSink = (line: string) => void;
 
@@ -43,7 +50,9 @@ const serialize = (entry: LogEvent) => {
     case "claude_unavailable":
       return { event: entry.event, reason: entry.reason };
     case "claude_turn":
-      return { event: entry.event, step: entry.step, detail: entry.detail };
+      return serializeTurn(entry);
+    case "claude_request_refused":
+      return { event: entry.event, method: entry.method, reason: entry.reason };
     case "model_id_collision":
       return { event: entry.event, model: entry.model };
     case "rpc_message":
@@ -73,6 +82,31 @@ const serialize = (entry: LogEvent) => {
         direction: entry.direction,
         reason: entry.reason,
       };
+  }
+};
+
+const serializeTurn = (entry: TurnEvent) => {
+  switch (entry.step) {
+    case "started":
+      return { event: entry.event, step: entry.step };
+    case "finished":
+      return {
+        event: entry.event,
+        step: entry.step,
+        status: entry.status,
+        error: entry.error,
+      };
+    case "refused":
+      return {
+        event: entry.event,
+        step: entry.step,
+        reason: entry.reason,
+        error: entry.error,
+      };
+    case "interrupt_failed":
+    case "session_not_saved":
+    case "run_state_not_saved":
+      return { event: entry.event, step: entry.step, error: entry.error };
   }
 };
 

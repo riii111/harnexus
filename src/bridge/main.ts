@@ -2,7 +2,8 @@ import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import { openServerPipes, type Signals } from "../boundary/process.ts";
 import { startClaudeSession } from "../claude/session.ts";
-import { createLineInjector, createLineRewriter } from "../rpc/inject.ts";
+import { createLineInjector } from "../rpc/inject.ts";
+import { createLineRewriter } from "../rpc/line-rewriter.ts";
 import { createObserver } from "../rpc/observe.ts";
 import { type RelayObserver, relayStreams } from "../rpc/relay.ts";
 import { createRouter } from "../rpc/route.ts";
@@ -77,24 +78,24 @@ async function withClaude(relay: {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
     return plain;
   }
-  const app = createLineInjector(process.stdout);
+  const appInjector = createLineInjector(process.stdout);
   const turns = createTurnController({
     store: store.value,
     startSession: startClaudeSession,
-    send: (message) => app.inject(`${JSON.stringify(message)}\n`),
+    send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });
   const router = createRouter(turns, logger.log);
-  const input = createLineRewriter(router.fromApp);
-  const serverOutput = createLineRewriter(router.fromServer);
-  process.stdin.on("error", (error) => input.destroy(error));
-  relay.serverOutput.on("error", () => serverOutput.end());
+  const appRewriter = createLineRewriter(router.fromApp);
+  const serverRewriter = createLineRewriter(router.fromServer);
+  process.stdin.on("error", (error) => appRewriter.destroy(error));
+  relay.serverOutput.on("error", () => serverRewriter.end());
   return {
     streams: {
       ...relay,
-      input: process.stdin.pipe(input),
-      output: app.stream,
-      serverOutput: relay.serverOutput.pipe(serverOutput),
+      input: process.stdin.pipe(appRewriter),
+      output: appInjector.stream,
+      serverOutput: relay.serverOutput.pipe(serverRewriter),
     },
     closeAll: turns.closeAll,
   };

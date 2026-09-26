@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AppRequest } from "../turn/controller.ts";
+import type { AppRequest } from "../turn/thread-request.ts";
 import { createRouter, type RouteEvent } from "./route.ts";
 
 describe("Codex threads", () => {
@@ -31,15 +31,14 @@ describe("Codex threads", () => {
     expect(changed).toEqual(expected);
   });
 
-  test.each([
-    { method: "turn/start" },
-    { method: "turn/interrupt" },
-    { method: "turn/steer" },
-    { method: "review/start" },
-    { method: "thread/compact/start" },
-  ])("leave $method of a Codex thread to the server", ({ method }) => {
+  // The fixtures already carry turn/start, turn/interrupt and turn/steer; review/start shares its branch with compaction.
+  test("leave review/start of a Codex thread to the server", () => {
     const { router, calls } = setup();
-    const line = encode({ id: 5, method, params: { threadId: "codex" } });
+    const line = encode({
+      id: 5,
+      method: "review/start",
+      params: { threadId: "codex" },
+    });
 
     expect(router.fromApp(line)).toEqual(line);
     expect(calls).toEqual([]);
@@ -123,27 +122,12 @@ describe("threads with a Claude model", () => {
     expect(out.result.thread.model).toBe(CLAUDE);
   });
 
-  test("reports the Claude model when a Claude thread is resumed", () => {
-    const { router } = setup(["th-claude"]);
-
-    router.fromApp(
-      encode({
-        id: 4,
-        method: "thread/resume",
-        params: { threadId: "th-claude" },
-      }),
-    );
-    const out = parse(router.fromServer(threadResponse(4, "th-claude")));
-
-    expect(out.result.model).toBe(CLAUDE);
-  });
-
   test.each([
     { method: "turn/start", expected: "startTurn" },
     { method: "turn/interrupt", expected: "interruptTurn" },
-    { method: "turn/steer", expected: "refuse" },
-    { method: "review/start", expected: "refuse" },
-    { method: "thread/compact/start", expected: "refuse" },
+    { method: "turn/steer", expected: "reject" },
+    { method: "review/start", expected: "reject" },
+    { method: "thread/compact/start", expected: "reject" },
   ])("hands $method of a Claude thread to $expected instead of the server", ({
     method,
     expected,
@@ -156,10 +140,21 @@ describe("threads with a Claude model", () => {
   });
 
   test.each([
-    { name: "another model", change: { model: "claude-opus-5-5" } },
-    { name: "another working directory", change: { cwd: "/elsewhere" } },
-  ])("refuses a resume of a Claude thread with $name", ({ change }) => {
-    const { router, calls } = setup(["th-claude"]);
+    {
+      name: "another model",
+      change: { model: "claude-opus-5-5" },
+      expected: "model_change",
+    },
+    {
+      name: "another working directory",
+      change: { cwd: "/elsewhere" },
+      expected: "directory_change",
+    },
+  ])("refuses a resume of a Claude thread with $name as $expected", ({
+    change,
+    expected,
+  }) => {
+    const { router, calls, events } = setup(["th-claude"]);
     const line = encode({
       id: 4,
       method: "thread/resume",
@@ -167,7 +162,14 @@ describe("threads with a Claude model", () => {
     });
 
     expect(router.fromApp(line)).toBeNull();
-    expect(calls.map(([name]) => name)).toEqual(["refuse"]);
+    expect(calls.map(([name]) => name)).toEqual(["reject"]);
+    expect(events).toEqual([
+      {
+        event: "claude_request_refused",
+        method: "thread/resume",
+        reason: expected,
+      },
+    ]);
   });
 
   test("forwards a resume of a Claude thread in its own directory", () => {
@@ -267,7 +269,7 @@ describe("thread/settings/update", () => {
     const { router, calls } = setup(["th-claude"]);
 
     expect(router.fromApp(settingsUpdate(change))).toBeNull();
-    expect(calls.map(([name]) => name)).toEqual(["refuse"]);
+    expect(calls.map(([name]) => name)).toEqual(["reject"]);
   });
 
   test("switches a Codex thread to Claude without telling the server", () => {
@@ -296,7 +298,7 @@ describe("thread/settings/update", () => {
     expect(router.fromApp(line)).toEqual(line);
   });
 
-  test("still reads a response whose history mentions the settings notice", () => {
+  test("reports the Claude model on resume even when the history mentions the settings notice", () => {
     const { router } = setup(["th-claude"]);
 
     router.fromApp(
@@ -313,11 +315,11 @@ describe("thread/settings/update", () => {
     expect(out.result.model).toBe(CLAUDE);
   });
 
-  test("accepts the same directory spelled with a trailing slash", () => {
+  test("forwards the same directory spelled with a trailing slash", () => {
     const { router, calls } = setup(["th-claude"]);
+    const line = settingsUpdate({ cwd: "/fixture/work/" });
 
-    router.fromApp(settingsUpdate({ cwd: "/fixture/work/" }));
-
+    expect(router.fromApp(line)).toEqual(line);
     expect(calls).toEqual([]);
   });
 
@@ -373,7 +375,7 @@ const setup = (claudeThreads: string[] = []) => {
       startTurn: (request: AppRequest, cwd) =>
         calls.push(["startTurn", request, cwd]),
       interruptTurn: (request) => calls.push(["interruptTurn", request]),
-      refuse: (request, message) => calls.push(["refuse", request, message]),
+      reject: (request, message) => calls.push(["reject", request, message]),
     },
     (event) => events.push(event),
   );
