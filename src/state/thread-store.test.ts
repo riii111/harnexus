@@ -285,21 +285,17 @@ describe("ThreadStore", () => {
     expect((await openStore()).get("thread-1")?.sessionId).toBeNull();
   });
 
-  test("follows the file and stops saving when the rename is not confirmed", async () => {
+  test("follows the file when the rename is not confirmed and keeps saving", async () => {
     const good = await openStore();
     await good.register(ENTRY);
-    const store = await openStore({ writeState: writeThenFailSync });
+    const store = await openStore({ writeState: writeThenFailSyncOnce() });
 
     const updated = await store.setSessionId("thread-1", "session-1");
-    const later = await store.setModel("thread-1", "claude-opus-5-5");
+    const later = await store.addReviewer("thread-1", "reviewer-1");
 
     expect(updated.isErr() && updated.error._tag).toBe("StatePersistFailed");
-    expect(store.get("thread-1")?.sessionId).toBe("session-1");
-    expect(later.isErr() && later.error._tag).toBe("StateStoreHalted");
-    expect((await openStore()).get("thread-1")).toMatchObject({
-      sessionId: "session-1",
-      model: "claude-sonnet-5",
-    });
+    expect(later.isOk() && later.value).toMatchObject(BOTH_UPDATES);
+    expect((await openStore()).get("thread-1")).toMatchObject(BOTH_UPDATES);
   });
 
   test("rejects an empty session id and keeps the saved one", async () => {
@@ -711,10 +707,14 @@ const failingWrite = async (target: string) =>
     }),
   );
 
-const writeThenFailSync = async (target: string, content: string) => {
-  const written = await writeFileAtomic(target, content);
-  if (written.isErr()) return written;
-  return Result.err(syncFailed(target));
+const writeThenFailSyncOnce = () => {
+  let failed = false;
+  return async (target: string, content: string) => {
+    const written = await writeFileAtomic(target, content);
+    if (written.isErr() || failed) return written;
+    failed = true;
+    return Result.err(syncFailed(target));
+  };
 };
 
 const failingCreate = async (target: string) =>
