@@ -1,14 +1,15 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { signalProcess } from "./process.ts";
 
 describe("signalProcess", () => {
-  test("reports ESRCH when the process has already exited and been reaped", async () => {
-    const child = Bun.spawn(["/usr/bin/true"]);
-    await child.exited;
+  test("keeps the errno code of a signal the system refuses", () => {
+    const kill = spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    });
 
-    // SIGURG is ignored by default, so a process that reused the pid is left unharmed.
-    const sent = signalProcess(child.pid, "SIGURG");
+    const sent = signalProcess(4242, "SIGTERM");
+    kill.mockRestore();
 
-    expect(sent.isErr() && sent.error.code).toBe("ESRCH");
+    expect(sent.isErr() && sent.error.code).toBe("EPERM");
   });
 });
