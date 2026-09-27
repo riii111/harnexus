@@ -12,18 +12,17 @@ import { prompt, reply, text } from "./testing/session-record.ts";
 describe("pageTurns", () => {
   test("pages back from the resume cursor through every turn with the next cursors", () => {
     const history = threeTurns();
-    const seen: string[] = [];
+    const next = (cursor: string | null | undefined) =>
+      pageTurns(history, turnsRequest({ limit: 1, cursor: cursor ?? null }));
 
-    for (
-      let cursor = resumeCursors(history).turnsBackwardsCursor;
-      cursor !== null;
-    ) {
-      const page = pageTurns(history, turnsRequest({ limit: 1, cursor }));
-      seen.push(...(page?.data.map((turn) => turn.id) ?? []));
-      cursor = page?.nextCursor ?? null;
-    }
+    const first = next(resumeCursors(history).turnsBackwardsCursor);
+    const second = next(first?.nextCursor);
+    const third = next(second?.nextCursor);
 
-    expect(seen).toEqual([T3, T2, T1]);
+    expect(
+      [first, second, third].map((page) => page?.data.map((turn) => turn.id)),
+    ).toEqual([[T3], [T2], [T1]]);
+    expect(third?.nextCursor).toBeNull();
   });
 
   test("includes the anchor turn again when the backwards cursor reverses the direction", () => {

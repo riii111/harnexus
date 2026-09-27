@@ -494,27 +494,24 @@ describe("Claude thread history", () => {
       }),
     );
     const out = parse(await router.fromServer(threadResponse(4, "th-claude")));
-    const turnIds: string[] = [];
-    const forwarded: (Buffer | null)[] = [];
-    for (
-      let cursor = out.result.turnsBackwardsCursor, id = 10;
-      cursor !== null;
-      id++
-    ) {
-      forwarded.push(
-        router.fromApp(
-          encode({
-            id,
-            method: "thread/turns/list",
-            params: { threadId: "th-claude", cursor, limit: 1 },
-          }),
-        ),
+    const askTurns = async (id: number, cursor: string | null) => {
+      const forwarded = router.fromApp(
+        encode({
+          id,
+          method: "thread/turns/list",
+          params: {
+            threadId: "th-claude",
+            cursor,
+            limit: 1,
+            itemsView: "notLoaded",
+          },
+        }),
       );
       await Bun.sleep(0);
-      const page = responseTo(sent, id).result;
-      turnIds.push(...page.data.map((turn: { id: string }) => turn.id));
-      cursor = page.nextCursor;
-    }
+      return { forwarded, page: responseTo(sent, id).result };
+    };
+    const newest = await askTurns(10, out.result.turnsBackwardsCursor);
+    const older = await askTurns(11, newest.page.nextCursor);
     router.fromApp(
       encode({
         id: 20,
@@ -533,8 +530,24 @@ describe("Claude thread history", () => {
     expect(
       out.result.initialTurnsPage.data.map((turn: { id: string }) => turn.id),
     ).toEqual(["harnexus-history-u2"]);
-    expect(turnIds).toEqual(["harnexus-history-u2", "harnexus-history-u1"]);
-    expect(forwarded).toEqual([null, null]);
+    expect([newest.page.data, older.page.data]).toEqual([
+      [
+        expect.objectContaining({
+          id: "harnexus-history-u2",
+          itemsView: "notLoaded",
+          items: [],
+        }),
+      ],
+      [
+        expect.objectContaining({
+          id: "harnexus-history-u1",
+          itemsView: "notLoaded",
+          items: [],
+        }),
+      ],
+    ]);
+    expect(older.page.nextCursor).toBeNull();
+    expect([newest.forwarded, older.forwarded]).toEqual([null, null]);
     expect(
       responseTo(sent, 20).result.data.map((turn: { id: string }) => turn.id),
     ).toEqual(["harnexus-history-u1"]);
