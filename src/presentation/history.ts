@@ -5,6 +5,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { isObject } from "../runtime/object.ts";
 import type { AppNotification, ThreadItem, Turn } from "./protocol.ts";
+import { withoutSkillBodies } from "./skill-prompt.ts";
 import {
   closeTurn,
   type Rendered,
@@ -46,7 +47,7 @@ export const buildHistory = (
         if (replay !== null) replay = interrupt(replay);
       } else {
         if (replay !== null) turns.push(close(replay));
-        replay = start(thread, message.uuid, prompt, at);
+        replay = start(thread, message.uuid, withoutSkillBodies(prompt), at);
       }
     } else if (message.type === "assistant" && isAssistantBody(body)) {
       replay ??= start(thread, message.uuid, null, at);

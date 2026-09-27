@@ -17,6 +17,7 @@ import {
   openLogSink,
   prepareDirectory,
   readTextFileIfExists,
+  readTextFileSync,
   removeFile,
   writeFileAtomic,
 } from "./fs.boundary.ts";
@@ -72,6 +73,25 @@ describe("readTextFileIfExists", () => {
 
   test("returns an error for a path that cannot be read", async () => {
     const read = await readTextFileIfExists(dir);
+
+    expect(read.isErr() && read.error._tag).toBe("FileReadFailed");
+  });
+});
+
+describe("readTextFileSync", () => {
+  test("returns the text of a file", async () => {
+    await writeFile(join(dir, "note.md"), "text");
+
+    const read = readTextFileSync(join(dir, "note.md"));
+
+    expect(read.isOk() && read.value).toBe("text");
+  });
+
+  test.each([
+    { name: "a missing file", path: () => join(dir, "missing.md") },
+    { name: "a directory", path: () => dir },
+  ])("returns an error for $name", ({ path }) => {
+    const read = readTextFileSync(path());
 
     expect(read.isErr() && read.error._tag).toBe("FileReadFailed");
   });

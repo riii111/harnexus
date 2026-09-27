@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, fchmodSync, openSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  fchmodSync,
+  openSync,
+  readFileSync,
+  writeSync,
+} from "node:fs";
 import {
   mkdir,
   open,
@@ -80,6 +86,14 @@ export const readTextFileIfExists = (path: string) =>
         throw cause;
       }
     },
+    catch: (cause) =>
+      new FileReadFailed({ path, cause, message: `cannot read ${path}` }),
+  });
+
+// Synchronous for callers that must answer the app before yielding, so only small files belong here.
+export const readTextFileSync = (path: string) =>
+  Result.try({
+    try: () => readFileSync(path, "utf8"),
     catch: (cause) =>
       new FileReadFailed({ path, cause, message: `cannot read ${path}` }),
   });

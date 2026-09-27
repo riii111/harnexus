@@ -21,6 +21,7 @@ import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { ThreadRecord, ThreadStore } from "../infra/thread-store.ts";
 import { promptFor } from "../presentation/permission.ts";
 import type { UserInput } from "../presentation/protocol.ts";
+import { withSkillBodies } from "../presentation/skill-prompt.ts";
 import {
   markInterrupting,
   markToolDeclined,
@@ -36,6 +37,7 @@ import {
   type TurnOutcome,
   type TurnState,
 } from "../presentation/turn.ts";
+import { readTextFileSync } from "../runtime/fs.boundary.ts";
 import {
   type AppRequest,
   checkThread,
@@ -59,7 +61,8 @@ export type TurnEvent =
         | "model_changed"
         | "idle_closed"
         | "session_missing"
-        | "outcome_cleared";
+        | "outcome_cleared"
+        | "skill_unreadable";
     }
   | {
       event: "claude_turn";
@@ -265,7 +268,7 @@ export const createTurnController = ({
       refuse(id, "reply_to_other_worker");
       return;
     }
-    const input = textInput(params.input, delegated);
+    const input = claudeInput(textInput(params.input, delegated));
     if (input === null) {
       refuse(id, "text_only");
       return;
@@ -355,7 +358,7 @@ export const createTurnController = ({
       refuse(id, "no_running_turn");
       return;
     }
-    const input = textInput(params.input, null);
+    const input = claudeInput(textInput(params.input, null));
     if (input === null) {
       refuse(id, "text_only");
       return;
@@ -374,6 +377,16 @@ export const createTurnController = ({
     send({ id, result: { turnId: state.turnId } });
     log({ event: "claude_turn", step: "steered" });
     apply(active, renderUserInput(state, input.items, null, now()));
+  };
+
+  // Only the text Claude reads carries the skill files; the app keeps showing the input as typed.
+  const claudeInput = (input: TextInput | null) => {
+    if (input === null) return null;
+    const prompt = withSkillBodies(input.text, readTextFileSync);
+    if (prompt.unreadable.length > 0) {
+      log({ event: "claude_turn", step: "skill_unreadable" });
+    }
+    return { ...input, text: prompt.text };
   };
 
   // The reply comes first so the app sees it before the interrupted turn completes; a failed interrupt stops Claude by closing the session.
@@ -1024,6 +1037,7 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
     case "idle_closed":
     case "session_missing":
     case "outcome_cleared":
+    case "skill_unreadable":
       return { event: entry.event, step: entry.step };
     case "finished":
       return {
