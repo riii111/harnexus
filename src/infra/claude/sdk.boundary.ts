@@ -65,7 +65,9 @@ class ClaudePermissionModeFailed extends TaggedError(
   message: string;
 }> {}
 
-class ClaudeRecordUnreadable extends TaggedError("ClaudeRecordUnreadable")<{
+export class ClaudeRecordUnreadable extends TaggedError(
+  "ClaudeRecordUnreadable",
+)<{
   cause: unknown;
   message: string;
 }> {}
@@ -143,7 +145,7 @@ export const setQueryPermissionMode = (
       }),
   });
 
-// The SDK reports a missing record as an empty conversation, so only a read that fails outright is an error.
+// The SDK also answers a missing or unreadable record with no messages, so an error here covers only a read that fails outright.
 export const readSessionMessages = (
   read: GetSessionMessages,
   sessionId: string,

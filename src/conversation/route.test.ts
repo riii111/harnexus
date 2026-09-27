@@ -784,11 +784,13 @@ const setup = (
     },
     readSession: (sessionId) => {
       reads.push(sessionId);
-      return readClaudeSession(sessionId, async () => {
-        const record = records[sessionId.replace("session-", "")];
-        if (record !== undefined && record !== "unreadable") return record;
-        // biome-ignore lint/plugin/no-throw-try-catch: getSessionMessages rejects when the record cannot be read.
-        throw new Error("unreadable");
+      return readClaudeSession(sessionId, {
+        read: async () => {
+          const record = records[sessionId.replace("session-", "")];
+          if (record !== undefined && record !== "unreadable") return record;
+          // biome-ignore lint/plugin/no-throw-try-catch: getSessionMessages rejects when the record cannot be read.
+          throw new Error("unreadable");
+        },
       });
     },
     send: (message) => sent.push(message),
