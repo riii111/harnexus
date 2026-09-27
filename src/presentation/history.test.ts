@@ -151,6 +151,27 @@ describe("buildHistory", () => {
     expect(turn?.items.map(({ item }) => item.type)).toEqual(["agentMessage"]);
   });
 
+  test("shows only the typed text of a prompt the bridge attached files to", () => {
+    const typed = "<skill> sample [$demo](/skills/demo/SKILL.md)";
+
+    const [turn] = build([
+      {
+        ...prompt("u1", ""),
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: typed },
+            { type: "text", text: "<skill>\nDo it.\n</skill>" },
+          ],
+        },
+      },
+    ]);
+
+    expect(turn?.items[0]?.item).toMatchObject({
+      content: [{ type: "text", text: typed }],
+    });
+  });
+
   test("returns no turns for an empty record", () => {
     expect(build([])).toEqual([]);
   });

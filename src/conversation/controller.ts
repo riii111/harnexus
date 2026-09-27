@@ -36,6 +36,7 @@ import {
   type TurnOutcome,
   type TurnState,
 } from "../presentation/turn.ts";
+import { skillAttachments } from "./skill-attachments.ts";
 import {
   type AppRequest,
   checkThread,
@@ -59,7 +60,8 @@ export type TurnEvent =
         | "model_changed"
         | "idle_closed"
         | "session_missing"
-        | "outcome_cleared";
+        | "outcome_cleared"
+        | "skill_unreadable";
     }
   | {
       event: "claude_turn";
@@ -677,6 +679,10 @@ export const createTurnController = ({
       active.state = markInterrupting(active.state);
     }
 
+    const skills = await skillAttachments(input.text);
+    if (skills.unreadable.length > 0) {
+      log({ event: "claude_turn", step: "skill_unreadable" });
+    }
     await waitForPendingInterrupt(threadId);
     if (active.state?.interrupting) {
       finish(active, { status: "interrupted" }, null);
@@ -702,7 +708,7 @@ export const createTurnController = ({
       return;
     }
     slot.value.link.acceptWrites();
-    const sent = slot.value.session.send(input.text);
+    const sent = slot.value.session.send(input.text, skills.attachments);
     if (sent.isErr()) {
       dropSession(threadId, slot.value);
       fail(active, sent.error);
@@ -1024,6 +1030,7 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
     case "idle_closed":
     case "session_missing":
     case "outcome_cleared":
+    case "skill_unreadable":
       return { event: entry.event, step: entry.step };
     case "finished":
       return {

@@ -7,6 +7,7 @@ import {
   readFile,
   rename,
   rm,
+  stat,
   unlink,
 } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
@@ -79,6 +80,19 @@ export const readTextFileIfExists = (path: string) =>
         if (isMissingFile(cause)) return null;
         throw cause;
       }
+    },
+    catch: (cause) =>
+      new FileReadFailed({ path, cause, message: `cannot read ${path}` }),
+  });
+
+// A FIFO or device would keep the read waiting forever, so only a regular file is read.
+export const readRegularTextFile = (path: string) =>
+  Result.tryPromise({
+    try: async () => {
+      if (!(await stat(path)).isFile()) {
+        throw new Error(`${path} is not a regular file`);
+      }
+      return await readFile(path, "utf8");
     },
     catch: (cause) =>
       new FileReadFailed({ path, cause, message: `cannot read ${path}` }),

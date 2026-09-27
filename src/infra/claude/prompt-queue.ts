@@ -27,9 +27,9 @@ export const createPromptQueue = () => {
         }
       },
     } satisfies AsyncIterable<SDKUserMessage>,
-    push: (text: string) => {
+    push: (text: string, attachments: readonly string[] = []) => {
       if (ended) return null;
-      const message = userMessage(text);
+      const message = userMessage(text, attachments);
       queued.push(message);
       notify();
       return message.uuid;
@@ -41,10 +41,20 @@ export const createPromptQueue = () => {
   };
 };
 
-const userMessage = (text: string) =>
+// Attachments follow the typed text as blocks of their own, so the record keeps the typed text apart from what the bridge added.
+const userMessage = (text: string, attachments: readonly string[]) =>
   ({
     type: "user",
-    message: { role: "user", content: text },
+    message: {
+      role: "user",
+      content:
+        attachments.length === 0
+          ? text
+          : [text, ...attachments].map((part) => ({
+              type: "text" as const,
+              text: part,
+            })),
+    },
     parent_tool_use_id: null,
     uuid: randomUUID(),
   }) satisfies SDKUserMessage;

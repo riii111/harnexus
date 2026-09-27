@@ -16,6 +16,7 @@ import {
   listFileNames,
   openLogSink,
   prepareDirectory,
+  readRegularTextFile,
   readTextFileIfExists,
   removeFile,
   writeFileAtomic,
@@ -72,6 +73,32 @@ describe("readTextFileIfExists", () => {
 
   test("returns an error for a path that cannot be read", async () => {
     const read = await readTextFileIfExists(dir);
+
+    expect(read.isErr() && read.error._tag).toBe("FileReadFailed");
+  });
+});
+
+describe("readRegularTextFile", () => {
+  beforeAll(async () => {
+    const made = Bun.spawnSync(["mkfifo", join(dir, "fifo")]);
+    expect(made.exitCode).toBe(0);
+    expect((await stat(join(dir, "fifo"))).isFIFO()).toBe(true);
+  });
+
+  test("returns the text of a regular file", async () => {
+    await writeFile(join(dir, "note.md"), "text");
+
+    const read = await readRegularTextFile(join(dir, "note.md"));
+
+    expect(read.isOk() && read.value).toBe("text");
+  });
+
+  test.each([
+    { name: "a missing file", path: () => join(dir, "missing.md") },
+    { name: "a directory", path: () => dir },
+    { name: "a FIFO", path: () => join(dir, "fifo") },
+  ])("returns an error without waiting for $name", async ({ path }) => {
+    const read = await readRegularTextFile(path());
 
     expect(read.isErr() && read.error._tag).toBe("FileReadFailed");
   });

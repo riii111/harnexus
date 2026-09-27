@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -1242,6 +1242,62 @@ describe("turn/steer", () => {
   });
 });
 
+describe("skill links in Claude input", () => {
+  test("attaches the linked SKILL.md after the typed text Claude reads while the turn shows the input as typed", async () => {
+    const skill = await writeSkill("demo", "---\nname: demo\n---\nDo it.\n");
+    const typed = `[$demo](${skill}) go`;
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, typed), undefined);
+    await until(() => claude.started());
+    const [prompt] = await readPrompts(claude, 1);
+    claude.emit(sdk(answer("msg-1", "done")));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(prompt?.message.content).toEqual([
+      { type: "text", text: typed },
+      {
+        type: "text",
+        text: `<skill>\n<name>demo</name>\n<path>${skill}</path>\n---\nname: demo\n---\nDo it.\n</skill>`,
+      },
+    ]);
+    expect(
+      completedItems(sent).filter((item) => item.type === "userMessage"),
+    ).toMatchObject([{ content: [{ text: typed }] }]);
+  });
+
+  // A steer is answered before any file could be read, so its link reaches Claude as typed.
+  test("passes a steer's skill link as typed", async () => {
+    const skill = await writeSkill("demo", "Do it.\n");
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    turns.steerTurn(steer(30, "turn-1", `[$demo](${skill})`));
+    const [, steered] = await readPrompts(claude, 2);
+
+    expect(steered?.message.content).toBe(`[$demo](${skill})`);
+  });
+
+  test("sends the link alone and logs it when the SKILL.md cannot be read", async () => {
+    const typed = `[$gone](${join(dir, "gone", "SKILL.md")}) go`;
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, events } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, typed), undefined);
+    await until(() => claude.started());
+
+    expect(await firstPrompt(claude.prompt())).toBe(typed);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "skill_unreadable",
+    });
+  });
+});
+
 describe("model changes", () => {
   test("restart Claude on the new model at the next turn and resume the conversation", async () => {
     const first = fakeClaude(SUBSCRIPTION);
@@ -2453,6 +2509,13 @@ const until = async (condition: () => boolean) => {
     if (waited > 2000) return expect.unreachable("condition never held");
     await Bun.sleep(2);
   }
+};
+
+const writeSkill = async (name: string, body: string) => {
+  const path = join(dir, "skills", name, "SKILL.md");
+  await mkdir(join(dir, "skills", name), { recursive: true });
+  await writeFile(path, body);
+  return path;
 };
 
 // Reads only as many prompts as were sent, since a read past them waits for the next send.
