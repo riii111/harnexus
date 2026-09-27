@@ -510,7 +510,8 @@ describe("Claude thread history", () => {
       await Bun.sleep(0);
       return { forwarded, page: responseTo(sent, id).result };
     };
-    const newest = await askTurns(10, out.result.turnsBackwardsCursor);
+    const opening = out.result.turnsBackwardsCursor;
+    const newest = await askTurns(10, opening);
     const older = await askTurns(11, newest.page.nextCursor);
     router.fromApp(
       encode({
@@ -527,6 +528,7 @@ describe("Claude thread history", () => {
     expect(reads[0]).toBe("session-th-claude");
     expect(out.result.model).toBe(CLAUDE);
     expect(out.result.thread).not.toHaveProperty("turns");
+    expect(typeof opening).toBe("string");
     expect(
       out.result.initialTurnsPage.data.map((turn: { id: string }) => turn.id),
     ).toEqual(["harnexus-history-u2"]);
