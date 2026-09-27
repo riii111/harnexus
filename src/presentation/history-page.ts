@@ -117,43 +117,6 @@ export const viewTurn = (entry: HistoryTurn, view: TurnsView): Turn => {
   }
 };
 
-// A next cursor resumes after the page's last entry, and a backwards cursor reverses from its first entry, which it includes again.
-const page = <T>(
-  entries: readonly T[],
-  idOf: (entry: T) => string,
-  keep: (entry: T) => boolean,
-  request: { cursor: string | null; limit: number | null },
-): Page<T> | null => {
-  const from =
-    request.cursor === null ? 0 : startOf(entries, idOf, request.cursor);
-  if (from === null) return null;
-  const candidates = entries.slice(from).filter(keep);
-  const data = candidates.slice(0, pageSize(request.limit, candidates.length));
-  const first = data[0];
-  const last = data.at(-1);
-  return {
-    data,
-    nextCursor:
-      last !== undefined && candidates.length > data.length
-        ? `${AFTER}${idOf(last)}`
-        : null,
-    backwardsCursor: first === undefined ? null : `${AT}${idOf(first)}`,
-  };
-};
-
-const startOf = <T>(
-  entries: readonly T[],
-  idOf: (entry: T) => string,
-  cursor: string,
-) => {
-  const inclusive = cursor.startsWith(AT);
-  if (!inclusive && !cursor.startsWith(AFTER)) return null;
-  const id = cursor.slice(inclusive ? AT.length : AFTER.length);
-  const index = entries.findIndex((entry) => idOf(entry) === id);
-  if (index === -1) return null;
-  return inclusive ? index : index + 1;
-};
-
 const timeline = (history: readonly HistoryTurn[]): TimelineEntry[] => {
   const entries: TimelineEntry[] = [];
   for (const { turn, items } of history) {
@@ -189,6 +152,43 @@ const timelineEnd = (cursor: string) => {
   if (!cursor.startsWith(BEFORE)) return null;
   const end = Number(cursor.slice(BEFORE.length));
   return Number.isInteger(end) && end > 0 ? end : null;
+};
+
+// A next cursor resumes after the page's last entry, and a backwards cursor reverses from its first entry, which it includes again.
+const page = <T>(
+  entries: readonly T[],
+  idOf: (entry: T) => string,
+  keep: (entry: T) => boolean,
+  request: { cursor: string | null; limit: number | null },
+): Page<T> | null => {
+  const from =
+    request.cursor === null ? 0 : startOf(entries, idOf, request.cursor);
+  if (from === null) return null;
+  const candidates = entries.slice(from).filter(keep);
+  const data = candidates.slice(0, pageSize(request.limit, candidates.length));
+  const first = data[0];
+  const last = data.at(-1);
+  return {
+    data,
+    nextCursor:
+      last !== undefined && candidates.length > data.length
+        ? `${AFTER}${idOf(last)}`
+        : null,
+    backwardsCursor: first === undefined ? null : `${AT}${idOf(first)}`,
+  };
+};
+
+const startOf = <T>(
+  entries: readonly T[],
+  idOf: (entry: T) => string,
+  cursor: string,
+) => {
+  const inclusive = cursor.startsWith(AT);
+  if (!inclusive && !cursor.startsWith(AFTER)) return null;
+  const id = cursor.slice(inclusive ? AT.length : AFTER.length);
+  const index = entries.findIndex((entry) => idOf(entry) === id);
+  if (index === -1) return null;
+  return inclusive ? index : index + 1;
 };
 
 const ordered = <T>(entries: readonly T[], direction: SortDirection) =>
