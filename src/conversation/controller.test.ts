@@ -2166,7 +2166,6 @@ const harness = async (
     missingSessions?: string[];
     sessionLookupFails?: boolean;
     materializeFailures?: number;
-    // Gives each session a real thread tool server that calls the app through this.
     linkRequest?: ServerRequest;
   } = {},
 ) => {
@@ -2245,7 +2244,6 @@ const harness = async (
   };
 };
 
-// Calls the thread tool server Claude was started with, as Claude would.
 const messageReviewer = async (session: ClaudeSessionSettings | undefined) => {
   const server = session?.mcpServers?.codex_link;
   if (server === undefined || !("instance" in server)) {
