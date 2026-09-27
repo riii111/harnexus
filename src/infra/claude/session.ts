@@ -2,12 +2,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   type CanUseTool,
+  getSessionMessages,
   type McpServerConfig,
   type Options,
   type PermissionMode,
   query,
   resolveSettings,
   type SDKMessage,
+  type SessionMessage,
   type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result, TaggedError } from "better-result";
@@ -28,6 +30,7 @@ import {
   nextMessage,
   openQuery,
   readAccount,
+  readSessionMessages,
   readSettingsEnv,
   setQueryPermissionMode,
 } from "./sdk.boundary.ts";
@@ -91,6 +94,12 @@ export const claudeSessionExists = (
     }
     return Result.ok(false);
   });
+
+// Without a project folder the SDK searches every project, as the thread's directory may not be where the record was written.
+export const readClaudeSession = (
+  sessionId: string,
+  read: (sessionId: string) => Promise<SessionMessage[]> = getSessionMessages,
+) => readSessionMessages(read, sessionId);
 
 // Codex instructions and the app's history are never appended to the preset system prompt.
 const sessionOptions = (

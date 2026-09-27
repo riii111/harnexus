@@ -95,6 +95,7 @@ const workerA = async () => {
       return startClaudeSession(session, claude.runtime);
     },
     findSession: async () => Result.ok(true),
+    readSession: async () => Result.ok([]),
     send: (message) => sent.push(message),
     log: () => {},
   });

@@ -2,6 +2,7 @@ import {
   createTurnController,
   type TurnEvent,
 } from "../conversation/controller.ts";
+import { createHistoryRequests } from "../conversation/history-request.ts";
 import { createRouter, type RouteEvent } from "../conversation/route.ts";
 import { createCodexLink } from "../infra/codex/codex-link.ts";
 import { createDelegationWatch } from "../infra/codex/delegations.ts";
@@ -16,6 +17,7 @@ export const connectClaudeThreads = ({
   request,
   startSession,
   findSession,
+  readSession,
   send,
   log,
 }: {
@@ -23,6 +25,7 @@ export const connectClaudeThreads = ({
   request: ServerRequest;
   startSession: Controller["startSession"];
   findSession: Controller["findSession"];
+  readSession: Parameters<typeof createHistoryRequests>[0]["readSession"];
   send: (message: object) => void;
   log: (event: TurnEvent | RouteEvent) => void;
 }) => {
@@ -42,7 +45,13 @@ export const connectClaudeThreads = ({
     send,
     log,
   });
-  const router = createRouter(turns, log, delegations.observe);
+  const history = createHistoryRequests({
+    threads: turns,
+    readSession,
+    send,
+    log,
+  });
+  const router = createRouter(turns, log, delegations.observe, history);
   return { router, closeAll: turns.closeAll };
 };
 

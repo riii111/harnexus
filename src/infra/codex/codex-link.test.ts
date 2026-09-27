@@ -282,6 +282,7 @@ describe("createCodexLink over the app's turn for the created thread", () => {
       CODEX_ONLY_TURNS,
       () => {},
       delegations.observe,
+      NO_HISTORY,
     );
     const forwarded: (Buffer | null)[] = [];
     const { client, store } = await connect({
@@ -736,6 +737,11 @@ const CODEX_ONLY_TURNS: Parameters<typeof createRouter>[0] = {
   answerRequest: () => false,
   selectMode: () => expect.unreachable("no Claude thread in this session"),
   modeOf: () => undefined,
+};
+
+const NO_HISTORY: Parameters<typeof createRouter>[3] = {
+  load: () => expect.unreachable("no Claude thread in this session"),
+  answer: () => expect.unreachable("no Claude thread in this session"),
 };
 
 const FIXTURE_DIR = join(import.meta.dir, "../../../test/fixtures/app-server");

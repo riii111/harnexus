@@ -2,6 +2,7 @@ import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import {
   claudeSessionExists,
+  readClaudeSession,
   startClaudeSession,
 } from "../infra/claude/session.ts";
 import { createLineInjector } from "../infra/codex/inject.ts";
@@ -88,6 +89,7 @@ async function withClaude(relay: {
     request: serverCalls.request,
     startSession: startClaudeSession,
     findSession: claudeSessionExists,
+    readSession: (sessionId) => readClaudeSession(sessionId),
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });

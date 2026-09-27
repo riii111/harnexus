@@ -1009,6 +1009,7 @@ export const createTurnController = ({
     isClaudeThread: (threadId: unknown) =>
       typeof threadId === "string" && threads.threadOf(threadId) !== undefined,
     threadOf: threads.threadOf,
+    sessionIdOf: threads.sessionIdOf,
     adopt: threads.adopt,
   };
 };

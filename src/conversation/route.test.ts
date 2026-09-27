@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import { readClaudeSession } from "../infra/claude/session.ts";
+import { conversation } from "../presentation/testing/session-record.ts";
+import { createHistoryRequests } from "./history-request.ts";
 import { createRouter, type RouteEvent } from "./route.ts";
 import type { AppRequest, Mode } from "./thread-request.ts";
 
@@ -11,7 +15,7 @@ describe("Codex threads", () => {
     { file: "turn-with-tools.jsonl", expected: [] },
     { file: "steer-and-interrupt.jsonl", expected: [] },
     { file: "turn-failed-with-edits.jsonl", expected: [] },
-  ])("pass $file unchanged except the ids $expected of model list responses", ({
+  ])("pass $file unchanged except the ids $expected of model list responses", async ({
     file,
     expected,
   }) => {
@@ -22,7 +26,7 @@ describe("Codex threads", () => {
       const routed =
         direction === "app_to_server"
           ? router.fromApp(line)
-          : router.fromServer(line);
+          : await router.fromServer(line);
       if (routed === null || !routed.equals(line)) {
         changed.push(JSON.parse(line.toString()).id);
       }
@@ -92,11 +96,11 @@ describe("turn/start of a thread created by create_thread", () => {
 });
 
 describe("model/list", () => {
-  test("appends the Claude models to the last page", () => {
+  test("appends the Claude models to the last page", async () => {
     const { router } = setup();
 
     router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
-    const out = parse(router.fromServer(modelList(2, null)));
+    const out = parse(await router.fromServer(modelList(2, null)));
 
     expect(out.result.data.map((model: { id: string }) => model.id)).toEqual([
       "gpt-fixture",
@@ -120,12 +124,14 @@ describe("model/list", () => {
     expect(router.fromServer(line)).toEqual(line);
   });
 
-  test("logs a Claude id the server already lists instead of adding it twice", () => {
+  test("logs a Claude id the server already lists instead of adding it twice", async () => {
     const { router, events } = setup();
 
     router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
     const out = parse(
-      router.fromServer(modelList(2, null, ["gpt-fixture", "claude-sonnet-5"])),
+      await router.fromServer(
+        modelList(2, null, ["gpt-fixture", "claude-sonnet-5"]),
+      ),
     );
 
     const ids = out.result.data.map((model: { id: string }) => model.id);
@@ -148,7 +154,7 @@ describe("model/list", () => {
 });
 
 describe("threads with a Claude model", () => {
-  test("creates the thread on the server's default model and reports the Claude one", () => {
+  test("creates the thread on the server's default model and reports the Claude one", async () => {
     const { router, calls } = setup();
 
     const forwarded = router.fromApp(
@@ -158,7 +164,7 @@ describe("threads with a Claude model", () => {
         params: { cwd: "/fixture/work", model: CLAUDE },
       }),
     );
-    const out = parse(router.fromServer(threadResponse(3, "th-new")));
+    const out = parse(await router.fromServer(threadResponse(3, "th-new")));
 
     expect(parse(forwarded).params).toEqual({ cwd: "/fixture/work" });
     expect(calls).toEqual([
@@ -204,7 +210,7 @@ describe("threads with a Claude model", () => {
     ]);
   });
 
-  test("moves a resumed Claude thread to the Claude model it names and hides it from the server", () => {
+  test("moves a resumed Claude thread to the Claude model it names and hides it from the server", async () => {
     const { router, calls } = setup(["th-claude"]);
 
     const forwarded = router.fromApp(
@@ -214,7 +220,7 @@ describe("threads with a Claude model", () => {
         params: { threadId: "th-claude", model: OTHER_CLAUDE },
       }),
     );
-    const out = parse(router.fromServer(threadResponse(4, "th-claude")));
+    const out = parse(await router.fromServer(threadResponse(4, "th-claude")));
 
     expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
     expect(calls).toEqual([["changeModel", "th-claude", OTHER_CLAUDE]]);
@@ -396,7 +402,7 @@ describe("thread/settings/update", () => {
     expect(router.fromApp(line)).toEqual(line);
   });
 
-  test("reports the Claude model on resume even when the history mentions the settings notice", () => {
+  test("reports the Claude model on resume even when the history mentions the settings notice", async () => {
     const { router } = setup(["th-claude"]);
 
     router.fromApp(
@@ -408,7 +414,7 @@ describe("thread/settings/update", () => {
     );
     const response = parse(threadResponse(4, "th-claude"));
     response.result.thread.preview = "about thread/settings/updated";
-    const out = parse(router.fromServer(encode(response)));
+    const out = parse(await router.fromServer(encode(response)));
 
     expect(out.result.model).toBe(CLAUDE);
   });
@@ -421,7 +427,7 @@ describe("thread/settings/update", () => {
     expect(calls).toEqual([]);
   });
 
-  test("keeps plan mode picked for a Claude thread from the server", () => {
+  test("keeps plan mode picked for a Claude thread from the server", async () => {
     const { router, calls } = setup(["th-claude"]);
 
     const forwarded = router.fromApp(
@@ -429,14 +435,14 @@ describe("thread/settings/update", () => {
         collaborationMode: { mode: "plan", settings: { model: CLAUDE } },
       }),
     );
-    const out = parse(router.fromServer(settingsNotice("default")));
+    const out = parse(await router.fromServer(settingsNotice("default")));
 
     expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
     expect(calls).toEqual([["selectMode", "th-claude", "plan"]]);
     expect(out.params.threadSettings.collaborationMode.mode).toBe("plan");
   });
 
-  test("reports the Claude model in the server's settings notice", () => {
+  test("reports the Claude model in the server's settings notice", async () => {
     const { router } = setup(["th-claude"]);
     const notice = encode({
       method: "thread/settings/updated",
@@ -452,12 +458,286 @@ describe("thread/settings/update", () => {
       },
     });
 
-    const out = parse(router.fromServer(notice));
+    const out = parse(await router.fromServer(notice));
 
     expect(out.params.threadSettings.model).toBe(CLAUDE);
     expect(out.params.threadSettings.collaborationMode.settings.model).toBe(
       CLAUDE,
     );
+  });
+});
+
+describe("Claude thread history", () => {
+  test("adds the Claude record's turns and cursors to the resume response of a Claude thread", async () => {
+    const { router, reads } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+
+    router.fromApp(
+      encode({
+        id: 4,
+        method: "thread/resume",
+        params: {
+          threadId: "th-claude",
+          excludeTurns: true,
+          initialTurnsPage: {
+            limit: 1,
+            itemsView: "full",
+            sortDirection: "desc",
+          },
+        },
+      }),
+    );
+    const out = parse(await router.fromServer(threadResponse(4, "th-claude")));
+
+    expect(reads).toEqual(["session-th-claude"]);
+    expect(out.result.model).toBe(CLAUDE);
+    expect(out.result.turnsBackwardsCursor).toBe("at:harnexus-history-u2");
+    expect(out.result.itemsBackwardsCursor).toStartWith(
+      "at:harnexus-history-u2-",
+    );
+    expect(
+      out.result.initialTurnsPage.data.map((turn: { id: string }) => turn.id),
+    ).toEqual(["harnexus-history-u2"]);
+    expect(out.result.initialTurnsPage.nextCursor).toBe(
+      "after:harnexus-history-u2",
+    );
+    expect(out.result.thread).not.toHaveProperty("turns");
+  });
+
+  test("fills the thread's turns when the resume asks for the whole history", async () => {
+    const { router } = setup(["th-claude"], { "th-claude": conversation() });
+
+    router.fromApp(
+      encode({
+        id: 4,
+        method: "thread/resume",
+        params: { threadId: "th-claude" },
+      }),
+    );
+    const out = parse(await router.fromServer(threadResponse(4, "th-claude")));
+
+    expect(
+      out.result.thread.turns.map((turn: { id: string; itemsView: string }) => [
+        turn.id,
+        turn.itemsView,
+      ]),
+    ).toEqual([
+      ["harnexus-history-u1", "full"],
+      ["harnexus-history-u2", "full"],
+    ]);
+    expect(out.result).not.toHaveProperty("initialTurnsPage");
+  });
+
+  test("fills the turns of thread/read for a Claude thread", async () => {
+    const { router } = setup(["th-claude"], { "th-claude": conversation() });
+
+    router.fromApp(
+      encode({
+        id: 6,
+        method: "thread/read",
+        params: { threadId: "th-claude", includeTurns: true },
+      }),
+    );
+    const out = parse(await router.fromServer(threadResponse(6, "th-claude")));
+
+    expect(out.result.thread.turns).toHaveLength(2);
+  });
+
+  test("passes the resume response with the Claude model alone when the record cannot be read", async () => {
+    const { router, events } = setup(["th-claude"], {
+      "th-claude": "unreadable",
+    });
+
+    router.fromApp(
+      encode({
+        id: 4,
+        method: "thread/resume",
+        params: {
+          threadId: "th-claude",
+          excludeTurns: true,
+          initialTurnsPage: {},
+        },
+      }),
+    );
+    const out = parse(await router.fromServer(threadResponse(4, "th-claude")));
+
+    expect(out.result.model).toBe(CLAUDE);
+    expect(out.result).not.toHaveProperty("turnsBackwardsCursor");
+    expect(events).toEqual([
+      { event: "claude_history_unreadable", error: "ClaudeRecordUnreadable" },
+    ]);
+  });
+
+  test("answers thread/turns/list of a Claude thread without the server", async () => {
+    const { router, sent } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+
+    const routed = router.fromApp(
+      encode({
+        id: 7,
+        method: "thread/turns/list",
+        params: { threadId: "th-claude", limit: 5, itemsView: "notLoaded" },
+      }),
+    );
+    await Bun.sleep(0);
+
+    expect(routed).toBeNull();
+    expect(sent).toEqual([
+      {
+        id: 7,
+        result: expect.objectContaining({
+          data: [
+            expect.objectContaining({ id: "harnexus-history-u2", items: [] }),
+            expect.objectContaining({ id: "harnexus-history-u1", items: [] }),
+          ],
+          nextCursor: null,
+        }),
+      },
+    ]);
+  });
+
+  test("answers thread/items/list with the items of the asked turn", async () => {
+    const { router, sent } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+
+    router.fromApp(
+      encode({
+        id: 8,
+        method: "thread/items/list",
+        params: {
+          threadId: "th-claude",
+          turnId: "harnexus-history-u2",
+          sortDirection: "asc",
+        },
+      }),
+    );
+    await Bun.sleep(0);
+
+    expect(sent).toMatchObject([
+      {
+        id: 8,
+        result: {
+          data: [
+            { turnId: "harnexus-history-u2", item: { type: "userMessage" } },
+            { turnId: "harnexus-history-u2", item: { type: "agentMessage" } },
+          ],
+        },
+      },
+    ]);
+  });
+
+  test("answers thread/timeline/list from the newest entry back", async () => {
+    const { router, sent } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+
+    router.fromApp(
+      encode({
+        id: 9,
+        method: "thread/timeline/list",
+        params: { threadId: "th-claude", limit: 1 },
+      }),
+    );
+    await Bun.sleep(0);
+
+    expect(sent).toMatchObject([
+      {
+        id: 9,
+        result: {
+          data: [{ type: "turnCompleted", turnId: "harnexus-history-u2" }],
+          activeRealtimeSessionAtPageStart: null,
+        },
+      },
+    ]);
+  });
+
+  test("answers an empty history for a Claude thread that has no session yet", async () => {
+    const { router, sent, reads } = setup(["th-claude"]);
+
+    router.fromApp(
+      encode({
+        id: 7,
+        method: "thread/turns/list",
+        params: { threadId: "th-claude" },
+      }),
+    );
+    await Bun.sleep(0);
+
+    expect(reads).toEqual([]);
+    expect(sent).toEqual([
+      { id: 7, result: { data: [], nextCursor: null, backwardsCursor: null } },
+    ]);
+  });
+
+  test.each([
+    {
+      name: "an unreadable record",
+      record: "unreadable" as const,
+      code: -32603,
+    },
+    { name: "an unknown cursor", record: conversation(), code: -32602 },
+  ])("answers a history page with an error for $name", async ({
+    record,
+    code,
+  }) => {
+    const { router, sent } = setup(["th-claude"], { "th-claude": record });
+
+    router.fromApp(
+      encode({
+        id: 7,
+        method: "thread/turns/list",
+        params: { threadId: "th-claude", cursor: "server-cursor" },
+      }),
+    );
+    await Bun.sleep(0);
+
+    expect(sent).toMatchObject([{ id: 7, error: { code } }]);
+  });
+
+  test("reads the record once for history pages asked for together", async () => {
+    const { router, sent, reads } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+
+    for (const id of [7, 8]) {
+      router.fromApp(
+        encode({
+          id,
+          method: "thread/items/list",
+          params: { threadId: "th-claude" },
+        }),
+      );
+    }
+    await Bun.sleep(0);
+
+    expect(reads).toEqual(["session-th-claude"]);
+    expect(sent).toHaveLength(2);
+  });
+
+  test.each([
+    { name: "thread/turns/list", params: { threadId: "codex" } },
+    { name: "thread/items/list", params: { threadId: "codex", turnId: "t" } },
+    { name: "thread/timeline/list", params: { threadId: "codex" } },
+    { name: "thread/read", params: { threadId: "codex", includeTurns: true } },
+  ])("leaves $name of a Codex thread to the server", async ({
+    name,
+    params,
+  }) => {
+    const { router, sent, reads } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+    const request = encode({ id: 7, method: name, params });
+    const response = threadResponse(7, "codex");
+
+    const routed = router.fromApp(request);
+    const answered = await router.fromServer(response);
+
+    expect(routed).toEqual(request);
+    expect(answered).toEqual(response);
+    expect({ sent, reads }).toEqual({ sent: [], reads: [] });
   });
 });
 
@@ -484,12 +764,36 @@ const settingsUpdate = (change: object) =>
     params: { threadId: "th-claude", ...change },
   });
 
-const setup = (claudeThreads: string[] = []) => {
+// A thread named in records has a session whose record holds those messages; "unreadable" makes reading it fail.
+const setup = (
+  claudeThreads: string[] = [],
+  records: Record<string, SessionMessage[] | "unreadable"> = {},
+) => {
   const calls: unknown[][] = [];
   const events: RouteEvent[] = [];
+  const sent: object[] = [];
+  const reads: string[] = [];
   const threads = new Map(
     claudeThreads.map((id) => [id, { model: CLAUDE, cwd: "/fixture/work" }]),
   );
+  const history = createHistoryRequests({
+    threads: {
+      threadOf: (threadId) => threads.get(threadId),
+      sessionIdOf: (threadId) =>
+        threadId in records ? `session-${threadId}` : null,
+    },
+    readSession: (sessionId) => {
+      reads.push(sessionId);
+      return readClaudeSession(sessionId, async () => {
+        const record = records[sessionId.replace("session-", "")];
+        if (record !== undefined && record !== "unreadable") return record;
+        // biome-ignore lint/plugin/no-throw-try-catch: getSessionMessages rejects when the record cannot be read.
+        throw new Error("unreadable");
+      });
+    },
+    send: (message) => sent.push(message),
+    log: (event) => events.push(event),
+  });
   const modes = new Map<string, Mode>();
   const router = createRouter(
     {
@@ -522,8 +826,9 @@ const setup = (claudeThreads: string[] = []) => {
     },
     (event) => events.push(event),
     (source, threadId) => calls.push(["delegated", source, threadId]),
+    history,
   );
-  return { router, calls, events };
+  return { router, calls, events, sent, reads };
 };
 
 const fixtureLines = (file: string) =>
