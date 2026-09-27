@@ -16,6 +16,36 @@ describe("createLineRewriter", () => {
 
     expect(await output).toBe("KEEP\nlast part");
   });
+
+  test("holds later lines back until a pending rewrite settles", async () => {
+    let settle: (line: Buffer | null) => void = () => {};
+    const rewriter = createLineRewriter((line) =>
+      line.toString().startsWith("slow")
+        ? new Promise<Buffer | null>((resolve) => {
+            settle = resolve;
+          })
+        : line,
+    );
+    const output = collect(rewriter);
+
+    rewriter.write("first\nslow\nafter\n");
+    rewriter.end("next chunk\n");
+    await Bun.sleep(0);
+    settle(Buffer.from("SLOW\n"));
+
+    expect(await output).toBe("first\nSLOW\nafter\nnext chunk\n");
+  });
+
+  test("drops a line whose pending rewrite settles with nothing", async () => {
+    const rewriter = createLineRewriter((line) =>
+      line.toString().startsWith("drop") ? Promise.resolve(null) : line,
+    );
+    const output = collect(rewriter);
+
+    rewriter.end("keep\ndrop\nlast\n");
+
+    expect(await output).toBe("keep\nlast\n");
+  });
 });
 
 const collect = async (stream: NodeJS.ReadableStream) => {

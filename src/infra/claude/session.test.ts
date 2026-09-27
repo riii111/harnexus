@@ -19,6 +19,7 @@ import {
 import {
   type ClaudeSessionSettings,
   claudeSessionExists,
+  readClaudeSession,
   startClaudeSession,
 } from "./session.ts";
 import { failingQuery, fakeClaude } from "./testing/fake-claude.ts";
@@ -500,6 +501,79 @@ describe("claudeSessionExists", () => {
   });
 });
 
+describe("readClaudeSession", () => {
+  let configDir: string;
+
+  beforeEach(() => {
+    configDir = mkdtempSync(join(tmpdir(), "harnexus-claude-config-"));
+  });
+
+  afterEach(() => {
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  // The SDK's own reader finds the record through CLAUDE_CONFIG_DIR and answers one it cannot read with no messages.
+  test.each([
+    { name: "a readable record", mode: 0o600, expected: "ok:1" },
+    {
+      name: "a record the bridge cannot read",
+      mode: 0o000,
+      expected: "err:ClaudeRecordUnreadable",
+    },
+  ])("reports $name through the SDK's reader as $expected", async ({
+    mode,
+    expected,
+  }) => {
+    const record = writeRecord(configDir, SESSION_ID, RECORD_LINE);
+    chmodSync(record, mode);
+
+    const read = await withConfigDir(configDir, () =>
+      readClaudeSession(SESSION_ID, { configDir }),
+    );
+
+    expect(
+      read.isOk() ? `ok:${read.value.length}` : `err:${read.error._tag}`,
+    ).toBe(expected);
+  });
+
+  test("reports a missing record as an empty conversation", async () => {
+    mkdirSync(join(configDir, "projects", "-work-tree"), { recursive: true });
+
+    const read = await readClaudeSession("se-1", {
+      read: async () => [],
+      configDir,
+    });
+
+    expect(read.isOk() && read.value).toEqual([]);
+  });
+
+  test("reports an empty answer as unreadable when a project folder cannot be listed", async () => {
+    const project = join(configDir, "projects", "-work-tree");
+    mkdirSync(project, { recursive: true });
+    chmodSync(project, 0o000);
+
+    const read = await readClaudeSession("se-1", {
+      read: async () => [],
+      configDir,
+    });
+    chmodSync(project, 0o700);
+
+    expect(read.isErr() && read.error._tag).toBe("ClaudeRecordUnreadable");
+  });
+
+  test("reports a reader that fails as unreadable", async () => {
+    const read = await readClaudeSession("se-1", {
+      read: async () => {
+        // biome-ignore lint/plugin/no-throw-try-catch: getSessionMessages rejects when it cannot read at all.
+        throw new Error("unreadable");
+      },
+      configDir,
+    });
+
+    expect(read.isErr() && read.error._tag).toBe("ClaudeRecordUnreadable");
+  });
+});
+
 const SETTINGS: ClaudeSessionSettings = {
   cwd: "/work/tree",
   model: "claude-sonnet-5",
@@ -541,3 +615,36 @@ const sdkMessage = (label: string) =>
     uuid: label,
     session_id: "session-1",
   }) as unknown as SDKMessage;
+
+const writeRecord = (configDir: string, sessionId: string, line: string) => {
+  const project = join(configDir, "projects", "-work-tree");
+  mkdirSync(project, { recursive: true });
+  const record = join(project, `${sessionId}.jsonl`);
+  writeFileSync(record, `${line}\n`);
+  return record;
+};
+
+const withConfigDir = async <T>(configDir: string, run: () => Promise<T>) => {
+  const previous = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = configDir;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previous;
+  }
+};
+
+// getSessionMessages only looks up session ids shaped as UUIDs.
+const SESSION_ID = "00000000-0000-4000-8000-0000000000aa";
+
+const RECORD_LINE = JSON.stringify({
+  type: "user",
+  uuid: "00000000-0000-4000-8000-000000000001",
+  parentUuid: null,
+  sessionId: SESSION_ID,
+  isSidechain: false,
+  cwd: "/work/tree",
+  timestamp: "2026-09-27T00:00:00.000Z",
+  message: { role: "user", content: "hello" },
+});

@@ -2,6 +2,13 @@ import { isClaudeModel } from "../infra/claude/models.ts";
 import { delegationSource } from "../infra/codex/delegations.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
+import {
+  type createHistoryRequests,
+  type HistoryEvent,
+  isHistoryMethod,
+  withResumeHistory,
+  withTurns,
+} from "./history-request.ts";
 import { withClaudeModels } from "./model-list.ts";
 import {
   type AppRequest,
@@ -16,7 +23,8 @@ import {
 
 export type RouteEvent =
   | { event: "model_id_collision"; model: string }
-  | { event: "claude_request_refused"; method: RefusedMethod; reason: Refusal };
+  | { event: "claude_request_refused"; method: RefusedMethod; reason: Refusal }
+  | HistoryEvent;
 
 type Turns = {
   isClaudeThread: (threadId: unknown) => boolean;
@@ -34,16 +42,25 @@ type Turns = {
 
 type RefusedMethod = (typeof REFUSED_METHODS)[number];
 
-// createdModel is the Claude model a thread/start asked for, which the server never sees.
+type History = ReturnType<typeof createHistoryRequests>;
+
+// createdModel is the Claude model a thread/start asked for, which the server never sees; history is the Claude thread's record being read while the server opens the thread.
 type Pending =
   | { kind: "modelList" }
-  | { kind: "threadOpen"; createdModel: string | null };
+  | {
+      kind: "threadOpen";
+      createdModel: string | null;
+      history: ReturnType<History["load"]> | null;
+      params: Record<string, unknown>;
+    }
+  | { kind: "threadRead"; history: ReturnType<History["load"]> };
 
 // Lines that are not Claude requests pass as the same bytes; server requests and app responses share ids with the other direction, so only lines with a method are read as app requests and only lines without one as server responses.
 export const createRouter = (
   turns: Turns,
   log: (event: RouteEvent) => void,
   onDelegated: (sourceThreadId: string, threadId: string) => void,
+  history: History,
 ) => {
   const pending = new Map<AppRequest["id"], Pending>();
   // A Codex thread switched to Claude by turn/start needs a working directory that the request itself may not carry.
@@ -87,6 +104,14 @@ export const createRouter = (
         return null;
       case "thread/settings/update":
         return routeSettingsUpdate(line, message, request);
+      case "thread/read":
+        if (params.includeTurns !== true) return line;
+        if (!turns.isClaudeThread(params.threadId)) return line;
+        pending.set(id, {
+          kind: "threadRead",
+          history: history.load(String(params.threadId)),
+        });
+        return line;
       // The server would run these on its own model with none of the Claude conversation.
       case "review/start":
       case "thread/compact/start":
@@ -94,7 +119,10 @@ export const createRouter = (
         refuse(message.method, request, "unsupported_request");
         return null;
       default:
-        return line;
+        if (!isHistoryMethod(message.method)) return line;
+        if (!turns.isClaudeThread(params.threadId)) return line;
+        void history.answer(message.method, request);
+        return null;
     }
   };
 
@@ -133,6 +161,11 @@ export const createRouter = (
     pending.set(id, {
       kind: "threadOpen",
       createdModel: created ? String(params.model) : null,
+      history:
+        threadId !== undefined && known !== undefined
+          ? history.load(threadId)
+          : null,
+      params,
     });
     if (!isClaudeModel(params.model)) return line;
     const { model: _model, ...rest } = params;
@@ -178,7 +211,8 @@ export const createRouter = (
   };
 
   // The substring check only skips parsing; the method decides, since a response can carry the same text in its thread history.
-  const fromServer = (line: Buffer): Buffer => {
+  // A response that opens a Claude thread waits for its history, which holds back the server's later lines until it is read.
+  const fromServer = (line: Buffer): Buffer | Promise<Buffer> => {
     if (pending.size === 0 && !line.includes(SETTINGS_UPDATED)) return line;
     const message = parseMessage(line);
     if (message === null) return line;
@@ -200,6 +234,13 @@ export const createRouter = (
       return encode({ ...message, result: listed.result });
     }
     const result = message.result;
+    if (request.kind === "threadRead") {
+      return request.history.then((loaded) =>
+        loaded.isErr()
+          ? line
+          : encode({ ...message, result: withTurns(result, loaded.value) }),
+      );
+    }
     const thread = isObject(result.thread) ? result.thread : {};
     const threadId = thread.id;
     if (typeof threadId !== "string") return line;
@@ -209,14 +250,21 @@ export const createRouter = (
     }
     const model = turns.threadOf(threadId)?.model;
     if (model === undefined) return line;
-    return encode({
-      ...message,
-      result: {
-        ...result,
-        model,
-        ...("model" in thread && { thread: { ...thread, model } }),
-      },
-    });
+    const opened = {
+      ...result,
+      model,
+      ...("model" in thread && { thread: { ...thread, model } }),
+    };
+    if (request.history === null) return encode({ ...message, result: opened });
+    const { params } = request;
+    return request.history.then((loaded) =>
+      encode({
+        ...message,
+        result: loaded.isErr()
+          ? opened
+          : withResumeHistory(opened, loaded.value, params),
+      }),
+    );
   };
 
   // The server keeps its own model and mode for a Claude thread, and the app shows what this notice reports after any settings change.
@@ -267,6 +315,8 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
       return { event: entry.event, method: entry.method, reason: entry.reason };
     case "model_id_collision":
       return { event: entry.event, model: entry.model };
+    case "claude_history_unreadable":
+      return { event: entry.event, error: entry.error };
   }
 };
 

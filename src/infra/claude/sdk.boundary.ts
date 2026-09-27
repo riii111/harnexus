@@ -3,6 +3,7 @@ import type {
   PermissionMode,
   Query,
   SDKUserMessage,
+  SessionMessage,
   SettingSource,
   Settings,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -22,6 +23,8 @@ type ResolveSettings = (options: {
   cwd: string;
   settingSources: SettingSource[];
 }) => Promise<{ effective: Pick<Settings, "env"> }>;
+
+type GetSessionMessages = (sessionId: string) => Promise<SessionMessage[]>;
 
 export type ClaudeSdk = {
   query: RunQuery;
@@ -57,6 +60,13 @@ class ClaudeInterruptFailed extends TaggedError("ClaudeInterruptFailed")<{
 
 class ClaudePermissionModeFailed extends TaggedError(
   "ClaudePermissionModeFailed",
+)<{
+  cause: unknown;
+  message: string;
+}> {}
+
+export class ClaudeRecordUnreadable extends TaggedError(
+  "ClaudeRecordUnreadable",
 )<{
   cause: unknown;
   message: string;
@@ -132,6 +142,20 @@ export const setQueryPermissionMode = (
       new ClaudePermissionModeFailed({
         cause,
         message: `cannot switch Claude to the ${mode} permission mode`,
+      }),
+  });
+
+// The SDK also answers a missing or unreadable record with no messages, so an error here covers only a read that fails outright.
+export const readSessionMessages = (
+  read: GetSessionMessages,
+  sessionId: string,
+) =>
+  Result.tryPromise({
+    try: () => read(sessionId),
+    catch: (cause) =>
+      new ClaudeRecordUnreadable({
+        cause,
+        message: "cannot read the Claude conversation record",
       }),
   });
 

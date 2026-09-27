@@ -21,7 +21,7 @@ export type AppNotificationBody =
 export type Turn = {
   id: string;
   items: ThreadItem[];
-  itemsView: "full" | "summary";
+  itemsView: "full" | "summary" | "notLoaded";
   status: "inProgress" | "completed" | "failed" | "interrupted";
   error: TurnError | null;
   startedAt: number | null;

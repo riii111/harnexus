@@ -74,6 +74,7 @@ const serializeLogEvent = (entry: LogEvent) => {
       return serializeTurnEvent(entry);
     case "claude_request_refused":
     case "model_id_collision":
+    case "claude_history_unreadable":
       return serializeRouteEvent(entry);
     case "rpc_message":
     case "rpc_unobserved":

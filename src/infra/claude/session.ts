@@ -2,16 +2,21 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   type CanUseTool,
+  getSessionMessages,
   type McpServerConfig,
   type Options,
   type PermissionMode,
   query,
   resolveSettings,
   type SDKMessage,
+  type SessionMessage,
   type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result, TaggedError } from "better-result";
-import { listDirectoryIfExists } from "../../runtime/fs.boundary.ts";
+import {
+  listDirectoryIfExists,
+  readTextFileIfExists,
+} from "../../runtime/fs.boundary.ts";
 import {
   checkSettingsEnv,
   checkSubscription,
@@ -21,6 +26,7 @@ import {
 import { createPromptQueue } from "./prompt-queue.ts";
 import {
   type ClaudeQuery,
+  ClaudeRecordUnreadable,
   type ClaudeSdk,
   type ClaudeStreamFailed,
   closeQuery,
@@ -28,6 +34,7 @@ import {
   nextMessage,
   openQuery,
   readAccount,
+  readSessionMessages,
   readSettingsEnv,
   setQueryPermissionMode,
 } from "./sdk.boundary.ts";
@@ -75,10 +82,32 @@ export const startClaudeSession = (
 
 // Claude keeps a conversation as <session id>.jsonl in a project folder under its config directory, which the user may delete or move to another machine.
 // The SDK's lookup reports an unreadable record as missing, so absence is concluded only when every project folder could be listed without finding the file.
-export const claudeSessionExists = (
+export const claudeSessionExists = async (
   sessionId: string,
   configDir: string = claudeConfigDir(process.env),
+) => (await findSessionFile(sessionId, configDir)).map((path) => path !== null);
+
+// Without a project folder the SDK searches every project, as the thread's directory may not be where the record was written.
+// getSessionMessages answers a record it cannot read with no messages, so an empty answer is checked against the record file itself.
+export const readClaudeSession = (
+  sessionId: string,
+  {
+    read = getSessionMessages,
+    configDir = claudeConfigDir(process.env),
+  }: {
+    read?: (sessionId: string) => Promise<SessionMessage[]>;
+    configDir?: string;
+  } = {},
 ) =>
+  Result.gen(async function* () {
+    const messages = yield* Result.await(readSessionMessages(read, sessionId));
+    if (messages.length === 0) {
+      yield* Result.await(checkRecordReadable(sessionId, configDir));
+    }
+    return Result.ok(messages);
+  });
+
+const findSessionFile = (sessionId: string, configDir: string) =>
   Result.gen(async function* () {
     const projectsDir = join(configDir, "projects");
     const projects = yield* Result.await(listDirectoryIfExists(projectsDir));
@@ -87,10 +116,28 @@ export const claudeSessionExists = (
       const files = yield* Result.await(
         listDirectoryIfExists(join(projectsDir, project)),
       );
-      if (files?.includes(fileName)) return Result.ok(true);
+      if (files?.includes(fileName)) {
+        return Result.ok<string | null>(join(projectsDir, project, fileName));
+      }
     }
-    return Result.ok(false);
+    return Result.ok<string | null>(null);
   });
+
+// A record that is absent is an empty conversation, but one that exists or may exist without being readable is a failure.
+const checkRecordReadable = async (sessionId: string, configDir: string) =>
+  (
+    await Result.gen(async function* () {
+      const path = yield* Result.await(findSessionFile(sessionId, configDir));
+      if (path !== null) yield* Result.await(readTextFileIfExists(path));
+      return Result.ok();
+    })
+  ).mapError(
+    (cause) =>
+      new ClaudeRecordUnreadable({
+        cause,
+        message: "cannot read the Claude conversation record",
+      }),
+  );
 
 // Codex instructions and the app's history are never appended to the preset system prompt.
 const sessionOptions = (
