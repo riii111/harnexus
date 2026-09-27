@@ -1,4 +1,4 @@
-import type { InferErr } from "better-result";
+import { type InferErr, Result } from "better-result";
 import type { readClaudeSession } from "../infra/claude/session.ts";
 import { buildHistory, type HistoryTurn } from "../presentation/history.ts";
 import {
@@ -27,8 +27,7 @@ type Threads = {
 
 type ReadSession = (sessionId: string) => ReturnType<typeof readClaudeSession>;
 
-// A thread with no session yet has an empty history; null means the record could not be read.
-type Loaded = HistoryTurn[] | null;
+type Loaded = Result<HistoryTurn[], InferErr<Awaited<ReturnType<ReadSession>>>>;
 
 // The server never sees a Claude turn, so a Claude thread's history comes from Claude's own record and is rebuilt on each request rather than stored by the bridge.
 export const createHistoryRequests = ({
@@ -45,19 +44,24 @@ export const createHistoryRequests = ({
   // The app asks for a turn page and then each turn's items at once, so requests arriving while a read runs share it.
   const reading = new Map<string, Promise<Loaded>>();
 
+  // A thread with no session yet has an empty history.
   const load = (threadId: string): Promise<Loaded> => {
     const running = reading.get(threadId);
     if (running !== undefined) return running;
     const thread = threads.threadOf(threadId);
     const sessionId = threads.sessionIdOf(threadId);
-    if (thread === undefined || sessionId === null) return Promise.resolve([]);
+    if (thread === undefined || sessionId === null) {
+      return Promise.resolve(Result.ok([]));
+    }
     const loaded = readSession(sessionId).then((read) => {
       reading.delete(threadId);
-      if (read.isErr()) {
-        log({ event: "claude_history_unreadable", error: read.error._tag });
-        return null;
-      }
-      return buildHistory(read.value, { threadId, cwd: thread.cwd });
+      return read
+        .tapError((error) =>
+          log({ event: "claude_history_unreadable", error: error._tag }),
+        )
+        .map((messages) =>
+          buildHistory(messages, { threadId, cwd: thread.cwd }),
+        );
     });
     reading.set(threadId, loaded);
     return loaded;
@@ -66,14 +70,14 @@ export const createHistoryRequests = ({
   const answer = async (method: HistoryMethod, request: AppRequest) => {
     const threadId = String(request.params.threadId);
     const history = await load(threadId);
-    if (history === null) {
+    if (history.isErr()) {
       send({
         id: request.id,
         error: { code: INTERNAL_ERROR, message: RECORD_UNREADABLE },
       });
       return;
     }
-    const result = pageFor(method, history, request.params);
+    const result = pageFor(method, history.value, request.params);
     send(
       result === null
         ? {

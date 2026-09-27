@@ -236,9 +236,9 @@ export const createRouter = (
     const result = message.result;
     if (request.kind === "threadRead") {
       return request.history.then((loaded) =>
-        loaded === null
+        loaded.isErr()
           ? line
-          : encode({ ...message, result: withTurns(result, loaded) }),
+          : encode({ ...message, result: withTurns(result, loaded.value) }),
       );
     }
     const thread = isObject(result.thread) ? result.thread : {};
@@ -260,8 +260,9 @@ export const createRouter = (
     return request.history.then((loaded) =>
       encode({
         ...message,
-        result:
-          loaded === null ? opened : withResumeHistory(opened, loaded, params),
+        result: loaded.isErr()
+          ? opened
+          : withResumeHistory(opened, loaded.value, params),
       }),
     );
   };
