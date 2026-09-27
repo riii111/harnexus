@@ -79,6 +79,12 @@ describe("readTextFileIfExists", () => {
 });
 
 describe("readRegularTextFile", () => {
+  beforeAll(async () => {
+    const made = Bun.spawnSync(["mkfifo", join(dir, "fifo")]);
+    expect(made.exitCode).toBe(0);
+    expect((await stat(join(dir, "fifo"))).isFIFO()).toBe(true);
+  });
+
   test("returns the text of a regular file", async () => {
     await writeFile(join(dir, "note.md"), "text");
 
@@ -92,8 +98,6 @@ describe("readRegularTextFile", () => {
     { name: "a directory", path: () => dir },
     { name: "a FIFO", path: () => join(dir, "fifo") },
   ])("returns an error without waiting for $name", async ({ path }) => {
-    Bun.spawnSync(["mkfifo", join(dir, "fifo")]);
-
     const read = await readRegularTextFile(path());
 
     expect(read.isErr() && read.error._tag).toBe("FileReadFailed");
