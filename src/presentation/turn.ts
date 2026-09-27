@@ -186,9 +186,18 @@ export const renderTurnCompleted = (
   now: number,
 ): Rendered => {
   if (state.finished) return { state, notifications: [] };
+  return closeTurn(state, outcome, now);
+};
+
+// Unlike renderTurnCompleted this does not check for an ended turn, so it serves a replayed record, which carries no result message and so is still open when the replay closes it.
+export const closeTurn = (
+  state: TurnState,
+  outcome: TurnOutcome,
+  now: number,
+): Rendered & { turn: Turn } => {
   const draft = open(state);
-  finish(draft, outcome, now);
-  return seal(draft);
+  const turn = finish(draft, outcome, now);
+  return { ...seal(draft), turn };
 };
 
 // A permission request can reach the bridge before the message carrying its tool call, and the app's prompt points at the tool's item, so the item starts here; the later tool call is skipped as already started.
@@ -519,24 +528,22 @@ const finish = (draft: Draft, outcome: TurnOutcome, now: number) => {
     method: "thread/status/changed",
     params: { threadId: draft.threadId, status: { type: "idle" } },
   });
+  const turn: Turn = {
+    id: draft.turnId,
+    items: completed && draft.finalMessage !== null ? [draft.finalMessage] : [],
+    itemsView: "summary",
+    status: outcome.status,
+    error,
+    startedAt: toSeconds(draft.startedAtMs),
+    completedAt: toSeconds(now),
+    durationMs: now - draft.startedAtMs,
+  };
   notify(draft, now, {
     method: "turn/completed",
-    params: {
-      threadId: draft.threadId,
-      turn: {
-        id: draft.turnId,
-        items:
-          completed && draft.finalMessage !== null ? [draft.finalMessage] : [],
-        itemsView: "summary",
-        status: outcome.status,
-        error,
-        startedAt: toSeconds(draft.startedAtMs),
-        completedAt: toSeconds(now),
-        durationMs: now - draft.startedAtMs,
-      },
-    },
+    params: { threadId: draft.threadId, turn },
   });
   draft.finished = true;
+  return turn;
 };
 
 const completeMessage = (draft: Draft, item: AgentMessageItem, now: number) => {

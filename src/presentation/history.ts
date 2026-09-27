@@ -6,9 +6,9 @@ import type {
 import { isObject } from "../runtime/object.ts";
 import type { AppNotification, ThreadItem, Turn } from "./protocol.ts";
 import {
+  closeTurn,
   type Rendered,
   renderSdkMessage,
-  renderTurnCompleted,
   renderTurnStarted,
   renderUserInput,
   type TurnState,
@@ -59,7 +59,6 @@ export const buildHistory = (
 
 type Replay = {
   state: TurnState;
-  turn: Turn | null;
   items: Map<string, HistoryItem>;
   interrupted: boolean;
   firstAt: number | null;
@@ -86,7 +85,6 @@ const start = (
   const replay = collect(
     {
       state: opened.state,
-      turn: null,
       items: new Map(),
       interrupted: false,
       firstAt: at,
@@ -117,21 +115,18 @@ const feed = (
 
 // A record says nothing of how its last turn ended unless an interrupt was written, so the rest close as completed.
 const close = (replay: Replay): HistoryTurn => {
-  const closed = collect(
-    replay,
-    renderTurnCompleted(
-      replay.state,
-      { status: replay.interrupted ? "interrupted" : "completed" },
-      replay.lastAt ?? 0,
-    ),
+  const closed = closeTurn(
+    replay.state,
+    { status: replay.interrupted ? "interrupted" : "completed" },
+    replay.lastAt ?? 0,
   );
-  const turn = closed.turn ?? unreachableTurn(replay);
+  const { items } = collect(replay, closed);
   const untimed = replay.firstAt === null;
   return {
     turn: untimed
-      ? { ...turn, startedAt: null, completedAt: null, durationMs: null }
-      : turn,
-    items: [...closed.items.values()].map((entry) =>
+      ? { ...closed.turn, startedAt: null, completedAt: null, durationMs: null }
+      : closed.turn,
+    items: [...items.values()].map((entry) =>
       untimed ? { ...entry, startedAtMs: null, completedAtMs: null } : entry,
     ),
   };
@@ -140,55 +135,33 @@ const close = (replay: Replay): HistoryTurn => {
 // A completion replaces the item it closes, since the renderer may complete one item twice to correct a denial.
 const collect = (replay: Replay, rendered: Rendered): Replay => {
   const items = new Map(replay.items);
-  let turn = replay.turn;
   for (const notification of rendered.notifications) {
-    turn = noteNotification(items, notification) ?? turn;
+    noteItem(items, notification);
   }
-  return { ...replay, state: rendered.state, items, turn };
+  return { ...replay, state: rendered.state, items };
 };
 
-const noteNotification = (
+const noteItem = (
   items: Map<string, HistoryItem>,
   notification: AppNotification,
-): Turn | null => {
-  switch (notification.method) {
-    case "item/started":
-      items.set(notification.params.item.id, {
-        turnId: notification.params.turnId,
-        item: notification.params.item,
-        startedAtMs: notification.params.startedAtMs,
-        completedAtMs: null,
-      });
-      return null;
-    case "item/completed": {
-      const { item, turnId, completedAtMs } = notification.params;
-      const started = items.get(item.id);
-      items.set(item.id, {
-        turnId,
-        item,
-        startedAtMs: started?.startedAtMs ?? completedAtMs,
-        completedAtMs,
-      });
-      return null;
-    }
-    case "turn/completed":
-      return notification.params.turn;
-    default:
-      return null;
+) => {
+  if (notification.method === "item/started") {
+    items.set(notification.params.item.id, {
+      turnId: notification.params.turnId,
+      item: notification.params.item,
+      startedAtMs: notification.params.startedAtMs,
+      completedAtMs: null,
+    });
+  } else if (notification.method === "item/completed") {
+    const { item, turnId, completedAtMs } = notification.params;
+    items.set(item.id, {
+      turnId,
+      item,
+      startedAtMs: items.get(item.id)?.startedAtMs ?? completedAtMs,
+      completedAtMs,
+    });
   }
 };
-
-// renderTurnCompleted always reports the turn it closes, so this only satisfies the type.
-const unreachableTurn = (replay: Replay): Turn => ({
-  id: replay.state.turnId,
-  items: [],
-  itemsView: "summary",
-  status: "completed",
-  error: null,
-  startedAt: null,
-  completedAt: null,
-  durationMs: null,
-});
 
 // A user record carrying tool results continues the turn; any other user record is a prompt.
 const promptOf = (body: unknown): string | null => {
