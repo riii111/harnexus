@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
   CanUseTool,
-  PermissionMode,
   SDKResultMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
@@ -176,7 +175,7 @@ type ToolOutput = NonNullable<
   ReturnType<typeof delegatedMessage>
 >["toolOutput"];
 
-type TurnInput = TextInput & { permissionMode: PermissionMode };
+type TurnInput = TextInput & { permissionMode: Mode };
 
 class BridgeClosing extends TaggedError("BridgeClosing")<{
   message: string;
@@ -218,13 +217,9 @@ export const createTurnController = ({
   newTurnId?: () => string;
   idleSessionMs?: number;
 }) => {
-  // Threads created with a Claude model are saved to the store only on their first turn, so a thread never used leaves nothing behind.
-  const adopted = new Map<string, Thread>();
+  const threads = createThreadValues(store, log);
   const sessions = new Map<string, SessionSlot>();
   const activeTurns = new Map<string, ActiveTurn>();
-  // A session id or model the store failed to save still applies while the bridge runs; a null session id is one Claude lost.
-  const sessionIds = new Map<string, string | null>();
-  const models = new Map<string, string>();
   // Message ids accepted but not yet saved, so a copy arriving while the first waits or runs is caught too.
   const acceptedMessageIds = new Map<string, Set<string>>();
   const turnsInFlight = new Map<string, number>();
@@ -252,7 +247,11 @@ export const createTurnController = ({
       refuse(id, "missing_thread");
       return;
     }
-    const checked = checkThread(params, threadOf(threadId), fallbackCwd);
+    const checked = checkThread(
+      params,
+      threads.threadOf(threadId),
+      fallbackCwd,
+    );
     if ("refusal" in checked) {
       refuse(id, checked.refusal);
       return;
@@ -281,7 +280,7 @@ export const createTurnController = ({
       return;
     }
     if (messageId !== null) acceptMessage(threadId, messageId);
-    changeModel(threadId, checked.thread.model);
+    threads.changeModel(threadId, checked.thread.model);
     cancelIdleClose(threadId);
     const inFlight = turnsInFlight.get(threadId) ?? 0;
     if (inFlight > 0) log({ event: "claude_turn", step: "queued" });
@@ -329,7 +328,7 @@ export const createTurnController = ({
       idleTimers.delete(threadId);
       const slot = sessions.get(threadId);
       if (slot === undefined) return;
-      if (sessionIdOf(threadId) == null) return;
+      if (threads.sessionIdOf(threadId) == null) return;
       dropSession(threadId, slot);
       log({ event: "claude_turn", step: "idle_closed" });
     }, idleSessionMs);
@@ -375,28 +374,6 @@ export const createTurnController = ({
     send({ id, result: { turnId: state.turnId } });
     log({ event: "claude_turn", step: "steered" });
     apply(active, renderUserInput(state, input.items, null, now()));
-  };
-
-  // A running turn keeps its model; the next turn restarts Claude on the new one and resumes the same conversation.
-  const changeModel = (threadId: string, model: string) => {
-    const thread = threadOf(threadId);
-    if (thread === undefined || thread.model === model) return;
-    models.set(threadId, model);
-    log({ event: "claude_turn", step: "model_changed" });
-    // A thread not yet registered saves this model when its first turn registers it.
-    if (store.get(threadId) !== undefined) saveModel(threadId, model);
-  };
-
-  const saveModel = (threadId: string, model: string) => {
-    void store.setModel(threadId, model).then((saved) => {
-      if (saved.isErr()) {
-        log({
-          event: "claude_turn",
-          step: "model_not_saved",
-          error: saved.error._tag,
-        });
-      }
-    });
   };
 
   // The reply comes first so the app sees it before the interrupted turn completes; a failed interrupt stops Claude by closing the session.
@@ -491,7 +468,7 @@ export const createTurnController = ({
         return;
       }
       // A turn accepted just before this one may have registered the thread first, with its own model and directory.
-      const saved = threadOf(threadId);
+      const saved = threads.threadOf(threadId);
       const change =
         saved === undefined ? null : savedThreadChange(thread, saved);
       if (change !== null) {
@@ -499,12 +476,7 @@ export const createTurnController = ({
         refuseTurn(request, queued, change);
         return;
       }
-      adopted.delete(threadId);
-      // A model picked while the thread was being registered is saved now, since the registration carried the earlier one.
-      const picked = models.get(threadId);
-      if (picked !== undefined && picked !== store.get(threadId)?.model) {
-        saveModel(threadId, picked);
-      }
+      threads.markRegistered(threadId);
     }
     const typedByUser = input.toolOutput === null && messageId !== null;
     if (
@@ -745,7 +717,7 @@ export const createTurnController = ({
         return;
       }
     }
-    let sessionId = sessionIdOf(threadId);
+    let sessionId = threads.sessionIdOf(threadId);
     while (active.state !== null && !active.state.finished) {
       const next = await slot.value.session.messages.next();
       const received =
@@ -764,15 +736,7 @@ export const createTurnController = ({
       const current = received.value.session_id;
       if (current !== undefined && current !== sessionId) {
         sessionId = current;
-        sessionIds.set(threadId, current);
-        const saved = await store.setSessionId(threadId, current);
-        if (saved.isErr()) {
-          log({
-            event: "claude_turn",
-            step: "session_not_saved",
-            error: saved.error._tag,
-          });
-        }
+        await threads.setSessionId(threadId, current);
       }
       const message = received.value;
       const steers =
@@ -834,7 +798,6 @@ export const createTurnController = ({
   };
 
   // model is the one the turn was accepted with, since a change that arrives while the turn waits applies to the next turn.
-  // model is the one the turn was accepted with, since a change that arrives while the turn waits applies to the next turn.
   const sessionFor = async (
     record: ThreadRecord,
     model: string,
@@ -849,9 +812,10 @@ export const createTurnController = ({
         new BridgeClosing({ message: refusalMessage("bridge_closing") }),
       );
     }
-    const resume = sessionIdOf(record.threadId);
+    const resume = threads.sessionIdOf(record.threadId);
     if (resume !== null && !(await sessionFound(resume))) {
-      forgetSession(record.threadId);
+      log({ event: "claude_turn", step: "session_missing" });
+      void threads.setSessionId(record.threadId, null);
       return Result.err(
         new SessionMissing({
           message:
@@ -887,29 +851,10 @@ export const createTurnController = ({
     return Result.ok(slot);
   };
 
-  const sessionIdOf = (threadId: string) =>
-    sessionIds.has(threadId)
-      ? (sessionIds.get(threadId) ?? null)
-      : (store.get(threadId)?.sessionId ?? null);
-
   // A record that cannot be looked up is left for Claude to resume, which reports its own failure.
   const sessionFound = async (sessionId: string) => {
     const found = await findSession(sessionId);
     return found.isErr() || found.value;
-  };
-
-  const forgetSession = (threadId: string) => {
-    sessionIds.set(threadId, null);
-    log({ event: "claude_turn", step: "session_missing" });
-    void store.setSessionId(threadId, null).then((saved) => {
-      if (saved.isErr()) {
-        log({
-          event: "claude_turn",
-          step: "session_not_saved",
-          error: saved.error._tag,
-        });
-      }
-    });
   };
 
   // The SDK reports no message when a call is refused here, so the refusal is recorded on the turn to show its item as declined.
@@ -1029,18 +974,6 @@ export const createTurnController = ({
     slot.session.close();
   };
 
-  const threadOf = (threadId: string): Thread | undefined => {
-    const record = store.get(threadId);
-    const thread =
-      record === undefined
-        ? adopted.get(threadId)
-        : { model: record.model, cwd: record.worktree };
-    const model = models.get(threadId);
-    return thread === undefined || model === undefined
-      ? thread
-      : { ...thread, model };
-  };
-
   const refuse = (
     id: AppRequest["id"],
     reason: Refusal,
@@ -1067,18 +1000,16 @@ export const createTurnController = ({
     startTurn,
     steerTurn,
     interruptTurn,
-    changeModel,
+    changeModel: threads.changeModel,
     closeAll,
     reject,
     answerRequest: appRequests.answer,
     selectMode,
     modeOf: (threadId: string) => modes.get(threadId),
     isClaudeThread: (threadId: unknown) =>
-      typeof threadId === "string" && threadOf(threadId) !== undefined,
-    threadOf,
-    adopt: (threadId: string, thread: Thread) => {
-      if (store.get(threadId) === undefined) adopted.set(threadId, thread);
-    },
+      typeof threadId === "string" && threads.threadOf(threadId) !== undefined,
+    threadOf: threads.threadOf,
+    adopt: threads.adopt,
   };
 };
 
@@ -1114,6 +1045,85 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
     case "run_state_not_saved":
       return { event: entry.event, step: entry.step, error: entry.error };
   }
+};
+
+// The model and session id a thread runs with are set here before the store saves them and win over what it holds, so a failed save still applies while the bridge runs; a null session id is one Claude lost.
+const createThreadValues = (
+  store: ThreadStore,
+  log: (event: TurnEvent) => void,
+) => {
+  // Threads created with a Claude model are saved to the store only on their first turn, so a thread never used leaves nothing behind.
+  const adopted = new Map<string, Thread>();
+  const models = new Map<string, string>();
+  const sessionIds = new Map<string, string | null>();
+
+  const threadOf = (threadId: string): Thread | undefined => {
+    const record = store.get(threadId);
+    const thread =
+      record === undefined
+        ? adopted.get(threadId)
+        : { model: record.model, cwd: record.worktree };
+    const model = models.get(threadId);
+    return thread === undefined || model === undefined
+      ? thread
+      : { ...thread, model };
+  };
+
+  const saveModel = (threadId: string, model: string) => {
+    void store.setModel(threadId, model).then((saved) => {
+      if (saved.isErr()) {
+        log({
+          event: "claude_turn",
+          step: "model_not_saved",
+          error: saved.error._tag,
+        });
+      }
+    });
+  };
+
+  return {
+    threadOf,
+
+    sessionIdOf: (threadId: string) =>
+      sessionIds.has(threadId)
+        ? (sessionIds.get(threadId) ?? null)
+        : (store.get(threadId)?.sessionId ?? null),
+
+    adopt: (threadId: string, thread: Thread) => {
+      if (store.get(threadId) === undefined) adopted.set(threadId, thread);
+    },
+
+    // A model picked while the thread was being registered is saved now, since the registration carried the earlier one.
+    markRegistered: (threadId: string) => {
+      adopted.delete(threadId);
+      const picked = models.get(threadId);
+      if (picked !== undefined && picked !== store.get(threadId)?.model) {
+        saveModel(threadId, picked);
+      }
+    },
+
+    // A running turn keeps its model; the next turn restarts Claude on the new one and resumes the same conversation.
+    changeModel: (threadId: string, model: string) => {
+      const thread = threadOf(threadId);
+      if (thread === undefined || thread.model === model) return;
+      models.set(threadId, model);
+      log({ event: "claude_turn", step: "model_changed" });
+      // A thread not yet registered saves this model when its first turn registers it.
+      if (store.get(threadId) !== undefined) saveModel(threadId, model);
+    },
+
+    setSessionId: async (threadId: string, sessionId: string | null) => {
+      sessionIds.set(threadId, sessionId);
+      const saved = await store.setSessionId(threadId, sessionId);
+      if (saved.isErr()) {
+        log({
+          event: "claude_turn",
+          step: "session_not_saved",
+          error: saved.error._tag,
+        });
+      }
+    },
+  };
 };
 
 // A list under its cap names every send the turn took, so a steer it leaves out runs as a later turn, even one that reached Claude after this result was written; a queued send the CLI counts promises that turn too.
