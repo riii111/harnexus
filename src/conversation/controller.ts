@@ -557,14 +557,17 @@ export const createTurnController = ({
           messageId,
         );
         release(active);
-        active.link?.stopWrites();
-        return active.link?.hasUnsettledWrite()
-          ? Result.err(
-              new LinkWriteUnsettled({
-                message: "a thread tool write has an unknown outcome",
-              }),
-            )
-          : Result.ok();
+        const link = active.link;
+        link?.stopWrites();
+        if (link === null || !link.hasUnsettledWrite()) return Result.ok();
+        // An undecided write stays on its link, so the session goes with it and the turn the user continues with starts on a new link.
+        const slot = sessions.get(threadId);
+        if (slot?.link === link) dropSession(threadId, slot);
+        return Result.err(
+          new LinkWriteUnsettled({
+            message: "a thread tool write has an unknown outcome",
+          }),
+        );
       },
       (error) => error._tag === "LinkWriteUnsettled",
     );

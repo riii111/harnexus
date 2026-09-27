@@ -9,13 +9,18 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { Result } from "better-result";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { type InferErr, Result } from "better-result";
 import {
   type ClaudeSessionSettings,
   claudeSessionExists,
   startClaudeSession,
 } from "../infra/claude/session.ts";
 import { fakeClaude } from "../infra/claude/testing/fake-claude.ts";
+import { createCodexLink } from "../infra/codex/codex-link.ts";
+import { createDelegationWatch } from "../infra/codex/delegations.ts";
+import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import {
   FileRemoveFailed,
@@ -452,18 +457,19 @@ describe("session ids", () => {
 
 describe("a thread whose last turn has an unknown outcome", () => {
   test("runs a new message the user sends after the refusal and clears the unknown state", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
     let undecided = true;
-    const { turns, sent, store, events } = await harness([claude], {
+    const { turns, sent, store, events } = await harness([first, second], {
       unsettledWrite: () => undecided,
     });
-    await completeTurn(turns, sent, claude, 10);
+    await completeTurn(turns, sent, first, 10);
     await until(() => store.get(THREAD)?.runState === "outcomeUnknown");
     undecided = false;
 
     turns.startTurn(withMessageId(turnStart(11, "again"), "m-1"), undefined);
     await until(() => responseTo(sent, 11) !== undefined);
-    await completeTurn(turns, sent, claude, 12, "m-2");
+    await completeTurn(turns, sent, second, 12, "m-2");
     await until(() => store.get(THREAD)?.runState === "idle");
 
     expect(responseTo(sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
@@ -544,6 +550,94 @@ describe("a thread whose last turn has an unknown outcome", () => {
       [11, 12].map((id) => responseTo(after.sent, id)?.error.message),
     ).toEqual([OUTCOME_UNKNOWN, OUTCOME_UNKNOWN]);
     expect(second.started()).toBe(false);
+  });
+
+  test("continues on a new Claude session whose thread tools write again after a write whose answer was lost", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    let lost = true;
+    const { turns, sent, store, settings, toolCalls } = await harness(
+      [first, second],
+      {
+        linkRequest: async () =>
+          lost ? Result.err(UNANSWERED) : Result.ok(TOOL_ANSWER),
+      },
+    );
+    turns.startTurn(turnStart(10, "ask the reviewer"), undefined);
+    await until(() => first.started());
+    await store.addReviewer(THREAD, NEW_REVIEWER);
+    const lostSend = await messageReviewer(settings[0]);
+    first.emit(sdk(success()));
+    await until(() => store.get(THREAD)?.runState === "outcomeUnknown");
+    lost = false;
+
+    turns.startTurn(
+      withMessageId(turnStart(11, "what happened?"), "m-1"),
+      undefined,
+    );
+    await until(() => responseTo(sent, 11) !== undefined);
+    turns.startTurn(withMessageId(turnStart(12, "go on"), "m-2"), undefined);
+    await until(() => second.started());
+    const resent = await messageReviewer(settings[1]);
+    second.emit(sdk(success()));
+    await until(() => turnsCompleted(sent).length === 2);
+    await until(() => store.get(THREAD)?.runState !== "running");
+
+    expect(lostSend.isError).toBe(true);
+    expect(responseTo(sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
+    expect(first.closes()).toBe(1);
+    expect(settings[1]).toMatchObject({ resume: "se-1" });
+    expect(resent.isError).toBeFalsy();
+    expect(toolCalls).toHaveLength(2);
+    expect(store.get(THREAD)?.runState).toBe("idle");
+  });
+
+  test("continues on a new Claude session after a turn stopped mid-write, which a late answer neither breaks nor sends again", async () => {
+    const first = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
+    const second = fakeClaude(SUBSCRIPTION);
+    const late = createGate();
+    const { turns, sent, store, settings, toolCalls } = await harness(
+      [first, second],
+      {
+        linkRequest: async () => {
+          if (toolCalls.length === 1) await late.promise;
+          return Result.ok(TOOL_ANSWER);
+        },
+      },
+    );
+    turns.startTurn(turnStart(10, "ask the reviewer"), undefined);
+    await until(() => first.started());
+    await store.addReviewer(THREAD, NEW_REVIEWER);
+    const waiting = messageReviewer(settings[0]);
+    await until(() => toolCalls.length === 1);
+    turns.interruptTurn(interrupt(20, "turn-1"));
+    await until(() => first.interrupts() === 1);
+    first.emit(
+      sdk(result({ subtype: "error_during_execution", is_error: true })),
+    );
+    await until(() => store.get(THREAD)?.runState === "outcomeUnknown");
+
+    turns.startTurn(
+      withMessageId(turnStart(11, "what happened?"), "m-1"),
+      undefined,
+    );
+    await until(() => responseTo(sent, 11) !== undefined);
+    turns.startTurn(withMessageId(turnStart(12, "go on"), "m-2"), undefined);
+    await until(() => second.started());
+    late.open();
+    await waiting;
+    const next = await messageReviewer(settings[1]);
+    second.emit(sdk(success()));
+    await until(() => turnsCompleted(sent).length === 2);
+    await until(() => store.get(THREAD)?.runState !== "running");
+
+    expect(responseTo(sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
+    expect(first.closes()).toBe(1);
+    expect(second.closes()).toBe(0);
+    expect(next.isError).toBeFalsy();
+    expect(toolCalls).toHaveLength(2);
+    expect(turnsCompleted(sent)).toEqual(["interrupted", "completed"]);
+    expect(store.get(THREAD)?.runState).toBe("idle");
   });
 
   test("keeps refusing while the unknown state cannot be cleared", async () => {
@@ -2061,6 +2155,7 @@ const harness = async (
     missingSessions = [],
     sessionLookupFails = false,
     materializeFailures = 0,
+    linkRequest,
   }: {
     adopt?: boolean;
     files?: Parameters<typeof openThreadStore>[1];
@@ -2071,6 +2166,7 @@ const harness = async (
     missingSessions?: string[];
     sessionLookupFails?: boolean;
     materializeFailures?: number;
+    linkRequest?: ServerRequest;
   } = {},
 ) => {
   const opened = await openThreadStore(join(dir, "threads.json"), files);
@@ -2082,6 +2178,7 @@ const harness = async (
   const links: string[] = [];
   const gates: string[] = [];
   const materialized: string[] = [];
+  const toolCalls: unknown[] = [];
   let failuresLeft = materializeFailures;
   let turnCount = 0;
   const turns = createTurnController({
@@ -2098,6 +2195,17 @@ const harness = async (
     },
     openLink: (threadId) => {
       links.push(threadId);
+      if (linkRequest !== undefined) {
+        return createCodexLink({
+          callerThreadId: threadId,
+          store,
+          request: (method, params, options) => {
+            toolCalls.push(params);
+            return linkRequest(method, params, options);
+          },
+          delegations: createDelegationWatch(store.claimReviewer),
+        });
+      }
       return {
         server: createSdkMcpServer({ name: "codex_link", tools: [] }),
         allowedTools: ALLOWED_TOOLS,
@@ -2132,7 +2240,24 @@ const harness = async (
     links,
     gates,
     materialized,
+    toolCalls,
   };
+};
+
+const messageReviewer = async (session: ClaudeSessionSettings | undefined) => {
+  const server = session?.mcpServers?.codex_link;
+  if (server === undefined || !("instance" in server)) {
+    return expect.unreachable("Claude has no thread tool server");
+  }
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  await server.instance.connect(serverTransport);
+  const client = new Client({ name: "test", version: "0" });
+  await client.connect(clientTransport);
+  return client.callTool({
+    name: "send_message_to_thread",
+    arguments: { threadId: NEW_REVIEWER, prompt: "review this" },
+  });
 };
 
 const restartedWithUnknownOutcome = async (
@@ -2204,6 +2329,14 @@ const DUPLICATE = (id: number) => ({
 });
 
 const ALLOWED_TOOLS = ["mcp__codex_link__read_thread"];
+
+const TOOL_ANSWER = { content: [{ type: "text", text: "sent" }] };
+
+const UNANSWERED = {
+  _tag: "ServerRequestUnanswered",
+  method: "mcpServer/tool/call",
+  message: "the server closed before answering mcpServer/tool/call",
+} as InferErr<Awaited<ReturnType<ServerRequest>>>;
 
 const OUTCOME_UNKNOWN =
   "the previous Claude turn on this thread stopped before its outcome was known; check what that turn did, such as changed files or messages to other threads, then send a message yourself to continue";
