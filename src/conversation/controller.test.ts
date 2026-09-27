@@ -640,6 +640,40 @@ describe("a thread whose last turn has an unknown outcome", () => {
     expect(store.get(THREAD)?.runState).toBe("idle");
   });
 
+  test("fails an answered waiting turn it cannot run and continues on the user's next new message", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    let undecided = true;
+    const { turns, sent, store } = await harness([first, second], {
+      unsettledWrite: () => undecided,
+    });
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => first.started());
+    turns.startTurn(withMessageId(turnStart(11, "reply"), "m-1"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    first.emit(sdk(success()));
+    await until(() => turnsCompleted(sent).length === 2);
+    const failedStarted = second.started();
+    undecided = false;
+
+    await completeTurn(turns, sent, second, 12, "m-2");
+    await until(() => store.get(THREAD)?.runState === "idle");
+
+    expect(responseTo(sent, 11)?.result.turn).toMatchObject({ id: "turn-2" });
+    expect(completedTurns(sent)[1]).toMatchObject({
+      id: "turn-2",
+      status: "failed",
+      error: { message: OUTCOME_UNKNOWN },
+    });
+    expect(failedStarted).toBe(false);
+    expect(turnsCompleted(sent)).toEqual(["completed", "failed", "completed"]);
+    expect(
+      sent
+        .filter((m) => m.method === "thread/status/changed")
+        .map((m) => m.params.status.type),
+    ).toEqual(["active", "idle", "active", "idle"]);
+  });
+
   test("keeps refusing while the unknown state cannot be cleared", async () => {
     const second = fakeClaude(SUBSCRIPTION);
     const after = await restartedWithUnknownOutcome([second], {
@@ -697,6 +731,30 @@ describe("a saved session Claude no longer has", () => {
       event: "claude_turn",
       step: "session_missing",
     });
+  });
+
+  test("starts a new conversation after a lost session even when forgetting its id cannot be saved", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const before = await harness([first]);
+    await completeTurn(before.turns, before.sent, first, 10);
+    await until(() => before.store.get(THREAD)?.runState === "idle");
+    const second = fakeClaude(SUBSCRIPTION);
+
+    const after = await harness([second], {
+      missingSessions: ["se-1"],
+      files: { writeState: diskFull },
+    });
+    after.turns.startTurn(turnStart(11, "hello"), undefined);
+    await until(() => turnCompleted(after.sent) !== undefined);
+    await until(() =>
+      after.events.some((event) => event.step === "session_not_saved"),
+    );
+    await completeTurn(after.turns, after.sent, second, 12);
+
+    expect(after.store.get(THREAD)?.sessionId).toBe("se-1");
+    expect(after.settings).toHaveLength(1);
+    expect(after.settings[0]?.resume).toBeUndefined();
+    expect(turnsCompleted(after.sent)).toEqual(["failed", "completed"]);
   });
 
   test("resumes the saved session when its record cannot be looked up", async () => {
@@ -1496,6 +1554,35 @@ describe("turn/start arriving on a busy thread", () => {
     expect(await promptsUntil(claude, 2)).toEqual(["prompt 10", "prompt 12"]);
   });
 
+  test("runs a turn answered after turn/completed only once the turn before it is cleared up", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const gate = createGate();
+    let holdCleanup = false;
+    const { turns, sent } = await harness([claude], {
+      files: {
+        removeMarker: async (target) => {
+          if (holdCleanup) await gate.promise;
+          return removeFile(target);
+        },
+      },
+    });
+    holdCleanup = true;
+    await completeTurn(turns, sent, claude, 10);
+    turns.startTurn(turnStart(11, "again"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    await settle();
+    expect(responseTo(sent, 11)?.result.turn).toMatchObject({ id: "turn-2" });
+    expect(startedTurns(sent)).toEqual(["turn-1"]);
+
+    gate.open();
+    await until(() => startedTurns(sent).length === 2);
+    claude.emit(sdk(success()));
+    await until(() => turnsCompleted(sent).length === 2);
+
+    expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
+    expect(await promptsUntil(claude, 2)).toEqual(["prompt 10", "again"]);
+  });
+
   test("fails a waiting turn without its thread status once the bridge is closing", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
@@ -1624,7 +1711,9 @@ describe("clientUserMessageId", () => {
     turns.startTurn(withMessageId(turnStart(11, "reply"), "m-1"), undefined);
     await until(() => responseTo(sent, 11) !== undefined);
 
-    expect(responseTo(sent, 10)?.error).toBeDefined();
+    expect(responseTo(sent, 10)?.error.message).toBe(
+      "the Claude thread could not be saved",
+    );
     expect(responseTo(sent, 11)?.result.turn).toMatchObject({
       status: "inProgress",
     });
@@ -2107,6 +2196,11 @@ const reply = (id: number, threadId: string, source: string) => ({
 
 const delegation = (source: string) =>
   `<codex_delegation>\n  <source_thread_id>${source}</source_thread_id>\n  <input>review done</input>\n</codex_delegation>`;
+
+const completedTurns = (sent: Sent[]) =>
+  sent
+    .filter((message) => message.method === "turn/completed")
+    .map((message) => message.params.turn);
 
 const startedTurns = (sent: Sent[]) =>
   sent
