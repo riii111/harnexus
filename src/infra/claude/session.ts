@@ -171,8 +171,8 @@ const createSession = (
   };
   return {
     messages: readMessages(claude, () => closed, close),
-    send: (text: string) => {
-      const uuid = closed ? null : prompt.push(text);
+    send: (text: string, attachments: readonly string[] = []) => {
+      const uuid = closed ? null : prompt.push(text, attachments);
       return uuid === null ? Result.err(sessionClosed()) : Result.ok(uuid);
     },
     interrupt: async () =>

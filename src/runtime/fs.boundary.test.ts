@@ -16,8 +16,8 @@ import {
   listFileNames,
   openLogSink,
   prepareDirectory,
+  readRegularTextFile,
   readTextFileIfExists,
-  readTextFileSync,
   removeFile,
   writeFileAtomic,
 } from "./fs.boundary.ts";
@@ -78,11 +78,11 @@ describe("readTextFileIfExists", () => {
   });
 });
 
-describe("readTextFileSync", () => {
-  test("returns the text of a file", async () => {
+describe("readRegularTextFile", () => {
+  test("returns the text of a regular file", async () => {
     await writeFile(join(dir, "note.md"), "text");
 
-    const read = readTextFileSync(join(dir, "note.md"));
+    const read = await readRegularTextFile(join(dir, "note.md"));
 
     expect(read.isOk() && read.value).toBe("text");
   });
@@ -90,8 +90,11 @@ describe("readTextFileSync", () => {
   test.each([
     { name: "a missing file", path: () => join(dir, "missing.md") },
     { name: "a directory", path: () => dir },
-  ])("returns an error for $name", ({ path }) => {
-    const read = readTextFileSync(path());
+    { name: "a FIFO", path: () => join(dir, "fifo") },
+  ])("returns an error without waiting for $name", async ({ path }) => {
+    Bun.spawnSync(["mkfifo", join(dir, "fifo")]);
+
+    const read = await readRegularTextFile(path());
 
     expect(read.isErr() && read.error._tag).toBe("FileReadFailed");
   });

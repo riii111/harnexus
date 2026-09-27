@@ -1243,7 +1243,7 @@ describe("turn/steer", () => {
 });
 
 describe("skill links in Claude input", () => {
-  test("adds the linked SKILL.md to the prompt Claude reads while the turn shows the input as typed", async () => {
+  test("attaches the linked SKILL.md after the typed text Claude reads while the turn shows the input as typed", async () => {
     const skill = await writeSkill("demo", "---\nname: demo\n---\nDo it.\n");
     const typed = `[$demo](${skill}) go`;
     const claude = fakeClaude(SUBSCRIPTION);
@@ -1256,15 +1256,20 @@ describe("skill links in Claude input", () => {
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
 
-    expect(prompt?.message.content).toBe(
-      `${typed}\n\n<skill>\n<name>demo</name>\n<path>${skill}</path>\n---\nname: demo\n---\nDo it.\n</skill>`,
-    );
+    expect(prompt?.message.content).toEqual([
+      { type: "text", text: typed },
+      {
+        type: "text",
+        text: `<skill>\n<name>demo</name>\n<path>${skill}</path>\n---\nname: demo\n---\nDo it.\n</skill>`,
+      },
+    ]);
     expect(
       completedItems(sent).filter((item) => item.type === "userMessage"),
     ).toMatchObject([{ content: [{ text: typed }] }]);
   });
 
-  test("adds the linked SKILL.md to a steer", async () => {
+  // A steer is answered before any file could be read, so its link reaches Claude as typed.
+  test("passes a steer's skill link as typed", async () => {
     const skill = await writeSkill("demo", "Do it.\n");
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns } = await harness([claude]);
@@ -1274,9 +1279,7 @@ describe("skill links in Claude input", () => {
     turns.steerTurn(steer(30, "turn-1", `[$demo](${skill})`));
     const [, steered] = await readPrompts(claude, 2);
 
-    expect(steered?.message.content).toContain(
-      `<path>${skill}</path>\nDo it.\n</skill>`,
-    );
+    expect(steered?.message.content).toBe(`[$demo](${skill})`);
   });
 
   test("sends the link alone and logs it when the SKILL.md cannot be read", async () => {

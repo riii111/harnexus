@@ -5,7 +5,6 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { isObject } from "../runtime/object.ts";
 import type { AppNotification, ThreadItem, Turn } from "./protocol.ts";
-import { withoutSkillBodies } from "./skill-prompt.ts";
 import {
   closeTurn,
   type Rendered,
@@ -47,7 +46,7 @@ export const buildHistory = (
         if (replay !== null) replay = interrupt(replay);
       } else {
         if (replay !== null) turns.push(close(replay));
-        replay = start(thread, message.uuid, withoutSkillBodies(prompt), at);
+        replay = start(thread, message.uuid, prompt, at);
       }
     } else if (message.type === "assistant" && isAssistantBody(body)) {
       replay ??= start(thread, message.uuid, null, at);
@@ -164,7 +163,7 @@ const noteItem = (
   }
 };
 
-// A user record carrying tool results continues the turn; any other user record is a prompt.
+// A user record carrying tool results continues the turn; any other user record is a prompt, whose first text block is what was typed and whose later ones are files the bridge attached.
 const promptOf = (body: unknown): string | null => {
   if (!isObject(body)) return null;
   const { content } = body;
@@ -175,13 +174,10 @@ const promptOf = (body: unknown): string | null => {
   ) {
     return null;
   }
-  return content
-    .flatMap((block) =>
-      isObject(block) && block.type === "text" && typeof block.text === "string"
-        ? [block.text]
-        : [],
-    )
-    .join("\n");
+  const typed = content.find(
+    (block) => isObject(block) && block.type === "text",
+  );
+  return isObject(typed) && typeof typed.text === "string" ? typed.text : "";
 };
 
 // The SDK types a record's message as unknown, so only a message with the fields the renderer reads is replayed.
