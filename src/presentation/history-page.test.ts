@@ -10,18 +10,20 @@ import {
 import { prompt, reply, text } from "./testing/session-record.ts";
 
 describe("pageTurns", () => {
-  test("pages from the newest turn and continues with the next cursor until every turn is seen", () => {
+  test("pages back from the resume cursor through every turn with the next cursors", () => {
     const history = threeTurns();
+    const seen: string[] = [];
 
-    const first = pageTurns(history, turnsRequest({ limit: 2 }));
-    const second = pageTurns(
-      history,
-      turnsRequest({ limit: 2, cursor: first?.nextCursor ?? null }),
-    );
+    for (
+      let cursor = resumeCursors(history).turnsBackwardsCursor;
+      cursor !== null;
+    ) {
+      const page = pageTurns(history, turnsRequest({ limit: 1, cursor }));
+      seen.push(...(page?.data.map((turn) => turn.id) ?? []));
+      cursor = page?.nextCursor ?? null;
+    }
 
-    expect(first?.data.map((turn) => turn.id)).toEqual([T3, T2]);
-    expect(second?.data.map((turn) => turn.id)).toEqual([T1]);
-    expect(second?.nextCursor).toBeNull();
+    expect(seen).toEqual([T3, T2, T1]);
   });
 
   test("includes the anchor turn again when the backwards cursor reverses the direction", () => {
@@ -112,21 +114,23 @@ describe("pageItems", () => {
     expect(rest?.nextCursor).toBeNull();
   });
 
-  test("returns every item of the thread without a turn", () => {
-    const page = pageItems(threeTurns(), {
+  test("returns every item of the thread from the resume cursor without a turn", () => {
+    const history = threeTurns();
+
+    const page = pageItems(history, {
       turnId: null,
-      cursor: null,
+      cursor: resumeCursors(history).itemsBackwardsCursor,
       limit: null,
-      sortDirection: "asc",
+      sortDirection: "desc",
     });
 
     expect(page?.data.map((entry) => entry.turnId)).toEqual([
-      T1,
-      T1,
-      T2,
-      T2,
       T3,
       T3,
+      T2,
+      T2,
+      T1,
+      T1,
     ]);
   });
 });
@@ -161,15 +165,6 @@ describe("pageTimeline", () => {
 });
 
 describe("resumeCursors", () => {
-  test("points at the newest turn and item", () => {
-    const history = threeTurns();
-
-    expect(resumeCursors(history)).toEqual({
-      turnsBackwardsCursor: `at:${T3}`,
-      itemsBackwardsCursor: `at:${history[2]?.items[1]?.item.id}`,
-    });
-  });
-
   test("leaves both cursors null for a thread without history", () => {
     expect(resumeCursors([])).toEqual({
       turnsBackwardsCursor: null,

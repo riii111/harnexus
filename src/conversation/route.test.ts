@@ -3,7 +3,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { readClaudeSession } from "../infra/claude/session.ts";
-import { conversation } from "../presentation/testing/session-record.ts";
+import {
+  conversation,
+  prompt,
+  reply,
+  text,
+} from "../presentation/testing/session-record.ts";
 import { createHistoryRequests } from "./history-request.ts";
 import { createRouter, type RouteEvent } from "./route.ts";
 import type { AppRequest, Mode } from "./thread-request.ts";
@@ -468,8 +473,8 @@ describe("thread/settings/update", () => {
 });
 
 describe("Claude thread history", () => {
-  test("adds the Claude record's turns and cursors to the resume response of a Claude thread", async () => {
-    const { router, reads } = setup(["th-claude"], {
+  test("resumes a Claude thread with an initial page and cursors the app can page back through without the server", async () => {
+    const { router, reads, sent } = setup(["th-claude"], {
       "th-claude": conversation(),
     });
 
@@ -489,20 +494,86 @@ describe("Claude thread history", () => {
       }),
     );
     const out = parse(await router.fromServer(threadResponse(4, "th-claude")));
-
-    expect(reads).toEqual(["session-th-claude"]);
-    expect(out.result.model).toBe(CLAUDE);
-    expect(out.result.turnsBackwardsCursor).toBe("at:harnexus-history-u2");
-    expect(out.result.itemsBackwardsCursor).toStartWith(
-      "at:harnexus-history-u2-",
+    const turnIds: string[] = [];
+    const forwarded: (Buffer | null)[] = [];
+    for (
+      let cursor = out.result.turnsBackwardsCursor, id = 10;
+      cursor !== null;
+      id++
+    ) {
+      forwarded.push(
+        router.fromApp(
+          encode({
+            id,
+            method: "thread/turns/list",
+            params: { threadId: "th-claude", cursor, limit: 1 },
+          }),
+        ),
+      );
+      await Bun.sleep(0);
+      const page = responseTo(sent, id).result;
+      turnIds.push(...page.data.map((turn: { id: string }) => turn.id));
+      cursor = page.nextCursor;
+    }
+    router.fromApp(
+      encode({
+        id: 20,
+        method: "thread/turns/list",
+        params: {
+          threadId: "th-claude",
+          cursor: out.result.initialTurnsPage.nextCursor,
+        },
+      }),
     );
+    await Bun.sleep(0);
+
+    expect(reads[0]).toBe("session-th-claude");
+    expect(out.result.model).toBe(CLAUDE);
+    expect(out.result.thread).not.toHaveProperty("turns");
     expect(
       out.result.initialTurnsPage.data.map((turn: { id: string }) => turn.id),
     ).toEqual(["harnexus-history-u2"]);
-    expect(out.result.initialTurnsPage.nextCursor).toBe(
-      "after:harnexus-history-u2",
+    expect(turnIds).toEqual(["harnexus-history-u2", "harnexus-history-u1"]);
+    expect(forwarded).toEqual([null, null]);
+    expect(
+      responseTo(sent, 20).result.data.map((turn: { id: string }) => turn.id),
+    ).toEqual(["harnexus-history-u1"]);
+  });
+
+  test("resumes a Claude thread with an item cursor that starts from the thread's newest item", async () => {
+    const { router, sent } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+
+    router.fromApp(
+      encode({
+        id: 4,
+        method: "thread/resume",
+        params: { threadId: "th-claude", excludeTurns: true },
+      }),
     );
-    expect(out.result.thread).not.toHaveProperty("turns");
+    const out = parse(await router.fromServer(threadResponse(4, "th-claude")));
+    router.fromApp(
+      encode({
+        id: 5,
+        method: "thread/items/list",
+        params: {
+          threadId: "th-claude",
+          cursor: out.result.itemsBackwardsCursor,
+          sortDirection: "desc",
+        },
+      }),
+    );
+    await Bun.sleep(0);
+
+    expect(responseTo(sent, 5).result.data).toMatchObject([
+      { turnId: "harnexus-history-u2", item: { text: "welcome" } },
+      { turnId: "harnexus-history-u2", item: { type: "userMessage" } },
+      { turnId: "harnexus-history-u1", item: { text: "one file" } },
+      { turnId: "harnexus-history-u1", item: { type: "commandExecution" } },
+      { turnId: "harnexus-history-u1", item: { type: "reasoning" } },
+      { turnId: "harnexus-history-u1", item: { type: "userMessage" } },
+    ]);
   });
 
   test("fills the thread's turns when the resume asks for the whole history", async () => {
@@ -566,35 +637,6 @@ describe("Claude thread history", () => {
     expect(out.result).not.toHaveProperty("turnsBackwardsCursor");
     expect(events).toEqual([
       { event: "claude_history_unreadable", error: "ClaudeRecordUnreadable" },
-    ]);
-  });
-
-  test("answers thread/turns/list of a Claude thread without the server", async () => {
-    const { router, sent } = setup(["th-claude"], {
-      "th-claude": conversation(),
-    });
-
-    const routed = router.fromApp(
-      encode({
-        id: 7,
-        method: "thread/turns/list",
-        params: { threadId: "th-claude", limit: 5, itemsView: "notLoaded" },
-      }),
-    );
-    await Bun.sleep(0);
-
-    expect(routed).toBeNull();
-    expect(sent).toEqual([
-      {
-        id: 7,
-        result: expect.objectContaining({
-          data: [
-            expect.objectContaining({ id: "harnexus-history-u2", items: [] }),
-            expect.objectContaining({ id: "harnexus-history-u1", items: [] }),
-          ],
-          nextCursor: null,
-        }),
-      },
     ]);
   });
 
@@ -676,12 +718,12 @@ describe("Claude thread history", () => {
     {
       name: "an unreadable record",
       record: "unreadable" as const,
-      code: -32603,
+      expected: -32603,
     },
-    { name: "an unknown cursor", record: conversation(), code: -32602 },
-  ])("answers a history page with an error for $name", async ({
+    { name: "an unknown cursor", record: conversation(), expected: -32602 },
+  ])("answers a history page with error $expected for $name", async ({
     record,
-    code,
+    expected,
   }) => {
     const { router, sent } = setup(["th-claude"], { "th-claude": record });
 
@@ -694,27 +736,37 @@ describe("Claude thread history", () => {
     );
     await Bun.sleep(0);
 
-    expect(sent).toMatchObject([{ id: 7, error: { code } }]);
+    expect(sent).toMatchObject([{ id: 7, error: { code: expected } }]);
   });
 
-  test("reads the record once for history pages asked for together", async () => {
-    const { router, sent, reads } = setup(["th-claude"], {
-      "th-claude": conversation(),
-    });
-
-    for (const id of [7, 8]) {
+  test("reads the record once for history pages asked for together and again for a later page", async () => {
+    const records = { "th-claude": conversation() };
+    const { router, sent, reads } = setup(["th-claude"], records);
+    const askTurns = (id: number) =>
       router.fromApp(
         encode({
           id,
-          method: "thread/items/list",
+          method: "thread/turns/list",
           params: { threadId: "th-claude" },
         }),
       );
-    }
+
+    askTurns(7);
+    askTurns(8);
+    await Bun.sleep(0);
+    records["th-claude"] = [
+      ...conversation(),
+      prompt("u3", "one more"),
+      reply("a5", "m4", text("sure"), "end_turn"),
+    ];
+    askTurns(9);
     await Bun.sleep(0);
 
-    expect(reads).toEqual(["session-th-claude"]);
-    expect(sent).toHaveLength(2);
+    expect(reads).toEqual(["session-th-claude", "session-th-claude"]);
+    expect([7, 8].map((id) => responseTo(sent, id).result.data.length)).toEqual(
+      [2, 2],
+    );
+    expect(responseTo(sent, 9).result.data[0].id).toBe("harnexus-history-u3");
   });
 
   test.each([
@@ -866,6 +918,14 @@ const threadResponse = (id: number, threadId: string) =>
   });
 
 const encode = (message: object) => Buffer.from(`${JSON.stringify(message)}\n`);
+
+// The bridge answers history requests itself, so their responses are among what it sent to the app.
+const responseTo = (sent: object[], id: number) =>
+  JSON.parse(
+    JSON.stringify(
+      sent.find((message) => "id" in message && message.id === id) ?? null,
+    ),
+  );
 
 const parse = (line: Buffer | null) => JSON.parse(line?.toString() ?? "null");
 
