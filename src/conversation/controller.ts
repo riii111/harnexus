@@ -1069,6 +1069,46 @@ const createThreadValues = (
       : { ...thread, model };
   };
 
+  const sessionIdOf = (threadId: string) =>
+    sessionIds.has(threadId)
+      ? (sessionIds.get(threadId) ?? null)
+      : (store.get(threadId)?.sessionId ?? null);
+
+  const adopt = (threadId: string, thread: Thread) => {
+    if (store.get(threadId) === undefined) adopted.set(threadId, thread);
+  };
+
+  // A model picked while the thread was being registered is saved now, since the registration carried the earlier one.
+  const markRegistered = (threadId: string) => {
+    adopted.delete(threadId);
+    const picked = models.get(threadId);
+    if (picked !== undefined && picked !== store.get(threadId)?.model) {
+      saveModel(threadId, picked);
+    }
+  };
+
+  // A running turn keeps its model; the next turn restarts Claude on the new one and resumes the same conversation.
+  const changeModel = (threadId: string, model: string) => {
+    const thread = threadOf(threadId);
+    if (thread === undefined || thread.model === model) return;
+    models.set(threadId, model);
+    log({ event: "claude_turn", step: "model_changed" });
+    // A thread not yet registered saves this model when its first turn registers it.
+    if (store.get(threadId) !== undefined) saveModel(threadId, model);
+  };
+
+  const setSessionId = async (threadId: string, sessionId: string | null) => {
+    sessionIds.set(threadId, sessionId);
+    const saved = await store.setSessionId(threadId, sessionId);
+    if (saved.isErr()) {
+      log({
+        event: "claude_turn",
+        step: "session_not_saved",
+        error: saved.error._tag,
+      });
+    }
+  };
+
   const saveModel = (threadId: string, model: string) => {
     void store.setModel(threadId, model).then((saved) => {
       if (saved.isErr()) {
@@ -1083,46 +1123,11 @@ const createThreadValues = (
 
   return {
     threadOf,
-
-    sessionIdOf: (threadId: string) =>
-      sessionIds.has(threadId)
-        ? (sessionIds.get(threadId) ?? null)
-        : (store.get(threadId)?.sessionId ?? null),
-
-    adopt: (threadId: string, thread: Thread) => {
-      if (store.get(threadId) === undefined) adopted.set(threadId, thread);
-    },
-
-    // A model picked while the thread was being registered is saved now, since the registration carried the earlier one.
-    markRegistered: (threadId: string) => {
-      adopted.delete(threadId);
-      const picked = models.get(threadId);
-      if (picked !== undefined && picked !== store.get(threadId)?.model) {
-        saveModel(threadId, picked);
-      }
-    },
-
-    // A running turn keeps its model; the next turn restarts Claude on the new one and resumes the same conversation.
-    changeModel: (threadId: string, model: string) => {
-      const thread = threadOf(threadId);
-      if (thread === undefined || thread.model === model) return;
-      models.set(threadId, model);
-      log({ event: "claude_turn", step: "model_changed" });
-      // A thread not yet registered saves this model when its first turn registers it.
-      if (store.get(threadId) !== undefined) saveModel(threadId, model);
-    },
-
-    setSessionId: async (threadId: string, sessionId: string | null) => {
-      sessionIds.set(threadId, sessionId);
-      const saved = await store.setSessionId(threadId, sessionId);
-      if (saved.isErr()) {
-        log({
-          event: "claude_turn",
-          step: "session_not_saved",
-          error: saved.error._tag,
-        });
-      }
-    },
+    sessionIdOf,
+    adopt,
+    markRegistered,
+    changeModel,
+    setSessionId,
   };
 };
 

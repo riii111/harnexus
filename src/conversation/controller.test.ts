@@ -99,7 +99,7 @@ describe("turn/start on a Claude thread", () => {
     await completeTurn(turns, sent, claude, 11);
 
     expect(settings).toHaveLength(1);
-    expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
   });
 
   test("accepts the next turn sent while the app receives turn/completed", async () => {
@@ -144,7 +144,7 @@ describe("turn/start on a Claude thread", () => {
     await until(() => turnCompleted(sent) !== undefined);
     await completeTurn(turns, sent, second, 11);
 
-    expect(turnsCompleted(sent)).toEqual(["failed", "completed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["failed", "completed"]);
     expect(first.closes()).toBe(1);
     expect(settings[1]).toMatchObject({ resume: "se-1" });
   });
@@ -473,7 +473,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
     await until(() => store.get(THREAD)?.runState === "idle");
 
     expect(responseTo(sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
-    expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
     expect(events).toContainEqual({
       event: "claude_turn",
       step: "outcome_cleared",
@@ -495,7 +495,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
     expect(responseTo(after.sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
     expect(refusedStarted).toBe(false);
     expect(after.settings[0]).toMatchObject({ resume: "se-1" });
-    expect(turnsCompleted(after.sent)).toEqual(["completed"]);
+    expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
   });
 
   test.each([
@@ -528,7 +528,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
 
     expect(responseTo(after.sent, 12)?.error.message).toBe(OUTCOME_UNKNOWN);
     expect(after.settings).toHaveLength(1);
-    expect(turnsCompleted(after.sent)).toEqual(["completed"]);
+    expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
   });
 
   test("does not count another thread's message as telling the user", async () => {
@@ -580,7 +580,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
     await until(() => second.started());
     const resent = await messageReviewer(settings[1]);
     second.emit(sdk(success()));
-    await until(() => turnsCompleted(sent).length === 2);
+    await until(() => completedTurnStatuses(sent).length === 2);
     await until(() => store.get(THREAD)?.runState !== "running");
 
     expect(lostSend.isError).toBe(true);
@@ -628,7 +628,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
     await waiting;
     const next = await messageReviewer(settings[1]);
     second.emit(sdk(success()));
-    await until(() => turnsCompleted(sent).length === 2);
+    await until(() => completedTurnStatuses(sent).length === 2);
     await until(() => store.get(THREAD)?.runState !== "running");
 
     expect(responseTo(sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
@@ -636,7 +636,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
     expect(second.closes()).toBe(0);
     expect(next.isError).toBeFalsy();
     expect(toolCalls).toHaveLength(2);
-    expect(turnsCompleted(sent)).toEqual(["interrupted", "completed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["interrupted", "completed"]);
     expect(store.get(THREAD)?.runState).toBe("idle");
   });
 
@@ -652,7 +652,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
     turns.startTurn(withMessageId(turnStart(11, "reply"), "m-1"), undefined);
     await until(() => responseTo(sent, 11) !== undefined);
     first.emit(sdk(success()));
-    await until(() => turnsCompleted(sent).length === 2);
+    await until(() => completedTurnStatuses(sent).length === 2);
     const failedStarted = second.started();
     undecided = false;
 
@@ -666,7 +666,11 @@ describe("a thread whose last turn has an unknown outcome", () => {
       error: { message: OUTCOME_UNKNOWN },
     });
     expect(failedStarted).toBe(false);
-    expect(turnsCompleted(sent)).toEqual(["completed", "failed", "completed"]);
+    expect(completedTurnStatuses(sent)).toEqual([
+      "completed",
+      "failed",
+      "completed",
+    ]);
     expect(
       sent
         .filter((m) => m.method === "thread/status/changed")
@@ -754,7 +758,7 @@ describe("a saved session Claude no longer has", () => {
     expect(after.store.get(THREAD)?.sessionId).toBe("se-1");
     expect(after.settings).toHaveLength(1);
     expect(after.settings[0]?.resume).toBeUndefined();
-    expect(turnsCompleted(after.sent)).toEqual(["failed", "completed"]);
+    expect(completedTurnStatuses(after.sent)).toEqual(["failed", "completed"]);
   });
 
   test("resumes the saved session when its record cannot be looked up", async () => {
@@ -768,7 +772,7 @@ describe("a saved session Claude no longer has", () => {
     await completeTurn(after.turns, after.sent, second, 11);
 
     expect(after.settings[0]).toMatchObject({ resume: "se-1" });
-    expect(turnsCompleted(after.sent)).toEqual(["completed"]);
+    expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
   });
 });
 
@@ -901,12 +905,12 @@ describe("turn/interrupt", () => {
     await until(() => responseTo(sent, 11) !== undefined);
     turns.interruptTurn(interrupt(21, "turn-2"));
     gate.open();
-    await until(() => turnsCompleted(sent).length === 2);
+    await until(() => completedTurnStatuses(sent).length === 2);
     await completeTurn(turns, sent, second, 12);
 
     expect(responseTo(sent, 21)).toEqual({ id: 21, result: {} });
     expect(first.interrupts()).toBe(1);
-    expect(turnsCompleted(sent)).toEqual([
+    expect(completedTurnStatuses(sent)).toEqual([
       "interrupted",
       "interrupted",
       "completed",
@@ -927,9 +931,9 @@ describe("turn/interrupt", () => {
     await until(() => responseTo(sent, 11) !== undefined);
     turns.closeAll();
     gate.open();
-    await until(() => turnsCompleted(sent).length === 2);
+    await until(() => completedTurnStatuses(sent).length === 2);
 
-    expect(turnsCompleted(sent)).toEqual(["interrupted", "failed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["interrupted", "failed"]);
     expect(settings).toHaveLength(1);
   });
 
@@ -1019,7 +1023,7 @@ describe("turn/steer", () => {
       { content: [{ text: "hello" }] },
       { content: [{ text: "also this" }] },
     ]);
-    expect(turnsCompleted(sent)).toEqual(["completed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
   });
 
   test.each([
@@ -1038,12 +1042,12 @@ describe("turn/steer", () => {
     claude.emit(sdk(answer("msg-1", "first")));
     claude.emit(sdk(success([prompt?.uuid], queued)));
     await settle();
-    expect(turnsCompleted(sent)).toEqual([]);
+    expect(completedTurnStatuses(sent)).toEqual([]);
     claude.emit(sdk(answer("msg-2", "second")));
     claude.emit(sdk(success([steered?.uuid])));
     await until(() => turnCompleted(sent) !== undefined);
 
-    expect(turnsCompleted(sent)).toEqual(["completed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
     expect(turnCompleted(sent).items).toMatchObject([{ text: "second" }]);
     expect(claude.closes()).toBe(0);
   });
@@ -1094,7 +1098,7 @@ describe("turn/steer", () => {
       status: "failed",
       error: { message: expect.stringContaining("send it again") },
     });
-    expect(turnsCompleted(sent)).toEqual(["failed", "completed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["failed", "completed"]);
     expect(claude.closes()).toBe(1);
     expect(settings[1]).toMatchObject({ resume: "se-1" });
   });
@@ -1153,7 +1157,7 @@ describe("turn/steer", () => {
     const [prompt, steered] = await readPrompts(claude, 2);
     claude.emit(sdk(success([prompt?.uuid], 1)));
     await settle();
-    expect(turnsCompleted(sent)).toEqual([]);
+    expect(completedTurnStatuses(sent)).toEqual([]);
     turns.interruptTurn(interrupt(20, "turn-1"));
     await until(() => claude.interrupts() === 1);
     claude.emit(
@@ -1167,7 +1171,7 @@ describe("turn/steer", () => {
     );
     await until(() => turnCompleted(sent) !== undefined);
 
-    expect(turnsCompleted(sent)).toEqual(["interrupted"]);
+    expect(completedTurnStatuses(sent)).toEqual(["interrupted"]);
     expect(claude.closes()).toBe(0);
   });
 
@@ -1221,7 +1225,7 @@ describe("turn/steer", () => {
 
     expect(responseTo(sent, 30)).toEqual(REFUSED(30));
     expect(prompt?.message.content).toBe("hello");
-    expect(turnsCompleted(sent)).toEqual(["completed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
   });
 
   test("refuses a steer once the turn is stopping", async () => {
@@ -1287,7 +1291,7 @@ describe("model changes", () => {
     gate.open();
     await until(() => second.started());
     second.emit(sdk(success()));
-    await until(() => turnsCompleted(sent).length === 2);
+    await until(() => completedTurnStatuses(sent).length === 2);
     await completeTurn(turns, sent, third, 12);
 
     expect(settings.map((session) => session.model)).toEqual([
@@ -1493,11 +1497,11 @@ describe("turn/start arriving on a busy thread", () => {
     await until(() => startedTurns(sent).length === 2);
     claude.emit(sdk(answer("msg-2", "ok")));
     claude.emit(sdk(success()));
-    await until(() => turnsCompleted(sent).length === 2);
+    await until(() => completedTurnStatuses(sent).length === 2);
 
     expect(sent.filter((m) => m.id === 11)).toHaveLength(1);
     expect(startedTurns(sent)).toEqual(["turn-1", "turn-2"]);
-    expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
     expect(await promptsUntil(claude, 2)).toEqual(["hello", "reply"]);
     expect(settings).toHaveLength(1);
     expect(events).toContainEqual({ event: "claude_turn", step: "queued" });
@@ -1521,8 +1525,8 @@ describe("turn/start arriving on a busy thread", () => {
     turns.answerRequest({ id: request.id, result: { decision: "accept" } });
     expect(await decision).toEqual({ behavior: "allow" });
     claude.emit(sdk(success()));
-    await until(() => turnsCompleted(sent).length === 2);
-    expect(turnsCompleted(sent)).toEqual(["completed", "interrupted"]);
+    await until(() => completedTurnStatuses(sent).length === 2);
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "interrupted"]);
     await completeTurn(turns, sent, claude, 12);
     expect(await promptsUntil(claude, 2)).toEqual(["hello", "prompt 12"]);
   });
@@ -1546,10 +1550,10 @@ describe("turn/start arriving on a busy thread", () => {
 
     turns.interruptTurn(interrupt(21, "turn-2"));
     gate.open();
-    await until(() => turnsCompleted(sent).length === 2);
+    await until(() => completedTurnStatuses(sent).length === 2);
 
     expect(responseTo(sent, 21)).toEqual({ id: 21, result: {} });
-    expect(turnsCompleted(sent)).toEqual(["completed", "interrupted"]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "interrupted"]);
     await completeTurn(turns, sent, claude, 12);
     expect(await promptsUntil(claude, 2)).toEqual(["prompt 10", "prompt 12"]);
   });
@@ -1577,9 +1581,9 @@ describe("turn/start arriving on a busy thread", () => {
     gate.open();
     await until(() => startedTurns(sent).length === 2);
     claude.emit(sdk(success()));
-    await until(() => turnsCompleted(sent).length === 2);
+    await until(() => completedTurnStatuses(sent).length === 2);
 
-    expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
     expect(await promptsUntil(claude, 2)).toEqual(["prompt 10", "again"]);
   });
 
@@ -1591,10 +1595,10 @@ describe("turn/start arriving on a busy thread", () => {
     await until(() => claude.started());
     turns.startTurn(turnStart(11, "reply"), undefined);
     turns.closeAll();
-    await until(() => turnsCompleted(sent).length === 2);
+    await until(() => completedTurnStatuses(sent).length === 2);
 
     expect(responseTo(sent, 11)?.result.turn).toMatchObject({ id: "turn-2" });
-    expect(turnsCompleted(sent)).toEqual(["failed", "failed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["failed", "failed"]);
     const waiting = sent.filter(
       (m) => m.params?.turnId === "turn-2" || m.params?.turn?.id === "turn-2",
     );
@@ -1632,12 +1636,12 @@ describe("clientUserMessageId", () => {
     claude.emit(sdk(success()));
     await until(() => responseTo(sent, 11) !== undefined);
     claude.emit(sdk(success()));
-    await until(() => turnsCompleted(sent).length === 2);
+    await until(() => completedTurnStatuses(sent).length === 2);
     await settle();
 
     expect(responseTo(sent, 11)?.result).toBeDefined();
     expect(responseTo(sent, 12)).toEqual(DUPLICATE(12));
-    expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
     const user = completedItems(sent).filter(
       (item) => item.type === "userMessage",
     );
@@ -1654,7 +1658,7 @@ describe("clientUserMessageId", () => {
     await until(() => responseTo(before.sent, 10) !== undefined);
     first.emit(sdk(success()));
     await until(() => before.store.get(THREAD)?.runState === "idle");
-    expect(turnsCompleted(before.sent)).toEqual(["completed"]);
+    expect(completedTurnStatuses(before.sent)).toEqual(["completed"]);
     const second = fakeClaude(SUBSCRIPTION);
 
     const after = await harness([second]);
@@ -1991,7 +1995,7 @@ describe("idle Claude sessions", () => {
       step: "idle_closed",
     });
     expect(settings[1]).toMatchObject({ resume: "se-1" });
-    expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
   });
 
   test("stay open for a turn that starts before the idle time ends", async () => {
@@ -2007,11 +2011,11 @@ describe("idle Claude sessions", () => {
     await until(() => responseTo(sent, 11) !== undefined);
     await Bun.sleep(60);
     claude.emit(sdk(success()));
-    await until(() => turnsCompleted(sent).length === 2);
+    await until(() => completedTurnStatuses(sent).length === 2);
 
     expect(claude.closes()).toBe(0);
     expect(settings).toHaveLength(1);
-    expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
   });
 
   test("stay open for a turn that waited behind the one that ended", async () => {
@@ -2044,7 +2048,7 @@ describe("idle Claude sessions", () => {
 
     expect(claude.closes()).toBe(0);
     expect(settings).toHaveLength(1);
-    expect(turnsCompleted(sent)).toEqual(["completed", "completed"]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
   });
 });
 
@@ -2196,11 +2200,6 @@ const reply = (id: number, threadId: string, source: string) => ({
 
 const delegation = (source: string) =>
   `<codex_delegation>\n  <source_thread_id>${source}</source_thread_id>\n  <input>review done</input>\n</codex_delegation>`;
-
-const completedTurns = (sent: Sent[]) =>
-  sent
-    .filter((message) => message.method === "turn/completed")
-    .map((message) => message.params.turn);
 
 const startedTurns = (sent: Sent[]) =>
   sent
@@ -2372,7 +2371,7 @@ const completeTurn = async (
   id: number,
   messageId?: string,
 ) => {
-  const before = turnsCompleted(sent).length;
+  const before = completedTurnStatuses(sent).length;
   const request = turnStart(id, `prompt ${id}`);
   turns.startTurn(
     messageId === undefined ? request : withMessageId(request, messageId),
@@ -2381,7 +2380,7 @@ const completeTurn = async (
   await until(() => responseTo(sent, id) !== undefined);
   claude.emit(sdk(answer(`msg-${id}`, "ok")));
   claude.emit(sdk(success()));
-  await until(() => turnsCompleted(sent).length > before);
+  await until(() => completedTurnStatuses(sent).length > before);
 };
 
 const turnStart = (id: number, text: string, threadId = THREAD) => ({
@@ -2498,13 +2497,16 @@ const promptsUntil = async (
 const responseTo = (sent: Sent[], id: number) =>
   sent.find((message) => message.id === id);
 
-const turnCompleted = (sent: Sent[]) =>
-  sent.find((message) => message.method === "turn/completed")?.params.turn;
-
-const turnsCompleted = (sent: Sent[]) =>
+const completedTurns = (sent: Sent[]) =>
   sent
     .filter((message) => message.method === "turn/completed")
-    .map((message) => message.params.turn.status);
+    .map((message) => message.params.turn);
+
+const completedTurnStatuses = (sent: Sent[]) =>
+  completedTurns(sent).map((turn) => turn.status);
+
+const turnCompleted = (sent: Sent[]) =>
+  sent.find((message) => message.method === "turn/completed")?.params.turn;
 
 const completedItems = (sent: Sent[]) =>
   sent
