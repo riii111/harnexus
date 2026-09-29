@@ -10,7 +10,11 @@ import {
   Result,
   TaggedError,
 } from "better-result";
-import { isClaudeEffort, supportsEffort } from "../infra/claude/models.ts";
+import {
+  type EffortDefaults,
+  isClaudeEffort,
+  runEffort,
+} from "../infra/claude/models.ts";
 import type {
   ClaudeSessionSettings,
   claudeSessionExists,
@@ -226,6 +230,7 @@ export const createTurnController = ({
   now = Date.now,
   newTurnId = () => `harnexus-turn-${randomUUID()}`,
   idleSessionMs = IDLE_SESSION_MS,
+  defaultEffort,
 }: {
   store: ThreadStore;
   startSession: StartSession;
@@ -237,6 +242,7 @@ export const createTurnController = ({
   now?: () => number;
   newTurnId?: () => string;
   idleSessionMs?: number;
+  defaultEffort: EffortDefaults;
 }) => {
   const threads = createThreadValues(store, log);
   const sessions = new Map<string, SessionSlot>();
@@ -315,7 +321,7 @@ export const createTurnController = ({
         threadId,
         requestedMode(params) ?? modes.get(threadId) ?? "default",
       ),
-      effort: threads.effortOf(threadId),
+      effort: threads.pickedEffortOf(threadId),
     };
     const request = {
       id,
@@ -736,11 +742,8 @@ export const createTurnController = ({
       fail(active, mode.error);
       return;
     }
-    // Set on every turn, as a session restarted for a model change or after idling starts on the user's settings again.
-    const effort =
-      input.effort !== null && supportsEffort(model, input.effort)
-        ? input.effort
-        : null;
+    // Set on every turn, even with none picked, so Claude runs at the level the app shows rather than at project settings, and a restarted session gets it again.
+    const effort = runEffort(model, input.effort, defaultEffort);
     if (effort !== null) {
       const applied = await slot.value.session.setEffort(effort);
       if (applied.isErr()) {
@@ -1060,7 +1063,13 @@ export const createTurnController = ({
     selectMode,
     modeOf: (threadId: string) => modes.get(threadId),
     selectEffort,
-    effortOf: threads.effortOf,
+    effortOf: (threadId: string) => {
+      const model = threads.threadOf(threadId)?.model;
+      return model === undefined
+        ? null
+        : runEffort(model, threads.pickedEffortOf(threadId), defaultEffort);
+    },
+    defaultEffort,
     isClaudeThread: (threadId: unknown) =>
       typeof threadId === "string" && threads.threadOf(threadId) !== undefined,
     threadOf: threads.threadOf,
@@ -1133,7 +1142,7 @@ const createThreadValues = (
   };
 
   // A saved level that is no Claude level, such as one written by hand, leaves Claude on the user's settings.
-  const effortOf = (threadId: string): EffortLevel | null => {
+  const pickedEffortOf = (threadId: string): EffortLevel | null => {
     const effort = efforts.get(threadId) ?? store.get(threadId)?.effort;
     return isClaudeEffort(effort) ? effort : null;
   };
@@ -1172,7 +1181,7 @@ const createThreadValues = (
 
   // A Codex thread switched to Claude by a turn/start is not known yet, and that turn registers it with this effort.
   const changeEffort = (threadId: string, effort: EffortLevel) => {
-    if (effortOf(threadId) === effort) return;
+    if (pickedEffortOf(threadId) === effort) return;
     efforts.set(threadId, effort);
     log({ event: "claude_turn", step: "effort_changed", effort });
     if (store.get(threadId) !== undefined) saveEffort(threadId, effort);
@@ -1216,7 +1225,7 @@ const createThreadValues = (
 
   return {
     threadOf,
-    effortOf,
+    pickedEffortOf,
     sessionIdOf,
     adopt,
     markRegistered,

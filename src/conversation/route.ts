@@ -1,5 +1,5 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
-import { isClaudeModel } from "../infra/claude/models.ts";
+import { type EffortDefaults, isClaudeModel } from "../infra/claude/models.ts";
 import { delegationSource } from "../infra/codex/delegations.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
@@ -42,6 +42,7 @@ type Turns = {
   modeOf: (threadId: string) => Mode | undefined;
   selectEffort: (threadId: string, effort: string) => void;
   effortOf: (threadId: string) => EffortLevel | null;
+  defaultEffort: EffortDefaults;
 };
 
 type RefusedMethod = (typeof REFUSED_METHODS)[number];
@@ -245,7 +246,7 @@ export const createRouter = (
     pending.delete(id);
     if (!isObject(message.result)) return line;
     if (request.kind === "modelList") {
-      const listed = withClaudeModels(message.result);
+      const listed = withClaudeModels(message.result, turns.defaultEffort);
       for (const model of listed.collisions) {
         log({ event: "model_id_collision", model });
       }
@@ -268,7 +269,7 @@ export const createRouter = (
     }
     const model = turns.threadOf(threadId)?.model;
     if (model === undefined) return line;
-    const reasoningEffort = shownEffort(model, turns.effortOf(threadId));
+    const reasoningEffort = shownEffort(turns.effortOf(threadId));
     const opened = {
       ...result,
       model,
@@ -306,7 +307,7 @@ export const createRouter = (
     if (threadId === undefined || model === undefined || !isObject(settings)) {
       return null;
     }
-    const effort = shownEffort(model, turns.effortOf(threadId));
+    const effort = shownEffort(turns.effortOf(threadId));
     const mode = settings.collaborationMode;
     return encode({
       ...message,

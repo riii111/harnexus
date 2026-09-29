@@ -24,6 +24,7 @@ import {
   type Env,
   withoutApiBilling,
 } from "./auth.ts";
+import { effortDefaults } from "./models.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
 import {
   type ClaudeQuery,
@@ -35,6 +36,7 @@ import {
   nextMessage,
   openQuery,
   readAccount,
+  readEffortSettings,
   readSessionMessages,
   readSettingsEnv,
   setQueryEffort,
@@ -81,6 +83,15 @@ export const startClaudeSession = (
     yield* checked;
     return Result.ok(createSession(claude, prompt));
   });
+
+// Project settings differ by thread, while every thread shows one default, so only the user's settings are read; a turn sets its level over them either way.
+export const loadEffortDefaults = async (
+  cwd: string = process.cwd(),
+  runtime: Pick<ClaudeRuntime, "resolveSettings"> = PROCESS_RUNTIME,
+) =>
+  (await readEffortSettings(runtime.resolveSettings, cwd, ["user"])).map(
+    effortDefaults,
+  );
 
 // Claude keeps a conversation as <session id>.jsonl in a project folder under its config directory, which the user may delete or move to another machine.
 // The SDK's lookup reports an unreadable record as missing, so absence is concluded only when every project folder could be listed without finding the file.

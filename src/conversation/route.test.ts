@@ -5,7 +5,11 @@ import type {
   EffortLevel,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { isClaudeEffort } from "../infra/claude/models.ts";
+import {
+  effortDefaults,
+  isClaudeEffort,
+  runEffort,
+} from "../infra/claude/models.ts";
 import { readClaudeSession } from "../infra/claude/session.ts";
 import {
   conversation,
@@ -128,10 +132,17 @@ describe("model/list", () => {
     {
       name: "with effort",
       model: "claude-opus-5-5",
-      expected: ["low", "medium", "high", "xhigh", "max"],
+      expected: {
+        levels: ["low", "medium", "high", "xhigh", "max"],
+        default: "high",
+      },
     },
-    { name: "without effort", model: "claude-haiku-4-5", expected: ["medium"] },
-  ])("lists the levels of a Claude model $name with medium as its default", async ({
+    {
+      name: "without effort",
+      model: "claude-haiku-4-5",
+      expected: { levels: ["medium"], default: "medium" },
+    },
+  ])("lists the levels and the default of a Claude model $name", async ({
     model,
     expected,
   }) => {
@@ -143,12 +154,12 @@ describe("model/list", () => {
     const entry = out.result.data.find(
       (listed: { id: string }) => listed.id === model,
     );
-    expect(
-      entry.supportedReasoningEfforts.map(
+    expect({
+      levels: entry.supportedReasoningEfforts.map(
         (level: { reasoningEffort: string }) => level.reasoningEffort,
       ),
-    ).toEqual(expected);
-    expect(entry.defaultReasoningEffort).toBe("medium");
+      default: entry.defaultReasoningEffort,
+    }).toEqual(expected);
   });
 
   test("leaves the levels of the server's models alone", async () => {
@@ -319,8 +330,8 @@ describe("threads with a Claude model", () => {
       await router.fromServer(threadResponse(3, "th-new", "xhigh")),
     );
 
-    expect(out.result.reasoningEffort).toBe("medium");
-    expect(out.result.thread.reasoningEffort).toBe("medium");
+    expect(out.result.reasoningEffort).toBe("high");
+    expect(out.result.thread.reasoningEffort).toBe("high");
   });
 
   test("leaves the resume response of a Codex thread as the same bytes", async () => {
@@ -599,20 +610,22 @@ describe("thread/settings/update", () => {
   });
 
   test.each([
-    { name: "no effort picked", change: {} },
+    { name: "no effort picked", change: {}, expected: "high" },
     {
-      name: "a level its model cannot run",
+      name: "a model without effort",
       change: { model: "claude-haiku-4-5", effort: "max" },
+      expected: "medium",
     },
-  ])("reports the default effort in the settings notice for a Claude thread with $name", async ({
+  ])("reports the level a Claude thread with $name runs at in the settings notice", async ({
     change,
+    expected,
   }) => {
     const { router } = setup(["th-claude"]);
     router.fromApp(settingsUpdate(change));
 
     const out = parse(await router.fromServer(settingsNotice("default")));
 
-    expect(out.params.threadSettings.effort).toBe("medium");
+    expect(out.params.threadSettings.effort).toBe(expected);
   });
 
   test("leaves the settings notice of a Codex thread as the same bytes", async () => {
@@ -990,6 +1003,7 @@ describe("Claude thread history", () => {
 });
 
 const CLAUDE = "claude-sonnet-5";
+const DEFAULT_EFFORT = effortDefaults({});
 const BRIDGE_REQUEST = "harnexus-1";
 
 const settingsNotice = (mode: string) =>
@@ -1082,7 +1096,13 @@ const setup = (
         calls.push(["selectEffort", threadId, effort]);
         if (isClaudeEffort(effort)) efforts.set(threadId, effort);
       },
-      effortOf: (threadId) => efforts.get(threadId) ?? null,
+      effortOf: (threadId) => {
+        const model = threads.get(threadId)?.model;
+        return model === undefined
+          ? null
+          : runEffort(model, efforts.get(threadId) ?? null, DEFAULT_EFFORT);
+      },
+      defaultEffort: DEFAULT_EFFORT,
     },
     (event) => events.push(event),
     (source, threadId) => calls.push(["delegated", source, threadId]),

@@ -6,6 +6,7 @@ import type { AccountInfo } from "@anthropic-ai/claude-agent-sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Result } from "better-result";
+import { effortDefaults } from "../infra/claude/models.ts";
 import {
   type ClaudeSessionSettings,
   startClaudeSession,
@@ -96,6 +97,7 @@ const workerA = async () => {
     },
     findSession: async () => Result.ok(true),
     readSession: async () => Result.ok([]),
+    defaultEffort: effortDefaults({}),
     send: (message) => sent.push(message),
     log: () => {},
   });

@@ -5,6 +5,7 @@ import type {
   PermissionMode,
   SDKMessage,
   SDKUserMessage,
+  Settings,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeQuery, ClaudeSdk } from "../sdk.boundary.ts";
 
@@ -21,6 +22,7 @@ export const fakeClaude = (
     stillQueued,
     closeEnding = { done: true, value: undefined },
     settingsEnv = {},
+    effortSettings = {},
     env = { PATH: "/usr/bin" },
   }: {
     interruptError?: Error;
@@ -31,6 +33,7 @@ export const fakeClaude = (
     stillQueued?: string[];
     closeEnding?: Delivery;
     settingsEnv?: Record<string, string> | Error;
+    effortSettings?: Pick<Settings, "effortLevel" | "modelSettings">;
     env?: Record<string, string | undefined>;
   } = {},
 ) => {
@@ -91,7 +94,7 @@ export const fakeClaude = (
   const resolveSettings: ClaudeSdk["resolveSettings"] = async () => {
     // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
     if (settingsEnv instanceof Error) throw settingsEnv;
-    return { effective: { env: settingsEnv } };
+    return { effective: { env: settingsEnv, ...effortSettings } };
   };
   const run: ClaudeSdk["query"] = (params) => {
     options = params.options;

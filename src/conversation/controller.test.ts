@@ -12,6 +12,7 @@ import {
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { type InferErr, Result } from "better-result";
+import { type EffortDefaults, effortDefaults } from "../infra/claude/models.ts";
 import {
   type ClaudeSessionSettings,
   claudeSessionExists,
@@ -512,21 +513,36 @@ describe("effort", () => {
     expect(claude.efforts()).toEqual(["low", "high"]);
   });
 
-  test.each([
-    { name: "no effort picked", model: MODEL, effort: null },
-    { name: "a model without effort", model: HAIKU, effort: "high" },
-    { name: "a level only Codex has", model: MODEL, effort: "ultra" },
-  ])("sends the prompt without setting an effort for $name", async ({
-    model,
-    effort,
-  }) => {
+  test("runs a turn with no level picked at the default the app shows for the thread", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude], {
+      defaultEffort: effortDefaults({ effortLevel: "low" }),
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.efforts().length === 1);
+
+    expect(claude.efforts()).toEqual(["low"]);
+    expect(turns.effortOf(THREAD)).toBe("low");
+  });
+
+  test("runs a turn/start naming a level only Codex has at the default", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns } = await harness([claude]);
-    const request = turnStart(10, "hello");
-    const params = { ...request.params, model };
+
+    turns.startTurn(withEffort(turnStart(10, "hello"), "ultra"), undefined);
+    await until(() => claude.efforts().length === 1);
+
+    expect(claude.efforts()).toEqual(["high"]);
+  });
+
+  test("sends the prompt to a model without effort without setting one", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude]);
+    const request = withEffort(turnStart(10, "hello"), "high");
 
     turns.startTurn(
-      { ...request, params: effort === null ? params : { ...params, effort } },
+      { ...request, params: { ...request.params, model: HAIKU } },
       undefined,
     );
     await until(() => claude.started());
@@ -660,7 +676,7 @@ describe("effort", () => {
       step: "effort_not_saved",
       error: "StatePersistFailed",
     });
-    expect(claude.efforts()).toEqual(["max"]);
+    expect(claude.efforts()).toEqual(["high", "max"]);
   });
 });
 
@@ -2543,6 +2559,7 @@ const harness = async (
     sessionLookupFails = false,
     materializeFailures = 0,
     linkRequest,
+    defaultEffort = effortDefaults({}),
   }: {
     adopt?: boolean;
     files?: Parameters<typeof openThreadStore>[1];
@@ -2554,6 +2571,7 @@ const harness = async (
     sessionLookupFails?: boolean;
     materializeFailures?: number;
     linkRequest?: ServerRequest;
+    defaultEffort?: EffortDefaults;
   } = {},
 ) => {
   const opened = await openThreadStore(join(dir, "threads.json"), files);
@@ -2615,6 +2633,7 @@ const harness = async (
     },
     now: () => 1_700_000_000_000,
     newTurnId: () => `turn-${++turnCount}`,
+    defaultEffort,
     ...(idleSessionMs !== undefined && { idleSessionMs }),
   });
   if (adopt) turns.adopt(THREAD, { model: MODEL, cwd: dir });

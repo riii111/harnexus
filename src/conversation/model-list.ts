@@ -1,12 +1,11 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
-import {
-  CLAUDE_MODELS,
-  DEFAULT_EFFORT,
-  supportsEffort,
-} from "../infra/claude/models.ts";
+import { CLAUDE_MODELS, type EffortDefaults } from "../infra/claude/models.ts";
 
 // Claude models join the last page only, so a paging client sees each once; an id the server already lists is reported, since requests for it still go to Claude.
-export const withClaudeModels = (result: Record<string, unknown>) => {
+export const withClaudeModels = (
+  result: Record<string, unknown>,
+  defaults: EffortDefaults,
+) => {
   const data = result.data;
   if (!Array.isArray(data) || (result.nextCursor ?? null) !== null) {
     return { result, collisions: [] };
@@ -15,21 +14,20 @@ export const withClaudeModels = (result: Record<string, unknown>) => {
   const collisions = CLAUDE_MODELS.filter(({ id }) => listed.has(id)).map(
     ({ id }) => id,
   );
-  const added = CLAUDE_MODELS.filter(({ id }) => !listed.has(id)).map(
-    modelEntry,
+  const added = CLAUDE_MODELS.filter(({ id }) => !listed.has(id)).map((model) =>
+    modelEntry(model, defaults(model.id)),
   );
   return { result: { ...result, data: [...data, ...added] }, collisions };
 };
 
-// The app shows a thread's effort from what the server reports, so a level the model cannot run, or none, is shown as the model's default level.
-export const shownEffort = (model: string, effort: EffortLevel | null) =>
-  effort !== null && supportsEffort(model, effort) ? effort : DEFAULT_EFFORT;
+// A model without effort still reports a level, which is the single entry its picker lists.
+export const shownEffort = (effort: EffortLevel | null) =>
+  effort ?? NO_EFFORT_ENTRY;
 
-const modelEntry = ({
-  id,
-  displayName,
-  efforts,
-}: (typeof CLAUDE_MODELS)[number]) => ({
+const modelEntry = (
+  { id, displayName, efforts }: (typeof CLAUDE_MODELS)[number],
+  defaultEffort: EffortLevel | null,
+) => ({
   id,
   model: id,
   upgrade: null,
@@ -40,7 +38,7 @@ const modelEntry = ({
   modelSpecialty: null,
   hidden: false,
   supportedReasoningEfforts: reasoningEfforts(displayName, efforts),
-  defaultReasoningEffort: DEFAULT_EFFORT,
+  defaultReasoningEffort: shownEffort(defaultEffort),
   inputModalities: ["text"],
   supportsPersonality: false,
   multiAgentVersion: null,
@@ -59,7 +57,7 @@ const reasoningEfforts = (
   efforts.length === 0
     ? [
         {
-          reasoningEffort: DEFAULT_EFFORT,
+          reasoningEffort: NO_EFFORT_ENTRY,
           description: `${displayName} does not use effort levels`,
         },
       ]
@@ -72,6 +70,8 @@ const modelId = (model: unknown) =>
   typeof model === "object" && model !== null && "id" in model
     ? model.id
     : undefined;
+
+const NO_EFFORT_ENTRY: EffortLevel = "medium";
 
 // Worded after the SDK's EffortLevel documentation.
 const EFFORT_DESCRIPTIONS: Record<EffortLevel, string> = {
