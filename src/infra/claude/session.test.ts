@@ -19,6 +19,7 @@ import {
 import {
   type ClaudeSessionSettings,
   claudeSessionExists,
+  loadEffortRule,
   readClaudeSession,
   startClaudeSession,
 } from "./session.ts";
@@ -423,6 +424,56 @@ describe("startClaudeSession started session", () => {
     expect(switched.isOk()).toBe(true);
     expect(late.isErr() && late.error._tag).toBe("ClaudeSessionClosed");
     expect(claude.modes()).toEqual(["plan"]);
+  });
+
+  test("sets Claude's effort through the session flag settings until closed", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const session = await startedSession(claude);
+
+    const switched = await session.setEffort("max");
+    session.close();
+    const late = await session.setEffort("low");
+
+    expect(switched.isOk()).toBe(true);
+    expect(late.isErr() && late.error._tag).toBe("ClaudeSessionClosed");
+    expect(claude.efforts()).toEqual(["max"]);
+  });
+
+  test("reports an effort Claude refuses as its own failure", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      effortError: new Error("no control channel"),
+    });
+    const session = await startedSession(claude);
+
+    const switched = await session.setEffort("high");
+
+    expect(switched.isErr() && switched.error._tag).toBe("ClaudeEffortFailed");
+  });
+});
+
+describe("loadEffortRule", () => {
+  test("starts a model at the level the user's settings give it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      effortSettings: { effortLevel: "xhigh" },
+    });
+
+    const loaded = await loadEffortRule("/work/tree", claude.runtime);
+
+    expect(loaded.isOk() && loaded.value("claude-sonnet-5", null)).toBe(
+      "xhigh",
+    );
+  });
+
+  test("reports settings it cannot read", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      settingsEnv: new Error("invalid settings"),
+    });
+
+    const loaded = await loadEffortRule("/work/tree", claude.runtime);
+
+    expect(loaded.isErr() && loaded.error._tag).toBe(
+      "ClaudeSettingsUnavailable",
+    );
   });
 });
 

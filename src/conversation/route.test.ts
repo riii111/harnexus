@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  EffortLevel,
+  SessionMessage,
+} from "@anthropic-ai/claude-agent-sdk";
+import { effortRule, isClaudeEffort } from "../infra/claude/models.ts";
 import { readClaudeSession } from "../infra/claude/session.ts";
 import {
   conversation,
@@ -120,6 +124,63 @@ describe("model/list", () => {
     });
   });
 
+  test.each([
+    {
+      name: "with effort",
+      model: "claude-opus-5-5",
+      expected: {
+        levels: ["low", "medium", "high", "xhigh", "max"],
+        default: "high",
+      },
+    },
+    {
+      name: "without effort",
+      model: "claude-haiku-4-5",
+      expected: { levels: ["medium"], default: "medium" },
+    },
+  ])("lists the levels and the default of a Claude model $name", async ({
+    model,
+    expected,
+  }) => {
+    const { router } = setup();
+
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    const out = parse(await router.fromServer(modelList(2, null)));
+
+    const entry = out.result.data.find(
+      (listed: { id: string }) => listed.id === model,
+    );
+    expect({
+      levels: entry.supportedReasoningEfforts.map(
+        (level: { reasoningEffort: string }) => level.reasoningEffort,
+      ),
+      default: entry.defaultReasoningEffort,
+    }).toEqual(expected);
+  });
+
+  test("leaves the levels of the server's models alone", async () => {
+    const { router } = setup();
+    const levels = [{ reasoningEffort: "ultra", description: "fixture" }];
+
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    const out = parse(
+      await router.fromServer(
+        encode({
+          id: 2,
+          result: {
+            data: [{ id: "gpt-fixture", supportedReasoningEfforts: levels }],
+            nextCursor: null,
+          },
+        }),
+      ),
+    );
+
+    expect(out.result.data[0]).toEqual({
+      id: "gpt-fixture",
+      supportedReasoningEfforts: levels,
+    });
+  });
+
   test("leaves earlier pages alone", () => {
     const { router } = setup();
 
@@ -230,6 +291,57 @@ describe("threads with a Claude model", () => {
     expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
     expect(calls).toEqual([["changeModel", "th-claude", OTHER_CLAUDE]]);
     expect(out.result.model).toBe(OTHER_CLAUDE);
+  });
+
+  test("reports the Claude thread's effort in the resume response", async () => {
+    const { router } = setup(["th-claude"]);
+    router.fromApp(settingsUpdate({ effort: "max" }));
+
+    router.fromApp(
+      encode({
+        id: 4,
+        method: "thread/resume",
+        params: { threadId: "th-claude" },
+      }),
+    );
+    const out = parse(
+      await router.fromServer(threadResponse(4, "th-claude", "low")),
+    );
+
+    expect(out.result.reasoningEffort).toBe("max");
+    expect(out.result.thread.reasoningEffort).toBe("max");
+  });
+
+  test("reports a new Claude thread at the model's default effort", async () => {
+    const { router } = setup();
+
+    router.fromApp(
+      encode({
+        id: 3,
+        method: "thread/start",
+        params: { cwd: "/fixture/work", model: CLAUDE },
+      }),
+    );
+    const out = parse(
+      await router.fromServer(threadResponse(3, "th-new", "xhigh")),
+    );
+
+    expect(out.result.reasoningEffort).toBe("high");
+    expect(out.result.thread.reasoningEffort).toBe("high");
+  });
+
+  test("leaves the resume response of a Codex thread as the same bytes", async () => {
+    const { router } = setup(["th-claude"]);
+    router.fromApp(
+      encode({
+        id: 4,
+        method: "thread/resume",
+        params: { threadId: "th-codex" },
+      }),
+    );
+    const response = threadResponse(4, "th-codex", "ultra");
+
+    expect(await router.fromServer(response)).toEqual(response);
   });
 
   test("forwards a resume of a Claude thread in its own directory", () => {
@@ -400,11 +512,45 @@ describe("thread/settings/update", () => {
     ]);
   });
 
-  test("leaves a Codex thread's settings to the server", () => {
+  test.each([
+    { name: "a model", change: { model: "gpt-fixture" } },
+    { name: "an effort", change: { effort: "high" } },
+  ])("leaves $name picked on a Codex thread to the server as the same bytes", ({
+    change,
+  }) => {
     const { router } = setup();
-    const line = settingsUpdate({ model: "gpt-fixture" });
+    const line = settingsUpdate(change);
 
     expect(router.fromApp(line)).toEqual(line);
+  });
+
+  test("keeps a Claude thread's effort from the server", () => {
+    const { router, calls } = setup(["th-claude"]);
+
+    const forwarded = router.fromApp(
+      settingsUpdate({ effort: "max", approvalPolicy: "never" }),
+    );
+
+    expect(parse(forwarded).params).toEqual({
+      threadId: "th-claude",
+      approvalPolicy: "never",
+    });
+    expect(calls).toEqual([["selectEffort", "th-claude", "max"]]);
+  });
+
+  test("reads a Claude thread's effort from the collaboration mode when the update has none", () => {
+    const { router, calls } = setup(["th-claude"]);
+
+    router.fromApp(
+      settingsUpdate({
+        collaborationMode: {
+          mode: "default",
+          settings: { model: CLAUDE, reasoning_effort: "xhigh" },
+        },
+      }),
+    );
+
+    expect(calls).toContainEqual(["selectEffort", "th-claude", "xhigh"]);
   });
 
   test("reports the Claude model on resume even when the history mentions the settings notice", async () => {
@@ -445,6 +591,50 @@ describe("thread/settings/update", () => {
     expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
     expect(calls).toEqual([["selectMode", "th-claude", "plan"]]);
     expect(out.params.threadSettings.collaborationMode.mode).toBe("plan");
+  });
+
+  test("reports the Claude thread's effort in the server's settings notice", async () => {
+    const { router } = setup(["th-claude"]);
+    router.fromApp(settingsUpdate({ effort: "max" }));
+
+    const out = parse(await router.fromServer(settingsNotice("default")));
+
+    expect(out.params.threadSettings.effort).toBe("max");
+    expect(
+      out.params.threadSettings.collaborationMode.settings.reasoning_effort,
+    ).toBe("max");
+  });
+
+  test.each([
+    { name: "no effort picked", change: {}, expected: "high" },
+    {
+      name: "a model without effort",
+      change: { model: "claude-haiku-4-5", effort: "max" },
+      expected: "medium",
+    },
+  ])("reports the level a Claude thread with $name runs at in the settings notice", async ({
+    change,
+    expected,
+  }) => {
+    const { router } = setup(["th-claude"]);
+    router.fromApp(settingsUpdate(change));
+
+    const out = parse(await router.fromServer(settingsNotice("default")));
+
+    expect(out.params.threadSettings.effort).toBe(expected);
+  });
+
+  test("leaves the settings notice of a Codex thread as the same bytes", async () => {
+    const { router } = setup(["th-claude"]);
+    const notice = encode({
+      method: "thread/settings/updated",
+      params: {
+        threadId: "th-codex",
+        threadSettings: { model: "gpt-fixture", effort: "ultra" },
+      },
+    });
+
+    expect(await router.fromServer(notice)).toEqual(notice);
   });
 
   test("reports the Claude model in the server's settings notice", async () => {
@@ -809,6 +999,7 @@ describe("Claude thread history", () => {
 });
 
 const CLAUDE = "claude-sonnet-5";
+const EFFORT_RULE = effortRule({});
 const BRIDGE_REQUEST = "harnexus-1";
 
 const settingsNotice = (mode: string) =>
@@ -818,7 +1009,11 @@ const settingsNotice = (mode: string) =>
       threadId: "th-claude",
       threadSettings: {
         model: "gpt-fixture",
-        collaborationMode: { mode, settings: { model: "gpt-fixture" } },
+        effort: "low",
+        collaborationMode: {
+          mode,
+          settings: { model: "gpt-fixture", reasoning_effort: "low" },
+        },
       },
     },
   });
@@ -864,6 +1059,7 @@ const setup = (
     log: (event) => events.push(event),
   });
   const modes = new Map<string, Mode>();
+  const efforts = new Map<string, EffortLevel>();
   const router = createRouter(
     {
       isClaudeThread: (threadId) =>
@@ -892,6 +1088,17 @@ const setup = (
         modes.set(threadId, mode);
       },
       modeOf: (threadId) => modes.get(threadId),
+      selectEffort: (threadId, effort) => {
+        calls.push(["selectEffort", threadId, effort]);
+        if (isClaudeEffort(effort)) efforts.set(threadId, effort);
+      },
+      effortOf: (threadId) => {
+        const model = threads.get(threadId)?.model;
+        return model === undefined
+          ? null
+          : EFFORT_RULE(model, efforts.get(threadId) ?? null);
+      },
+      effortRule: EFFORT_RULE,
     },
     (event) => events.push(event),
     (source, threadId) => calls.push(["delegated", source, threadId]),
@@ -922,13 +1129,23 @@ const modelList = (
     result: { data: ids.map((model) => ({ id: model, model })), nextCursor },
   });
 
-const threadResponse = (id: number, threadId: string) =>
+const threadResponse = (
+  id: number,
+  threadId: string,
+  reasoningEffort?: string,
+) =>
   encode({
     id,
     result: {
-      thread: { id: threadId, model: "gpt-fixture", cwd: "/fixture/work" },
+      thread: {
+        id: threadId,
+        model: "gpt-fixture",
+        cwd: "/fixture/work",
+        ...(reasoningEffort !== undefined && { reasoningEffort }),
+      },
       model: "gpt-fixture",
       cwd: "/fixture/work",
+      ...(reasoningEffort !== undefined && { reasoningEffort }),
     },
   });
 

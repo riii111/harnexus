@@ -1,4 +1,5 @@
 import type {
+  EffortLevel,
   Options,
   PermissionMode,
   Query,
@@ -11,7 +12,12 @@ import { Result, TaggedError } from "better-result";
 
 export type ClaudeQuery = Pick<
   Query,
-  "next" | "interrupt" | "setPermissionMode" | "accountInfo" | "close"
+  | "next"
+  | "interrupt"
+  | "setPermissionMode"
+  | "applyFlagSettings"
+  | "accountInfo"
+  | "close"
 >;
 
 type RunQuery = (params: {
@@ -22,7 +28,12 @@ type RunQuery = (params: {
 type ResolveSettings = (options: {
   cwd: string;
   settingSources: SettingSource[];
-}) => Promise<{ effective: Pick<Settings, "env"> }>;
+}) => Promise<{
+  effective: Pick<
+    Settings,
+    "env" | "effortLevel" | "maxEffortLevel" | "modelSettings"
+  >;
+}>;
 
 type GetSessionMessages = (sessionId: string) => Promise<SessionMessage[]>;
 
@@ -65,6 +76,11 @@ class ClaudePermissionModeFailed extends TaggedError(
   message: string;
 }> {}
 
+class ClaudeEffortFailed extends TaggedError("ClaudeEffortFailed")<{
+  cause: unknown;
+  message: string;
+}> {}
+
 export class ClaudeRecordUnreadable extends TaggedError(
   "ClaudeRecordUnreadable",
 )<{
@@ -75,14 +91,13 @@ export class ClaudeRecordUnreadable extends TaggedError(
 export type { ClaudeStreamFailed };
 
 // resolveSettings merges the same files as the CLI without starting it, but skips an admin policyHelper.
-export const readSettingsEnv = (
+export const readSettings = (
   resolve: ResolveSettings,
   cwd: string,
   settingSources: SettingSource[],
 ) =>
   Result.tryPromise({
-    try: async () =>
-      (await resolve({ cwd, settingSources })).effective.env ?? {},
+    try: async () => (await resolve({ cwd, settingSources })).effective,
     catch: (cause) =>
       new ClaudeSettingsUnavailable({
         cause,
@@ -142,6 +157,17 @@ export const setQueryPermissionMode = (
       new ClaudePermissionModeFailed({
         cause,
         message: `cannot switch Claude to the ${mode} permission mode`,
+      }),
+  });
+
+// The flag layer holds the level for this session only, so the user's settings files keep their own effortLevel.
+export const setQueryEffort = (query: ClaudeQuery, effort: EffortLevel) =>
+  Result.tryPromise({
+    try: () => query.applyFlagSettings({ effortLevel: effort }),
+    catch: (cause) =>
+      new ClaudeEffortFailed({
+        cause,
+        message: `cannot switch Claude to the ${effort} effort`,
       }),
   });
 

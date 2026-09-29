@@ -1,9 +1,11 @@
 import type {
   AccountInfo,
+  EffortLevel,
   Options,
   PermissionMode,
   SDKMessage,
   SDKUserMessage,
+  Settings,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeQuery, ClaudeSdk } from "../sdk.boundary.ts";
 
@@ -15,19 +17,23 @@ export const fakeClaude = (
   {
     interruptError,
     permissionModeError,
+    effortError,
     interruptAnswered,
     stillQueued,
     closeEnding = { done: true, value: undefined },
     settingsEnv = {},
+    effortSettings = {},
     env = { PATH: "/usr/bin" },
   }: {
     interruptError?: Error;
     permissionModeError?: Error;
+    effortError?: Error;
     // Holds the interrupt receipt back, as the CLI may send it after the turn's result.
     interruptAnswered?: Promise<void>;
     stillQueued?: string[];
     closeEnding?: Delivery;
     settingsEnv?: Record<string, string> | Error;
+    effortSettings?: Pick<Settings, "effortLevel" | "modelSettings">;
     env?: Record<string, string | undefined>;
   } = {},
 ) => {
@@ -37,6 +43,7 @@ export const fakeClaude = (
   let prompt: AsyncIterable<SDKUserMessage> | null = null;
   let interrupts = 0;
   const modes: PermissionMode[] = [];
+  const efforts: (EffortLevel | null | undefined)[] = [];
   let closes = 0;
   const deliver = (item: Delivery) => {
     const resolve = waiting;
@@ -69,6 +76,11 @@ export const fakeClaude = (
       if (permissionModeError !== undefined) throw permissionModeError;
       modes.push(mode);
     },
+    applyFlagSettings: async (settings) => {
+      // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
+      if (effortError !== undefined) throw effortError;
+      efforts.push(settings.effortLevel);
+    },
     accountInfo: async () => {
       // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
       if (account instanceof Error) throw account;
@@ -82,7 +94,7 @@ export const fakeClaude = (
   const resolveSettings: ClaudeSdk["resolveSettings"] = async () => {
     // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
     if (settingsEnv instanceof Error) throw settingsEnv;
-    return { effective: { env: settingsEnv } };
+    return { effective: { env: settingsEnv, ...effortSettings } };
   };
   const run: ClaudeSdk["query"] = (params) => {
     options = params.options;
@@ -109,6 +121,7 @@ export const fakeClaude = (
     fail: (error: Error) => deliver(error),
     interrupts: () => interrupts,
     modes: () => modes,
+    efforts: () => efforts,
     closes: () => closes,
   };
 };

@@ -4,6 +4,7 @@ import {
   type TurnEvent,
 } from "../conversation/controller.ts";
 import { type RouteEvent, serializeRouteEvent } from "../conversation/route.ts";
+import type { loadEffortRule } from "../infra/claude/session.ts";
 import {
   type ObservationEvent,
   serializeObservationEvent,
@@ -25,6 +26,7 @@ type LogEvent =
   | { event: "server_closed" }
   | ServerSignalEvent
   | { event: "claude_unavailable"; reason: ClaudeUnavailable }
+  | { event: "effort_settings_unavailable"; reason: EffortSettingsFailure }
   | { event: "bridge_signaled"; signal: Signal }
   | ObservationEvent
   | TurnEvent
@@ -37,6 +39,10 @@ type LogFileFailure = "LogPathNotAbsolute" | "LogFileOpenFailed";
 type ClaudeUnavailable =
   | InferErr<ReturnType<typeof loadStatePath>>["_tag"]
   | InferErr<Awaited<ReturnType<typeof openThreadStore>>>["_tag"];
+
+type EffortSettingsFailure = InferErr<
+  Awaited<ReturnType<typeof loadEffortRule>>
+>["_tag"];
 
 // The app may discard the server's stderr, so HARNEXUS_LOG_PATH keeps a copy in a file.
 export const createBridgeLogger = (env: NodeJS.ProcessEnv) => {
@@ -69,6 +75,7 @@ const serializeLogEvent = (entry: LogEvent) => {
     case "server_signal_failed":
       return serializeServerSignalEvent(entry);
     case "claude_unavailable":
+    case "effort_settings_unavailable":
       return { event: entry.event, reason: entry.reason };
     case "claude_turn":
       return serializeTurnEvent(entry);

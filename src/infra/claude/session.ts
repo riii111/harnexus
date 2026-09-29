@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   type CanUseTool,
+  type EffortLevel,
   getSessionMessages,
   type McpServerConfig,
   type Options,
@@ -23,6 +24,7 @@ import {
   type Env,
   withoutApiBilling,
 } from "./auth.ts";
+import { effortRule } from "./models.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
 import {
   type ClaudeQuery,
@@ -35,7 +37,8 @@ import {
   openQuery,
   readAccount,
   readSessionMessages,
-  readSettingsEnv,
+  readSettings,
+  setQueryEffort,
   setQueryPermissionMode,
 } from "./sdk.boundary.ts";
 
@@ -61,10 +64,10 @@ export const startClaudeSession = (
   runtime: ClaudeRuntime = PROCESS_RUNTIME,
 ) =>
   Result.gen(async function* () {
-    const settingsEnv = yield* Result.await(
-      readSettingsEnv(runtime.resolveSettings, settings.cwd, SETTING_SOURCES),
+    const resolved = yield* Result.await(
+      readSettings(runtime.resolveSettings, settings.cwd, SETTING_SOURCES),
     );
-    yield* checkSettingsEnv(settingsEnv);
+    yield* checkSettingsEnv(resolved.env ?? {});
     const prompt = createPromptQueue();
     const claude = yield* openQuery(
       runtime.query,
@@ -79,6 +82,13 @@ export const startClaudeSession = (
     yield* checked;
     return Result.ok(createSession(claude, prompt));
   });
+
+// Project settings differ by thread, while the model list shows one default, so only the user's settings are read; a turn's level overrides a project's level but not a cap set by a project or an organization.
+export const loadEffortRule = async (
+  cwd: string = process.cwd(),
+  runtime: Pick<ClaudeRuntime, "resolveSettings"> = PROCESS_RUNTIME,
+) =>
+  (await readSettings(runtime.resolveSettings, cwd, ["user"])).map(effortRule);
 
 // Claude keeps a conversation as <session id>.jsonl in a project folder under its config directory, which the user may delete or move to another machine.
 // The SDK's lookup reports an unreadable record as missing, so absence is concluded only when every project folder could be listed without finding the file.
@@ -181,6 +191,8 @@ const createSession = (
       closed
         ? Result.err(sessionClosed())
         : setQueryPermissionMode(claude, mode),
+    setEffort: async (effort: EffortLevel) =>
+      closed ? Result.err(sessionClosed()) : setQueryEffort(claude, effort),
     close,
   };
 };

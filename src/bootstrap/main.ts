@@ -1,7 +1,9 @@
 import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
+import { effortRule } from "../infra/claude/models.ts";
 import {
   claudeSessionExists,
+  loadEffortRule,
   readClaudeSession,
   startClaudeSession,
 } from "../infra/claude/session.ts";
@@ -81,6 +83,13 @@ async function withClaude(relay: {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
     return plain;
   }
+  const defaults = await loadEffortRule();
+  if (defaults.isErr()) {
+    logger.log({
+      event: "effort_settings_unavailable",
+      reason: defaults.error._tag,
+    });
+  }
   const appInjector = createLineInjector(process.stdout);
   // The bridge's own requests to the server are answered before the router reads the server output, so their responses never reach the app.
   const serverCalls = attachServerRequests(relay);
@@ -90,6 +99,8 @@ async function withClaude(relay: {
     startSession: startClaudeSession,
     findSession: claudeSessionExists,
     readSession: (sessionId) => readClaudeSession(sessionId),
+    // Unreadable settings leave threads with none picked on the model default, which is still the level the app shows.
+    effortRule: defaults.isOk() ? defaults.value : effortRule({}),
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });
