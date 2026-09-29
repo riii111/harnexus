@@ -19,6 +19,7 @@ export const connectClaudeThreads = ({
   findSession,
   readSession,
   effortRule,
+  claudeModels,
   send,
   log,
 }: {
@@ -28,6 +29,7 @@ export const connectClaudeThreads = ({
   findSession: Controller["findSession"];
   readSession: Parameters<typeof createHistoryRequests>[0]["readSession"];
   effortRule: Controller["effortRule"];
+  claudeModels: Parameters<typeof createRouter>[4];
   send: (message: object) => void;
   log: (event: TurnEvent | RouteEvent) => void;
 }) => {
@@ -54,7 +56,13 @@ export const connectClaudeThreads = ({
     send,
     log,
   });
-  const router = createRouter(turns, log, delegations.observe, history);
+  const router = createRouter(
+    turns,
+    log,
+    delegations.observe,
+    history,
+    claudeModels,
+  );
   return { router, closeAll: turns.closeAll };
 };
 

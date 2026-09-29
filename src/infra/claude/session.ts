@@ -24,7 +24,7 @@ import {
   type Env,
   withoutApiBilling,
 } from "./auth.ts";
-import { effortRule } from "./models.ts";
+import { modelsFromSdk } from "./models.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
 import {
   type ClaudeQuery,
@@ -38,6 +38,7 @@ import {
   readAccount,
   readSessionMessages,
   readSettings,
+  readSupportedModels,
   setQueryEffort,
   setQueryPermissionMode,
 } from "./sdk.boundary.ts";
@@ -84,11 +85,29 @@ export const startClaudeSession = (
   });
 
 // Project settings differ by thread, while the model list shows one default, so only the user's settings are read; a turn's level overrides a project's level but not a cap set by a project or an organization.
-export const loadEffortRule = async (
+export const loadEffortSettings = (
   cwd: string = process.cwd(),
   runtime: Pick<ClaudeRuntime, "resolveSettings"> = PROCESS_RUNTIME,
+) => readSettings(runtime.resolveSettings, cwd, ["user"]);
+
+// Reading the list sends no prompt, so the process is closed as soon as it answers; the models it runs depend on the Claude Code version the SDK bundles.
+export const loadClaudeModels = (
+  runtime: ClaudeRuntime = PROCESS_RUNTIME,
+  cwd: string = process.cwd(),
 ) =>
-  (await readSettings(runtime.resolveSettings, cwd, ["user"])).map(effortRule);
+  Result.gen(async function* () {
+    const prompt = createPromptQueue();
+    const claude = yield* openQuery(runtime.query, prompt.stream, {
+      cwd,
+      env: withoutApiBilling(runtime.env),
+      settingSources: SETTING_SOURCES,
+    });
+    const listed = await readSupportedModels(claude);
+    prompt.end();
+    closeQuery(claude);
+    const infos = yield* listed;
+    return Result.ok(modelsFromSdk(infos));
+  });
 
 // Claude keeps a conversation as <session id>.jsonl in a project folder under its config directory, which the user may delete or move to another machine.
 // The SDK's lookup reports an unreadable record as missing, so absence is concluded only when every project folder could be listed without finding the file.

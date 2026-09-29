@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { type InferErr, Result, TaggedError } from "better-result";
 import { createRouter } from "../../conversation/route.ts";
+import { createModelCatalog } from "../claude/models.ts";
 import { createCodexLink } from "./codex-link.ts";
 import { createDelegationWatch } from "./delegations.ts";
 import type { ServerRequest } from "./server-requests.ts";
@@ -283,6 +284,7 @@ describe("createCodexLink over the app's turn for the created thread", () => {
       () => {},
       delegations.observe,
       NO_HISTORY,
+      createModelCatalog().models,
     );
     const forwarded: (Buffer | null)[] = [];
     const { client, store } = await connect({

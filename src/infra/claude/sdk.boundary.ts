@@ -16,6 +16,7 @@ export type ClaudeQuery = Pick<
   | "interrupt"
   | "setPermissionMode"
   | "applyFlagSettings"
+  | "supportedModels"
   | "accountInfo"
   | "close"
 >;
@@ -77,6 +78,11 @@ class ClaudePermissionModeFailed extends TaggedError(
 }> {}
 
 class ClaudeEffortFailed extends TaggedError("ClaudeEffortFailed")<{
+  cause: unknown;
+  message: string;
+}> {}
+
+class ClaudeModelsUnavailable extends TaggedError("ClaudeModelsUnavailable")<{
   cause: unknown;
   message: string;
 }> {}
@@ -157,6 +163,16 @@ export const setQueryPermissionMode = (
       new ClaudePermissionModeFailed({
         cause,
         message: `cannot switch Claude to the ${mode} permission mode`,
+      }),
+  });
+
+export const readSupportedModels = (query: ClaudeQuery) =>
+  Result.tryPromise({
+    try: () => query.supportedModels(),
+    catch: (cause) =>
+      new ClaudeModelsUnavailable({
+        cause,
+        message: "cannot read the models Claude Code offers",
       }),
   });
 

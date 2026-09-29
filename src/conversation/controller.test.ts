@@ -12,7 +12,11 @@ import {
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { type InferErr, Result } from "better-result";
-import { type EffortRule, effortRule } from "../infra/claude/models.ts";
+import {
+  createModelCatalog,
+  type EffortRule,
+  effortRule,
+} from "../infra/claude/models.ts";
 import {
   type ClaudeSessionSettings,
   claudeSessionExists,
@@ -516,7 +520,7 @@ describe("effort", () => {
   test("runs a turn with no level picked at the default the app shows for the thread", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns } = await harness([claude], {
-      effortRule: effortRule({ effortLevel: "low" }),
+      effortRule: effortRule({ effortLevel: "low" }, BUILT_IN_EFFORTS),
     });
 
     turns.startTurn(turnStart(10, "hello"), undefined);
@@ -529,7 +533,7 @@ describe("effort", () => {
   test("runs a picked level above the settings' cap at the cap the app shows", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns } = await harness([claude], {
-      effortRule: effortRule({ maxEffortLevel: "low" }),
+      effortRule: effortRule({ maxEffortLevel: "low" }, BUILT_IN_EFFORTS),
     });
 
     turns.startTurn(withEffort(turnStart(10, "hello"), "max"), undefined);
@@ -2551,7 +2555,8 @@ const NEW_REVIEWER = "th-fixture-reviewer-1";
 const MODEL = "claude-sonnet-5";
 const OTHER_MODEL = "claude-opus-5-5";
 const HAIKU = "claude-haiku-4-5";
-const defaultRule = effortRule({});
+const BUILT_IN_EFFORTS = createModelCatalog().effortsOf;
+const defaultRule = effortRule({}, BUILT_IN_EFFORTS);
 const SUBSCRIPTION: AccountInfo = {
   subscriptionType: "Claude Max",
   apiProvider: "firstParty",

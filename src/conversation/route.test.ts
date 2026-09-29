@@ -5,7 +5,11 @@ import type {
   EffortLevel,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { effortRule, isClaudeEffort } from "../infra/claude/models.ts";
+import {
+  createModelCatalog,
+  effortRule,
+  isClaudeEffort,
+} from "../infra/claude/models.ts";
 import { readClaudeSession } from "../infra/claude/session.ts";
 import {
   conversation,
@@ -178,6 +182,43 @@ describe("model/list", () => {
     expect(out.result.data[0]).toEqual({
       id: "gpt-fixture",
       supportedReasoningEfforts: levels,
+    });
+  });
+
+  test("lists the models Claude Code offers once read and a dropped built-in model as hidden", async () => {
+    const { router, catalog } = setup();
+    catalog.replace([
+      {
+        id: "claude-sonnet-5-5",
+        displayName: "Claude Sonnet 5.5",
+        description: "Sonnet 5.5 · Efficient for routine tasks",
+        efforts: ["low", "high"],
+      },
+    ]);
+
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    const out = parse(await router.fromServer(modelList(2, null)));
+
+    expect(
+      out.result.data.map((model: { id: string; hidden: boolean }) => [
+        model.id,
+        model.hidden,
+      ]),
+    ).toEqual([
+      ["gpt-fixture", undefined],
+      ["claude-sonnet-5-5", false],
+      ["claude-opus-5-5", true],
+      ["claude-sonnet-5", true],
+      ["claude-haiku-4-5", true],
+    ]);
+    expect(out.result.data[1]).toMatchObject({
+      displayName: "Claude Sonnet 5.5",
+      description: "Sonnet 5.5 · Efficient for routine tasks",
+      supportedReasoningEfforts: [
+        { reasoningEffort: "low" },
+        { reasoningEffort: "high" },
+      ],
+      defaultReasoningEffort: "high",
     });
   });
 
@@ -999,7 +1040,6 @@ describe("Claude thread history", () => {
 });
 
 const CLAUDE = "claude-sonnet-5";
-const EFFORT_RULE = effortRule({});
 const BRIDGE_REQUEST = "harnexus-1";
 
 const settingsNotice = (mode: string) =>
@@ -1060,6 +1100,8 @@ const setup = (
   });
   const modes = new Map<string, Mode>();
   const efforts = new Map<string, EffortLevel>();
+  const catalog = createModelCatalog();
+  const rule = effortRule({}, catalog.effortsOf);
   const router = createRouter(
     {
       isClaudeThread: (threadId) =>
@@ -1096,15 +1138,16 @@ const setup = (
         const model = threads.get(threadId)?.model;
         return model === undefined
           ? null
-          : EFFORT_RULE(model, efforts.get(threadId) ?? null);
+          : rule(model, efforts.get(threadId) ?? null);
       },
-      effortRule: EFFORT_RULE,
+      effortRule: rule,
     },
     (event) => events.push(event),
     (source, threadId) => calls.push(["delegated", source, threadId]),
     history,
+    catalog.models,
   );
-  return { router, calls, events, sent, reads };
+  return { router, calls, events, sent, reads, catalog };
 };
 
 const fixtureLines = (file: string) =>

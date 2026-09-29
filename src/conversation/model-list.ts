@@ -1,9 +1,15 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
-import { CLAUDE_MODELS, type EffortRule } from "../infra/claude/models.ts";
+import type {
+  ClaudeModel,
+  EffortRule,
+  ModelCatalog,
+} from "../infra/claude/models.ts";
 
 // Claude models join the last page only, so a paging client sees each once; an id the server already lists is reported, since requests for it still go to Claude.
+// A retired model is listed hidden, so the app can still name the model of a thread already on it.
 export const withClaudeModels = (
   result: Record<string, unknown>,
+  { offered, retired }: ReturnType<ModelCatalog["models"]>,
   rule: EffortRule,
 ) => {
   const data = result.data;
@@ -11,12 +17,18 @@ export const withClaudeModels = (
     return { result, collisions: [] };
   }
   const listed = new Set(data.map((model) => modelId(model)));
-  const collisions = CLAUDE_MODELS.filter(({ id }) => listed.has(id)).map(
-    ({ id }) => id,
-  );
-  const added = CLAUDE_MODELS.filter(({ id }) => !listed.has(id)).map((model) =>
-    modelEntry(model, rule(model.id, null)),
-  );
+  const models = [
+    ...offered.map((model) => ({ model, hidden: false })),
+    ...retired.map((model) => ({ model, hidden: true })),
+  ];
+  const collisions = models
+    .filter(({ model }) => listed.has(model.id))
+    .map(({ model }) => model.id);
+  const added = models
+    .filter(({ model }) => !listed.has(model.id))
+    .map(({ model, hidden }) =>
+      modelEntry(model, hidden, rule(model.id, null)),
+    );
   return { result: { ...result, data: [...data, ...added] }, collisions };
 };
 
@@ -25,7 +37,8 @@ export const shownEffort = (effort: EffortLevel | null) =>
   effort ?? NO_EFFORT_ENTRY;
 
 const modelEntry = (
-  { id, displayName, efforts }: (typeof CLAUDE_MODELS)[number],
+  { id, displayName, description, efforts }: ClaudeModel,
+  hidden: boolean,
   defaultEffort: EffortLevel | null,
 ) => ({
   id,
@@ -34,9 +47,9 @@ const modelEntry = (
   upgradeInfo: null,
   availabilityNux: null,
   displayName,
-  description: `${displayName} through Claude Code`,
+  description,
   modelSpecialty: null,
-  hidden: false,
+  hidden,
   supportedReasoningEfforts: reasoningEfforts(displayName, efforts),
   defaultReasoningEffort: shownEffort(defaultEffort),
   inputModalities: ["text"],

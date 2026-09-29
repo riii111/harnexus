@@ -4,7 +4,10 @@ import {
   type TurnEvent,
 } from "../conversation/controller.ts";
 import { type RouteEvent, serializeRouteEvent } from "../conversation/route.ts";
-import type { loadEffortRule } from "../infra/claude/session.ts";
+import type {
+  loadClaudeModels,
+  loadEffortSettings,
+} from "../infra/claude/session.ts";
 import {
   type ObservationEvent,
   serializeObservationEvent,
@@ -27,6 +30,8 @@ type LogEvent =
   | ServerSignalEvent
   | { event: "claude_unavailable"; reason: ClaudeUnavailable }
   | { event: "effort_settings_unavailable"; reason: EffortSettingsFailure }
+  | { event: "claude_models_unavailable"; reason: ModelsFailure }
+  | { event: "claude_models_loaded"; count: number }
   | { event: "bridge_signaled"; signal: Signal }
   | ObservationEvent
   | TurnEvent
@@ -41,7 +46,11 @@ type ClaudeUnavailable =
   | InferErr<Awaited<ReturnType<typeof openThreadStore>>>["_tag"];
 
 type EffortSettingsFailure = InferErr<
-  Awaited<ReturnType<typeof loadEffortRule>>
+  Awaited<ReturnType<typeof loadEffortSettings>>
+>["_tag"];
+
+type ModelsFailure = InferErr<
+  Awaited<ReturnType<typeof loadClaudeModels>>
 >["_tag"];
 
 // The app may discard the server's stderr, so HARNEXUS_LOG_PATH keeps a copy in a file.
@@ -76,7 +85,10 @@ const serializeLogEvent = (entry: LogEvent) => {
       return serializeServerSignalEvent(entry);
     case "claude_unavailable":
     case "effort_settings_unavailable":
+    case "claude_models_unavailable":
       return { event: entry.event, reason: entry.reason };
+    case "claude_models_loaded":
+      return { event: entry.event, count: entry.count };
     case "claude_turn":
       return serializeTurnEvent(entry);
     case "claude_request_refused":

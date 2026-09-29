@@ -1,5 +1,9 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
-import { type EffortRule, isClaudeModel } from "../infra/claude/models.ts";
+import {
+  type EffortRule,
+  isClaudeModel,
+  type ModelCatalog,
+} from "../infra/claude/models.ts";
 import { delegationSource } from "../infra/codex/delegations.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
@@ -66,6 +70,7 @@ export const createRouter = (
   log: (event: RouteEvent) => void,
   onDelegated: (sourceThreadId: string, threadId: string) => void,
   history: History,
+  claudeModels: ModelCatalog["models"],
 ) => {
   const pending = new Map<AppRequest["id"], Pending>();
   // A Codex thread switched to Claude by turn/start needs a working directory that the request itself may not carry.
@@ -246,7 +251,11 @@ export const createRouter = (
     pending.delete(id);
     if (!isObject(message.result)) return line;
     if (request.kind === "modelList") {
-      const listed = withClaudeModels(message.result, turns.effortRule);
+      const listed = withClaudeModels(
+        message.result,
+        claudeModels(),
+        turns.effortRule,
+      );
       for (const model of listed.collisions) {
         log({ event: "model_id_collision", model });
       }

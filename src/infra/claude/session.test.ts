@@ -19,7 +19,8 @@ import {
 import {
   type ClaudeSessionSettings,
   claudeSessionExists,
-  loadEffortRule,
+  loadClaudeModels,
+  loadEffortSettings,
   readClaudeSession,
   startClaudeSession,
 } from "./session.ts";
@@ -451,17 +452,15 @@ describe("startClaudeSession started session", () => {
   });
 });
 
-describe("loadEffortRule", () => {
-  test("starts a model at the level the user's settings give it", async () => {
+describe("loadEffortSettings", () => {
+  test("reads the effort level in the user's settings", async () => {
     const claude = fakeClaude(SUBSCRIPTION, {
       effortSettings: { effortLevel: "xhigh" },
     });
 
-    const loaded = await loadEffortRule("/work/tree", claude.runtime);
+    const loaded = await loadEffortSettings("/work/tree", claude.runtime);
 
-    expect(loaded.isOk() && loaded.value("claude-sonnet-5", null)).toBe(
-      "xhigh",
-    );
+    expect(loaded.isOk() && loaded.value.effortLevel).toBe("xhigh");
   });
 
   test("reports settings it cannot read", async () => {
@@ -469,11 +468,55 @@ describe("loadEffortRule", () => {
       settingsEnv: new Error("invalid settings"),
     });
 
-    const loaded = await loadEffortRule("/work/tree", claude.runtime);
+    const loaded = await loadEffortSettings("/work/tree", claude.runtime);
 
     expect(loaded.isErr() && loaded.error._tag).toBe(
       "ClaudeSettingsUnavailable",
     );
+  });
+});
+
+describe("loadClaudeModels", () => {
+  test("lists the models Claude Code offers without sending a prompt and closes Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      models: [
+        {
+          value: "sonnet",
+          resolvedModel: "claude-sonnet-5-5",
+          displayName: "Sonnet",
+          description: "Sonnet 5.5 · Efficient for routine tasks",
+        },
+      ],
+    });
+
+    const loaded = await loadClaudeModels(claude.runtime, "/work/tree");
+
+    expect(loaded.isOk() && loaded.value.map(({ id }) => id)).toEqual([
+      "claude-sonnet-5-5",
+    ]);
+    expect(await claude.prompts()).toEqual([]);
+    expect(claude.closes()).toBe(1);
+  });
+
+  test("starts Claude without the variables that would bill the API", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      env: { PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-fixture" },
+    });
+
+    await loadClaudeModels(claude.runtime, "/work/tree");
+
+    expect(claude.options().env).toEqual({ PATH: "/usr/bin" });
+  });
+
+  test("reports a list Claude cannot give and still closes Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      models: new Error("no control channel"),
+    });
+
+    const loaded = await loadClaudeModels(claude.runtime, "/work/tree");
+
+    expect(loaded.isErr() && loaded.error._tag).toBe("ClaudeModelsUnavailable");
+    expect(claude.closes()).toBe(1);
   });
 });
 
