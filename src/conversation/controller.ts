@@ -10,11 +10,7 @@ import {
   Result,
   TaggedError,
 } from "better-result";
-import {
-  type EffortDefaults,
-  isClaudeEffort,
-  runEffort,
-} from "../infra/claude/models.ts";
+import { type EffortRule, isClaudeEffort } from "../infra/claude/models.ts";
 import type {
   ClaudeSessionSettings,
   claudeSessionExists,
@@ -230,7 +226,7 @@ export const createTurnController = ({
   now = Date.now,
   newTurnId = () => `harnexus-turn-${randomUUID()}`,
   idleSessionMs = IDLE_SESSION_MS,
-  defaultEffort,
+  effortRule,
 }: {
   store: ThreadStore;
   startSession: StartSession;
@@ -242,7 +238,7 @@ export const createTurnController = ({
   now?: () => number;
   newTurnId?: () => string;
   idleSessionMs?: number;
-  defaultEffort: EffortDefaults;
+  effortRule: EffortRule;
 }) => {
   const threads = createThreadValues(store, log);
   const sessions = new Map<string, SessionSlot>();
@@ -743,7 +739,7 @@ export const createTurnController = ({
       return;
     }
     // Set on every turn, even with none picked, so Claude runs at the level the app shows rather than at project settings, and a restarted session gets it again.
-    const effort = runEffort(model, input.effort, defaultEffort);
+    const effort = effortRule(model, input.effort);
     if (effort !== null) {
       const applied = await slot.value.session.setEffort(effort);
       if (applied.isErr()) {
@@ -1067,9 +1063,9 @@ export const createTurnController = ({
       const model = threads.threadOf(threadId)?.model;
       return model === undefined
         ? null
-        : runEffort(model, threads.pickedEffortOf(threadId), defaultEffort);
+        : effortRule(model, threads.pickedEffortOf(threadId));
     },
-    defaultEffort,
+    effortRule,
     isClaudeThread: (threadId: unknown) =>
       typeof threadId === "string" && threads.threadOf(threadId) !== undefined,
     threadOf: threads.threadOf,

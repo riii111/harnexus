@@ -20,8 +20,16 @@ export const CLAUDE_MODELS = [
   efforts: readonly EffortLevel[];
 }[];
 
-// The level a thread with none picked runs at, or null for a model without effort.
-export type EffortDefaults = (model: string) => EffortLevel | null;
+// The level a thread runs at on the model given the level picked for it, or null for a model without effort.
+export type EffortRule = (
+  model: string,
+  picked: EffortLevel | null,
+) => EffortLevel | null;
+
+export type EffortSettings = Pick<
+  Settings,
+  "effortLevel" | "maxEffortLevel" | "modelSettings"
+>;
 
 export const isClaudeModel = (model: unknown): model is string =>
   CLAUDE_MODELS.some(({ id }) => id === model);
@@ -35,27 +43,34 @@ export const isClaudeEffort = (effort: unknown): effort is EffortLevel =>
 const effortsOf = (model: string): readonly EffortLevel[] =>
   CLAUDE_MODELS.find(({ id }) => id === model)?.efforts ?? [];
 
-// A level from the user's settings is the one Claude Code itself would start from, and the SDK documents high as the model default.
-export const effortDefaults =
-  (settings: Pick<Settings, "effortLevel" | "modelSettings">): EffortDefaults =>
-  (model) => {
+// Without a pick a thread starts where Claude Code would, from the settings or else the model default the SDK documents as high, and the settings' cap lowers any level as Claude Code does.
+export const effortRule =
+  (settings: EffortSettings): EffortRule =>
+  (model, picked) => {
     if (effortsOf(model).length === 0) return null;
-    const configured =
-      settings.modelSettings?.[model]?.effortLevel ?? settings.effortLevel;
-    return configured !== undefined && supportsEffort(model, configured)
-      ? configured
-      : MODEL_DEFAULT_EFFORT;
+    const perModel = settings.modelSettings?.[model];
+    const configured = perModel?.effortLevel ?? settings.effortLevel;
+    const wanted =
+      picked !== null && supportsEffort(model, picked)
+        ? picked
+        : configured !== undefined && supportsEffort(model, configured)
+          ? configured
+          : MODEL_DEFAULT_EFFORT;
+    const cap = perModel?.maxEffortLevel ?? settings.maxEffortLevel;
+    return cap !== undefined && rank(wanted) > rank(cap) ? cap : wanted;
   };
-
-// A picked level the model cannot run falls back to the default, so a thread always runs at a level it can show.
-export const runEffort = (
-  model: string,
-  picked: EffortLevel | null,
-  defaults: EffortDefaults,
-) =>
-  picked !== null && supportsEffort(model, picked) ? picked : defaults(model);
 
 const supportsEffort = (model: string, effort: EffortLevel) =>
   effortsOf(model).includes(effort);
+
+const rank = (effort: EffortLevel) => EFFORT_ORDER.indexOf(effort);
+
+const EFFORT_ORDER: readonly EffortLevel[] = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
 
 const MODEL_DEFAULT_EFFORT: EffortLevel = "high";

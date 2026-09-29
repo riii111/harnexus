@@ -5,11 +5,7 @@ import type {
   EffortLevel,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import {
-  effortDefaults,
-  isClaudeEffort,
-  runEffort,
-} from "../infra/claude/models.ts";
+import { effortRule, isClaudeEffort } from "../infra/claude/models.ts";
 import { readClaudeSession } from "../infra/claude/session.ts";
 import {
   conversation,
@@ -1003,7 +999,7 @@ describe("Claude thread history", () => {
 });
 
 const CLAUDE = "claude-sonnet-5";
-const DEFAULT_EFFORT = effortDefaults({});
+const EFFORT_RULE = effortRule({});
 const BRIDGE_REQUEST = "harnexus-1";
 
 const settingsNotice = (mode: string) =>
@@ -1100,9 +1096,9 @@ const setup = (
         const model = threads.get(threadId)?.model;
         return model === undefined
           ? null
-          : runEffort(model, efforts.get(threadId) ?? null, DEFAULT_EFFORT);
+          : EFFORT_RULE(model, efforts.get(threadId) ?? null);
       },
-      defaultEffort: DEFAULT_EFFORT,
+      effortRule: EFFORT_RULE,
     },
     (event) => events.push(event),
     (source, threadId) => calls.push(["delegated", source, threadId]),

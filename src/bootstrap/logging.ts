@@ -4,7 +4,7 @@ import {
   type TurnEvent,
 } from "../conversation/controller.ts";
 import { type RouteEvent, serializeRouteEvent } from "../conversation/route.ts";
-import type { loadEffortDefaults } from "../infra/claude/session.ts";
+import type { loadEffortRule } from "../infra/claude/session.ts";
 import {
   type ObservationEvent,
   serializeObservationEvent,
@@ -41,7 +41,7 @@ type ClaudeUnavailable =
   | InferErr<Awaited<ReturnType<typeof openThreadStore>>>["_tag"];
 
 type EffortSettingsFailure = InferErr<
-  Awaited<ReturnType<typeof loadEffortDefaults>>
+  Awaited<ReturnType<typeof loadEffortRule>>
 >["_tag"];
 
 // The app may discard the server's stderr, so HARNEXUS_LOG_PATH keeps a copy in a file.

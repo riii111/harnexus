@@ -1,9 +1,9 @@
 import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
-import { effortDefaults } from "../infra/claude/models.ts";
+import { effortRule } from "../infra/claude/models.ts";
 import {
   claudeSessionExists,
-  loadEffortDefaults,
+  loadEffortRule,
   readClaudeSession,
   startClaudeSession,
 } from "../infra/claude/session.ts";
@@ -83,7 +83,7 @@ async function withClaude(relay: {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
     return plain;
   }
-  const defaults = await loadEffortDefaults();
+  const defaults = await loadEffortRule();
   if (defaults.isErr()) {
     logger.log({
       event: "effort_settings_unavailable",
@@ -100,7 +100,7 @@ async function withClaude(relay: {
     findSession: claudeSessionExists,
     readSession: (sessionId) => readClaudeSession(sessionId),
     // Unreadable settings leave threads with none picked on the model default, which is still the level the app shows.
-    defaultEffort: defaults.isOk() ? defaults.value : effortDefaults({}),
+    effortRule: defaults.isOk() ? defaults.value : effortRule({}),
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });

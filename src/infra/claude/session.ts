@@ -24,7 +24,7 @@ import {
   type Env,
   withoutApiBilling,
 } from "./auth.ts";
-import { effortDefaults } from "./models.ts";
+import { effortRule } from "./models.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
 import {
   type ClaudeQuery,
@@ -36,9 +36,8 @@ import {
   nextMessage,
   openQuery,
   readAccount,
-  readEffortSettings,
   readSessionMessages,
-  readSettingsEnv,
+  readSettings,
   setQueryEffort,
   setQueryPermissionMode,
 } from "./sdk.boundary.ts";
@@ -65,10 +64,10 @@ export const startClaudeSession = (
   runtime: ClaudeRuntime = PROCESS_RUNTIME,
 ) =>
   Result.gen(async function* () {
-    const settingsEnv = yield* Result.await(
-      readSettingsEnv(runtime.resolveSettings, settings.cwd, SETTING_SOURCES),
+    const resolved = yield* Result.await(
+      readSettings(runtime.resolveSettings, settings.cwd, SETTING_SOURCES),
     );
-    yield* checkSettingsEnv(settingsEnv);
+    yield* checkSettingsEnv(resolved.env ?? {});
     const prompt = createPromptQueue();
     const claude = yield* openQuery(
       runtime.query,
@@ -84,14 +83,12 @@ export const startClaudeSession = (
     return Result.ok(createSession(claude, prompt));
   });
 
-// Project settings differ by thread, while every thread shows one default, so only the user's settings are read; a turn sets its level over them either way.
-export const loadEffortDefaults = async (
+// Project settings differ by thread, while the model list shows one default, so only the user's settings are read; a turn's level overrides a project's level but not a cap set by a project or an organization.
+export const loadEffortRule = async (
   cwd: string = process.cwd(),
   runtime: Pick<ClaudeRuntime, "resolveSettings"> = PROCESS_RUNTIME,
 ) =>
-  (await readEffortSettings(runtime.resolveSettings, cwd, ["user"])).map(
-    effortDefaults,
-  );
+  (await readSettings(runtime.resolveSettings, cwd, ["user"])).map(effortRule);
 
 // Claude keeps a conversation as <session id>.jsonl in a project folder under its config directory, which the user may delete or move to another machine.
 // The SDK's lookup reports an unreadable record as missing, so absence is concluded only when every project folder could be listed without finding the file.

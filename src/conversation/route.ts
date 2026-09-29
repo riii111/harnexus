@@ -1,5 +1,5 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
-import { type EffortDefaults, isClaudeModel } from "../infra/claude/models.ts";
+import { type EffortRule, isClaudeModel } from "../infra/claude/models.ts";
 import { delegationSource } from "../infra/codex/delegations.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
@@ -42,7 +42,7 @@ type Turns = {
   modeOf: (threadId: string) => Mode | undefined;
   selectEffort: (threadId: string, effort: string) => void;
   effortOf: (threadId: string) => EffortLevel | null;
-  defaultEffort: EffortDefaults;
+  effortRule: EffortRule;
 };
 
 type RefusedMethod = (typeof REFUSED_METHODS)[number];
@@ -246,7 +246,7 @@ export const createRouter = (
     pending.delete(id);
     if (!isObject(message.result)) return line;
     if (request.kind === "modelList") {
-      const listed = withClaudeModels(message.result, turns.defaultEffort);
+      const listed = withClaudeModels(message.result, turns.effortRule);
       for (const model of listed.collisions) {
         log({ event: "model_id_collision", model });
       }

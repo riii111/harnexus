@@ -18,7 +18,7 @@ export const connectClaudeThreads = ({
   startSession,
   findSession,
   readSession,
-  defaultEffort,
+  effortRule,
   send,
   log,
 }: {
@@ -27,7 +27,7 @@ export const connectClaudeThreads = ({
   startSession: Controller["startSession"];
   findSession: Controller["findSession"];
   readSession: Parameters<typeof createHistoryRequests>[0]["readSession"];
-  defaultEffort: Controller["defaultEffort"];
+  effortRule: Controller["effortRule"];
   send: (message: object) => void;
   log: (event: TurnEvent | RouteEvent) => void;
 }) => {
@@ -46,7 +46,7 @@ export const connectClaudeThreads = ({
       createCodexLink({ callerThreadId, store, request, delegations }),
     send,
     log,
-    defaultEffort,
+    effortRule,
   });
   const history = createHistoryRequests({
     threads: turns,

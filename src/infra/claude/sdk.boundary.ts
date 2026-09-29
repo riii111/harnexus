@@ -29,7 +29,10 @@ type ResolveSettings = (options: {
   cwd: string;
   settingSources: SettingSource[];
 }) => Promise<{
-  effective: Pick<Settings, "env" | "effortLevel" | "modelSettings">;
+  effective: Pick<
+    Settings,
+    "env" | "effortLevel" | "maxEffortLevel" | "modelSettings"
+  >;
 }>;
 
 type GetSessionMessages = (sessionId: string) => Promise<SessionMessage[]>;
@@ -88,22 +91,7 @@ export class ClaudeRecordUnreadable extends TaggedError(
 export type { ClaudeStreamFailed };
 
 // resolveSettings merges the same files as the CLI without starting it, but skips an admin policyHelper.
-export const readSettingsEnv = (
-  resolve: ResolveSettings,
-  cwd: string,
-  settingSources: SettingSource[],
-) =>
-  Result.tryPromise({
-    try: async () =>
-      (await resolve({ cwd, settingSources })).effective.env ?? {},
-    catch: (cause) =>
-      new ClaudeSettingsUnavailable({
-        cause,
-        message: "cannot read the Claude settings",
-      }),
-  });
-
-export const readEffortSettings = (
+export const readSettings = (
   resolve: ResolveSettings,
   cwd: string,
   settingSources: SettingSource[],

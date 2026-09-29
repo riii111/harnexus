@@ -19,7 +19,7 @@ import {
 import {
   type ClaudeSessionSettings,
   claudeSessionExists,
-  loadEffortDefaults,
+  loadEffortRule,
   readClaudeSession,
   startClaudeSession,
 } from "./session.ts";
@@ -451,15 +451,17 @@ describe("startClaudeSession started session", () => {
   });
 });
 
-describe("loadEffortDefaults", () => {
+describe("loadEffortRule", () => {
   test("starts a model at the level the user's settings give it", async () => {
     const claude = fakeClaude(SUBSCRIPTION, {
       effortSettings: { effortLevel: "xhigh" },
     });
 
-    const loaded = await loadEffortDefaults("/work/tree", claude.runtime);
+    const loaded = await loadEffortRule("/work/tree", claude.runtime);
 
-    expect(loaded.isOk() && loaded.value("claude-sonnet-5")).toBe("xhigh");
+    expect(loaded.isOk() && loaded.value("claude-sonnet-5", null)).toBe(
+      "xhigh",
+    );
   });
 
   test("reports settings it cannot read", async () => {
@@ -467,7 +469,7 @@ describe("loadEffortDefaults", () => {
       settingsEnv: new Error("invalid settings"),
     });
 
-    const loaded = await loadEffortDefaults("/work/tree", claude.runtime);
+    const loaded = await loadEffortRule("/work/tree", claude.runtime);
 
     expect(loaded.isErr() && loaded.error._tag).toBe(
       "ClaudeSettingsUnavailable",

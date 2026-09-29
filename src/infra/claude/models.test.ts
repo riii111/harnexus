@@ -1,56 +1,76 @@
 import { describe, expect, test } from "bun:test";
-import { effortDefaults, runEffort } from "./models.ts";
+import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+import { type EffortSettings, effortRule } from "./models.ts";
 
-describe("effortDefaults", () => {
-  test.each([
+describe("effortRule", () => {
+  test.each<{ name: string; settings: EffortSettings; expected: EffortLevel }>([
     {
       name: "the model's own level in the settings",
       settings: {
-        effortLevel: "low" as const,
-        modelSettings: { "claude-opus-5-5": { effortLevel: "xhigh" as const } },
+        effortLevel: "low",
+        modelSettings: { [OPUS]: { effortLevel: "xhigh" } },
       },
       expected: "xhigh",
     },
     {
       name: "the settings' level for every model",
-      settings: { effortLevel: "low" as const },
+      settings: { effortLevel: "low" },
       expected: "low",
     },
     { name: "no level in the settings", settings: {}, expected: "high" },
-  ])("starts a model with effort from $name", ({ settings, expected }) => {
-    const defaults = effortDefaults(settings);
+  ])("runs a thread with no level picked at $name", ({
+    settings,
+    expected,
+  }) => {
+    const rule = effortRule(settings);
 
-    expect(defaults("claude-opus-5-5")).toBe(expected);
+    expect(rule(OPUS, null)).toBe(expected);
   });
 
-  test("gives a model without effort no level", () => {
-    const defaults = effortDefaults({ effortLevel: "low" });
+  test("runs a thread at its picked level over the settings' level", () => {
+    const rule = effortRule({ effortLevel: "low" });
 
-    expect(defaults("claude-haiku-4-5")).toBeNull();
+    expect(rule(OPUS, "max")).toBe("max");
   });
-});
 
-describe("runEffort", () => {
-  test.each([
-    { name: "a level the model runs", picked: "max" as const, expected: "max" },
-    { name: "no level", picked: null, expected: "medium" },
-  ])("runs a thread with $name picked at $expected", ({ picked, expected }) => {
-    const effort = runEffort(
-      "claude-sonnet-5",
-      picked,
-      effortDefaults({ effortLevel: "medium" }),
-    );
+  test.each<{
+    name: string;
+    settings: EffortSettings;
+    picked: "max" | null;
+    expected: EffortLevel;
+  }>([
+    {
+      name: "a picked level above the settings' cap",
+      settings: { maxEffortLevel: "low" },
+      picked: "max",
+      expected: "low",
+    },
+    {
+      name: "the default above the settings' cap",
+      settings: { effortLevel: "high", maxEffortLevel: "medium" },
+      picked: null,
+      expected: "medium",
+    },
+    {
+      name: "a picked level under the model's own cap of max",
+      settings: {
+        maxEffortLevel: "low",
+        modelSettings: { [OPUS]: { maxEffortLevel: "max" } },
+      },
+      picked: "max",
+      expected: "max",
+    },
+  ])("runs $name at $expected", ({ settings, picked, expected }) => {
+    const rule = effortRule(settings);
 
-    expect(effort).toBe(expected);
+    expect(rule(OPUS, picked)).toBe(expected);
   });
 
   test("runs a model without effort at no level whatever was picked", () => {
-    const effort = runEffort(
-      "claude-haiku-4-5",
-      "max",
-      effortDefaults({ effortLevel: "medium" }),
-    );
+    const rule = effortRule({ effortLevel: "low" });
 
-    expect(effort).toBeNull();
+    expect(rule("claude-haiku-4-5", "max")).toBeNull();
   });
 });
+
+const OPUS = "claude-opus-5-5";

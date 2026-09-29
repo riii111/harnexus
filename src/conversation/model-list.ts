@@ -1,10 +1,10 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
-import { CLAUDE_MODELS, type EffortDefaults } from "../infra/claude/models.ts";
+import { CLAUDE_MODELS, type EffortRule } from "../infra/claude/models.ts";
 
 // Claude models join the last page only, so a paging client sees each once; an id the server already lists is reported, since requests for it still go to Claude.
 export const withClaudeModels = (
   result: Record<string, unknown>,
-  defaults: EffortDefaults,
+  rule: EffortRule,
 ) => {
   const data = result.data;
   if (!Array.isArray(data) || (result.nextCursor ?? null) !== null) {
@@ -15,7 +15,7 @@ export const withClaudeModels = (
     ({ id }) => id,
   );
   const added = CLAUDE_MODELS.filter(({ id }) => !listed.has(id)).map((model) =>
-    modelEntry(model, defaults(model.id)),
+    modelEntry(model, rule(model.id, null)),
   );
   return { result: { ...result, data: [...data, ...added] }, collisions };
 };
@@ -26,7 +26,7 @@ export const shownEffort = (effort: EffortLevel | null) =>
 
 const modelEntry = (
   { id, displayName, efforts }: (typeof CLAUDE_MODELS)[number],
-  defaultEffort: EffortLevel | null,
+  effortRule: EffortLevel | null,
 ) => ({
   id,
   model: id,
@@ -38,7 +38,7 @@ const modelEntry = (
   modelSpecialty: null,
   hidden: false,
   supportedReasoningEfforts: reasoningEfforts(displayName, efforts),
-  defaultReasoningEffort: shownEffort(defaultEffort),
+  defaultReasoningEffort: shownEffort(effortRule),
   inputModalities: ["text"],
   supportsPersonality: false,
   multiAgentVersion: null,
