@@ -740,10 +740,13 @@ export const createTurnController = ({
       fail(active, mode.error);
       return;
     }
-    // A model only Claude Code's list names has no levels until the list is read, which the bridge starts reading at launch.
-    await modelsSettled();
     // Set on every turn, even with none picked, so Claude runs at the level the app shows rather than at project settings, and a restarted session gets it again.
-    const effort = effortRule(model, input.effort);
+    let effort = effortRule(model, input.effort);
+    // A model only Claude Code's list names has no levels until the list is read, which the bridge starts reading at launch.
+    if (effort === null) {
+      await modelsSettled();
+      effort = effortRule(model, input.effort);
+    }
     if (effort !== null) {
       const applied = await slot.value.session.setEffort(effort);
       if (applied.isErr()) {

@@ -125,8 +125,14 @@ describe("createModelCatalog", () => {
   });
 
   test.each([
-    { name: "the list is read", settle: (c: Catalog) => c.replace([]) },
-    { name: "the list is given up", settle: (c: Catalog) => c.giveUp() },
+    {
+      name: "the list is read",
+      settle: (catalog: Catalog) => catalog.replace([]),
+    },
+    {
+      name: "the list is given up",
+      settle: (catalog: Catalog) => catalog.giveUp(),
+    },
   ])("lets a waiting turn go on once $name", async ({ settle }) => {
     const catalog = createModelCatalog();
     let settled = false;
