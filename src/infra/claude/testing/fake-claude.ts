@@ -1,6 +1,7 @@
 import type {
   AccountInfo,
   EffortLevel,
+  ModelInfo,
   Options,
   PermissionMode,
   SDKMessage,
@@ -23,6 +24,7 @@ export const fakeClaude = (
     closeEnding = { done: true, value: undefined },
     settingsEnv = {},
     effortSettings = {},
+    models = [],
     env = { PATH: "/usr/bin" },
   }: {
     interruptError?: Error;
@@ -34,6 +36,8 @@ export const fakeClaude = (
     closeEnding?: Delivery;
     settingsEnv?: Record<string, string> | Error;
     effortSettings?: Pick<Settings, "effortLevel" | "modelSettings">;
+    // "unanswered" stands for a Claude Code that never lists its models.
+    models?: ModelInfo[] | Error | "unanswered";
     env?: Record<string, string | undefined>;
   } = {},
 ) => {
@@ -80,6 +84,12 @@ export const fakeClaude = (
       // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
       if (effortError !== undefined) throw effortError;
       efforts.push(settings.effortLevel);
+    },
+    supportedModels: async () => {
+      // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
+      if (models instanceof Error) throw models;
+      if (models === "unanswered") return new Promise<ModelInfo[]>(() => {});
+      return models;
     },
     accountInfo: async () => {
       // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.

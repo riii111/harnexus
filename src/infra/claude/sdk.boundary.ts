@@ -16,6 +16,7 @@ export type ClaudeQuery = Pick<
   | "interrupt"
   | "setPermissionMode"
   | "applyFlagSettings"
+  | "supportedModels"
   | "accountInfo"
   | "close"
 >;
@@ -77,6 +78,11 @@ class ClaudePermissionModeFailed extends TaggedError(
 }> {}
 
 class ClaudeEffortFailed extends TaggedError("ClaudeEffortFailed")<{
+  cause: unknown;
+  message: string;
+}> {}
+
+class ClaudeModelsUnavailable extends TaggedError("ClaudeModelsUnavailable")<{
   cause: unknown;
   message: string;
 }> {}
@@ -157,6 +163,32 @@ export const setQueryPermissionMode = (
       new ClaudePermissionModeFailed({
         cause,
         message: `cannot switch Claude to the ${mode} permission mode`,
+      }),
+  });
+
+// A Claude Code that never answers would otherwise keep its process running for the whole bridge.
+export const readSupportedModels = (query: ClaudeQuery, timeoutMs: number) =>
+  Result.tryPromise({
+    try: async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          query.supportedModels(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("Claude Code did not list its models")),
+              timeoutMs,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    catch: (cause) =>
+      new ClaudeModelsUnavailable({
+        cause,
+        message: "cannot read the models Claude Code offers",
       }),
   });
 

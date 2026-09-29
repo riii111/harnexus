@@ -1,9 +1,10 @@
 import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
-import { effortRule } from "../infra/claude/models.ts";
+import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import {
   claudeSessionExists,
-  loadEffortRule,
+  loadClaudeModels,
+  loadEffortSettings,
   readClaudeSession,
   startClaudeSession,
 } from "../infra/claude/session.ts";
@@ -83,11 +84,24 @@ async function withClaude(relay: {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
     return plain;
   }
-  const defaults = await loadEffortRule();
-  if (defaults.isErr()) {
+  const catalog = createModelCatalog();
+  // Not awaited, since the app lists models before Claude Code can answer and holding that answer would hold every later server line; the app asks again later.
+  void loadClaudeModels().then((loaded) => {
+    if (loaded.isErr()) {
+      logger.log({
+        event: "claude_models_unavailable",
+        reason: loaded.error._tag,
+      });
+      return;
+    }
+    catalog.replace(loaded.value);
+    logger.log({ event: "claude_models_loaded", count: loaded.value.length });
+  });
+  const settings = await loadEffortSettings();
+  if (settings.isErr()) {
     logger.log({
       event: "effort_settings_unavailable",
-      reason: defaults.error._tag,
+      reason: settings.error._tag,
     });
   }
   const appInjector = createLineInjector(process.stdout);
@@ -100,7 +114,11 @@ async function withClaude(relay: {
     findSession: claudeSessionExists,
     readSession: (sessionId) => readClaudeSession(sessionId),
     // Unreadable settings leave threads with none picked on the model default, which is still the level the app shows.
-    effortRule: defaults.isOk() ? defaults.value : effortRule({}),
+    effortRule: effortRule(
+      settings.isOk() ? settings.value : {},
+      catalog.effortsOf,
+    ),
+    claudeModels: catalog.models,
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });

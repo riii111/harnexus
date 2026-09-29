@@ -19,7 +19,8 @@ import {
 import {
   type ClaudeSessionSettings,
   claudeSessionExists,
-  loadEffortRule,
+  loadClaudeModels,
+  loadEffortSettings,
   readClaudeSession,
   startClaudeSession,
 } from "./session.ts";
@@ -451,17 +452,15 @@ describe("startClaudeSession started session", () => {
   });
 });
 
-describe("loadEffortRule", () => {
-  test("starts a model at the level the user's settings give it", async () => {
+describe("loadEffortSettings", () => {
+  test("reads the effort level in the user's settings", async () => {
     const claude = fakeClaude(SUBSCRIPTION, {
       effortSettings: { effortLevel: "xhigh" },
     });
 
-    const loaded = await loadEffortRule("/work/tree", claude.runtime);
+    const loaded = await loadEffortSettings("/work/tree", claude.runtime);
 
-    expect(loaded.isOk() && loaded.value("claude-sonnet-5", null)).toBe(
-      "xhigh",
-    );
+    expect(loaded.isOk() && loaded.value.effortLevel).toBe("xhigh");
   });
 
   test("reports settings it cannot read", async () => {
@@ -469,11 +468,83 @@ describe("loadEffortRule", () => {
       settingsEnv: new Error("invalid settings"),
     });
 
-    const loaded = await loadEffortRule("/work/tree", claude.runtime);
+    const loaded = await loadEffortSettings("/work/tree", claude.runtime);
 
     expect(loaded.isErr() && loaded.error._tag).toBe(
       "ClaudeSettingsUnavailable",
     );
+  });
+});
+
+describe("loadClaudeModels", () => {
+  test("lists the models Claude Code offers without sending a prompt and closes Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      models: [SONNET_INFO],
+    });
+
+    const loaded = await loadClaudeModels(claude.runtime, "/work/tree");
+
+    expect(loaded.isOk() && loaded.value.map(({ id }) => id)).toEqual([
+      "claude-sonnet-5-5",
+    ]);
+    expect(await claude.prompts()).toEqual([]);
+    expect(claude.closes()).toBe(1);
+  });
+
+  test("starts Claude without the variables that would bill the API", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      env: { PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-fixture" },
+    });
+
+    await loadClaudeModels(claude.runtime, "/work/tree");
+
+    expect(claude.options().env).toEqual({ PATH: "/usr/bin" });
+  });
+
+  test("refuses to list when the user's settings would switch the login", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      settingsEnv: { ANTHROPIC_API_KEY: "api-key" },
+      models: [SONNET_INFO],
+    });
+
+    const loaded = await loadClaudeModels(claude.runtime, "/work/tree");
+
+    expect(loaded.isErr() && loaded.error._tag).toBe(
+      "ClaudeSettingsOverrideAuth",
+    );
+    expect(claude.started()).toBe(false);
+  });
+
+  test("gives up on a Claude Code that never lists and closes it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, { models: "unanswered" });
+
+    const loaded = await loadClaudeModels(claude.runtime, "/work/tree", 10);
+
+    expect(loaded.isErr() && loaded.error._tag).toBe("ClaudeModelsUnavailable");
+    expect(claude.closes()).toBe(1);
+  });
+
+  test("reports a list without a Claude model as a failure", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      models: [
+        { value: "custom", displayName: "Custom", description: "Custom model" },
+      ],
+    });
+
+    const loaded = await loadClaudeModels(claude.runtime, "/work/tree");
+
+    expect(loaded.isErr() && loaded.error._tag).toBe("NoClaudeModelsListed");
+  });
+
+  test("reports a list Claude cannot give and still closes Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      models: new Error("no control channel"),
+    });
+
+    const loaded = await loadClaudeModels(claude.runtime, "/work/tree");
+
+    expect(loaded.isErr() && loaded.error._tag).toBe("ClaudeModelsUnavailable");
+    expect(claude.closes()).toBe(1);
   });
 });
 
@@ -699,3 +770,10 @@ const RECORD_LINE = JSON.stringify({
   timestamp: "2026-09-27T00:00:00.000Z",
   message: { role: "user", content: "hello" },
 });
+
+const SONNET_INFO = {
+  value: "sonnet",
+  resolvedModel: "claude-sonnet-5-5",
+  displayName: "Sonnet",
+  description: "Sonnet 5.5 · Efficient for routine tasks",
+};
