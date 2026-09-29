@@ -32,7 +32,7 @@ export const isClaudeEffort = (effort: unknown): effort is EffortLevel =>
     (efforts as readonly unknown[]).includes(effort),
   );
 
-export const effortsOf = (model: string): readonly EffortLevel[] =>
+const effortsOf = (model: string): readonly EffortLevel[] =>
   CLAUDE_MODELS.find(({ id }) => id === model)?.efforts ?? [];
 
 export const supportsEffort = (model: string, effort: EffortLevel) =>

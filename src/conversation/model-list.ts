@@ -21,7 +21,7 @@ export const withClaudeModels = (result: Record<string, unknown>) => {
   return { result: { ...result, data: [...data, ...added] }, collisions };
 };
 
-// The app shows a thread's effort from what the server reports, so a level the model cannot run, or none, is shown as the one the picker offers first.
+// The app shows a thread's effort from what the server reports, so a level the model cannot run, or none, is shown as the model's default level.
 export const shownEffort = (model: string, effort: EffortLevel | null) =>
   effort !== null && supportsEffort(model, effort) ? effort : DEFAULT_EFFORT;
 

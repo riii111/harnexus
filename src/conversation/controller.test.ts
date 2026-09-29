@@ -616,6 +616,28 @@ describe("effort", () => {
     expect(claude.efforts()).toEqual(["low"]);
   });
 
+  test("saves an effort picked while the thread's first turn registers it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const firstWrite = createGate();
+    let writes = 0;
+    const { turns, store } = await harness([claude], {
+      files: {
+        writeState: async (target, content) => {
+          if (++writes === 1) await firstWrite.promise;
+          return writeFileAtomic(target, content);
+        },
+      },
+    });
+
+    turns.startTurn(withEffort(turnStart(10, "hello"), "low"), undefined);
+    await until(() => writes === 1);
+    turns.selectEffort(THREAD, "max");
+    firstWrite.open();
+    await until(() => store.get(THREAD)?.effort === "max");
+
+    expect(turns.effortOf(THREAD)).toBe("max");
+  });
+
   test("keeps an effort the store failed to save while the bridge runs", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     let writes = 0;

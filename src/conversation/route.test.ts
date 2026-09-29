@@ -323,6 +323,20 @@ describe("threads with a Claude model", () => {
     expect(out.result.thread.reasoningEffort).toBe("medium");
   });
 
+  test("leaves the resume response of a Codex thread as the same bytes", async () => {
+    const { router } = setup(["th-claude"]);
+    router.fromApp(
+      encode({
+        id: 4,
+        method: "thread/resume",
+        params: { threadId: "th-codex" },
+      }),
+    );
+    const response = threadResponse(4, "th-codex", "ultra");
+
+    expect(await router.fromServer(response)).toEqual(response);
+  });
+
   test("forwards a resume of a Claude thread in its own directory", () => {
     const { router, calls } = setup(["th-claude"]);
     const line = encode({
