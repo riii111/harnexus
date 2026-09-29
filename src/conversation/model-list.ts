@@ -26,7 +26,7 @@ export const shownEffort = (effort: EffortLevel | null) =>
 
 const modelEntry = (
   { id, displayName, efforts }: (typeof CLAUDE_MODELS)[number],
-  effortRule: EffortLevel | null,
+  defaultEffort: EffortLevel | null,
 ) => ({
   id,
   model: id,
@@ -38,7 +38,7 @@ const modelEntry = (
   modelSpecialty: null,
   hidden: false,
   supportedReasoningEfforts: reasoningEfforts(displayName, efforts),
-  defaultReasoningEffort: shownEffort(effortRule),
+  defaultReasoningEffort: shownEffort(defaultEffort),
   inputModalities: ["text"],
   supportsPersonality: false,
   multiAgentVersion: null,
