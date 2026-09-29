@@ -250,6 +250,19 @@ describe("model/list", () => {
     ]);
   });
 
+  test("logs a server model with the Claude prefix that no Claude list names", async () => {
+    const { router, events } = setup();
+
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    await router.fromServer(
+      modelList(2, null, ["gpt-fixture", "claude-custom"]),
+    );
+
+    expect(events).toEqual([
+      { event: "model_id_collision", model: "claude-custom" },
+    ]);
+  });
+
   test("does not read a server request that reuses the pending id", () => {
     const { router } = setup();
 

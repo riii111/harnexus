@@ -1,11 +1,12 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
-import type {
-  ClaudeModel,
-  EffortRule,
-  ModelCatalog,
+import {
+  type ClaudeModel,
+  type EffortRule,
+  isClaudeModel,
+  type ModelCatalog,
 } from "../infra/claude/models.ts";
 
-// Claude models join the last page only, so a paging client sees each once; an id the server already lists is reported, since requests for it still go to Claude.
+// Claude models join the last page only, so a paging client sees each once; a server id with the Claude prefix is reported, since requests for it go to Claude.
 // A retired model is listed hidden, so the app can still name the model of a thread already on it.
 export const withClaudeModels = (
   result: Record<string, unknown>,
@@ -21,9 +22,9 @@ export const withClaudeModels = (
     ...offered.map((model) => ({ model, hidden: false })),
     ...retired.map((model) => ({ model, hidden: true })),
   ];
-  const collisions = models
-    .filter(({ model }) => listed.has(model.id))
-    .map(({ model }) => model.id);
+  const collisions = data
+    .map((model) => modelId(model))
+    .filter((id) => isClaudeModel(id));
   const added = models
     .filter(({ model }) => !listed.has(model.id))
     .map(({ model, hidden }) =>

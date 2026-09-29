@@ -88,13 +88,14 @@ async function withClaude(relay: {
   // Not awaited, since the app lists models before Claude Code can answer and holding that answer would hold every later server line; the app asks again later.
   void loadClaudeModels().then((loaded) => {
     if (loaded.isErr()) {
+      catalog.giveUp();
       logger.log({
         event: "claude_models_unavailable",
         reason: loaded.error._tag,
       });
       return;
     }
-    if (loaded.value.length > 0) catalog.replace(loaded.value);
+    catalog.replace(loaded.value);
     logger.log({ event: "claude_models_loaded", count: loaded.value.length });
   });
   const settings = await loadEffortSettings();
@@ -119,6 +120,7 @@ async function withClaude(relay: {
       catalog.effortsOf,
     ),
     claudeModels: catalog.models,
+    modelsSettled: catalog.settled,
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });

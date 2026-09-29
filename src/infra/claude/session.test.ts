@@ -479,14 +479,7 @@ describe("loadEffortSettings", () => {
 describe("loadClaudeModels", () => {
   test("lists the models Claude Code offers without sending a prompt and closes Claude", async () => {
     const claude = fakeClaude(SUBSCRIPTION, {
-      models: [
-        {
-          value: "sonnet",
-          resolvedModel: "claude-sonnet-5-5",
-          displayName: "Sonnet",
-          description: "Sonnet 5.5 · Efficient for routine tasks",
-        },
-      ],
+      models: [SONNET_INFO],
     });
 
     const loaded = await loadClaudeModels(claude.runtime, "/work/tree");
@@ -506,6 +499,41 @@ describe("loadClaudeModels", () => {
     await loadClaudeModels(claude.runtime, "/work/tree");
 
     expect(claude.options().env).toEqual({ PATH: "/usr/bin" });
+  });
+
+  test("refuses to list when the user's settings would switch the login", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      settingsEnv: { ANTHROPIC_API_KEY: "api-key" },
+      models: [SONNET_INFO],
+    });
+
+    const loaded = await loadClaudeModels(claude.runtime, "/work/tree");
+
+    expect(loaded.isErr() && loaded.error._tag).toBe(
+      "ClaudeSettingsOverrideAuth",
+    );
+    expect(claude.started()).toBe(false);
+  });
+
+  test("gives up on a Claude Code that never lists and closes it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, { models: "unanswered" });
+
+    const loaded = await loadClaudeModels(claude.runtime, "/work/tree", 10);
+
+    expect(loaded.isErr() && loaded.error._tag).toBe("ClaudeModelsUnavailable");
+    expect(claude.closes()).toBe(1);
+  });
+
+  test("reports a list without a Claude model as a failure", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      models: [
+        { value: "custom", displayName: "Custom", description: "Custom model" },
+      ],
+    });
+
+    const loaded = await loadClaudeModels(claude.runtime, "/work/tree");
+
+    expect(loaded.isErr() && loaded.error._tag).toBe("NoClaudeModelsListed");
   });
 
   test("reports a list Claude cannot give and still closes Claude", async () => {
@@ -742,3 +770,10 @@ const RECORD_LINE = JSON.stringify({
   timestamp: "2026-09-27T00:00:00.000Z",
   message: { role: "user", content: "hello" },
 });
+
+const SONNET_INFO = {
+  value: "sonnet",
+  resolvedModel: "claude-sonnet-5-5",
+  displayName: "Sonnet",
+  description: "Sonnet 5.5 · Efficient for routine tasks",
+};

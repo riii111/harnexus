@@ -124,6 +124,24 @@ describe("createModelCatalog", () => {
     });
   });
 
+  test.each([
+    { name: "the list is read", settle: (c: Catalog) => c.replace([]) },
+    { name: "the list is given up", settle: (c: Catalog) => c.giveUp() },
+  ])("lets a waiting turn go on once $name", async ({ settle }) => {
+    const catalog = createModelCatalog();
+    let settled = false;
+    void catalog.settled().then(() => {
+      settled = true;
+    });
+    await Bun.sleep(0);
+    const before = settled;
+
+    settle(catalog);
+    await catalog.settled();
+
+    expect({ before, after: settled }).toEqual({ before: false, after: true });
+  });
+
   test("takes a listed model's levels over the built-in ones and keeps those of a retired model", () => {
     const catalog = createModelCatalog();
 
@@ -228,6 +246,8 @@ describe("effortRule", () => {
     expect(rule("claude-haiku-4-5", "max")).toBeNull();
   });
 });
+
+type Catalog = ReturnType<typeof createModelCatalog>;
 
 const OPUS = "claude-opus-5-5";
 

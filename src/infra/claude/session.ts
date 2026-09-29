@@ -57,6 +57,10 @@ class ClaudeSessionClosed extends TaggedError("ClaudeSessionClosed")<{
   message: string;
 }> {}
 
+class NoClaudeModelsListed extends TaggedError("NoClaudeModelsListed")<{
+  message: string;
+}> {}
+
 type ClaudeRuntime = ClaudeSdk & { env: Env };
 
 // The settings and the account are checked before any prompt is sent, so a login that would bill the API never starts a conversation.
@@ -88,25 +92,37 @@ export const startClaudeSession = (
 export const loadEffortSettings = (
   cwd: string = process.cwd(),
   runtime: Pick<ClaudeRuntime, "resolveSettings"> = PROCESS_RUNTIME,
-) => readSettings(runtime.resolveSettings, cwd, ["user"]);
+) => readSettings(runtime.resolveSettings, cwd, USER_SETTINGS);
 
 // Reading the list sends no prompt, so the process is closed as soon as it answers; the models it runs depend on the Claude Code version the SDK bundles.
+// Only the user's settings are read, since the bridge's directory is no thread's project, and they pass the same check as a session so the list is the subscription's.
 export const loadClaudeModels = (
   runtime: ClaudeRuntime = PROCESS_RUNTIME,
   cwd: string = process.cwd(),
+  timeoutMs: number = MODELS_TIMEOUT_MS,
 ) =>
   Result.gen(async function* () {
+    const resolved = yield* Result.await(
+      readSettings(runtime.resolveSettings, cwd, USER_SETTINGS),
+    );
+    yield* checkSettingsEnv(resolved.env ?? {});
     const prompt = createPromptQueue();
     const claude = yield* openQuery(runtime.query, prompt.stream, {
       cwd,
       env: withoutApiBilling(runtime.env),
-      settingSources: SETTING_SOURCES,
+      settingSources: USER_SETTINGS,
     });
-    const listed = await readSupportedModels(claude);
+    const listed = await readSupportedModels(claude, timeoutMs);
     prompt.end();
     closeQuery(claude);
-    const infos = yield* listed;
-    return Result.ok(modelsFromSdk(infos));
+    const models = modelsFromSdk(yield* listed);
+    return models.length === 0
+      ? Result.err(
+          new NoClaudeModelsListed({
+            message: "Claude Code listed no Claude model",
+          }),
+        )
+      : Result.ok(models);
   });
 
 // Claude keeps a conversation as <session id>.jsonl in a project folder under its config directory, which the user may delete or move to another machine.
@@ -245,6 +261,11 @@ const claudeConfigDir = (env: NodeJS.ProcessEnv) =>
   env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
 
 const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
+
+const USER_SETTINGS: SettingSource[] = ["user"];
+
+// Starting Claude Code and listing takes about 3.5 s on the verification Mac.
+const MODELS_TIMEOUT_MS = 30_000;
 
 // resolveSettings resolves settings directories such as CLAUDE_CONFIG_DIR from this process's environment, so Claude starts from the same one and differs only by the billing variables removed from it.
 const PROCESS_RUNTIME: ClaudeRuntime = {

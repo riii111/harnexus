@@ -166,9 +166,25 @@ export const setQueryPermissionMode = (
       }),
   });
 
-export const readSupportedModels = (query: ClaudeQuery) =>
+// A Claude Code that never answers would otherwise keep its process running for the whole bridge.
+export const readSupportedModels = (query: ClaudeQuery, timeoutMs: number) =>
   Result.tryPromise({
-    try: () => query.supportedModels(),
+    try: async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          query.supportedModels(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("Claude Code did not list its models")),
+              timeoutMs,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
     catch: (cause) =>
       new ClaudeModelsUnavailable({
         cause,

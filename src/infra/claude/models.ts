@@ -36,10 +36,18 @@ export const isClaudeEffort = (effort: unknown): effort is EffortLevel =>
 // The models Claude Code lists replace the built-in ones once read; a built-in model it no longer lists stays for the threads already on it.
 export const createModelCatalog = () => {
   let listed: readonly ClaudeModel[] | null = null;
+  let settle = () => {};
+  const settled = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
   return {
     replace: (models: readonly ClaudeModel[]) => {
       listed = models;
+      settle();
     },
+    // The built-in models stay, and a turn waiting for the list goes on with them.
+    giveUp: () => settle(),
+    settled: () => settled,
     models: (): {
       offered: readonly ClaudeModel[];
       retired: readonly ClaudeModel[];

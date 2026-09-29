@@ -227,6 +227,7 @@ export const createTurnController = ({
   newTurnId = () => `harnexus-turn-${randomUUID()}`,
   idleSessionMs = IDLE_SESSION_MS,
   effortRule,
+  modelsSettled = async () => {},
 }: {
   store: ThreadStore;
   startSession: StartSession;
@@ -239,6 +240,7 @@ export const createTurnController = ({
   newTurnId?: () => string;
   idleSessionMs?: number;
   effortRule: EffortRule;
+  modelsSettled?: () => Promise<void>;
 }) => {
   const threads = createThreadValues(store, log);
   const sessions = new Map<string, SessionSlot>();
@@ -738,6 +740,8 @@ export const createTurnController = ({
       fail(active, mode.error);
       return;
     }
+    // A model only Claude Code's list names has no levels until the list is read, which the bridge starts reading at launch.
+    await modelsSettled();
     // Set on every turn, even with none picked, so Claude runs at the level the app shows rather than at project settings, and a restarted session gets it again.
     const effort = effortRule(model, input.effort);
     if (effort !== null) {

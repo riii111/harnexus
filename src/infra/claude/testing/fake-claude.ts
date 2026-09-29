@@ -36,7 +36,8 @@ export const fakeClaude = (
     closeEnding?: Delivery;
     settingsEnv?: Record<string, string> | Error;
     effortSettings?: Pick<Settings, "effortLevel" | "modelSettings">;
-    models?: ModelInfo[] | Error;
+    // "unanswered" stands for a Claude Code that never lists its models.
+    models?: ModelInfo[] | Error | "unanswered";
     env?: Record<string, string | undefined>;
   } = {},
 ) => {
@@ -87,6 +88,7 @@ export const fakeClaude = (
     supportedModels: async () => {
       // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
       if (models instanceof Error) throw models;
+      if (models === "unanswered") return new Promise<ModelInfo[]>(() => {});
       return models;
     },
     accountInfo: async () => {

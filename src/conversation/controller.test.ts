@@ -543,6 +543,37 @@ describe("effort", () => {
     expect(turns.effortOf(THREAD)).toBe("low");
   });
 
+  test("waits for Claude Code's model list before setting the effort of a model only it names", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const catalog = createModelCatalog();
+    const { turns } = await harness([claude], {
+      effortRule: effortRule({}, catalog.effortsOf),
+      modelsSettled: catalog.settled,
+    });
+    const request = withEffort(turnStart(10, "hello"), "xhigh");
+
+    turns.startTurn(
+      { ...request, params: { ...request.params, model: "claude-sonnet-5-5" } },
+      undefined,
+    );
+    await until(() => claude.modes().length === 1);
+    await settle();
+    const waiting = [...claude.efforts()];
+    catalog.replace([
+      {
+        id: "claude-sonnet-5-5",
+        displayName: "Claude Sonnet 5.5",
+        description: "Sonnet 5.5",
+        efforts: ["low", "xhigh"],
+      },
+    ]);
+    await until(() => claude.efforts().length === 1);
+
+    expect(waiting).toEqual([]);
+    expect(claude.efforts()).toEqual(["xhigh"]);
+    expect(await firstPrompt(claude.prompt())).toBe("hello");
+  });
+
   test("runs a turn/start naming a level only Codex has at the default", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns } = await harness([claude]);
@@ -2579,6 +2610,7 @@ const harness = async (
     materializeFailures = 0,
     linkRequest,
     effortRule = defaultRule,
+    modelsSettled,
   }: {
     adopt?: boolean;
     files?: Parameters<typeof openThreadStore>[1];
@@ -2591,6 +2623,7 @@ const harness = async (
     materializeFailures?: number;
     linkRequest?: ServerRequest;
     effortRule?: EffortRule;
+    modelsSettled?: () => Promise<void>;
   } = {},
 ) => {
   const opened = await openThreadStore(join(dir, "threads.json"), files);
@@ -2653,6 +2686,7 @@ const harness = async (
     now: () => 1_700_000_000_000,
     newTurnId: () => `turn-${++turnCount}`,
     effortRule,
+    ...(modelsSettled !== undefined && { modelsSettled }),
     ...(idleSessionMs !== undefined && { idleSessionMs }),
   });
   if (adopt) turns.adopt(THREAD, { model: MODEL, cwd: dir });
