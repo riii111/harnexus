@@ -427,6 +427,221 @@ describe("permission mode", () => {
   });
 });
 
+describe("effort", () => {
+  test("sets the effort a turn/start names and logs the level", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, events } = await harness([claude]);
+
+    turns.startTurn(withEffort(turnStart(10, "hello"), "high"), undefined);
+    await until(() => claude.started());
+
+    expect(await firstPrompt(claude.prompt())).toBe("hello");
+    expect(claude.efforts()).toEqual(["high"]);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "effort_applied",
+      effort: "high",
+    });
+  });
+
+  test("reads the effort from the collaboration mode when the turn/start has none", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude]);
+    const request = turnStart(10, "hello");
+
+    turns.startTurn(
+      {
+        ...request,
+        params: {
+          ...request.params,
+          collaborationMode: {
+            mode: "default",
+            settings: { model: MODEL, reasoning_effort: "xhigh" },
+          },
+        },
+      },
+      undefined,
+    );
+    await until(() => claude.efforts().length === 1);
+
+    expect(claude.efforts()).toEqual(["xhigh"]);
+  });
+
+  test("runs another thread's reply, which names no effort, at the thread's effort", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    turns.startTurn(withEffort(turnStart(10, "hello"), "max"), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    claude.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 1);
+
+    turns.startTurn(reply(11, THREAD, "th-lead"), undefined);
+    await until(() => claude.efforts().length === 2);
+
+    expect(claude.efforts()).toEqual(["max", "max"]);
+  });
+
+  test("leaves the running turn at its effort and sets a change at the next turn", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    turns.startTurn(withEffort(turnStart(10, "hello"), "low"), undefined);
+    await until(() => claude.efforts().length === 1);
+
+    turns.selectEffort(THREAD, "max");
+    claude.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 1);
+    const whileRunning = [...claude.efforts()];
+    await completeTurn(turns, sent, claude, 11);
+
+    expect(whileRunning).toEqual(["low"]);
+    expect(claude.efforts()).toEqual(["low", "max"]);
+  });
+
+  test("runs a queued turn at the effort it was accepted with", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    turns.startTurn(withEffort(turnStart(10, "hello"), "low"), undefined);
+    await until(() => claude.efforts().length === 1);
+
+    turns.startTurn(withEffort(turnStart(11, "next"), "high"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    turns.selectEffort(THREAD, "max");
+    claude.emit(sdk(success()));
+    await until(() => claude.efforts().length === 2);
+
+    expect(claude.efforts()).toEqual(["low", "high"]);
+  });
+
+  test.each([
+    { name: "no effort picked", model: MODEL, effort: null },
+    { name: "a model without effort", model: HAIKU, effort: "high" },
+    { name: "a level only Codex has", model: MODEL, effort: "ultra" },
+  ])("sends the prompt without setting an effort for $name", async ({
+    model,
+    effort,
+  }) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude]);
+    const request = turnStart(10, "hello");
+    const params = { ...request.params, model };
+
+    turns.startTurn(
+      { ...request, params: effort === null ? params : { ...params, effort } },
+      undefined,
+    );
+    await until(() => claude.started());
+
+    expect(await firstPrompt(claude.prompt())).toBe("hello");
+    expect(claude.efforts()).toEqual([]);
+  });
+
+  test("keeps the thread's effort when a turn/start names a level only Codex has", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, events, store } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10, undefined, "high");
+
+    await completeTurn(turns, sent, claude, 11, undefined, "ultra");
+
+    expect(claude.efforts()).toEqual(["high", "high"]);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "effort_unsupported",
+    });
+    expect(store.get(THREAD)?.effort).toBe("high");
+  });
+
+  test("fails the turn without sending the prompt when Claude refuses the effort", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      effortError: new Error("no control channel"),
+    });
+    const { turns, sent, events } = await harness([claude]);
+
+    turns.startTurn(withEffort(turnStart(10, "hello"), "high"), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        step: "finished",
+        error: "ClaudeEffortFailed",
+      }),
+    );
+    expect(claude.closes()).toBe(1);
+    expect(await claude.prompts()).toEqual([]);
+  });
+
+  test("sets the effort again on the session restarted for a model change", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([first, second]);
+    await completeTurn(turns, sent, first, 10, undefined, "xhigh");
+
+    turns.changeModel(THREAD, OTHER_MODEL);
+    await completeTurn(turns, sent, second, 11);
+
+    expect(first.efforts()).toEqual(["xhigh"]);
+    expect(second.efforts()).toEqual(["xhigh"]);
+  });
+
+  test("saves the effort so the thread runs at it after a restart", async () => {
+    const before = fakeClaude(SUBSCRIPTION);
+    const first = await harness([before]);
+    await completeTurn(first.turns, first.sent, before, 10, undefined, "max");
+    await until(() => first.store.get(THREAD)?.effort === "max");
+
+    const after = fakeClaude(SUBSCRIPTION);
+    const restarted = await harness([after]);
+    await completeTurn(restarted.turns, restarted.sent, after, 11);
+
+    expect(restarted.turns.effortOf(THREAD)).toBe("max");
+    expect(after.efforts()).toEqual(["max"]);
+  });
+
+  test("registers a thread switched to Claude by turn/start with that turn's effort", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store } = await harness([claude], { adopt: false });
+    const request = turnStart(10, "hello");
+
+    turns.startTurn(
+      {
+        ...request,
+        params: { ...request.params, model: MODEL, cwd: dir, effort: "low" },
+      },
+      undefined,
+    );
+    await until(() => responseTo(sent, 10) !== undefined);
+
+    expect(store.get(THREAD)?.effort).toBe("low");
+    await until(() => claude.efforts().length === 1);
+    expect(claude.efforts()).toEqual(["low"]);
+  });
+
+  test("keeps an effort the store failed to save while the bridge runs", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    let writes = 0;
+    const { turns, sent, events } = await harness([claude], {
+      files: {
+        writeState: async (target, content) =>
+          ++writes <= 2 ? writeFileAtomic(target, content) : diskFull(target),
+      },
+    });
+    await completeTurn(turns, sent, claude, 10);
+
+    turns.selectEffort(THREAD, "max");
+    await until(() =>
+      events.some((event) => event.step === "effort_not_saved"),
+    );
+    await completeTurn(turns, sent, claude, 11);
+
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "effort_not_saved",
+      error: "StatePersistFailed",
+    });
+    expect(claude.efforts()).toEqual(["max"]);
+  });
+});
+
 describe("session ids", () => {
   test("resumes from the session id Claude reported even when saving it failed", async () => {
     const first = fakeClaude(SUBSCRIPTION);
@@ -2284,6 +2499,7 @@ const OTHER_REVIEWER = "th-fixture-reviewer-2";
 const NEW_REVIEWER = "th-fixture-reviewer-1";
 const MODEL = "claude-sonnet-5";
 const OTHER_MODEL = "claude-opus-5-5";
+const HAIKU = "claude-haiku-4-5";
 const SUBSCRIPTION: AccountInfo = {
   subscriptionType: "Claude Max",
   apiProvider: "firstParty",
@@ -2426,9 +2642,11 @@ const completeTurn = async (
   claude: ReturnType<typeof fakeClaude>,
   id: number,
   messageId?: string,
+  effort?: string,
 ) => {
   const before = completedTurnStatuses(sent).length;
-  const request = turnStart(id, `prompt ${id}`);
+  const typed = turnStart(id, `prompt ${id}`);
+  const request = effort === undefined ? typed : withEffort(typed, effort);
   turns.startTurn(
     messageId === undefined ? request : withMessageId(request, messageId),
     undefined,
@@ -2460,6 +2678,11 @@ const withMessageId = (
   request: ReturnType<typeof turnStart>,
   clientUserMessageId: string,
 ) => ({ ...request, params: { ...request.params, clientUserMessageId } });
+
+const withEffort = (request: ReturnType<typeof turnStart>, effort: string) => ({
+  ...request,
+  params: { ...request.params, effort },
+});
 
 const interrupt = (id: number, turnId: string) => ({
   id,

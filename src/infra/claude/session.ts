@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   type CanUseTool,
+  type EffortLevel,
   getSessionMessages,
   type McpServerConfig,
   type Options,
@@ -36,6 +37,7 @@ import {
   readAccount,
   readSessionMessages,
   readSettingsEnv,
+  setQueryEffort,
   setQueryPermissionMode,
 } from "./sdk.boundary.ts";
 
@@ -181,6 +183,8 @@ const createSession = (
       closed
         ? Result.err(sessionClosed())
         : setQueryPermissionMode(claude, mode),
+    setEffort: async (effort: EffortLevel) =>
+      closed ? Result.err(sessionClosed()) : setQueryEffort(claude, effort),
     close,
   };
 };

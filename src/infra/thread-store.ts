@@ -20,6 +20,8 @@ type ThreadMapping = {
   readonly threadId: string;
   readonly sessionId: string | null;
   readonly model: string;
+  // The effort level the app last picked for the thread, or null to leave Claude on the user's settings.
+  readonly effort: string | null;
   readonly worktree: string;
   readonly reviewerThreadIds: readonly string[];
   // The app's clientUserMessageId of the latest turns, so a message delivered again after a reconnect or restart is not run twice.
@@ -219,7 +221,12 @@ const createThreadStore = (
   return {
     get,
 
-    register: (entry: { threadId: string; model: string; worktree: string }) =>
+    register: (entry: {
+      threadId: string;
+      model: string;
+      worktree: string;
+      effort?: string | null;
+    }) =>
       persistThenCommit((current) =>
         current.has(entry.threadId)
           ? Result.err(
@@ -230,6 +237,7 @@ const createThreadStore = (
             )
           : Result.ok({
               ...entry,
+              effort: entry.effort ?? null,
               sessionId: null,
               reviewerThreadIds: [],
               messageIds: [],
@@ -241,6 +249,9 @@ const createThreadStore = (
 
     setModel: (threadId: string, model: string) =>
       update(threadId, (mapping) => ({ ...mapping, model })),
+
+    setEffort: (threadId: string, effort: string | null) =>
+      update(threadId, (mapping) => ({ ...mapping, effort })),
 
     // A reviewer answers one worker only, so a reply can be traced back to that worker; a Claude thread is a worker of its own.
     addReviewer: async (threadId: string, reviewerThreadId: string) => {
@@ -444,10 +455,14 @@ const serializeState = (mappings: ReadonlyMap<string, ThreadMapping>) =>
 const readState = (value: unknown): ThreadMapping[] | null => {
   if (!isObject(value) || value.version !== STATE_VERSION) return null;
   if (!Array.isArray(value.threads)) return null;
-  // Files written before message ids were kept have none.
+  // Files written before message ids or efforts were kept have none.
   const threads = value.threads.map((thread) =>
-    isObject(thread) && !("messageIds" in thread)
-      ? { ...thread, messageIds: [] }
+    isObject(thread)
+      ? {
+          ...thread,
+          ...(!("messageIds" in thread) && { messageIds: [] }),
+          ...(!("effort" in thread) && { effort: null }),
+        }
       : thread,
   );
   if (!threads.every(isThreadMapping)) return null;
@@ -459,6 +474,7 @@ const pickMappingFields = (mapping: ThreadMapping): ThreadMapping => ({
   threadId: mapping.threadId,
   sessionId: mapping.sessionId,
   model: mapping.model,
+  effort: mapping.effort,
   worktree: mapping.worktree,
   reviewerThreadIds: [...mapping.reviewerThreadIds],
   messageIds: [...mapping.messageIds],
@@ -469,6 +485,7 @@ const isThreadMapping = (value: unknown): value is ThreadMapping =>
   isNonEmptyString(value.threadId) &&
   (value.sessionId === null || isNonEmptyString(value.sessionId)) &&
   isNonEmptyString(value.model) &&
+  (value.effort === null || isNonEmptyString(value.effort)) &&
   isNonEmptyString(value.worktree) &&
   Array.isArray(value.reviewerThreadIds) &&
   value.reviewerThreadIds.every(isNonEmptyString) &&

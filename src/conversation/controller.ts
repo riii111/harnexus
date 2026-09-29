@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   CanUseTool,
+  EffortLevel,
   SDKResultMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
@@ -9,6 +10,7 @@ import {
   Result,
   TaggedError,
 } from "better-result";
+import { isClaudeEffort, supportsEffort } from "../infra/claude/models.ts";
 import type {
   ClaudeSessionSettings,
   claudeSessionExists,
@@ -43,12 +45,13 @@ import {
   type Mode,
   type Refusal,
   refusalMessage,
+  requestedEffort,
   requestedMode,
   savedThreadChange,
   type Thread,
 } from "./thread-request.ts";
 
-// Only steps, turn statuses, refusal reasons and error tags are logged, never thread ids or text.
+// Only steps, turn statuses, effort levels, refusal reasons and error tags are logged, never thread ids or text.
 export type TurnEvent =
   | {
       event: "claude_turn";
@@ -61,7 +64,13 @@ export type TurnEvent =
         | "idle_closed"
         | "session_missing"
         | "outcome_cleared"
-        | "skill_unreadable";
+        | "skill_unreadable"
+        | "effort_unsupported";
+    }
+  | {
+      event: "claude_turn";
+      step: "effort_changed" | "effort_applied";
+      effort: EffortLevel;
     }
   | {
       event: "claude_turn";
@@ -83,7 +92,11 @@ export type TurnEvent =
     }
   | {
       event: "claude_turn";
-      step: "session_not_saved" | "model_not_saved" | "run_state_not_saved";
+      step:
+        | "session_not_saved"
+        | "model_not_saved"
+        | "effort_not_saved"
+        | "run_state_not_saved";
       error: StoreTag;
     };
 
@@ -121,6 +134,7 @@ type FailureTag =
   | ErrorTag<SessionStart>
   | ErrorTag<ReturnType<ClaudeSession["send"]>>
   | ErrorTag<ReturnType<ClaudeSession["setPermissionMode"]>>
+  | ErrorTag<ReturnType<ClaudeSession["setEffort"]>>
   | InferErr<StreamedMessage>["_tag"]
   | InterruptTag
   | BridgeClosing["_tag"]
@@ -134,6 +148,7 @@ type StoreTag =
   | ErrorTag<ReturnType<ThreadStore["setSessionId"]>>
   | ErrorTag<ReturnType<ThreadStore["addMessageId"]>>
   | ErrorTag<ReturnType<ThreadStore["setModel"]>>
+  | ErrorTag<ReturnType<ThreadStore["setEffort"]>>
   | "ThreadNotFound"
   | "WriteOutcomeUnknown"
   | "WriteNotStarted"
@@ -177,7 +192,11 @@ type ToolOutput = NonNullable<
   ReturnType<typeof delegatedMessage>
 >["toolOutput"];
 
-type TurnInput = TextInput & { permissionMode: Mode };
+// effort is the thread's level when the turn was accepted, so a change made while it waits or runs applies to the next turn.
+type TurnInput = TextInput & {
+  permissionMode: Mode;
+  effort: EffortLevel | null;
+};
 
 class BridgeClosing extends TaggedError("BridgeClosing")<{
   message: string;
@@ -283,6 +302,9 @@ export const createTurnController = ({
     }
     if (messageId !== null) acceptMessage(threadId, messageId);
     threads.changeModel(threadId, checked.thread.model);
+    // A turn/start without an effort, such as another thread's reply, runs at the thread's level.
+    const effort = requestedEffort(params);
+    if (effort !== undefined) selectEffort(threadId, effort);
     cancelIdleClose(threadId);
     const inFlight = turnsInFlight.get(threadId) ?? 0;
     if (inFlight > 0) log({ event: "claude_turn", step: "queued" });
@@ -293,6 +315,7 @@ export const createTurnController = ({
         threadId,
         requestedMode(params) ?? modes.get(threadId) ?? "default",
       ),
+      effort: threads.effortOf(threadId),
     };
     const request = {
       id,
@@ -438,6 +461,15 @@ export const createTurnController = ({
     return mode;
   };
 
+  // A level only Codex models have, such as minimal or ultra, would leave Claude on some other level, so the thread keeps its own.
+  const selectEffort = (threadId: string, effort: string) => {
+    if (!isClaudeEffort(effort)) {
+      log({ event: "claude_turn", step: "effort_unsupported" });
+      return;
+    }
+    threads.changeEffort(threadId, effort);
+  };
+
   // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
   const closeAll = () => {
     closed = true;
@@ -460,6 +492,7 @@ export const createTurnController = ({
         threadId,
         model: thread.model,
         worktree: thread.cwd,
+        effort: input.effort,
       });
       if (
         registered.isErr() &&
@@ -702,6 +735,20 @@ export const createTurnController = ({
       dropSession(threadId, slot.value);
       fail(active, mode.error);
       return;
+    }
+    // Set on every turn, as a session restarted for a model change or after idling starts on the user's settings again.
+    const effort =
+      input.effort !== null && supportsEffort(model, input.effort)
+        ? input.effort
+        : null;
+    if (effort !== null) {
+      const applied = await slot.value.session.setEffort(effort);
+      if (applied.isErr()) {
+        dropSession(threadId, slot.value);
+        fail(active, applied.error);
+        return;
+      }
+      log({ event: "claude_turn", step: "effort_applied", effort });
     }
     if (active.state?.interrupting) {
       finish(active, { status: "interrupted" }, null);
@@ -1012,6 +1059,8 @@ export const createTurnController = ({
     answerRequest: appRequests.answer,
     selectMode,
     modeOf: (threadId: string) => modes.get(threadId),
+    selectEffort,
+    effortOf: threads.effortOf,
     isClaudeThread: (threadId: unknown) =>
       typeof threadId === "string" && threads.threadOf(threadId) !== undefined,
     threadOf: threads.threadOf,
@@ -1031,7 +1080,11 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
     case "session_missing":
     case "outcome_cleared":
     case "skill_unreadable":
+    case "effort_unsupported":
       return { event: entry.event, step: entry.step };
+    case "effort_changed":
+    case "effort_applied":
+      return { event: entry.event, step: entry.step, effort: entry.effort };
     case "finished":
       return {
         event: entry.event,
@@ -1050,12 +1103,13 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
     case "thread_not_materialized":
     case "session_not_saved":
     case "model_not_saved":
+    case "effort_not_saved":
     case "run_state_not_saved":
       return { event: entry.event, step: entry.step, error: entry.error };
   }
 };
 
-// The model and session id a thread runs with are set here before the store saves them and win over what it holds, so a failed save still applies while the bridge runs; a null session id is one Claude lost.
+// The model, effort and session id a thread runs with are set here before the store saves them and win over what it holds, so a failed save still applies while the bridge runs; a null session id is one Claude lost.
 const createThreadValues = (
   store: ThreadStore,
   log: (event: TurnEvent) => void,
@@ -1063,6 +1117,7 @@ const createThreadValues = (
   // Threads created with a Claude model are saved to the store only on their first turn, so a thread never used leaves nothing behind.
   const adopted = new Map<string, Thread>();
   const models = new Map<string, string>();
+  const efforts = new Map<string, EffortLevel>();
   const sessionIds = new Map<string, string | null>();
 
   const threadOf = (threadId: string): Thread | undefined => {
@@ -1077,6 +1132,12 @@ const createThreadValues = (
       : { ...thread, model };
   };
 
+  // A saved level that is no Claude level, such as one written by hand, leaves Claude on the user's settings.
+  const effortOf = (threadId: string): EffortLevel | null => {
+    const effort = efforts.get(threadId) ?? store.get(threadId)?.effort;
+    return isClaudeEffort(effort) ? effort : null;
+  };
+
   const sessionIdOf = (threadId: string) =>
     sessionIds.has(threadId)
       ? (sessionIds.get(threadId) ?? null)
@@ -1086,12 +1147,16 @@ const createThreadValues = (
     if (store.get(threadId) === undefined) adopted.set(threadId, thread);
   };
 
-  // A model picked while the thread was being registered is saved now, since the registration carried the earlier one.
+  // A model or effort picked while the thread was being registered is saved now, since the registration carried the earlier one.
   const markRegistered = (threadId: string) => {
     adopted.delete(threadId);
     const picked = models.get(threadId);
     if (picked !== undefined && picked !== store.get(threadId)?.model) {
       saveModel(threadId, picked);
+    }
+    const effort = efforts.get(threadId);
+    if (effort !== undefined && effort !== store.get(threadId)?.effort) {
+      saveEffort(threadId, effort);
     }
   };
 
@@ -1103,6 +1168,14 @@ const createThreadValues = (
     log({ event: "claude_turn", step: "model_changed" });
     // A thread not yet registered saves this model when its first turn registers it.
     if (store.get(threadId) !== undefined) saveModel(threadId, model);
+  };
+
+  // A Codex thread switched to Claude by a turn/start is not known yet, and that turn registers it with this effort.
+  const changeEffort = (threadId: string, effort: EffortLevel) => {
+    if (effortOf(threadId) === effort) return;
+    efforts.set(threadId, effort);
+    log({ event: "claude_turn", step: "effort_changed", effort });
+    if (store.get(threadId) !== undefined) saveEffort(threadId, effort);
   };
 
   const setSessionId = async (threadId: string, sessionId: string | null) => {
@@ -1129,12 +1202,26 @@ const createThreadValues = (
     });
   };
 
+  const saveEffort = (threadId: string, effort: EffortLevel) => {
+    void store.setEffort(threadId, effort).then((saved) => {
+      if (saved.isErr()) {
+        log({
+          event: "claude_turn",
+          step: "effort_not_saved",
+          error: saved.error._tag,
+        });
+      }
+    });
+  };
+
   return {
     threadOf,
+    effortOf,
     sessionIdOf,
     adopt,
     markRegistered,
     changeModel,
+    changeEffort,
     setSessionId,
   };
 };

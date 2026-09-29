@@ -1,3 +1,4 @@
+import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import { isClaudeModel } from "../infra/claude/models.ts";
 import { delegationSource } from "../infra/codex/delegations.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
@@ -9,13 +10,14 @@ import {
   withResumeHistory,
   withTurns,
 } from "./history-request.ts";
-import { withClaudeModels } from "./model-list.ts";
+import { shownEffort, withClaudeModels } from "./model-list.ts";
 import {
   type AppRequest,
   checkThread,
   type Mode,
   type Refusal,
   refusalMessage,
+  requestedEffort,
   requestedMode,
   requestedModel,
   type Thread,
@@ -38,6 +40,8 @@ type Turns = {
   answerRequest: (response: Record<string, unknown>) => boolean;
   selectMode: (threadId: string, mode: Mode) => void;
   modeOf: (threadId: string) => Mode | undefined;
+  selectEffort: (threadId: string, effort: string) => void;
+  effortOf: (threadId: string) => EffortLevel | null;
 };
 
 type RefusedMethod = (typeof REFUSED_METHODS)[number];
@@ -196,8 +200,22 @@ export const createRouter = (
     }
     const mode = requestedMode(params);
     if (mode !== undefined) turns.selectMode(threadId, mode);
-    if (!("model" in params) && !("collaborationMode" in params)) return line;
-    const { model: _model, collaborationMode: _mode, ...rest } = params;
+    const effort = requestedEffort(params);
+    if (effort !== undefined) turns.selectEffort(threadId, effort);
+    // A Claude level such as max would be refused by the server's Codex model.
+    if (
+      !("model" in params) &&
+      !("collaborationMode" in params) &&
+      !("effort" in params)
+    ) {
+      return line;
+    }
+    const {
+      model: _model,
+      collaborationMode: _mode,
+      effort: _effort,
+      ...rest
+    } = params;
     return encode({ ...message, params: rest });
   };
 
@@ -250,10 +268,18 @@ export const createRouter = (
     }
     const model = turns.threadOf(threadId)?.model;
     if (model === undefined) return line;
+    const reasoningEffort = shownEffort(model, turns.effortOf(threadId));
     const opened = {
       ...result,
       model,
-      ...("model" in thread && { thread: { ...thread, model } }),
+      reasoningEffort,
+      ...("model" in thread && {
+        thread: {
+          ...thread,
+          model,
+          ...("reasoningEffort" in thread && { reasoningEffort }),
+        },
+      }),
     };
     if (request.history === null) return encode({ ...message, result: opened });
     const { params } = request;
@@ -267,7 +293,7 @@ export const createRouter = (
     );
   };
 
-  // The server keeps its own model and mode for a Claude thread, and the app shows what this notice reports after any settings change.
+  // The server keeps its own model, effort and mode for a Claude thread, and the app shows what this notice reports after any settings change.
   const rewriteSettingsUpdated = (message: Record<string, unknown>) => {
     const params = isObject(message.params) ? message.params : {};
     const threadId =
@@ -277,7 +303,10 @@ export const createRouter = (
     const selected =
       threadId === undefined ? undefined : turns.modeOf(threadId);
     const settings = params.threadSettings;
-    if (model === undefined || !isObject(settings)) return null;
+    if (threadId === undefined || model === undefined || !isObject(settings)) {
+      return null;
+    }
+    const effort = shownEffort(model, turns.effortOf(threadId));
     const mode = settings.collaborationMode;
     return encode({
       ...message,
@@ -286,12 +315,17 @@ export const createRouter = (
         threadSettings: {
           ...settings,
           model,
+          effort,
           ...(isObject(mode) &&
             isObject(mode.settings) && {
               collaborationMode: {
                 ...mode,
                 ...(selected !== undefined && { mode: selected }),
-                settings: { ...mode.settings, model },
+                settings: {
+                  ...mode.settings,
+                  model,
+                  reasoning_effort: effort,
+                },
               },
             }),
         },

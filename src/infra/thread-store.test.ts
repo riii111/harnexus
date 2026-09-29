@@ -32,6 +32,7 @@ describe("openThreadStore", () => {
     await store.setSessionId("thread-1", "session-1");
     await store.addReviewer("thread-1", "reviewer-1");
     await store.setModel("thread-1", "claude-opus-5-5");
+    await store.setEffort("thread-1", "max");
     await store.addMessageId("thread-1", "message-1");
 
     const reopened = await openStore();
@@ -40,6 +41,7 @@ describe("openThreadStore", () => {
       threadId: "thread-1",
       sessionId: "session-1",
       model: "claude-opus-5-5",
+      effort: "max",
       worktree: "/work/tree",
       reviewerThreadIds: ["reviewer-1"],
       messageIds: ["message-1"],
@@ -47,7 +49,7 @@ describe("openThreadStore", () => {
     });
   });
 
-  test("loads a file saved before message ids were kept with none", async () => {
+  test("loads a file saved before message ids and efforts were kept with neither", async () => {
     await writeFile(
       path,
       JSON.stringify({ version: 1, threads: [SAVED_RECORD] }),
@@ -55,7 +57,18 @@ describe("openThreadStore", () => {
 
     const store = await openStore();
 
-    expect(store.get("thread-1")?.messageIds).toEqual([]);
+    expect(store.get("thread-1")).toMatchObject({
+      messageIds: [],
+      effort: null,
+    });
+  });
+
+  test("registers a thread with the effort it was given", async () => {
+    const store = await openStore();
+
+    const registered = await store.register({ ...ENTRY, effort: "high" });
+
+    expect(registered.isOk() && registered.value.effort).toBe("high");
   });
 
   test.each([
@@ -65,6 +78,13 @@ describe("openThreadStore", () => {
       content: JSON.stringify({
         version: 1,
         threads: [{ ...SAVED_RECORD, reviewerThreadIds: [""] }],
+      }),
+    },
+    {
+      name: "has an effort that is not a level name",
+      content: JSON.stringify({
+        version: 1,
+        threads: [{ ...SAVED_RECORD, effort: 3 }],
       }),
     },
     {

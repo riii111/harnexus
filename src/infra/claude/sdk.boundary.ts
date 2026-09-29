@@ -1,4 +1,5 @@
 import type {
+  EffortLevel,
   Options,
   PermissionMode,
   Query,
@@ -11,7 +12,12 @@ import { Result, TaggedError } from "better-result";
 
 export type ClaudeQuery = Pick<
   Query,
-  "next" | "interrupt" | "setPermissionMode" | "accountInfo" | "close"
+  | "next"
+  | "interrupt"
+  | "setPermissionMode"
+  | "applyFlagSettings"
+  | "accountInfo"
+  | "close"
 >;
 
 type RunQuery = (params: {
@@ -61,6 +67,11 @@ class ClaudeInterruptFailed extends TaggedError("ClaudeInterruptFailed")<{
 class ClaudePermissionModeFailed extends TaggedError(
   "ClaudePermissionModeFailed",
 )<{
+  cause: unknown;
+  message: string;
+}> {}
+
+class ClaudeEffortFailed extends TaggedError("ClaudeEffortFailed")<{
   cause: unknown;
   message: string;
 }> {}
@@ -142,6 +153,17 @@ export const setQueryPermissionMode = (
       new ClaudePermissionModeFailed({
         cause,
         message: `cannot switch Claude to the ${mode} permission mode`,
+      }),
+  });
+
+// The flag layer holds the level for this session only, so the user's settings files keep their own effortLevel.
+export const setQueryEffort = (query: ClaudeQuery, effort: EffortLevel) =>
+  Result.tryPromise({
+    try: () => query.applyFlagSettings({ effortLevel: effort }),
+    catch: (cause) =>
+      new ClaudeEffortFailed({
+        cause,
+        message: `cannot switch Claude to the ${effort} effort`,
       }),
   });
 
