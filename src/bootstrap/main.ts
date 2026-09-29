@@ -86,10 +86,8 @@ async function withClaude(relay: {
   }
   const catalog = createModelCatalog();
   // Not awaited, since the app lists models before Claude Code can answer and holding that answer would hold every later server line; the app asks again later.
-  const loading = loadClaudeModels();
-  void loading.then((loaded) => {
+  void loadClaudeModels().then((loaded) => {
     if (loaded.isErr()) {
-      catalog.giveUp();
       logger.log({
         event: "claude_models_unavailable",
         reason: loaded.error._tag,
@@ -99,8 +97,6 @@ async function withClaude(relay: {
     catalog.replace(loaded.value);
     logger.log({ event: "claude_models_loaded", count: loaded.value.length });
   });
-  // A panic while reading still lets waiting turns go on with the built-in models; giving up after a read is a no-op.
-  void loading.finally(() => catalog.giveUp());
   const settings = await loadEffortSettings();
   if (settings.isErr()) {
     logger.log({
@@ -123,7 +119,6 @@ async function withClaude(relay: {
       catalog.effortsOf,
     ),
     claudeModels: catalog.models,
-    modelsSettled: catalog.settled,
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });

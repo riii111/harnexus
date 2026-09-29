@@ -36,18 +36,10 @@ export const isClaudeEffort = (effort: unknown): effort is EffortLevel =>
 // The models Claude Code lists replace the built-in ones once read; a built-in model it no longer lists stays for the threads already on it.
 export const createModelCatalog = () => {
   let listed: readonly ClaudeModel[] | null = null;
-  let settle = () => {};
-  const settled = new Promise<void>((resolve) => {
-    settle = resolve;
-  });
   return {
     replace: (models: readonly ClaudeModel[]) => {
       listed = models;
-      settle();
     },
-    // The built-in models stay, and a turn waiting for the list goes on with them.
-    giveUp: () => settle(),
-    settled: () => settled,
     models: (): {
       offered: readonly ClaudeModel[];
       retired: readonly ClaudeModel[];
@@ -60,11 +52,12 @@ export const createModelCatalog = () => {
               ({ id }) => !listed?.some((model) => model.id === id),
             ),
           },
+    // A model neither list names, such as one only Claude Code's unread list has, is given every level, since the SDK lowers a level the model cannot run and a saved pick is not lost.
     effortsOf: (model: string): readonly EffortLevel[] =>
       (
         listed?.find(({ id }) => id === model) ??
         BUILT_IN_MODELS.find(({ id }) => id === model)
-      )?.efforts ?? [],
+      )?.efforts ?? EFFORT_ORDER,
   };
 };
 
@@ -85,7 +78,7 @@ export const modelsFromSdk = (infos: readonly ModelInfo[]): ClaudeModel[] => {
   return models;
 };
 
-// Without a pick a thread starts where Claude Code would, from the settings or else the model default the SDK documents as high, and the settings' cap lowers any level as Claude Code does.
+// Without a pick a thread starts where Claude Code would, from the settings or else the model default the SDK documents as high, and the settings' cap lowers any level as Claude Code does, down to a level the model runs.
 export const effortRule =
   (
     settings: EffortSettings,
@@ -106,7 +99,11 @@ export const effortRule =
           ? configured
           : MODEL_DEFAULT_EFFORT;
     const cap = perModel?.maxEffortLevel ?? settings.maxEffortLevel;
-    return cap !== undefined && rank(wanted) > rank(cap) ? cap : wanted;
+    const limit =
+      cap !== undefined && rank(wanted) > rank(cap) ? rank(cap) : rank(wanted);
+    const ascending = [...efforts].sort((a, b) => rank(a) - rank(b));
+    const runnable = ascending.filter((effort) => rank(effort) <= limit);
+    return runnable[runnable.length - 1] ?? ascending[0] ?? null;
   };
 
 // An alias's displayName is a family such as Opus, and its version comes before the description's separator; a description that does not start with the name, such as an upgrade hint, is not a name.

@@ -20,7 +20,6 @@ export const connectClaudeThreads = ({
   readSession,
   effortRule,
   claudeModels,
-  modelsSettled,
   send,
   log,
 }: {
@@ -31,7 +30,6 @@ export const connectClaudeThreads = ({
   readSession: Parameters<typeof createHistoryRequests>[0]["readSession"];
   effortRule: Controller["effortRule"];
   claudeModels: Parameters<typeof createRouter>[4];
-  modelsSettled: NonNullable<Controller["modelsSettled"]>;
   send: (message: object) => void;
   log: (event: TurnEvent | RouteEvent) => void;
 }) => {
@@ -51,7 +49,6 @@ export const connectClaudeThreads = ({
     send,
     log,
     effortRule,
-    modelsSettled,
   });
   const history = createHistoryRequests({
     threads: turns,

@@ -100,7 +100,6 @@ const workerA = async () => {
     readSession: async () => Result.ok([]),
     effortRule: effortRule({}, catalog.effortsOf),
     claudeModels: catalog.models,
-    modelsSettled: async () => {},
     send: (message) => sent.push(message),
     log: () => {},
   });

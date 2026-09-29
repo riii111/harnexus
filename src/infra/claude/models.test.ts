@@ -124,31 +124,7 @@ describe("createModelCatalog", () => {
     });
   });
 
-  test.each([
-    {
-      name: "the list is read",
-      settle: (catalog: Catalog) => catalog.replace([]),
-    },
-    {
-      name: "the list is given up",
-      settle: (catalog: Catalog) => catalog.giveUp(),
-    },
-  ])("lets a waiting turn go on once $name", async ({ settle }) => {
-    const catalog = createModelCatalog();
-    let settled = false;
-    void catalog.settled().then(() => {
-      settled = true;
-    });
-    await Bun.sleep(0);
-    const before = settled;
-
-    settle(catalog);
-    await catalog.settled();
-
-    expect({ before, after: settled }).toEqual({ before: false, after: true });
-  });
-
-  test("takes a listed model's levels over the built-in ones and keeps those of a retired model", () => {
+  test("takes a listed model's levels over the built-in ones, keeps those of a retired model and gives an unnamed model every level", () => {
     const catalog = createModelCatalog();
 
     catalog.replace(
@@ -162,7 +138,7 @@ describe("createModelCatalog", () => {
     }).toEqual({
       listed: ["low"],
       retired: ["low", "medium", "high", "xhigh", "max"],
-      unknown: [],
+      unknown: ["low", "medium", "high", "xhigh", "max"],
     });
   });
 });
@@ -246,6 +222,43 @@ describe("effortRule", () => {
     expect(rule(OPUS, picked)).toBe(expected);
   });
 
+  test.each<{
+    name: string;
+    settings: EffortSettings;
+    picked: "max" | null;
+    expected: EffortLevel;
+  }>([
+    {
+      name: "a pick lowered to a cap the model does not run",
+      settings: { maxEffortLevel: "xhigh" },
+      picked: "max",
+      expected: "high",
+    },
+    {
+      name: "a default the model does not run",
+      settings: { effortLevel: "xhigh" },
+      picked: null,
+      expected: "high",
+    },
+  ])("runs $name at the highest level under it that the model runs", ({
+    settings,
+    picked,
+    expected,
+  }) => {
+    const rule = effortRule(settings, () => OPUS_4_6_EFFORTS);
+
+    expect(rule(OPUS, picked)).toBe(expected);
+  });
+
+  test("runs a cap below every level the model runs at its lowest level", () => {
+    const rule = effortRule({ maxEffortLevel: "low" }, () => [
+      "medium",
+      "high",
+    ]);
+
+    expect(rule(OPUS, "high")).toBe("medium");
+  });
+
   test("runs a model without effort at no level whatever was picked", () => {
     const rule = effortRule({ effortLevel: "low" }, BUILT_IN_EFFORTS);
 
@@ -253,9 +266,9 @@ describe("effortRule", () => {
   });
 });
 
-type Catalog = ReturnType<typeof createModelCatalog>;
-
 const OPUS = "claude-opus-5-5";
+
+const OPUS_4_6_EFFORTS: EffortLevel[] = ["low", "medium", "high", "max"];
 
 const BUILT_IN_IDS = ["claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5"];
 
