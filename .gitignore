@@ -114,3 +114,5 @@ dist
 
 # nix-direnv
 .direnv/
+
+.DS_Store
