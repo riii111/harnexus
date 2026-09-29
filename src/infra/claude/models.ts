@@ -52,7 +52,7 @@ export const createModelCatalog = () => {
               ({ id }) => !listed?.some((model) => model.id === id),
             ),
           },
-    // A model neither list names, such as one only Claude Code's unread list has, is given every level, since the SDK lowers a level the model cannot run and a saved pick is not lost.
+    // A model neither list names, such as one only Claude Code's unread list has, is given every level, so a saved pick is not lost; the SDK ran xhigh as high on Opus 4.6 and ignored a level on Haiku 4.5 (SDK 0.3.284).
     effortsOf: (model: string): readonly EffortLevel[] =>
       (
         listed?.find(({ id }) => id === model) ??
