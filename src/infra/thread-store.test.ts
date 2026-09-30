@@ -34,6 +34,7 @@ describe("openThreadStore", () => {
     await store.setModel("thread-1", "claude-opus-5-5");
     await store.setEffort("thread-1", "max");
     await store.addMessageId("thread-1", "message-1");
+    await store.addRequester("thread-1", "worker-1");
 
     const reopened = await openStore();
 
@@ -44,12 +45,13 @@ describe("openThreadStore", () => {
       effort: "max",
       worktree: "/work/tree",
       reviewerThreadIds: ["reviewer-1"],
+      requesterThreadIds: ["worker-1"],
       messageIds: ["message-1"],
       runState: "idle",
     });
   });
 
-  test("loads a file saved before message ids and efforts were kept with neither", async () => {
+  test("loads a file saved before message ids, efforts and requesters were kept with none of them", async () => {
     await writeFile(
       path,
       JSON.stringify({ version: 1, threads: [SAVED_RECORD] }),
@@ -60,7 +62,40 @@ describe("openThreadStore", () => {
     expect(store.get("thread-1")).toMatchObject({
       messageIds: [],
       effort: null,
+      requesterThreadIds: [],
     });
+  });
+
+  test("keeps a requester once however often it sends work", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+
+    await store.addRequester("thread-1", "worker-1");
+    const again = await store.addRequester("thread-1", "worker-1");
+
+    expect(again.isOk() && again.value.requesterThreadIds).toEqual([
+      "worker-1",
+    ]);
+  });
+
+  test("keeps only the 64 requesters that asked most recently", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    for (let n = 0; n < 65; n += 1) {
+      await store.addRequester("thread-1", `worker-${n}`);
+    }
+
+    const again = await store.addRequester("thread-1", "worker-1");
+    const next = await store.addRequester("thread-1", "worker-65");
+
+    expect(again.isOk() && again.value.requesterThreadIds.at(-1)).toBe(
+      "worker-1",
+    );
+    expect(next.isOk() && next.value.requesterThreadIds).toEqual([
+      ...Array.from({ length: 62 }, (_, i) => `worker-${i + 3}`),
+      "worker-1",
+      "worker-65",
+    ]);
   });
 
   test("registers a thread with the effort it was given", async () => {

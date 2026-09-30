@@ -166,6 +166,7 @@ type StoreTag =
   | ErrorTag<ReturnType<ThreadStore["register"]>>
   | ErrorTag<ReturnType<ThreadStore["setSessionId"]>>
   | ErrorTag<ReturnType<ThreadStore["addMessageId"]>>
+  | ErrorTag<ReturnType<ThreadStore["addRequester"]>>
   | ErrorTag<ReturnType<ThreadStore["setModel"]>>
   | ErrorTag<ReturnType<ThreadStore["setEffort"]>>
   | "ThreadNotFound"
@@ -214,9 +215,11 @@ type ToolOutput = NonNullable<
 >["toolOutput"];
 
 // effort is the thread's level when the turn was accepted, so a change made while it waits or runs applies to the next turn.
+// requester is the thread that delegated this turn's message, saved before the turn runs so Claude can answer it.
 type TurnInput = TextInput & {
   permissionMode: Mode;
   effort: EffortLevel | null;
+  requester: string | null;
 };
 
 class BridgeClosing extends TaggedError("BridgeClosing")<{
@@ -340,6 +343,12 @@ export const createTurnController = ({
         requestedMode(params) ?? modes.get(threadId) ?? "default",
       ),
       effort: threads.pickedEffortOf(threadId),
+      requester: requesterOf(
+        threadId,
+        delegated?.sourceThreadId,
+        owner,
+        threads.threadOf,
+      ),
     };
     const request = {
       id,
@@ -560,6 +569,13 @@ export const createTurnController = ({
           refuseTurn(request, queued, "bridge_closing");
           return Result.ok();
         }
+        // Claude could not answer an unsaved requester, and the message id is saved after it so a refused message may be sent again.
+        const noted = await recordRequester(threadId, input.requester);
+        if (noted.isErr()) {
+          forgetMessage(threadId, messageId);
+          refuseTurn(request, queued, "requester_not_saved", noted.error);
+          return Result.ok();
+        }
         // Without the saved id a restart could run the same message again, so the turn does not start.
         const saved = await recordMessage(threadId, messageId);
         if (saved.isErr()) {
@@ -703,6 +719,13 @@ export const createTurnController = ({
     ids?.delete(messageId);
     if (ids?.size === 0) acceptedMessageIds.delete(threadId);
   };
+
+  // A requester already saved is not written again, so a store that cannot be written does not refuse a thread it already knows.
+  const recordRequester = async (threadId: string, requester: string | null) =>
+    requester === null ||
+    store.get(threadId)?.requesterThreadIds.includes(requester)
+      ? Result.ok()
+      : store.addRequester(threadId, requester);
 
   const recordMessage = async (threadId: string, messageId: string | null) => {
     if (messageId === null) return Result.ok();
@@ -1344,6 +1367,20 @@ const steersAfter = (
 
 const resumeFrom = (sessionId: string | null) =>
   sessionId === null ? {} : { resume: sessionId };
+
+// A reviewer's reply is already answerable and the thread cannot message itself, and a Claude sender is left out since Claude-to-Claude round trips are outside O2 and would raise usage.
+const requesterOf = (
+  threadId: string,
+  source: string | null | undefined,
+  owner: string | undefined,
+  claudeThreadOf: (threadId: string) => Thread | undefined,
+) =>
+  source == null ||
+  source === threadId ||
+  owner !== undefined ||
+  claudeThreadOf(source) !== undefined
+    ? null
+    : source;
 
 const clientMessageId = (params: Record<string, unknown>) =>
   typeof params.clientUserMessageId === "string" &&
