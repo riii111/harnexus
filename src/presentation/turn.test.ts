@@ -321,6 +321,103 @@ describe("renderSdkMessage tools", () => {
   });
 });
 
+describe("renderSdkMessage plan", () => {
+  test("sends a TodoWrite list as the turn's plan in app step statuses", () => {
+    const out = run([
+      assistant("msg-1", [toolUse("tool-1", "TodoWrite", { todos: TODOS })]),
+    ]);
+
+    expect(plans(out)).toEqual([
+      {
+        threadId: "th-1",
+        turnId: "tu-1",
+        explanation: null,
+        plan: [
+          { step: "Read the spec", status: "completed" },
+          { step: "Write the code", status: "inProgress" },
+          { step: "Run the tests", status: "pending" },
+        ],
+      },
+    ]);
+  });
+
+  test("keeps the TodoWrite call as a tool item beside the plan", () => {
+    const out = run([
+      assistant("msg-1", [toolUse("tool-1", "TodoWrite", { todos: TODOS })]),
+      toolResult("tool-1", "Todos have been modified", false),
+    ]);
+
+    expect(plans(out)).toHaveLength(1);
+    expect(completedTool(out)).toMatchObject({
+      type: "mcpToolCall",
+      tool: "TodoWrite",
+      status: "completed",
+    });
+  });
+
+  test("sends one plan for a call repeated across messages", () => {
+    const call = assistant("msg-1", [
+      toolUse("tool-1", "TodoWrite", { todos: TODOS }),
+    ]);
+
+    const out = run([call, toolResult("tool-1", "ok", false), call]);
+
+    expect(plans(out)).toHaveLength(1);
+  });
+
+  test("sends the main conversation's list but not a subagent's", () => {
+    const out = run([
+      {
+        ...assistant("sub", [
+          toolUse("tool-9", "TodoWrite", {
+            todos: [{ content: "Inner step", status: "pending" }],
+          }),
+        ]),
+        parent_tool_use_id: "tool-1",
+      },
+      assistant("msg-1", [toolUse("tool-2", "TodoWrite", { todos: TODOS })]),
+    ]);
+
+    expect(plans(out).map((params) => params.plan.map((s) => s.step))).toEqual([
+      ["Read the spec", "Write the code", "Run the tests"],
+    ]);
+  });
+
+  test.each([
+    { name: "no todos", input: {} },
+    { name: "todos that are not a list", input: { todos: "Read the spec" } },
+    { name: "an entry that is not an object", input: { todos: ["Read"] } },
+    {
+      name: "an entry without content",
+      input: { todos: [{ status: "pending" }] },
+    },
+    {
+      name: "an unknown status",
+      input: { todos: [{ content: "Read", status: "blocked" }] },
+    },
+    {
+      name: "an inherited name as the status",
+      input: { todos: [{ content: "Read", status: "toString" }] },
+    },
+    {
+      name: "one bad entry among good ones",
+      input: {
+        todos: [
+          { content: "Read", status: "completed" },
+          { content: "Ship", status: 1 },
+        ],
+      },
+    },
+  ])("sends no plan for $name but still shows the call", ({ input }) => {
+    const out = run([
+      assistant("msg-1", [toolUse("tool-1", "TodoWrite", input)]),
+    ]);
+
+    expect(plans(out)).toEqual([]);
+    expect(startedTool(out)).toMatchObject({ tool: "TodoWrite" });
+  });
+});
+
 describe("renderSdkMessage turn end", () => {
   test("fails the turn once with the result error, not as an answer", () => {
     const out = run([
@@ -622,6 +719,11 @@ const FIXTURE_DIR = join(
   "app-server",
 );
 const SECRET = "sk-fixture-secret";
+const TODOS = [
+  { content: "Read the spec", status: "completed", activeForm: "Reading" },
+  { content: "Write the code", status: "in_progress", activeForm: "Writing" },
+  { content: "Run the tests", status: "pending", activeForm: "Running" },
+];
 const TIME_KEYS = new Set([
   "emittedAtMs",
   "startedAtMs",
@@ -794,6 +896,9 @@ const messageTexts = (out: Output) =>
   completedItems(out).flatMap((item) =>
     item.type === "agentMessage" ? [item.text] : [],
   );
+
+const plans = (out: Output) =>
+  notificationsOf(out, "turn/plan/updated").map((n) => n.params);
 
 const startedTool = (out: Output) =>
   notificationsOf(out, "item/started")
