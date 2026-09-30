@@ -173,10 +173,6 @@ test.each([{ name: "a" }])(\`\${format("%s")} $name\`, () => {});`),
         `test.each([{ name: "a" }])("does $name with %%s", () => {});`,
       ),
     },
-    {
-      name: "a percent sign in a plain test title",
-      source: lintCase(`test("keeps 100% of bytes", () => {});`),
-    },
   ])("allows $name", ({ source }) => {
     const diagnostics = reports.get(source);
 

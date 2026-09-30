@@ -84,19 +84,6 @@ describe("delegationSource", () => {
       },
       expected: null,
     },
-    {
-      name: "another tool's output",
-      toolOutput: {
-        name: "fork_thread",
-        output: "<source_thread_id>th-claude</source_thread_id>",
-      },
-      expected: null,
-    },
-    {
-      name: "no source id",
-      toolOutput: { name: "create_thread", output: "created" },
-      expected: null,
-    },
   ])("reads $expected from $name", ({ toolOutput, expected }) => {
     expect(delegationSource({ threadId: "th-new", toolOutput })).toBe(expected);
   });

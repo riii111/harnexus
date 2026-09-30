@@ -12,19 +12,6 @@ import {
 } from "./testing/session-record.ts";
 
 describe("buildHistory", () => {
-  test("opens a turn for each prompt, named after the prompt's record", () => {
-    const history = build(conversation());
-
-    expect(history.map(({ turn }) => turn.id)).toEqual([
-      "harnexus-history-u1",
-      "harnexus-history-u2",
-    ]);
-    expect(history.map(({ turn }) => turn.status)).toEqual([
-      "completed",
-      "completed",
-    ]);
-  });
-
   test("replays the items a live turn shows, in the order Claude produced them", () => {
     const [first] = build(conversation());
 

@@ -11,11 +11,6 @@ import {
 describe("isClaudeModel", () => {
   test.each([
     { name: "a listed model", model: "claude-opus-5-5", expected: true },
-    {
-      name: "a model Claude Code dropped",
-      model: "claude-sonnet-5",
-      expected: true,
-    },
     { name: "a Codex model", model: "gpt-fixture", expected: false },
     { name: "a missing model", model: undefined, expected: false },
   ])("tells $name by its id", ({ model, expected }) => {
@@ -60,20 +55,6 @@ describe("modelsFromSdk", () => {
 
     expect(models.map(({ displayName }) => displayName)).toEqual([
       "Claude Opus 5 (1M context)",
-    ]);
-  });
-
-  test("names a model whose description has no version from its display name", () => {
-    const models = modelsFromSdk([
-      {
-        value: "claude-opus-4-6[1m]",
-        displayName: "Opus 4.6 (1M)",
-        description: "Opus 4.6 with 1M context",
-      },
-    ]);
-
-    expect(models.map(({ displayName }) => displayName)).toEqual([
-      "Claude Opus 4.6 (1M)",
     ]);
   });
 

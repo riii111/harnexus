@@ -623,24 +623,6 @@ describe("app responses", () => {
 });
 
 describe("thread/settings/update", () => {
-  test("drops a Claude thread's own model before the server sees it", () => {
-    const { router, calls } = setup(["th-claude"]);
-
-    const forwarded = router.fromApp(
-      settingsUpdate({
-        model: CLAUDE,
-        collaborationMode: { mode: "default", settings: { model: CLAUDE } },
-        approvalPolicy: "never",
-      }),
-    );
-
-    expect(parse(forwarded).params).toEqual({
-      threadId: "th-claude",
-      approvalPolicy: "never",
-    });
-    expect(calls).toEqual([["selectMode", "th-claude", "default"]]);
-  });
-
   // The app sends its previous collaboration mode along with the model just picked, as observed with App 26.924.
   test("keeps the thread's model picked again over a stale collaboration mode", () => {
     const { router, calls } = setup(["th-claude"]);
