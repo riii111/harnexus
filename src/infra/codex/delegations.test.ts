@@ -66,6 +66,17 @@ describe("delegationSource", () => {
       expected: "th-claude",
     },
     {
+      name: "an output split into items",
+      toolOutput: {
+        name: "create_thread",
+        output: [
+          { type: "input_text", text: "<source_thread_id>th-claude" },
+          { type: "input_text", text: "</source_thread_id>" },
+        ],
+      },
+      expected: "th-claude",
+    },
+    {
       name: "a send_message_to_thread output",
       toolOutput: {
         name: "send_message_to_thread",

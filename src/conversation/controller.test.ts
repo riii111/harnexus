@@ -337,6 +337,19 @@ describe("tool approval", () => {
 });
 
 describe("tool approval that must default to no", () => {
+  test("asks for the approving word without choices", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { sent } = await startedTurn(claude);
+
+    askTool(claude, "Bash", { command: "ls" }, { defaultToNo: true });
+    const request = await appRequest(sent);
+
+    expect(request.method).toBe("item/tool/requestUserInput");
+    expect(request.params.questions).toMatchObject([
+      { question: expect.stringContaining('Type "Allow"'), options: null },
+    ]);
+  });
+
   test.each([
     { name: "a choice number", typed: "2", expected: "deny" },
     { name: "the approving word", typed: "Allow", expected: "allow" },
@@ -511,6 +524,19 @@ describe("effort", () => {
     });
 
     turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.efforts().length === 1);
+
+    expect(claude.efforts()).toEqual(["low"]);
+    expect(turns.effortOf(THREAD)).toBe("low");
+  });
+
+  test("runs a picked level above the settings' cap at the cap the app shows", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude], {
+      effortRule: effortRule({ maxEffortLevel: "low" }, BUILT_IN_EFFORTS),
+    });
+
+    turns.startTurn(withEffort(turnStart(10, "hello"), "max"), undefined);
     await until(() => claude.efforts().length === 1);
 
     expect(claude.efforts()).toEqual(["low"]);
@@ -1924,6 +1950,16 @@ describe("refused requests", () => {
 
     expect(sent).toEqual([REFUSED(10)]);
     expect(claude.started()).toBe(false);
+  });
+
+  test("answers a rejected request with the given message", async () => {
+    const { turns, sent } = await harness([]);
+
+    turns.reject({ id: 12 }, "not yet");
+
+    expect(sent).toEqual([
+      { id: 12, error: { code: -32600, message: "not yet" } },
+    ]);
   });
 
   test("fails a turn asking for another directory that lost the race to register the thread", async () => {

@@ -85,6 +85,27 @@ describe("turn/start of a thread created by create_thread", () => {
     expect(routed).toBe(line);
     expect(calls).toEqual([["delegated", "th-claude", "th-reviewer"]]);
   });
+
+  test("reports nothing for another tool's output", () => {
+    const { router, calls } = setup();
+
+    router.fromApp(
+      encode({
+        id: 7,
+        method: "turn/start",
+        params: {
+          threadId: "th-other",
+          input: [],
+          toolOutput: {
+            name: "fork_thread",
+            output: "<source_thread_id>th-claude</source_thread_id>",
+          },
+        },
+      }),
+    );
+
+    expect(calls).toEqual([]);
+  });
 });
 
 describe("Codex CLI version", () => {
