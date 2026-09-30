@@ -636,13 +636,9 @@ describe("claudeSessionExists", () => {
   });
 
   test("reports a project folder it cannot list as an error rather than missing", async () => {
-    const project = join(configDir, "projects", "-work-tree");
-    mkdirSync(project, { recursive: true });
-    writeFileSync(join(project, "se-1.jsonl"), "{}\n");
-    chmodSync(project, 0o000);
+    unlistableProject(configDir);
 
     const found = await claudeSessionExists("se-1", configDir);
-    chmodSync(project, 0o700);
 
     expect(found.isErr() && found.error._tag).toBe("FileReadFailed");
   });
@@ -661,18 +657,22 @@ describe("readClaudeSession", () => {
 
   // The SDK's own reader finds the record through CLAUDE_CONFIG_DIR and answers one it cannot read with no messages.
   test.each([
-    { name: "a readable record", mode: 0o600, expected: "ok:1" },
+    {
+      name: "a readable record",
+      prepare: (record: string) => chmodSync(record, 0o600),
+      expected: "ok:1",
+    },
     {
       name: "a record the bridge cannot read",
-      mode: 0o000,
+      prepare: unreadableRecord,
       expected: "err:ClaudeRecordUnreadable",
     },
   ])("reports $name through the SDK's reader as $expected", async ({
-    mode,
+    prepare,
     expected,
   }) => {
     const record = writeRecord(configDir, SESSION_ID, RECORD_LINE);
-    chmodSync(record, mode);
+    prepare(record);
 
     const read = await withConfigDir(configDir, () =>
       readClaudeSession(SESSION_ID, { configDir }),
@@ -695,15 +695,12 @@ describe("readClaudeSession", () => {
   });
 
   test("reports an empty answer as unreadable when a project folder cannot be listed", async () => {
-    const project = join(configDir, "projects", "-work-tree");
-    mkdirSync(project, { recursive: true });
-    chmodSync(project, 0o000);
+    unlistableProject(configDir);
 
     const read = await readClaudeSession("se-1", {
       read: async () => [],
       configDir,
     });
-    chmodSync(project, 0o700);
 
     expect(read.isErr() && read.error._tag).toBe("ClaudeRecordUnreadable");
   });
@@ -771,6 +768,18 @@ const writeRecord = (configDir: string, sessionId: string, line: string) => {
   const record = join(project, `${sessionId}.jsonl`);
   writeFileSync(record, `${line}\n`);
   return record;
+};
+
+// A link to itself cannot be followed, as a folder or file without permission cannot, and unlike chmod it fails for root too and leaves the test directory removable.
+const unlistableProject = (configDir: string) => {
+  const project = join(configDir, "projects", "-work-tree");
+  mkdirSync(join(configDir, "projects"), { recursive: true });
+  symlinkSync(project, project);
+};
+
+const unreadableRecord = (record: string) => {
+  rmSync(record);
+  symlinkSync(record, record);
 };
 
 const withConfigDir = async <T>(configDir: string, run: () => Promise<T>) => {
