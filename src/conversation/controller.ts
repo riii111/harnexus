@@ -831,7 +831,7 @@ export const createTurnController = ({
         await threads.setSessionId(threadId, current);
       }
       const message = received.value;
-      // Status and system messages follow the send at once, so the wait is measured to the first message carrying the model's reply, and a turn without one logs null.
+      // Status and system messages follow the send at once, so the wait is measured to the first reply of the main conversation, not of a subagent, and a turn without one logs null.
       if (
         (message.type === "stream_event" || message.type === "assistant") &&
         message.parent_tool_use_id === null

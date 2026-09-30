@@ -124,7 +124,7 @@ const versionedName = (info: ModelInfo) => {
 
 const rank = (effort: EffortLevel) => EFFORT_ORDER.indexOf(effort);
 
-// The first number in a name such as "Claude Opus 4.6 (1M)", so a context size is not read as a version.
+// A number standing alone in a name such as "Claude Opus 4.6 (1M)", so a context size such as 1M is not read as a version.
 const versionOf = (displayName: string): readonly number[] | null => {
   const version = VERSION.exec(displayName)?.[1];
   return version === undefined ? null : version.split(".").map(Number);
