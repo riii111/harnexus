@@ -797,6 +797,62 @@ describe("turn metrics", () => {
     });
   });
 
+  test("measures the first message from the first reply of the main conversation, past status and subagent messages", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    let clock = 0;
+    const { turns, sent, events } = await harness([claude], {
+      now: () => clock,
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    expect(await firstPrompt(claude.prompt())).toBe("hello");
+    clock = 3;
+    claude.emit(sdk({ type: "system", subtype: "status", status: null }));
+    await until(() => claude.drained());
+    clock = 23;
+    claude.emit(
+      sdk({
+        ...answer("msg-sub", "working"),
+        parent_tool_use_id: "toolu-task",
+      }),
+    );
+    await until(() => claude.drained());
+    clock = 63;
+    claude.emit(
+      sdk({
+        type: "stream_event",
+        event: { type: "ping" },
+        parent_tool_use_id: null,
+      }),
+    );
+    await until(() => claude.drained());
+    clock = 93;
+    claude.emit(sdk(answer("msg-1", "hi")));
+    await until(() => claude.drained());
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(events.find((event) => event.step === "metrics")).toMatchObject({
+      firstMessageMs: 63,
+    });
+  });
+
+  test("logs no first message for a turn that ends before Claude replies", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, events } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    claude.emit(sdk({ type: "system", subtype: "status", status: null }));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(events.find((event) => event.step === "metrics")).toMatchObject({
+      firstMessageMs: null,
+    });
+  });
+
   test("logs the result that ends a Claude turn before a queued steer runs", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, events } = await harness([claude]);
