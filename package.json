@@ -9,7 +9,8 @@
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun test",
-    "doctor": "bun --no-env-file --config=/dev/null src/bootstrap/doctor.ts"
+    "doctor": "bun --no-env-file --config=/dev/null src/bootstrap/doctor.ts",
+    "open-app": "bun --no-env-file --config=/dev/null src/bootstrap/open-app.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.13",
