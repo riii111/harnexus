@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  checkAccess,
   createEmptyFile,
   listFileNames,
   openLogSink,
@@ -180,5 +181,23 @@ describe("removeFile", () => {
     const removed = await removeFile(join(dir, "busy"));
 
     expect(removed.isErr() && removed.error._tag).toBe("FileRemoveFailed");
+  });
+});
+
+describe("checkAccess", () => {
+  test("accepts a directory the process can write to", async () => {
+    const checked = await checkAccess(dir, "write");
+
+    expect(checked.isOk()).toBe(true);
+  });
+
+  test("reports a file it cannot run", async () => {
+    const path = join(dir, "not-runnable");
+    await writeFile(path, "");
+    await chmod(path, 0o600);
+
+    const checked = await checkAccess(path, "execute");
+
+    expect(checked.isErr() && checked.error._tag).toBe("AccessDenied");
   });
 });

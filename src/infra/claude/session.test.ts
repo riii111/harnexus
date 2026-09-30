@@ -21,6 +21,7 @@ import {
   claudeSessionExists,
   loadClaudeModels,
   loadEffortSettings,
+  readClaudeLogin,
   readClaudeSession,
   startClaudeSession,
 } from "./session.ts";
@@ -545,6 +546,26 @@ describe("loadClaudeModels", () => {
 
     expect(loaded.isErr() && loaded.error._tag).toBe("ClaudeModelsUnavailable");
     expect(claude.closes()).toBe(1);
+  });
+});
+
+describe("readClaudeLogin", () => {
+  test("reports the subscription without sending a prompt and closes Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+
+    const login = await readClaudeLogin(claude.runtime, "/work/tree");
+
+    expect(login.isOk() && login.value).toBe("Claude Max");
+    expect(await claude.prompts()).toEqual([]);
+    expect(claude.closes()).toBe(1);
+  });
+
+  test("refuses a login that would bill the API", async () => {
+    const claude = fakeClaude({ apiProvider: "bedrock" });
+
+    const login = await readClaudeLogin(claude.runtime, "/work/tree");
+
+    expect(login.isErr() && login.error._tag).toBe("ClaudeNotSubscription");
   });
 });
 

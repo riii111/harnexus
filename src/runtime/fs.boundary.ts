@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, fchmodSync, openSync, writeSync } from "node:fs";
+import { closeSync, constants, fchmodSync, openSync, writeSync } from "node:fs";
 import {
+  access,
   mkdir,
   open,
   readdir,
@@ -144,6 +145,24 @@ export const prepareDirectory = (path: string) =>
         path,
         cause,
         message: `cannot prepare directory ${path}`,
+      }),
+  });
+
+class AccessDenied extends TaggedError("AccessDenied")<{
+  path: string;
+  cause: unknown;
+  message: string;
+}> {}
+
+// Checks the permission without creating or changing anything at the path.
+export const checkAccess = (path: string, mode: "write" | "execute") =>
+  Result.tryPromise({
+    try: () => access(path, mode === "write" ? constants.W_OK : constants.X_OK),
+    catch: (cause) =>
+      new AccessDenied({
+        path,
+        cause,
+        message: `cannot ${mode === "write" ? "write to" : "run"} ${path}`,
       }),
   });
 

@@ -94,12 +94,45 @@ export const loadEffortSettings = (
   runtime: Pick<ClaudeRuntime, "resolveSettings"> = PROCESS_RUNTIME,
 ) => readSettings(runtime.resolveSettings, cwd, USER_SETTINGS);
 
-// Reading the list sends no prompt, so the process is closed as soon as it answers; the models it runs depend on the Claude Code version the SDK bundles.
-// Only the user's settings are read, since the bridge's directory is no thread's project, and they pass the same check as a session so the list is the subscription's.
-export const loadClaudeModels = (
+// The models Claude Code runs depend on the Claude Code version the SDK bundles.
+export const loadClaudeModels = async (
   runtime: ClaudeRuntime = PROCESS_RUNTIME,
   cwd: string = process.cwd(),
   timeoutMs: number = MODELS_TIMEOUT_MS,
+) =>
+  (
+    await askClaude(runtime, cwd, (claude) =>
+      readSupportedModels(claude, timeoutMs),
+    )
+  ).andThen((infos) => {
+    const models = modelsFromSdk(infos);
+    return models.length === 0
+      ? Result.err(
+          new NoClaudeModelsListed({
+            message: "Claude Code listed no Claude model",
+          }),
+        )
+      : Result.ok(models);
+  });
+
+// Reports the subscription a session would run on, refusing a login that would bill the API as a session does.
+export const readClaudeLogin = async (
+  runtime: ClaudeRuntime = PROCESS_RUNTIME,
+  cwd: string = process.cwd(),
+) =>
+  (await askClaude(runtime, cwd, readAccount)).andThen((account) =>
+    Result.gen(function* () {
+      yield* checkSubscription(account);
+      return Result.ok(account.subscriptionType ?? "subscription");
+    }),
+  );
+
+// Asking Claude Code about itself sends no prompt, so the process is closed as soon as it answers.
+// Only the user's settings are read, since the bridge's directory is no thread's project, and they pass the same check as a session so the answer is the subscription's.
+const askClaude = <T, E>(
+  runtime: ClaudeRuntime,
+  cwd: string,
+  ask: (claude: ClaudeQuery) => Promise<Result<T, E>>,
 ) =>
   Result.gen(async function* () {
     const resolved = yield* Result.await(
@@ -112,17 +145,11 @@ export const loadClaudeModels = (
       env: withoutApiBilling(runtime.env),
       settingSources: USER_SETTINGS,
     });
-    const listed = await readSupportedModels(claude, timeoutMs);
+    const answer = await ask(claude);
     prompt.end();
     closeQuery(claude);
-    const models = modelsFromSdk(yield* listed);
-    return models.length === 0
-      ? Result.err(
-          new NoClaudeModelsListed({
-            message: "Claude Code listed no Claude model",
-          }),
-        )
-      : Result.ok(models);
+    const value = yield* answer;
+    return Result.ok(value);
   });
 
 // Claude keeps a conversation as <session id>.jsonl in a project folder under its config directory, which the user may delete or move to another machine.
