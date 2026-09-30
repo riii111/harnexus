@@ -749,6 +749,50 @@ describe("token usage", () => {
   });
 });
 
+describe("turn metrics", () => {
+  test("logs each result's model, effort, tokens and durations", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    let clock = 1_700_000_000_000;
+    const { turns, sent, events } = await harness([claude], {
+      now: () => (clock += 10),
+    });
+
+    await completeTurn(turns, sent, claude, 10);
+
+    expect(events.filter((event) => event.step === "metrics")).toEqual([
+      {
+        event: "claude_turn",
+        step: "metrics",
+        model: MODEL,
+        effort: "high",
+        totalTokens: 40,
+        inputTokens: 34,
+        cachedInputTokens: 20,
+        cacheWriteInputTokens: 10,
+        outputTokens: 6,
+        reasoningOutputTokens: 0,
+        sessionStartMs: expect.any(Number),
+        firstMessageMs: expect.any(Number),
+        turnMs: expect.any(Number),
+      },
+    ]);
+  });
+
+  test("logs no start time for a turn on a Claude session already running", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, events } = await harness([claude]);
+
+    await completeTurn(turns, sent, claude, 10);
+    await completeTurn(turns, sent, claude, 11);
+
+    expect(
+      events
+        .filter((event) => event.step === "metrics")
+        .map((event) => "sessionStartMs" in event && event.sessionStartMs),
+    ).toEqual([0, null]);
+  });
+});
+
 describe("session ids", () => {
   test("resumes from the session id Claude reported even when saving it failed", async () => {
     const first = fakeClaude(SUBSCRIPTION);
@@ -2640,6 +2684,7 @@ const harness = async (
     materializeFailures = 0,
     linkRequest,
     effortRule = defaultRule,
+    now = () => 1_700_000_000_000,
   }: {
     adopt?: boolean;
     files?: Parameters<typeof openThreadStore>[1];
@@ -2652,6 +2697,7 @@ const harness = async (
     materializeFailures?: number;
     linkRequest?: ServerRequest;
     effortRule?: EffortRule;
+    now?: () => number;
   } = {},
 ) => {
   const opened = await openThreadStore(join(dir, "threads.json"), files);
@@ -2711,7 +2757,7 @@ const harness = async (
       await beforeStart;
       return startClaudeSession(session, fake.runtime);
     },
-    now: () => 1_700_000_000_000,
+    now,
     newTurnId: () => `turn-${++turnCount}`,
     effortRule,
     ...(idleSessionMs !== undefined && { idleSessionMs }),
