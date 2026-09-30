@@ -778,6 +778,55 @@ describe("turn metrics", () => {
     ]);
   });
 
+  test("measures the Claude start from the session request, the first message from the send and the turn from its start", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const gate = createGate();
+    let clock = 0;
+    const { turns, sent, events, settings } = await harness([claude], {
+      now: () => clock,
+      beforeStart: gate.promise,
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => settings.length === 1);
+    clock = 50;
+    gate.open();
+    await until(() => claude.started());
+    expect(await firstPrompt(claude.prompt())).toBe("hello");
+    clock = 120;
+    claude.emit(sdk(answer("msg-1", "hi")));
+    await settle();
+    clock = 200;
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(events.find((event) => event.step === "metrics")).toMatchObject({
+      sessionStartMs: 50,
+      firstMessageMs: 70,
+      turnMs: 200,
+    });
+  });
+
+  test("logs the result that ends a Claude turn before a queued steer runs", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, events } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    turns.steerTurn(steer(30, "turn-1", "also this"));
+    const [prompt, steered] = await readPrompts(claude, 2);
+    claude.emit(sdk(success([prompt?.uuid], 1)));
+    await settle();
+    const beforeSteer = events.filter((e) => e.step === "metrics").length;
+    claude.emit(sdk(success([steered?.uuid])));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect({
+      beforeSteer,
+      after: events.filter((e) => e.step === "metrics").length,
+    }).toEqual({ beforeSteer: 1, after: 2 });
+  });
+
   test("logs no start time for a turn on a Claude session already running", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, events } = await harness([claude]);
