@@ -62,7 +62,7 @@ export const createModelCatalog = () => {
 };
 
 // The SDK gives no release date, so the version in the name stands in for it across families; a tie keeps the given order and a name without a version goes last.
-export const newestFirst = (models: readonly ClaudeModel[]): ClaudeModel[] =>
+const newestFirst = (models: readonly ClaudeModel[]): ClaudeModel[] =>
   models
     .map((model) => ({ model, version: versionOf(model.displayName) }))
     .sort((a, b) => compareVersions(b.version, a.version))
