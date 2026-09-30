@@ -303,12 +303,20 @@ describe("app-server shutdown", () => {
     "signals SIGTERM, then SIGKILL, to a Codex that ignores both the app disconnecting and SIGTERM",
     async () => {
       const { env, reportPath } = setup({
-        HARNEXUS_SHUTDOWN_GRACE_MS: "200",
+        HARNEXUS_SHUTDOWN_GRACE_MS: "50",
         FAKE_CODEX_MODE: "wait-ignore-term",
       });
 
-      const proc = launch(["app-server"], env);
+      // The app disconnects only once Codex is up, so the grace period never counts its start.
+      const proc = spawnLauncher(["app-server"], {
+        cwd: dir,
+        env,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
       await readReport(reportPath);
+      proc.stdin.end();
       const result = await finish(proc);
 
       expect(result).toMatchObject({ exitCode: null, signal: "SIGKILL" });
@@ -326,7 +334,7 @@ describe("app-server shutdown", () => {
     async () => {
       const { env } = setup({
         HARNEXUS_CODEX_PATH: lingeringCodex,
-        HARNEXUS_SHUTDOWN_GRACE_MS: "200",
+        HARNEXUS_SHUTDOWN_GRACE_MS: "50",
       });
       // An open stdin keeps the relay's disconnect timer out, so only the bridge's own shutdown can signal.
       const proc = spawnLauncher(["app-server"], {
@@ -543,7 +551,12 @@ const processTable = () =>
     .filter((match) => match !== null)
     .map(([, pid, pgid]) => ({ pid: Number(pid), pgid: Number(pgid) }));
 
-const finish = async (proc: ReturnType<typeof launch>) => {
+const finish = async (
+  proc: Pick<
+    ReturnType<typeof launch>,
+    "stdout" | "stderr" | "exited" | "exitCode" | "signalCode"
+  >,
+) => {
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
@@ -610,6 +623,8 @@ type Report = {
 // Records how it was started (renamed into place so readReport never sees a partial write), then echoes stdin and exits with FAKE_CODEX_EXIT, or waits for a signal when FAKE_CODEX_MODE=wait.
 const FAKE_CODEX = `#!/usr/bin/env -S ${BUN} --no-env-file --config=/dev/null
 import { renameSync, writeFileSync } from "node:fs";
+// Ignored before the report exists, so a test that has read the report knows SIGTERM can no longer end it.
+if (process.env.FAKE_CODEX_MODE === "wait-ignore-term") process.on("SIGTERM", () => {});
 const report = process.env.FAKE_CODEX_REPORT;
 writeFileSync(
   report + ".tmp",
@@ -631,7 +646,6 @@ if (process.env.FAKE_CODEX_MODE === "burst") {
   await new Promise((resolve) => process.stdout.write("END\\n", resolve));
   process.exit(0);
 } else if (process.env.FAKE_CODEX_MODE === "wait" || process.env.FAKE_CODEX_MODE === "wait-ignore-term") {
-  if (process.env.FAKE_CODEX_MODE === "wait-ignore-term") process.on("SIGTERM", () => {});
   // Still ends on its own if the test run is killed before afterAll can stop it.
   setTimeout(() => process.exit(0), 60_000);
 } else {
@@ -642,7 +656,7 @@ if (process.env.FAKE_CODEX_MODE === "burst") {
 
 // Unlike closeSync(1) in Bun, which leaves the pipe open until exit, exec >&- gives the bridge EOF while Codex keeps running; the ignored SIGTERM survives exec.
 const LINGERING_CODEX = `#!/bin/sh
-exec >&-
 trap '' TERM
+exec >&-
 exec sleep 30
 `;

@@ -279,7 +279,7 @@ describe("ThreadStore", () => {
   });
 
   test("keeps each message id once and only the latest 64", async () => {
-    const store = await openStore();
+    const store = await openStore({ writeState: async () => Result.ok() });
     await store.register(ENTRY);
     for (let index = 0; index < 70; index += 1) {
       await store.addMessageId("thread-1", `message-${index}`);
@@ -392,16 +392,19 @@ describe("ThreadStore.runWrite", () => {
     const store = await openStore();
     await store.register(ENTRY);
     await store.register({ ...ENTRY, threadId: "thread-2" });
+    const started = deferred();
     const blocker = deferred();
 
     const first = store.runWrite(
       "thread-1",
       async () => {
+        started.resolve();
         await blocker.promise;
         return Result.ok("first");
       },
       neverUnknown,
     );
+    await started.promise;
     const second = await store.runWrite(
       "thread-2",
       async () => Result.ok("second"),
