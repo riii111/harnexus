@@ -846,7 +846,26 @@ describe("Claude thread history", () => {
       }),
     );
     const out = parse(await router.fromServer(threadResponse(4, "th-claude")));
-    const forwarded = router.fromApp(
+    const askTurns = async (id: number, cursor: string | null) => {
+      const forwarded = router.fromApp(
+        encode({
+          id,
+          method: "thread/turns/list",
+          params: {
+            threadId: "th-claude",
+            cursor,
+            limit: 1,
+            itemsView: "notLoaded",
+          },
+        }),
+      );
+      await Bun.sleep(0);
+      return { forwarded, page: responseTo(sent, id).result };
+    };
+    const opening = out.result.turnsBackwardsCursor;
+    const newest = await askTurns(10, opening);
+    const older = await askTurns(11, newest.page.nextCursor);
+    router.fromApp(
       encode({
         id: 20,
         method: "thread/turns/list",
@@ -861,11 +880,28 @@ describe("Claude thread history", () => {
     expect(reads[0]).toBe("session-th-claude");
     expect(out.result.model).toBe(CLAUDE);
     expect(out.result.thread).not.toHaveProperty("turns");
-    expect(typeof out.result.turnsBackwardsCursor).toBe("string");
+    expect(typeof opening).toBe("string");
     expect(
       out.result.initialTurnsPage.data.map((turn: { id: string }) => turn.id),
     ).toEqual(["harnexus-history-u2"]);
-    expect(forwarded).toBeNull();
+    expect([newest.page.data, older.page.data]).toEqual([
+      [
+        expect.objectContaining({
+          id: "harnexus-history-u2",
+          itemsView: "notLoaded",
+          items: [],
+        }),
+      ],
+      [
+        expect.objectContaining({
+          id: "harnexus-history-u1",
+          itemsView: "notLoaded",
+          items: [],
+        }),
+      ],
+    ]);
+    expect(older.page.nextCursor).toBeNull();
+    expect([newest.forwarded, older.forwarded]).toEqual([null, null]);
     expect(
       responseTo(sent, 20).result.data.map((turn: { id: string }) => turn.id),
     ).toEqual(["harnexus-history-u1"]);

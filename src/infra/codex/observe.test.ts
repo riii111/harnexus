@@ -56,6 +56,7 @@ describe("createObserver", () => {
         params: { arguments: SECRET },
       }),
       toServer({ id: "s-1", error: { code: -1, message: SECRET } }),
+      toApp({ id: 4, error: { message: SECRET } }),
     ]);
 
     expect(records).toEqual([
@@ -93,6 +94,13 @@ describe("createObserver", () => {
         kind: "error_response",
         method: "item/tool/call",
         id: "s-1",
+      },
+      {
+        event: "rpc_message",
+        direction: "server_to_app",
+        kind: "error_response",
+        method: null,
+        id: 4,
       },
     ]);
     expect(log).not.toContain(SECRET);

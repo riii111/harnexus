@@ -69,7 +69,7 @@ describe("startClaudeSession options", () => {
     });
   });
 
-  test("keeps API billing variables away from Claude", async () => {
+  test("keeps API billing variables and auth headers away from Claude", async () => {
     const claude = fakeClaude(SUBSCRIPTION, {
       env: {
         PATH: "/usr/bin",
@@ -78,6 +78,7 @@ describe("startClaudeSession options", () => {
         ANTHROPIC_API_KEY: "api-key",
         ANTHROPIC_AUTH_TOKEN: "bearer",
         CLAUDE_CODE_USE_BEDROCK: "1",
+        ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer other\r\nX-Trace: 1",
       },
     });
 
@@ -87,6 +88,7 @@ describe("startClaudeSession options", () => {
       PATH: "/usr/bin",
       HOME: "/home/user",
       CLAUDE_CODE_OAUTH_TOKEN: "subscription-token",
+      ANTHROPIC_CUSTOM_HEADERS: "X-Trace: 1",
     });
   });
 });

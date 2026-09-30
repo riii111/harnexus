@@ -643,37 +643,7 @@ describe("effort", () => {
     expect(claude.efforts()).toEqual(["low"]);
   });
 
-  test.each<{
-    name: string;
-    start: () => ReturnType<typeof turnStart>;
-    pick: (turns: Turns) => void;
-    saved: (store: Store) => unknown;
-    current: (turns: Turns) => unknown;
-    expected: string;
-  }>([
-    {
-      name: "an effort",
-      start: () => withEffort(turnStart(10, "hello"), "low"),
-      pick: (turns) => turns.selectEffort(THREAD, "max"),
-      saved: (store) => store.get(THREAD)?.effort,
-      current: (turns) => turns.effortOf(THREAD),
-      expected: "max",
-    },
-    {
-      name: "a model",
-      start: () => turnStart(10, "hello"),
-      pick: (turns) => turns.changeModel(THREAD, OTHER_MODEL),
-      saved: (store) => store.get(THREAD)?.model,
-      current: (turns) => turns.threadOf(THREAD)?.model,
-      expected: OTHER_MODEL,
-    },
-  ])("saves $name picked while the thread's first turn registers it", async ({
-    start,
-    pick,
-    saved,
-    current,
-    expected,
-  }) => {
+  test("saves an effort picked while the thread's first turn registers it", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const firstWrite = createGate();
     let writes = 0;
@@ -686,13 +656,13 @@ describe("effort", () => {
       },
     });
 
-    turns.startTurn(start(), undefined);
+    turns.startTurn(withEffort(turnStart(10, "hello"), "low"), undefined);
     await until(() => writes === 1);
-    pick(turns);
+    turns.selectEffort(THREAD, "max");
     firstWrite.open();
-    await until(() => saved(store) === expected);
+    await until(() => store.get(THREAD)?.effort === "max");
 
-    expect(current(turns)).toBe(expected);
+    expect(turns.effortOf(THREAD)).toBe("max");
   });
 
   test("keeps an effort the store failed to save while the bridge runs", async () => {
@@ -1829,6 +1799,28 @@ describe("model changes", () => {
     ]);
   });
 
+  test("save a model picked while the thread's first turn registers it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const firstWrite = createGate();
+    let writes = 0;
+    const { turns, store } = await harness([claude], {
+      files: {
+        writeState: async (target, content) => {
+          if (++writes === 1) await firstWrite.promise;
+          return writeFileAtomic(target, content);
+        },
+      },
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => writes === 1);
+    turns.changeModel(THREAD, OTHER_MODEL);
+    firstWrite.open();
+    await until(() => store.get(THREAD)?.model === OTHER_MODEL);
+
+    expect(turns.threadOf(THREAD)?.model).toBe(OTHER_MODEL);
+  });
+
   test("run a turn that lost the race to register the thread on the model it asked for", async () => {
     const first = fakeClaude(SUBSCRIPTION);
     const second = fakeClaude(SUBSCRIPTION);
@@ -2616,7 +2608,6 @@ const resolvedRequests = (sent: Sent[]) =>
     .map((m) => m.params.requestId);
 
 type Turns = ReturnType<typeof createTurnController>;
-type Store = Awaited<ReturnType<typeof harness>>["store"];
 
 const diskFull = async (target: string) =>
   Result.err(
