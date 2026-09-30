@@ -88,7 +88,7 @@ export type TurnEvent =
       model: string;
       effort: EffortLevel | null;
       sessionStartMs: number | null;
-      firstMessageMs: number;
+      firstMessageMs: number | null;
       turnMs: number;
     } & TokenUsageBreakdown)
   | {
@@ -831,7 +831,13 @@ export const createTurnController = ({
         await threads.setSessionId(threadId, current);
       }
       const message = received.value;
-      firstMessageMs ??= now() - sentAt;
+      // Status and system messages follow the send at once, so the wait is measured to the first reply of the main conversation, not of a subagent, and a turn without one logs null.
+      if (
+        (message.type === "stream_event" || message.type === "assistant") &&
+        message.parent_tool_use_id === null
+      ) {
+        firstMessageMs ??= now() - sentAt;
+      }
       // A compaction summarizes the skills attached so far and a reset such as /clear drops them, so the next turn attaches them again.
       if (
         (message.type === "system" && message.subtype === "compact_boundary") ||

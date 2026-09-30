@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { EffortLevel, ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import {
+  type ClaudeModel,
   createModelCatalog,
   type EffortSettings,
   effortRule,
   isClaudeModel,
+  type ModelCatalog,
   modelsFromSdk,
 } from "./models.ts";
 
@@ -103,6 +105,47 @@ describe("createModelCatalog", () => {
       offered: ["claude-sonnet-5-5", "claude-opus-5-5"],
       retired: ["claude-sonnet-5", "claude-haiku-4-5"],
     });
+  });
+
+  test("offers the listed models by the version in their names, highest first", () => {
+    const catalog = createModelCatalog();
+
+    catalog.replace(
+      [
+        "Claude Opus 5 (1M context)",
+        "Claude Haiku 4.5",
+        "Claude Fable 5.1",
+        "Claude Opus 4.6 (1M)",
+        "Claude Opus 5.5",
+        "Claude Sonnet 5.5",
+      ].map(named),
+    );
+
+    expect(offeredNames(catalog)).toEqual([
+      "Claude Opus 5.5",
+      "Claude Sonnet 5.5",
+      "Claude Fable 5.1",
+      "Claude Opus 5 (1M context)",
+      "Claude Opus 4.6 (1M)",
+      "Claude Haiku 4.5",
+    ]);
+  });
+
+  test("keeps the listed order of a tie and offers a name without a version last", () => {
+    const catalog = createModelCatalog();
+
+    catalog.replace(
+      ["Claude Next", "Claude Sonnet 5.5", "Claude Opus 5.5", "Claude 4"].map(
+        named,
+      ),
+    );
+
+    expect(offeredNames(catalog)).toEqual([
+      "Claude Sonnet 5.5",
+      "Claude Opus 5.5",
+      "Claude 4",
+      "Claude Next",
+    ]);
   });
 
   test("takes a listed model's levels over the built-in ones, keeps those of a retired model and gives an unnamed model every level", () => {
@@ -272,3 +315,13 @@ const OPUS_ALIAS: ModelInfo = {
   supportsEffort: true,
   supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
 };
+
+const named = (displayName: string): ClaudeModel => ({
+  id: `claude-${displayName}`,
+  displayName,
+  description: displayName,
+  efforts: [],
+});
+
+const offeredNames = (catalog: ModelCatalog) =>
+  catalog.models().offered.map(({ displayName }) => displayName);
