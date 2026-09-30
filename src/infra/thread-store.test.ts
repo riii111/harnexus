@@ -78,6 +78,26 @@ describe("openThreadStore", () => {
     ]);
   });
 
+  test("keeps only the 64 requesters that asked most recently", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    for (let n = 0; n < 65; n += 1) {
+      await store.addRequester("thread-1", `worker-${n}`);
+    }
+
+    const again = await store.addRequester("thread-1", "worker-1");
+    const next = await store.addRequester("thread-1", "worker-65");
+
+    expect(again.isOk() && again.value.requesterThreadIds.at(-1)).toBe(
+      "worker-1",
+    );
+    expect(next.isOk() && next.value.requesterThreadIds).toEqual([
+      ...Array.from({ length: 62 }, (_, i) => `worker-${i + 3}`),
+      "worker-1",
+      "worker-65",
+    ]);
+  });
+
   test("registers a thread with the effort it was given", async () => {
     const store = await openStore();
 

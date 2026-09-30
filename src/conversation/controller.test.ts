@@ -2504,12 +2504,14 @@ describe("turn/start carrying another thread's message", () => {
 
   test.each([
     { name: "its own reviewer", source: OTHER_REVIEWER, expected: [] },
+    { name: "the thread itself", source: OTHER_THREAD, expected: [] },
+    { name: "another Claude thread", source: THREAD, expected: [] },
     {
-      name: "a thread that is no reviewer",
+      name: "a Codex thread that is no reviewer",
       source: "th-lead",
       expected: ["th-lead"],
     },
-  ])("saves a sender that is $name as a thread Claude may answer only when it is no one's reviewer", async ({
+  ])("saves the sender when it is $name only if it is a Codex thread no one reviews for", async ({
     source,
     expected,
   }) => {
@@ -2568,6 +2570,36 @@ describe("turn/start carrying another thread's message", () => {
     );
     expect(claude.started()).toBe(false);
     expect(store.get(THREAD)?.requesterThreadIds).toEqual([]);
+  });
+
+  test("runs a delegated message once when it is sent again after its sender could not be saved", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    let failWrites = false;
+    const { turns, sent, store } = await registeredWorkers([claude], {
+      writeState: async (target, content) =>
+        failWrites ? diskFull(target) : writeFileAtomic(target, content),
+    });
+    const delegated = (id: number) =>
+      withMessageId(reply(id, THREAD, CODEX_WORKER), "m-1");
+    failWrites = true;
+    turns.startTurn(delegated(10), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    failWrites = false;
+
+    turns.startTurn(delegated(11), undefined);
+    await until(() => claude.started());
+    turns.startTurn(delegated(12), undefined);
+    await until(() => responseTo(sent, 12) !== undefined);
+
+    expect(responseTo(sent, 10)?.error.message).toBe(
+      "the thread that sent this message could not be saved, so Claude could not answer it and the message was not run",
+    );
+    expect(responseTo(sent, 11)?.result.turn).toMatchObject({
+      status: "inProgress",
+    });
+    expect(responseTo(sent, 12)).toEqual(DUPLICATE(12));
+    expect(startedTurns(sent)).toHaveLength(1);
+    expect(store.get(THREAD)?.requesterThreadIds).toEqual([CODEX_WORKER]);
   });
 });
 

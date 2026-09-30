@@ -311,18 +311,17 @@ const createThreadStore = (
       ownerIn(mappings, reviewerThreadId) ??
       claimedReviewers.get(reviewerThreadId),
 
+    // A requester that sends again moves to the end, so the cap drops the one that asked longest ago.
     addRequester: (threadId: string, requesterThreadId: string) =>
-      update(threadId, (mapping) =>
-        mapping.requesterThreadIds.includes(requesterThreadId)
-          ? mapping
-          : {
-              ...mapping,
-              requesterThreadIds: [
-                ...mapping.requesterThreadIds,
-                requesterThreadId,
-              ],
-            },
-      ),
+      update(threadId, (mapping) => ({
+        ...mapping,
+        requesterThreadIds: [
+          ...mapping.requesterThreadIds.filter(
+            (id) => id !== requesterThreadId,
+          ),
+          requesterThreadId,
+        ].slice(-REQUESTER_LIMIT),
+      })),
 
     addMessageId: (threadId: string, messageId: string) =>
       update(threadId, (mapping) =>
@@ -520,3 +519,5 @@ const STATE_VERSION = 1;
 const MARKER_SUFFIX = ".running";
 
 const MESSAGE_ID_LIMIT = 64;
+
+const REQUESTER_LIMIT = 64;

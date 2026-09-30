@@ -343,7 +343,12 @@ export const createTurnController = ({
         requestedMode(params) ?? modes.get(threadId) ?? "default",
       ),
       effort: threads.pickedEffortOf(threadId),
-      requester: requesterOf(threadId, delegated?.sourceThreadId, owner),
+      requester: requesterOf(
+        threadId,
+        delegated?.sourceThreadId,
+        owner,
+        threads.threadOf,
+      ),
     };
     const request = {
       id,
@@ -717,7 +722,7 @@ export const createTurnController = ({
 
   const recordRequester = async (threadId: string, requester: string | null) =>
     requester === null ||
-    store.get(threadId)?.requesterThreadIds.includes(requester) === true
+    store.get(threadId)?.requesterThreadIds.at(-1) === requester
       ? Result.ok()
       : store.addRequester(threadId, requester);
 
@@ -1356,13 +1361,19 @@ const steersAfter = (
 const resumeFrom = (sessionId: string | null) =>
   sessionId === null ? {} : { resume: sessionId };
 
-// A reviewer's reply is already answerable, so only a sender that is no one's reviewer is kept, and never the thread itself, which it cannot message.
+// A reviewer's reply is already answerable and the thread cannot message itself, and a Claude sender is left out since Claude-to-Claude round trips are outside O2 and would raise usage.
 const requesterOf = (
   threadId: string,
   source: string | null | undefined,
   owner: string | undefined,
+  claudeThreadOf: (threadId: string) => Thread | undefined,
 ) =>
-  source == null || source === threadId || owner !== undefined ? null : source;
+  source == null ||
+  source === threadId ||
+  owner !== undefined ||
+  claudeThreadOf(source) !== undefined
+    ? null
+    : source;
 
 const clientMessageId = (params: Record<string, unknown>) =>
   typeof params.clientUserMessageId === "string" &&
