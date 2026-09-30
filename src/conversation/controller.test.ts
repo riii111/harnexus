@@ -2601,6 +2601,35 @@ describe("turn/start carrying another thread's message", () => {
     expect(startedTurns(sent)).toHaveLength(1);
     expect(store.get(THREAD)?.requesterThreadIds).toEqual([CODEX_WORKER]);
   });
+
+  test("runs a message from a sender already saved when the store cannot be written", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    let failWrites = false;
+    const { turns, sent, store } = await registeredWorkers([claude], {
+      writeState: async (target, content) =>
+        failWrites ? diskFull(target) : writeFileAtomic(target, content),
+    });
+    turns.startTurn(reply(10, THREAD, CODEX_WORKER), undefined);
+    await until(() => claude.started());
+    claude.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 1);
+    turns.startTurn(reply(11, THREAD, "th-lead"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    claude.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 2);
+    expect(store.get(THREAD)?.requesterThreadIds).toEqual([
+      CODEX_WORKER,
+      "th-lead",
+    ]);
+    failWrites = true;
+
+    turns.startTurn(reply(12, THREAD, CODEX_WORKER), undefined);
+    await until(() => responseTo(sent, 12) !== undefined);
+
+    expect(responseTo(sent, 12)?.result.turn).toMatchObject({
+      status: "inProgress",
+    });
+  });
 });
 
 describe("idle Claude sessions", () => {

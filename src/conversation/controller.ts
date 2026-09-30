@@ -720,9 +720,10 @@ export const createTurnController = ({
     if (ids?.size === 0) acceptedMessageIds.delete(threadId);
   };
 
+  // A requester already saved is not written again, so a store that cannot be written does not refuse a thread it already knows.
   const recordRequester = async (threadId: string, requester: string | null) =>
     requester === null ||
-    store.get(threadId)?.requesterThreadIds.at(-1) === requester
+    store.get(threadId)?.requesterThreadIds.includes(requester)
       ? Result.ok()
       : store.addRequester(threadId, requester);
 
