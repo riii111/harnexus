@@ -33,11 +33,13 @@ export type TurnOutcome =
   | { status: "failed"; message: string }
   | { status: "interrupted" };
 
+// compaction marks a turn the app asked to compact the conversation, which shows the compaction instead of Claude's reply.
 export const renderTurnStarted = (params: {
   threadId: string;
   turnId: string;
   cwd: string;
   now: number;
+  compaction?: boolean;
 }): Rendered & { turn: Turn } => {
   const draft = open({
     threadId: params.threadId,
@@ -54,6 +56,8 @@ export const renderTurnStarted = (params: {
     finalMessage: null,
     interrupting: false,
     finished: false,
+    compaction: params.compaction ?? false,
+    compactionError: null,
   });
   const turn: Turn = {
     id: params.turnId,
@@ -125,13 +129,14 @@ export const renderSdkMessage = (
   if (state.finished) return { state, notifications: [] };
   const draft = open(state);
   switch (message.type) {
+    // A compaction's only text is the command's own report, which its outcome already carries.
     case "stream_event":
-      if (message.parent_tool_use_id === null) {
+      if (message.parent_tool_use_id === null && !draft.compaction) {
         renderStreamEvent(draft, message.event, now);
       }
       break;
     case "assistant":
-      if (message.parent_tool_use_id === null) {
+      if (message.parent_tool_use_id === null && !draft.compaction) {
         renderAssistant(draft, message, now);
       }
       break;
@@ -141,9 +146,7 @@ export const renderSdkMessage = (
       }
       break;
     case "system":
-      if (message.subtype === "permission_denied") {
-        draft.declinedToolUseIds.push(message.tool_use_id);
-      }
+      renderSystem(draft, message, now);
       break;
     case "result":
       correctDenials(
@@ -151,11 +154,7 @@ export const renderSdkMessage = (
         message.permission_denials.map((denial) => denial.tool_use_id),
         now,
       );
-      finish(
-        draft,
-        draft.interrupting ? { status: "interrupted" } : outcomeOf(message),
-        now,
-      );
+      finish(draft, resultOutcome(draft, message), now);
       break;
   }
   return seal(draft);
@@ -253,6 +252,8 @@ type Draft = {
   finalMessage: AgentMessageItem | null;
   interrupting: boolean;
   finished: boolean;
+  compaction: boolean;
+  compactionError: string | null;
   notifications: AppNotification[];
 };
 
@@ -264,12 +265,42 @@ type TrackedTool =
   | { state: "failed"; item: ToolItem }
   | { state: "closed" };
 
+type SystemMessage = Extract<SDKMessage, { type: "system" }>;
+
 type StreamEvent = SDKPartialAssistantMessage["event"];
 
 type StreamDelta = Extract<
   StreamEvent,
   { type: "content_block_delta" }
 >["delta"];
+
+// Claude compacts on its own inside a turn as well as when the app asks, and both show the same item; only a compaction the app asked for fails its turn, since after one Claude tried on its own the turn reports what followed.
+const renderSystem = (draft: Draft, message: SystemMessage, now: number) => {
+  switch (message.subtype) {
+    case "permission_denied":
+      draft.declinedToolUseIds.push(message.tool_use_id);
+      break;
+    case "compact_boundary":
+      renderCompaction(draft, now);
+      break;
+    case "status":
+      if (draft.compaction && message.compact_result === "failed") {
+        draft.compactionError = message.compact_error ?? COMPACTION_FAILED;
+      }
+      break;
+  }
+};
+
+// Claude reports a compaction only once it is done, so its item starts and completes together; thread/compacted is deprecated but still in the protocol for apps that read it.
+const renderCompaction = (draft: Draft, now: number) => {
+  const item: ThreadItem = { type: "contextCompaction", id: nextItemId(draft) };
+  itemStarted(draft, item, now);
+  itemCompleted(draft, item, now);
+  notify(draft, now, {
+    method: "thread/compacted",
+    params: { threadId: draft.threadId, turnId: draft.turnId },
+  });
+};
 
 const renderStreamEvent = (draft: Draft, event: StreamEvent, now: number) => {
   switch (event.type) {
@@ -479,6 +510,15 @@ const correctDenials = (draft: Draft, toolUseIds: string[], now: number) => {
   }
 };
 
+// The CLI ends a failed compaction with a successful result, so the failure its status reported decides the outcome.
+const resultOutcome = (draft: Draft, result: SDKResultMessage): TurnOutcome => {
+  if (draft.interrupting) return { status: "interrupted" };
+  if (draft.compactionError !== null) {
+    return { status: "failed", message: draft.compactionError };
+  }
+  return outcomeOf(result);
+};
+
 const outcomeOf = (result: SDKResultMessage): TurnOutcome => {
   if (result.subtype === "success") {
     return result.is_error
@@ -632,3 +672,5 @@ const seal = ({ notifications, ...state }: Draft): Rendered => ({
 const toSeconds = (ms: number) => Math.floor(ms / 1000);
 
 const CONTINUING_STOP_REASONS = new Set(["tool_use", "pause_turn"]);
+
+const COMPACTION_FAILED = "Claude could not compact the conversation";

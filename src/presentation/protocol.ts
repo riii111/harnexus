@@ -21,6 +21,7 @@ export type AppNotificationBody =
       "thread/tokenUsage/updated",
       { threadId: string; turnId: string; tokenUsage: ThreadTokenUsage }
     >
+  | Envelope<"thread/compacted", { threadId: string; turnId: string }>
   | Envelope<
       "turn/plan/updated",
       {
@@ -83,7 +84,9 @@ export type ThreadItem =
   | FunctionCallOutputItem
   | AgentMessageItem
   | ReasoningItem
-  | ToolItem;
+  | ToolItem
+  // No recorded session carries a compaction, so this item and thread/compacted follow the types `codex app-server generate-ts` emits.
+  | { type: "contextCompaction"; id: string };
 
 // A turn another thread started through codex_app opens with the call's output, which the app shows as a message sent from that thread.
 export type FunctionCallOutputItem = {

@@ -40,6 +40,7 @@ type Turns = {
   adopt: (threadId: string, thread: Thread) => void;
   changeModel: (threadId: string, model: string) => void;
   startTurn: (request: AppRequest, fallbackCwd: string | undefined) => void;
+  compactThread: (request: AppRequest) => void;
   steerTurn: (request: AppRequest) => void;
   interruptTurn: (request: AppRequest) => void;
   reject: (request: AppRequest, message: string) => void;
@@ -139,9 +140,17 @@ export const createRouter = (
           history: history.load(String(params.threadId)),
         });
         return line;
-      // The server would run these on its own model with none of the Claude conversation.
-      case "review/start":
+      // The server would compact its own record, which holds none of the Claude conversation.
       case "thread/compact/start":
+        if (!turns.isClaudeThread(params.threadId)) return line;
+        if (paused) {
+          refuse("thread/compact/start", request, "claude_paused");
+          return null;
+        }
+        turns.compactThread(request);
+        return null;
+      // The server would run this on its own model with none of the Claude conversation.
+      case "review/start":
         if (!turns.isClaudeThread(params.threadId)) return line;
         refuse(message.method, request, "unsupported_request");
         return null;

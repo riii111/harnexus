@@ -48,14 +48,13 @@ describe("Codex threads", () => {
     expect(changed).toEqual(expected);
   });
 
-  // The fixtures already carry turn/start, turn/interrupt and turn/steer; review/start shares its branch with compaction.
-  test("leave review/start of a Codex thread to the server", () => {
-    const { router, calls } = setup();
-    const line = encode({
-      id: 5,
-      method: "review/start",
-      params: { threadId: "codex" },
-    });
+  // The fixtures already carry turn/start, turn/interrupt and turn/steer.
+  test.each([
+    { method: "review/start" },
+    { method: "thread/compact/start" },
+  ])("leave $method of a Codex thread to the server", ({ method }) => {
+    const { router, calls } = setup(["th-claude"]);
+    const line = encode({ id: 5, method, params: { threadId: "codex" } });
 
     expect(router.fromApp(line)).toEqual(line);
     expect(calls).toEqual([]);
@@ -204,6 +203,12 @@ describe("Codex CLI version", () => {
       name: "turn/steer of a Claude thread",
       id: 6,
       method: "turn/steer",
+      params: { threadId: "th-claude" },
+    },
+    {
+      name: "thread/compact/start of a Claude thread",
+      id: 6,
+      method: "thread/compact/start",
       params: { threadId: "th-claude" },
     },
     {
@@ -422,7 +427,7 @@ describe("threads with a Claude model", () => {
     { method: "turn/interrupt", expected: "interruptTurn" },
     { method: "turn/steer", expected: "steerTurn" },
     { method: "review/start", expected: "reject" },
-    { method: "thread/compact/start", expected: "reject" },
+    { method: "thread/compact/start", expected: "compactThread" },
   ])("hands $method of a Claude thread to $expected instead of the server", ({
     method,
     expected,
@@ -1227,6 +1232,7 @@ const setup = (
       },
       startTurn: (request: AppRequest, cwd) =>
         calls.push(["startTurn", request, cwd]),
+      compactThread: (request) => calls.push(["compactThread", request]),
       steerTurn: (request) => calls.push(["steerTurn", request]),
       interruptTurn: (request) => calls.push(["interruptTurn", request]),
       reject: (request, message) => calls.push(["reject", request, message]),
