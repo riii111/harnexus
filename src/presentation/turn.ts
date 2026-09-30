@@ -5,7 +5,6 @@ import type {
   SDKResultMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { todoPlanOf } from "./plan.ts";
 import type {
   AgentMessageItem,
   AppNotification,
@@ -428,7 +427,6 @@ const renderWholeBlock = (
 };
 
 // Text before a tool call is commentary, and closing it first keeps the app's items in the order Claude produced them.
-// A TodoWrite call keeps its item so the call stays visible beside the plan; only main-conversation calls reach here, so a subagent's list never replaces the plan.
 const startTool = (
   draft: Draft,
   block: { id: string; name: string; input: unknown },
@@ -439,18 +437,6 @@ const startTool = (
   const item = startToolItem(nextItemId(draft), block, draft.cwd);
   draft.tools[block.id] = { state: "running", item, startedAtMs: now };
   itemStarted(draft, item, now);
-  const plan = todoPlanOf(block);
-  if (plan !== null) {
-    notify(draft, now, {
-      method: "turn/plan/updated",
-      params: {
-        threadId: draft.threadId,
-        turnId: draft.turnId,
-        explanation: null,
-        plan,
-      },
-    });
-  }
 };
 
 const renderToolResults = (
