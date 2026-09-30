@@ -832,8 +832,11 @@ export const createTurnController = ({
       }
       const message = received.value;
       firstMessageMs ??= now() - sentAt;
-      // A compaction summarizes the skills attached so far, so the next turn attaches them again.
-      if (message.type === "system" && message.subtype === "compact_boundary") {
+      // A compaction summarizes the skills attached so far and a reset such as /clear drops them, so the next turn attaches them again.
+      if (
+        (message.type === "system" && message.subtype === "compact_boundary") ||
+        message.type === "conversation_reset"
+      ) {
         attached.clear();
       }
       if (message.type === "result") {

@@ -1734,15 +1734,22 @@ describe("skill links in Claude input", () => {
     ]);
   });
 
-  test("attaches a skill again after Claude compacts the conversation", async () => {
+  test.each([
+    {
+      name: "compacts the conversation",
+      message: { type: "system", subtype: "compact_boundary" },
+    },
+    {
+      name: "resets the conversation",
+      message: { type: "conversation_reset", trigger: "clear" },
+    },
+  ])("attaches a skill again after Claude $name", async ({ message }) => {
     const skill = await writeSkill("demo", "Do it.\n");
     const typed = `[$demo](${skill}) go`;
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
 
-    await skillTurn(turns, sent, claude, 10, typed, [
-      sdk({ type: "system", subtype: "compact_boundary" }),
-    ]);
+    await skillTurn(turns, sent, claude, 10, typed, [sdk(message)]);
     await skillTurn(turns, sent, claude, 11, typed);
     const [, second] = await readPrompts(claude, 2);
 
@@ -2941,7 +2948,6 @@ const completeTurn = async (
   await until(() => completedTurnStatuses(sent).length > before);
 };
 
-// Emits what Claude says before its result, such as a compaction boundary, and ends the turn.
 const skillTurn = async (
   turns: ReturnType<typeof createTurnController>,
   sent: Sent[],
