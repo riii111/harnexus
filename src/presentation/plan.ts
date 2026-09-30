@@ -48,6 +48,8 @@ const nextPlan = (plan: ThreadPlan, message: SDKMessage): ThreadPlan => {
   if (message.type === "user") return applyResults(plan, message);
   // A call left without a result when its turn ended never completes.
   if (message.type === "result") return { ...plan, calls: {} };
+  // A reset such as /clear starts a conversation whose task list is empty.
+  if (message.type === "conversation_reset") return NO_PLAN;
   return plan;
 };
 

@@ -213,6 +213,16 @@ describe("renderPlan tasks", () => {
     expect(out.plan.calls).toEqual({});
   });
 
+  test("empties a shown plan once when the conversation resets", () => {
+    const shown = feed(created("tool-1", "1", "Alpha step"));
+
+    const out = feed([RESET, RESET], shown.plan);
+
+    expect(shown.sent).toHaveLength(1);
+    expect(out.sent.map((params) => params.plan)).toEqual([[]]);
+    expect(out.plan).toEqual(NO_PLAN);
+  });
+
   test("forgets a call left unanswered when its turn ends", () => {
     const out = feed([
       call("tool-1", "TaskCreate", { subject: "Alpha step", description: "" }),
@@ -305,6 +315,12 @@ const result = (
   parent_tool_use_id: null,
   tool_use_result: output,
 });
+
+const RESET = {
+  type: "conversation_reset",
+  new_conversation_id: "conversation-2",
+  trigger: "clear",
+};
 
 const TURN = { threadId: "th-1", turnId: "tu-1", now: 1700000000500 };
 
