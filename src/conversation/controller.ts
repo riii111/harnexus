@@ -22,8 +22,12 @@ import { delegatedMessage } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { ThreadRecord, ThreadStore } from "../infra/thread-store.ts";
 import { promptFor } from "../presentation/permission.ts";
-import type { UserInput } from "../presentation/protocol.ts";
+import type {
+  TokenUsageBreakdown,
+  UserInput,
+} from "../presentation/protocol.ts";
 import {
+  breakdown,
   NO_USAGE,
   renderTokenUsage,
   type ThreadUsage,
@@ -56,7 +60,7 @@ import {
   type Thread,
 } from "./thread-request.ts";
 
-// Only steps, turn statuses, effort levels, refusal reasons and error tags are logged, never thread ids or text.
+// Only steps, turn statuses, models, effort levels, token counts, durations, refusal reasons and error tags are logged, never thread ids or text.
 export type TurnEvent =
   | {
       event: "claude_turn";
@@ -77,6 +81,15 @@ export type TurnEvent =
       step: "effort_changed" | "effort_applied";
       effort: EffortLevel;
     }
+  | ({
+      event: "claude_turn";
+      step: "metrics";
+      model: string;
+      effort: EffortLevel | null;
+      sessionStartMs: number | null;
+      firstMessageMs: number;
+      turnMs: number;
+    } & TokenUsageBreakdown)
   | {
       event: "claude_turn";
       step: "finished";
@@ -704,6 +717,7 @@ export const createTurnController = ({
     messageId: string | null,
   ) => {
     const threadId = record.threadId;
+    const turnStartedAt = now();
     const started = renderTurnStarted({
       threadId,
       turnId: request.turnId,
@@ -729,11 +743,14 @@ export const createTurnController = ({
       finish(active, { status: "interrupted" }, null);
       return;
     }
+    const reused = sessions.get(threadId)?.model === model;
+    const sessionAskedAt = now();
     const slot = await sessionFor(record, model);
     if (slot.isErr()) {
       fail(active, slot.error);
       return;
     }
+    const sessionStartMs = reused ? null : now() - sessionAskedAt;
     active.link = slot.value.link;
     // Claude leaves plan mode when a plan is approved, so the mode the app asks for is set again on every turn.
     const mode = await slot.value.session.setPermissionMode(
@@ -775,6 +792,8 @@ export const createTurnController = ({
         return;
       }
     }
+    const sentAt = now();
+    let firstMessageMs: number | null = null;
     let sessionId = threads.sessionIdOf(threadId);
     while (active.state !== null && !active.state.finished) {
       const next = await slot.value.session.messages.next();
@@ -797,6 +816,19 @@ export const createTurnController = ({
         await threads.setSessionId(threadId, current);
       }
       const message = received.value;
+      firstMessageMs ??= now() - sentAt;
+      if (message.type === "result") {
+        log({
+          event: "claude_turn",
+          step: "metrics",
+          model,
+          effort,
+          ...breakdown(message.usage),
+          sessionStartMs,
+          firstMessageMs,
+          turnMs: now() - turnStartedAt,
+        });
+      }
       // Sent before the message is rendered, so a result's usage reaches the app ahead of turn/completed.
       const usage = renderTokenUsage(
         usages.get(threadId) ?? NO_USAGE,
@@ -1104,6 +1136,22 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
     case "effort_changed":
     case "effort_applied":
       return { event: entry.event, step: entry.step, effort: entry.effort };
+    case "metrics":
+      return {
+        event: entry.event,
+        step: entry.step,
+        model: entry.model,
+        effort: entry.effort,
+        inputTokens: entry.inputTokens,
+        cachedInputTokens: entry.cachedInputTokens,
+        cacheWriteInputTokens: entry.cacheWriteInputTokens,
+        outputTokens: entry.outputTokens,
+        reasoningOutputTokens: entry.reasoningOutputTokens,
+        totalTokens: entry.totalTokens,
+        sessionStartMs: entry.sessionStartMs,
+        firstMessageMs: entry.firstMessageMs,
+        turnMs: entry.turnMs,
+      };
     case "finished":
       return {
         event: entry.event,

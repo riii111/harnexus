@@ -35,6 +35,32 @@ describe("createBridgeLogger", () => {
     expect(log).not.toContain("private text");
   });
 
+  test("records a turn's metrics with only its counts, durations, model and effort", () => {
+    const entry = {
+      event: "claude_turn",
+      step: "metrics",
+      model: "claude-sonnet-5-5",
+      effort: "high",
+      totalTokens: 40,
+      inputTokens: 34,
+      cachedInputTokens: 20,
+      cacheWriteInputTokens: 10,
+      outputTokens: 6,
+      reasoningOutputTokens: 0,
+      sessionStartMs: null,
+      firstMessageMs: 70,
+      turnMs: 200,
+      threadId: "th-secret",
+      prompt: "private text",
+    } as const;
+    const widened: LogEvent = entry;
+
+    const [record] = logged(widened);
+
+    const { threadId: _threadId, prompt: _prompt, ...kept } = entry;
+    expect(record).toEqual(kept);
+  });
+
   test("keeps only the summary fields of an observed message", () => {
     const entry = {
       event: "rpc_message",

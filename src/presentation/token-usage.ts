@@ -79,7 +79,7 @@ const nextUsage = (
 };
 
 // Claude counts cached input apart from input_tokens, while the app's input includes it, and thinking is part of the output in both.
-const breakdown = (usage: ApiUsage): TokenUsageBreakdown => {
+export const breakdown = (usage: ApiUsage): TokenUsageBreakdown => {
   const cachedInputTokens = usage.cache_read_input_tokens ?? 0;
   const cacheWriteInputTokens = usage.cache_creation_input_tokens ?? 0;
   const inputTokens =
