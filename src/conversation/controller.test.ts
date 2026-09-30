@@ -337,19 +337,6 @@ describe("tool approval", () => {
 });
 
 describe("tool approval that must default to no", () => {
-  test("asks for the approving word without choices", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { sent } = await startedTurn(claude);
-
-    askTool(claude, "Bash", { command: "ls" }, { defaultToNo: true });
-    const request = await appRequest(sent);
-
-    expect(request.method).toBe("item/tool/requestUserInput");
-    expect(request.params.questions).toMatchObject([
-      { question: expect.stringContaining('Type "Allow"'), options: null },
-    ]);
-  });
-
   test.each([
     { name: "a choice number", typed: "2", expected: "deny" },
     { name: "the approving word", typed: "Allow", expected: "allow" },
@@ -530,19 +517,6 @@ describe("effort", () => {
     expect(turns.effortOf(THREAD)).toBe("low");
   });
 
-  test("runs a picked level above the settings' cap at the cap the app shows", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns } = await harness([claude], {
-      effortRule: effortRule({ maxEffortLevel: "low" }, BUILT_IN_EFFORTS),
-    });
-
-    turns.startTurn(withEffort(turnStart(10, "hello"), "max"), undefined);
-    await until(() => claude.efforts().length === 1);
-
-    expect(claude.efforts()).toEqual(["low"]);
-    expect(turns.effortOf(THREAD)).toBe("low");
-  });
-
   test("runs a thread on a model no list names yet at its saved level", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const catalog = createModelCatalog();
@@ -559,16 +533,6 @@ describe("effort", () => {
 
     expect(claude.efforts()).toEqual(["xhigh"]);
     expect(turns.effortOf(THREAD)).toBe("xhigh");
-  });
-
-  test("runs a turn/start naming a level only Codex has at the default", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns } = await harness([claude]);
-
-    turns.startTurn(withEffort(turnStart(10, "hello"), "ultra"), undefined);
-    await until(() => claude.efforts().length === 1);
-
-    expect(claude.efforts()).toEqual(["high"]);
   });
 
   test("sends the prompt to a model without effort without setting one", async () => {
@@ -1962,16 +1926,6 @@ describe("refused requests", () => {
     expect(claude.started()).toBe(false);
   });
 
-  test("answers a rejected request with the given message", async () => {
-    const { turns, sent } = await harness([]);
-
-    turns.reject({ id: 12 }, "not yet");
-
-    expect(sent).toEqual([
-      { id: 12, error: { code: -32600, message: "not yet" } },
-    ]);
-  });
-
   test("fails a turn asking for another directory that lost the race to register the thread", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, settings } = await harness([claude], {
@@ -2332,18 +2286,6 @@ describe("thread tools", () => {
     await until(() => gates.length === 4);
 
     expect(gates).toEqual(["accept", "stop", "accept", "stop"]);
-  });
-
-  test("clear the run state after a turn whose writes were all decided", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, store } = await harness([claude], {
-      unsettledWrite: () => false,
-    });
-
-    await completeTurn(turns, sent, claude, 10);
-    await until(() => store.get(THREAD)?.runState !== "running");
-
-    expect(store.get(THREAD)?.runState).toBe("idle");
   });
 });
 

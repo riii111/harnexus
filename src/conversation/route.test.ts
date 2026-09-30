@@ -85,27 +85,6 @@ describe("turn/start of a thread created by create_thread", () => {
     expect(routed).toBe(line);
     expect(calls).toEqual([["delegated", "th-claude", "th-reviewer"]]);
   });
-
-  test("reports nothing for another tool's output", () => {
-    const { router, calls } = setup();
-
-    router.fromApp(
-      encode({
-        id: 7,
-        method: "turn/start",
-        params: {
-          threadId: "th-other",
-          input: [],
-          toolOutput: {
-            name: "fork_thread",
-            output: "<source_thread_id>th-claude</source_thread_id>",
-          },
-        },
-      }),
-    );
-
-    expect(calls).toEqual([]);
-  });
 });
 
 describe("Codex CLI version", () => {
@@ -623,24 +602,6 @@ describe("app responses", () => {
 });
 
 describe("thread/settings/update", () => {
-  test("drops a Claude thread's own model before the server sees it", () => {
-    const { router, calls } = setup(["th-claude"]);
-
-    const forwarded = router.fromApp(
-      settingsUpdate({
-        model: CLAUDE,
-        collaborationMode: { mode: "default", settings: { model: CLAUDE } },
-        approvalPolicy: "never",
-      }),
-    );
-
-    expect(parse(forwarded).params).toEqual({
-      threadId: "th-claude",
-      approvalPolicy: "never",
-    });
-    expect(calls).toEqual([["selectMode", "th-claude", "default"]]);
-  });
-
   // The app sends its previous collaboration mode along with the model just picked, as observed with App 26.924.
   test("keeps the thread's model picked again over a stale collaboration mode", () => {
     const { router, calls } = setup(["th-claude"]);

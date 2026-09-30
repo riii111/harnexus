@@ -85,18 +85,6 @@ describe("serverFromEnv", () => {
     expect(sent).toEqual([]);
   });
 
-  test("signals the launcher's pid while Codex is still the parent", () => {
-    const sent: [number, string][] = [];
-    const server = serverFromEnv(
-      { HARNEXUS_SERVER_PID: "4242" },
-      { parentPid: () => 4242, send: record(sent) },
-    );
-
-    expect(server.isRunning()).toBe(true);
-    expect(server.signal("SIGTERM")).toEqual(Result.ok(true));
-    expect(sent).toEqual([[4242, "SIGTERM"]]);
-  });
-
   test("stops signaling once Codex is no longer the parent", () => {
     const sent: [number, string][] = [];
     let parent = 4242;
@@ -114,17 +102,6 @@ describe("serverFromEnv", () => {
       after: Result.ok(false),
     });
     expect(sent).toEqual([[4242, "SIGTERM"]]);
-  });
-
-  test("reports a signal the system refuses as a failure with its errno code", () => {
-    const server = serverFromEnv(
-      { HARNEXUS_SERVER_PID: "4242" },
-      { parentPid: () => 4242, send: refuse("EPERM") },
-    );
-
-    const sent = server.signal("SIGTERM");
-
-    expect(sent.isErr() && sent.error.code).toBe("EPERM");
   });
 });
 

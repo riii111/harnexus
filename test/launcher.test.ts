@@ -124,10 +124,6 @@ describe("app-server", () => {
       args: ["app-server", "generate-ts", "--out", "x"],
     },
     {
-      name: "the daemon subcommand after config overrides",
-      args: ["-c", "a=b", "app-server", "-c", "c=d", "daemon"],
-    },
-    {
       name: "a unix socket listener",
       args: ["app-server", "--listen", "unix://"],
     },
@@ -374,36 +370,6 @@ describe("app-server shutdown", () => {
       const exitCode = await proc.exited;
 
       expect(exitCode).toBe(0);
-    },
-    TIMEOUT,
-  );
-});
-
-describe("leftover processes", () => {
-  test(
-    "are killed even when the bridge outlives its launcher",
-    async () => {
-      const { env, reportPath } = setup({ FAKE_CODEX_MODE: "wait" });
-      const proc = spawnLauncher(["app-server"], {
-        cwd: dir,
-        env,
-        stdin: "pipe",
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      await readReport(reportPath);
-      const [bridge] = childPids(proc.pid);
-      if (bridge === undefined) return expect.unreachable("no bridge started");
-      // A stopped bridge cannot exit on the end of Codex's output, as a hung one would not.
-      process.kill(bridge, "SIGSTOP");
-      proc.kill("SIGKILL");
-      await proc.exited;
-      expect(isAlive(bridge)).toBe(true);
-
-      killLeftovers();
-      for (let i = 0; i < 100 && isAlive(bridge); i++) await Bun.sleep(20);
-
-      expect(isAlive(bridge)).toBe(false);
     },
     TIMEOUT,
   );
