@@ -1,17 +1,28 @@
 import type { ModelUsage, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AppNotification, TokenUsageBreakdown } from "./protocol.ts";
 
-// total adds up the thread's turns while the bridge runs, last is the context the latest request of the main conversation carried, and contextWindow is the model's window from the latest result.
+// total adds up the thread's turns while the bridge runs, last is the context the latest request of the main conversation carried, and contextWindow is the window a result reported for windowModel.
 export type ThreadUsage = {
   readonly total: TokenUsageBreakdown;
   readonly last: TokenUsageBreakdown;
   readonly contextWindow: number | null;
+  readonly windowModel: string | null;
+};
+
+const NO_TOKENS: TokenUsageBreakdown = {
+  totalTokens: 0,
+  inputTokens: 0,
+  cachedInputTokens: 0,
+  cacheWriteInputTokens: 0,
+  outputTokens: 0,
+  reasoningOutputTokens: 0,
 };
 
 export const NO_USAGE: ThreadUsage = {
-  total: emptyBreakdown(),
-  last: emptyBreakdown(),
+  total: NO_TOKENS,
+  last: NO_TOKENS,
   contextWindow: null,
+  windowModel: null,
 };
 
 // A request's final usage arrives in its message_delta, since the assistant message carries the output counted so far; a result sums the requests of its turn.
@@ -32,7 +43,8 @@ export const renderTokenUsage = (
         tokenUsage: {
           total: next.total,
           last: next.last,
-          modelContextWindow: next.contextWindow,
+          modelContextWindow:
+            next.windowModel === turn.model ? next.contextWindow : null,
         },
       },
       emittedAtMs: turn.now,
@@ -56,8 +68,10 @@ const nextUsage = (
     return {
       ...usage,
       total: add(usage.total, breakdown(message.usage)),
-      contextWindow:
-        contextWindowOf(message.modelUsage, model) ?? usage.contextWindow,
+      ...(contextWindowOf(message.modelUsage, model) ?? {
+        contextWindow: usage.contextWindow,
+        windowModel: usage.windowModel,
+      }),
     };
   }
   return null;
@@ -80,18 +94,22 @@ const breakdown = (usage: ApiUsage): TokenUsageBreakdown => {
   };
 };
 
-// modelUsage also lists models a subagent ran on, so the thread's own model is looked up first under the id without its context suffix.
+// modelUsage also lists models a subagent ran on, so the thread's own model is looked up first under the id without its context suffix; the window is kept for the model the turn ran on, so a model change shows none until its first result.
 const contextWindowOf = (
   modelUsage: Record<string, ModelUsage>,
   model: string,
 ) => {
   const own =
     modelUsage[model] ?? modelUsage[model.replace(CONTEXT_SUFFIX, "")];
-  if (own !== undefined) return own.contextWindow;
+  if (own !== undefined) {
+    return { contextWindow: own.contextWindow, windowModel: model };
+  }
   const windows = Object.values(modelUsage).map(
     ({ contextWindow }) => contextWindow,
   );
-  return windows.length === 0 ? null : Math.max(...windows);
+  return windows.length === 0
+    ? null
+    : { contextWindow: Math.max(...windows), windowModel: model };
 };
 
 const add = (
@@ -105,17 +123,6 @@ const add = (
   outputTokens: a.outputTokens + b.outputTokens,
   reasoningOutputTokens: a.reasoningOutputTokens + b.reasoningOutputTokens,
 });
-
-function emptyBreakdown(): TokenUsageBreakdown {
-  return {
-    totalTokens: 0,
-    inputTokens: 0,
-    cachedInputTokens: 0,
-    cacheWriteInputTokens: 0,
-    outputTokens: 0,
-    reasoningOutputTokens: 0,
-  };
-}
 
 // The fields a message_delta and a result share; a delta may leave the input counts null.
 type ApiUsage = {

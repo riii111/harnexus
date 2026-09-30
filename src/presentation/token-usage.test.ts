@@ -28,25 +28,46 @@ describe("renderTokenUsage", () => {
     });
   });
 
-  test("adds each result to the thread's total and keeps the latest context", () => {
-    const first = renderTokenUsage(NO_USAGE, delta(DELTA_USAGE), TURN);
-    const afterFirst = renderTokenUsage(
-      first.usage,
-      result(RESULT_USAGE),
-      TURN,
-    );
+  test("adds each result to the thread's total", () => {
+    const first = renderTokenUsage(NO_USAGE, result(RESULT_USAGE), TURN);
 
-    const afterSecond = renderTokenUsage(
-      afterFirst.usage,
-      result(RESULT_USAGE),
-      TURN,
-    );
+    const second = renderTokenUsage(first.usage, result(RESULT_USAGE), TURN);
 
-    expect(afterSecond.notification?.params).toMatchObject({
+    expect(second.notification?.params).toMatchObject({
       tokenUsage: {
         total: { inputTokens: 220, outputTokens: 20, totalTokens: 240 },
-        last: { totalTokens: 3106 },
       },
+    });
+  });
+
+  test("keeps the latest request's context through a result", () => {
+    const requested = renderTokenUsage(NO_USAGE, delta(DELTA_USAGE), TURN);
+
+    const finished = renderTokenUsage(
+      requested.usage,
+      result(RESULT_USAGE),
+      TURN,
+    );
+
+    expect(finished.notification?.params).toMatchObject({
+      tokenUsage: { last: { totalTokens: 3106 } },
+    });
+  });
+
+  test("reports no window after a model change until the new model's first result", () => {
+    const earlier = renderTokenUsage(
+      NO_USAGE,
+      result(RESULT_USAGE, { [MODEL]: window(1_000_000) }),
+      TURN,
+    );
+
+    const changed = renderTokenUsage(earlier.usage, delta(DELTA_USAGE), {
+      ...TURN,
+      model: "claude-opus-5-5",
+    });
+
+    expect(changed.notification?.params).toMatchObject({
+      tokenUsage: { modelContextWindow: null },
     });
   });
 

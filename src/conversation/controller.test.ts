@@ -730,23 +730,21 @@ describe("token usage", () => {
   });
 
   test("adds each turn's usage to its own thread's total", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await twoWorkers([first, second]);
+    await until(() => second.started());
 
-    await completeTurn(turns, sent, claude, 10);
-    await completeTurn(turns, sent, claude, 11);
+    first.emit(sdk(success()));
+    await until(() => usageTotals(sent).length === 1);
+    second.emit(sdk(success()));
+    await until(() => usageTotals(sent).length === 2);
+    await completeTurn(turns, sent, first, 12);
 
-    expect(
-      sent
-        .filter((message) => message.method === "thread/tokenUsage/updated")
-        .map(({ params }) => ({
-          turnId: params.turnId,
-          total: params.tokenUsage.total.totalTokens,
-          window: params.tokenUsage.modelContextWindow,
-        })),
-    ).toEqual([
-      { turnId: "turn-1", total: 40, window: 200_000 },
-      { turnId: "turn-2", total: 80, window: 200_000 },
+    expect(usageTotals(sent)).toEqual([
+      { threadId: THREAD, total: 40, window: 200_000 },
+      { threadId: OTHER_THREAD, total: 40, window: 200_000 },
+      { threadId: THREAD, total: 80, window: 200_000 },
     ]);
   });
 });
@@ -2580,6 +2578,15 @@ const reply = (id: number, threadId: string, source: string) => ({
 
 const delegation = (source: string) =>
   `<codex_delegation>\n  <source_thread_id>${source}</source_thread_id>\n  <input>review done</input>\n</codex_delegation>`;
+
+const usageTotals = (sent: Sent[]) =>
+  sent
+    .filter((message) => message.method === "thread/tokenUsage/updated")
+    .map(({ params }) => ({
+      threadId: params.threadId,
+      total: params.tokenUsage.total.totalTokens,
+      window: params.tokenUsage.modelContextWindow,
+    }));
 
 const startedTurns = (sent: Sent[]) =>
   sent
