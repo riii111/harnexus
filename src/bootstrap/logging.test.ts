@@ -2,24 +2,29 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { createBridgeLogger } from "./logging.ts";
 
 describe("createBridgeLogger", () => {
-  test("records a server signal with only its signal", () => {
-    const [record] = logged({ event: "server_signaled", signal: "SIGTERM" });
+  test.each<{ name: string; entry: LogEvent; expected: object }>([
+    {
+      name: "a server signal with only its signal",
+      entry: { event: "server_signaled", signal: "SIGTERM" },
+      expected: { event: "server_signaled", signal: "SIGTERM" },
+    },
+    {
+      name: "a failed server signal with its errno code",
+      entry: {
+        event: "server_signal_failed",
+        signal: "SIGKILL",
+        code: "EPERM",
+      },
+      expected: {
+        event: "server_signal_failed",
+        signal: "SIGKILL",
+        code: "EPERM",
+      },
+    },
+  ])("records $name", ({ entry, expected }) => {
+    const [record] = logged(entry);
 
-    expect(record).toEqual({ event: "server_signaled", signal: "SIGTERM" });
-  });
-
-  test("records a failed server signal with its errno code", () => {
-    const [record] = logged({
-      event: "server_signal_failed",
-      signal: "SIGKILL",
-      code: "EPERM",
-    });
-
-    expect(record).toEqual({
-      event: "server_signal_failed",
-      signal: "SIGKILL",
-      code: "EPERM",
-    });
+    expect(record).toEqual(expected);
   });
 
   test("drops fields outside the event shape", () => {

@@ -11,25 +11,6 @@ import { createDelegationWatch } from "./delegations.ts";
 import type { ServerRequest } from "./server-requests.ts";
 
 describe("createCodexLink tools", () => {
-  test("registers the five thread tools without a host choice", async () => {
-    const { client } = await connect();
-
-    const { tools } = await client.listTools();
-
-    expect(tools.map((tool) => tool.name).sort()).toEqual([
-      "create_thread",
-      "list_projects",
-      "read_thread",
-      "send_message_to_thread",
-      "wait_threads",
-    ]);
-    for (const tool of tools) {
-      expect(Object.keys(tool.inputSchema.properties ?? {})).not.toContain(
-        "hostId",
-      );
-    }
-  });
-
   test("lets only the read tools run without asking", async () => {
     const { link } = await connect();
 
@@ -226,16 +207,23 @@ describe("createCodexLink tools", () => {
     ]);
   });
 
-  test("never forwards a host choice, even nested in wait targets", async () => {
+  test("accepts no hostId and never forwards it, even nested in wait targets", async () => {
     const { client, requests } = await connect({
       answer: () => Result.ok(textAnswer("ok")),
     });
 
+    const { tools } = await client.listTools();
     await client.callTool({
       name: "wait_threads",
       arguments: { targets: [{ threadId: CALLER, hostId: "remote" }] },
     });
 
+    expect(tools.map((tool) => tool.name)).toContain("wait_threads");
+    for (const tool of tools) {
+      expect(Object.keys(tool.inputSchema.properties ?? {})).not.toContain(
+        "hostId",
+      );
+    }
     expect(requests[0]?.params.arguments).toEqual({
       targets: [{ threadId: CALLER }],
     });

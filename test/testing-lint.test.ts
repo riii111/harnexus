@@ -158,13 +158,10 @@ describe("b", () => {});`),
       ),
     },
     {
-      name: "a title passed through a variable",
+      name: "titles the lint cannot read statically",
       source: lintCase(`const title = "does $name";
-test.each([{ name: "a" }])(title, () => {});`),
-    },
-    {
-      name: "a template title whose substitution the lint cannot read",
-      source: lintCase(`const format = (text: string) => text.length;
+test.each([{ name: "a" }])(title, () => {});
+const format = (text: string) => text.length;
 test.each([{ name: "a" }])(\`\${format("%s")} $name\`, () => {});`),
     },
     {

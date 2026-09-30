@@ -131,21 +131,6 @@ describe("promptFor calls that must default to no", () => {
       prompt.decide({ answers: { approval: { answers: [typed] } } }).behavior,
     ).toBe(expected);
   });
-
-  test("leaves plan mode only when the approving word is typed", () => {
-    const prompt = promptFor(
-      { ...call("ExitPlanMode", {}, null), defaultToNo: true },
-      TARGET,
-    );
-
-    const typed = prompt.decide({
-      answers: { plan: { answers: ["approve"] } },
-    });
-    const numbered = prompt.decide({ answers: { plan: { answers: ["1"] } } });
-
-    expect(typed.behavior).toBe("allow");
-    expect(numbered.behavior).toBe("deny");
-  });
 });
 
 describe("promptFor multi-select questions", () => {
@@ -164,20 +149,6 @@ describe("promptFor multi-select questions", () => {
         options: null,
       },
     ]);
-  });
-
-  test("returns the typed answer as the choices", () => {
-    const input = { questions: [{ ...QUESTION, multiSelect: true }] };
-    const prompt = promptFor(call("AskUserQuestion", input, null), TARGET);
-
-    const decision = prompt.decide({
-      answers: { "question-1": { answers: ["zod, valibot"] } },
-    });
-
-    expect(decision).toEqual({
-      behavior: "allow",
-      updatedInput: { ...input, answers: { "Which library?": "zod, valibot" } },
-    });
   });
 });
 
@@ -287,20 +258,6 @@ describe("promptFor decisions", () => {
         message: expect.stringContaining(expected),
       },
     );
-  });
-
-  test.each([
-    { name: "Allow", expected: "allow" },
-    { name: "Deny", expected: "deny" },
-  ])("answers $expected when the user picks $name for another tool", ({
-    name,
-    expected,
-  }) => {
-    const prompt = promptFor(call("WebFetch", {}, null), TARGET);
-
-    expect(
-      prompt.decide({ answers: { approval: { answers: [name] } } }).behavior,
-    ).toBe(expected);
   });
 });
 

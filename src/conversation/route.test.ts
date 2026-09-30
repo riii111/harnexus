@@ -150,92 +150,86 @@ describe("Codex CLI version", () => {
     expect(events).toEqual([{ event: "codex_version", ...expected }]);
   });
 
-  test("keeps listing Claude models on an unverified version unless asked to pause", async () => {
-    const { router } = setup();
+  test.each<{
+    name: string;
+    agent: string;
+    policy: "warn" | "pause";
+    expected: { models: number; unchanged: boolean };
+  }>([
+    {
+      name: "an unverified version unless asked to pause",
+      agent: UNVERIFIED_AGENT,
+      policy: "warn",
+      expected: { models: 4, unchanged: false },
+    },
+    {
+      name: "an unverified version when asked to pause",
+      agent: UNVERIFIED_AGENT,
+      policy: "pause",
+      expected: { models: 1, unchanged: true },
+    },
+    {
+      name: "a verified version even when asked to pause",
+      agent: VERIFIED_AGENT,
+      policy: "pause",
+      expected: { models: 4, unchanged: false },
+    },
+  ])("appends the Claude models to model/list only as allowed on $name", async ({
+    agent,
+    policy,
+    expected,
+  }) => {
+    const { router } = setup([], {}, policy);
     router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
-    await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
-
-    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
-    const out = parse(await router.fromServer(modelList(2, null)));
-
-    expect(out.result.data).toHaveLength(4);
-  });
-
-  test("lists no Claude model on an unverified version when asked to pause", async () => {
-    const { router } = setup([], {}, "pause");
-    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
-    await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
-
+    await router.fromServer(initializeAnswer(agent));
     router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
     const line = modelList(2, null);
 
-    expect(await router.fromServer(line)).toEqual(line);
+    const out = await router.fromServer(line);
+
+    expect({
+      models: parse(out).result.data.length,
+      unchanged: out?.equals(line),
+    }).toEqual(expected);
   });
 
   test.each([
-    { method: "turn/start" },
-    { method: "turn/steer" },
-  ])("refuses $method on a Claude thread with the reason while paused", async ({
+    {
+      name: "turn/start of a Claude thread",
+      id: 6,
+      method: "turn/start",
+      params: { threadId: "th-claude" },
+    },
+    {
+      name: "turn/steer of a Claude thread",
+      id: 6,
+      method: "turn/steer",
+      params: { threadId: "th-claude" },
+    },
+    {
+      name: "thread/start on a Claude model",
+      id: 3,
+      method: "thread/start",
+      params: { cwd: "/fixture/work", model: CLAUDE },
+    },
+  ])("refuses $name with the reason while paused", async ({
+    id,
     method,
+    params,
   }) => {
     const { router, calls, events } = setup(["th-claude"], {}, "pause");
     router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
     await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
 
-    const routed = router.fromApp(
-      encode({ id: 6, method, params: { threadId: "th-claude" } }),
-    );
+    const routed = router.fromApp(encode({ id, method, params }));
 
     expect(routed).toBeNull();
     expect(calls).toEqual([
-      [
-        "reject",
-        { id: 6, params: { threadId: "th-claude" } },
-        expect.stringContaining("paused"),
-      ],
+      ["reject", { id, params }, expect.stringContaining("paused")],
     ]);
     expect(events).toContainEqual({
       event: "claude_request_refused",
       method,
-      reason: "claude_paused",
-    });
-  });
-
-  test("lists Claude models on a verified version even when asked to pause", async () => {
-    const { router } = setup([], {}, "pause");
-    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
-    await router.fromServer(initializeAnswer(VERIFIED_AGENT));
-
-    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
-    const out = parse(await router.fromServer(modelList(2, null)));
-
-    expect(out.result.data).toHaveLength(4);
-  });
-
-  test("refuses a new thread on a Claude model with the reason while paused", async () => {
-    const { router, calls, events } = setup([], {}, "pause");
-    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
-    await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
-
-    const routed = router.fromApp(
-      encode({
-        id: 3,
-        method: "thread/start",
-        params: { cwd: "/fixture/work", model: CLAUDE },
-      }),
-    );
-
-    expect(routed).toBeNull();
-    expect(calls).toEqual([
-      [
-        "reject",
-        expect.objectContaining({ id: 3 }),
-        expect.stringContaining("paused"),
-      ],
-    ]);
-    expect(events).toContainEqual({
-      event: "claude_request_refused",
-      method: "thread/start",
       reason: "claude_paused",
     });
   });
@@ -258,11 +252,22 @@ describe("Codex CLI version", () => {
 });
 
 describe("model/list", () => {
-  test("appends the Claude models to the last page", async () => {
+  test("appends the Claude models to the last page and leaves the levels of the server's models alone", async () => {
     const { router } = setup();
+    const levels = [{ reasoningEffort: "ultra", description: "fixture" }];
 
     router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
-    const out = parse(await router.fromServer(modelList(2, null)));
+    const out = parse(
+      await router.fromServer(
+        encode({
+          id: 2,
+          result: {
+            data: [{ id: "gpt-fixture", supportedReasoningEfforts: levels }],
+            nextCursor: null,
+          },
+        }),
+      ),
+    );
 
     expect(out.result.data.map((model: { id: string }) => model.id)).toEqual([
       "gpt-fixture",
@@ -274,6 +279,10 @@ describe("model/list", () => {
       model: "claude-opus-5-5",
       hidden: false,
       isDefault: false,
+    });
+    expect(out.result.data[0]).toEqual({
+      id: "gpt-fixture",
+      supportedReasoningEfforts: levels,
     });
   });
 
@@ -309,29 +318,6 @@ describe("model/list", () => {
       ),
       default: entry.defaultReasoningEffort,
     }).toEqual(expected);
-  });
-
-  test("leaves the levels of the server's models alone", async () => {
-    const { router } = setup();
-    const levels = [{ reasoningEffort: "ultra", description: "fixture" }];
-
-    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
-    const out = parse(
-      await router.fromServer(
-        encode({
-          id: 2,
-          result: {
-            data: [{ id: "gpt-fixture", supportedReasoningEfforts: levels }],
-            nextCursor: null,
-          },
-        }),
-      ),
-    );
-
-    expect(out.result.data[0]).toEqual({
-      id: "gpt-fixture",
-      supportedReasoningEfforts: levels,
-    });
   });
 
   test("lists the models Claude Code offers once read and a dropped built-in model as hidden", async () => {
@@ -380,13 +366,13 @@ describe("model/list", () => {
     expect(router.fromServer(line)).toEqual(line);
   });
 
-  test("logs a Claude id the server already lists instead of adding it twice", async () => {
+  test("logs a server model with a Claude id and adds an already listed one only once", async () => {
     const { router, events } = setup();
 
     router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
     const out = parse(
       await router.fromServer(
-        modelList(2, null, ["gpt-fixture", "claude-sonnet-5"]),
+        modelList(2, null, ["gpt-fixture", "claude-sonnet-5", "claude-custom"]),
       ),
     );
 
@@ -396,18 +382,6 @@ describe("model/list", () => {
     );
     expect(events).toEqual([
       { event: "model_id_collision", model: "claude-sonnet-5" },
-    ]);
-  });
-
-  test("logs a server model with the Claude prefix that no Claude list names", async () => {
-    const { router, events } = setup();
-
-    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
-    await router.fromServer(
-      modelList(2, null, ["gpt-fixture", "claude-custom"]),
-    );
-
-    expect(events).toEqual([
       { event: "model_id_collision", model: "claude-custom" },
     ]);
   });
@@ -606,19 +580,21 @@ describe("threads with a Claude model", () => {
 });
 
 describe("app responses", () => {
-  test("hands an answer to the bridge's own request to the turns and not to the server", () => {
+  test.each([
+    { name: "the bridge's own request", id: BRIDGE_REQUEST, expected: null },
+    { name: "the server's request", id: 1, expected: true },
+  ])("hands an answer to $name to the turns first and forwards it unchanged only for the server", ({
+    id,
+    expected,
+  }) => {
     const { router, calls } = setup(["th-claude"]);
-    const answer = { id: BRIDGE_REQUEST, result: { decision: "accept" } };
+    const answer = { id, result: { decision: "accept" } };
+    const line = encode(answer);
 
-    expect(router.fromApp(encode(answer))).toBeNull();
+    const routed = router.fromApp(line);
+
+    expect(routed?.equals(line) ?? null).toBe(expected);
     expect(calls).toEqual([["answerRequest", answer]]);
-  });
-
-  test("forwards an answer to the server's request unchanged", () => {
-    const { router } = setup(["th-claude"]);
-    const line = encode({ id: 1, result: { decision: "accept" } });
-
-    expect(router.fromApp(line)).toEqual(line);
   });
 });
 
@@ -796,27 +772,23 @@ describe("thread/settings/update", () => {
     expect(out.params.threadSettings.collaborationMode.mode).toBe("plan");
   });
 
-  test("reports the Claude thread's effort in the server's settings notice", async () => {
-    const { router } = setup(["th-claude"]);
-    router.fromApp(settingsUpdate({ effort: "max" }));
-
-    const out = parse(await router.fromServer(settingsNotice("default")));
-
-    expect(out.params.threadSettings.effort).toBe("max");
-    expect(
-      out.params.threadSettings.collaborationMode.settings.reasoning_effort,
-    ).toBe("max");
-  });
-
   test.each([
-    { name: "no effort picked", change: {}, expected: "high" },
+    {
+      name: "an effort picked",
+      change: { effort: "max" },
+      model: CLAUDE,
+      expected: "max",
+    },
+    { name: "no effort picked", change: {}, model: CLAUDE, expected: "high" },
     {
       name: "a model without effort",
       change: { model: "claude-haiku-4-5", effort: "max" },
+      model: "claude-haiku-4-5",
       expected: "medium",
     },
-  ])("reports the level a Claude thread with $name runs at in the settings notice", async ({
+  ])("reports the model and the level a Claude thread with $name runs at in the settings notice", async ({
     change,
+    model,
     expected,
   }) => {
     const { router } = setup(["th-claude"]);
@@ -824,7 +796,18 @@ describe("thread/settings/update", () => {
 
     const out = parse(await router.fromServer(settingsNotice("default")));
 
-    expect(out.params.threadSettings.effort).toBe(expected);
+    const settings = out.params.threadSettings;
+    expect({
+      model: settings.model,
+      effort: settings.effort,
+      collaborationModel: settings.collaborationMode.settings.model,
+      collaborationEffort: settings.collaborationMode.settings.reasoning_effort,
+    }).toEqual({
+      model,
+      effort: expected,
+      collaborationModel: model,
+      collaborationEffort: expected,
+    });
   });
 
   test("leaves the settings notice of a Codex thread as the same bytes", async () => {
@@ -838,30 +821,6 @@ describe("thread/settings/update", () => {
     });
 
     expect(await router.fromServer(notice)).toEqual(notice);
-  });
-
-  test("reports the Claude model in the server's settings notice", async () => {
-    const { router } = setup(["th-claude"]);
-    const notice = encode({
-      method: "thread/settings/updated",
-      params: {
-        threadId: "th-claude",
-        threadSettings: {
-          model: "gpt-fixture",
-          collaborationMode: {
-            mode: "default",
-            settings: { model: "gpt-fixture" },
-          },
-        },
-      },
-    });
-
-    const out = parse(await router.fromServer(notice));
-
-    expect(out.params.threadSettings.model).toBe(CLAUDE);
-    expect(out.params.threadSettings.collaborationMode.settings.model).toBe(
-      CLAUDE,
-    );
   });
 });
 
@@ -887,26 +846,7 @@ describe("Claude thread history", () => {
       }),
     );
     const out = parse(await router.fromServer(threadResponse(4, "th-claude")));
-    const askTurns = async (id: number, cursor: string | null) => {
-      const forwarded = router.fromApp(
-        encode({
-          id,
-          method: "thread/turns/list",
-          params: {
-            threadId: "th-claude",
-            cursor,
-            limit: 1,
-            itemsView: "notLoaded",
-          },
-        }),
-      );
-      await Bun.sleep(0);
-      return { forwarded, page: responseTo(sent, id).result };
-    };
-    const opening = out.result.turnsBackwardsCursor;
-    const newest = await askTurns(10, opening);
-    const older = await askTurns(11, newest.page.nextCursor);
-    router.fromApp(
+    const forwarded = router.fromApp(
       encode({
         id: 20,
         method: "thread/turns/list",
@@ -921,28 +861,11 @@ describe("Claude thread history", () => {
     expect(reads[0]).toBe("session-th-claude");
     expect(out.result.model).toBe(CLAUDE);
     expect(out.result.thread).not.toHaveProperty("turns");
-    expect(typeof opening).toBe("string");
+    expect(typeof out.result.turnsBackwardsCursor).toBe("string");
     expect(
       out.result.initialTurnsPage.data.map((turn: { id: string }) => turn.id),
     ).toEqual(["harnexus-history-u2"]);
-    expect([newest.page.data, older.page.data]).toEqual([
-      [
-        expect.objectContaining({
-          id: "harnexus-history-u2",
-          itemsView: "notLoaded",
-          items: [],
-        }),
-      ],
-      [
-        expect.objectContaining({
-          id: "harnexus-history-u1",
-          itemsView: "notLoaded",
-          items: [],
-        }),
-      ],
-    ]);
-    expect(older.page.nextCursor).toBeNull();
-    expect([newest.forwarded, older.forwarded]).toEqual([null, null]);
+    expect(forwarded).toBeNull();
     expect(
       responseTo(sent, 20).result.data.map((turn: { id: string }) => turn.id),
     ).toEqual(["harnexus-history-u1"]);

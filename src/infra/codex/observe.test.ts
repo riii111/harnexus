@@ -37,13 +37,25 @@ describe("createObserver", () => {
     expect(log).not.toContain("/private/path");
   });
 
-  test("records direction, kind, method and id of each message", () => {
-    const { records } = observe([
-      toServer({ id: 1, method: "thread/start", params: { cwd: "/w" } }),
-      toApp({ method: "turn/started", params: { turnId: "t" } }),
-      toApp({ id: 1, result: { thread: { id: "th" } } }),
-      toApp({ id: "s-1", method: "item/tool/call", params: {} }),
-      toServer({ id: "s-1", error: { code: -1, message: "denied" } }),
+  test("records direction, kind, method and id of each message and keeps params, results and errors out of the log", () => {
+    const { log, records } = observe([
+      toServer({
+        id: 1,
+        method: "thread/start",
+        params: {
+          cwd: "/w",
+          input: [{ type: "text", text: PROMPT }],
+          token: SECRET,
+        },
+      }),
+      toApp({ method: "turn/started", params: { turnId: "t", delta: PROMPT } }),
+      toApp({ id: 1, result: { thread: { id: "th" }, apiKey: SECRET } }),
+      toApp({
+        id: "s-1",
+        method: "item/tool/call",
+        params: { arguments: SECRET },
+      }),
+      toServer({ id: "s-1", error: { code: -1, message: SECRET } }),
     ]);
 
     expect(records).toEqual([
@@ -83,6 +95,8 @@ describe("createObserver", () => {
         id: "s-1",
       },
     ]);
+    expect(log).not.toContain(SECRET);
+    expect(log).not.toContain(PROMPT);
   });
 
   test("does not label a response with a request from the same direction", () => {
@@ -216,27 +230,6 @@ describe("createObserver", () => {
       undefined,
       undefined,
     ]);
-    expect(log).not.toContain(SECRET);
-    expect(log).not.toContain(PROMPT);
-  });
-
-  test("keeps params, results and errors out of the log", () => {
-    const { log } = observe([
-      toServer({
-        id: 3,
-        method: "turn/start",
-        params: { input: [{ type: "text", text: PROMPT }], token: SECRET },
-      }),
-      toApp({ method: "item/agentMessage/delta", params: { delta: PROMPT } }),
-      toApp({ id: 3, result: { apiKey: SECRET } }),
-      toApp({ id: 4, error: { message: SECRET } }),
-      toApp({
-        id: "x",
-        method: "item/tool/call",
-        params: { arguments: SECRET },
-      }),
-    ]);
-
     expect(log).not.toContain(SECRET);
     expect(log).not.toContain(PROMPT);
   });
