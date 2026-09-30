@@ -121,6 +121,17 @@ describe("Codex CLI version", () => {
       expected: { version: "0.159.0", verified: false },
     },
     {
+      name: "the observed agent with a client suffix",
+      agent:
+        "probe/0.158.0-alpha.2.1 (Mac OS 26.5.1; arm64) unknown (probe; 0.0.0)",
+      expected: { version: "0.158.0-alpha.2.1", verified: true },
+    },
+    {
+      name: "a client name with a slash",
+      agent: "Codex/Desktop/0.158.0-alpha.2.1 (Mac OS 26.5.1; arm64)",
+      expected: { version: "0.158.0-alpha.2.1", verified: true },
+    },
+    {
       name: "an agent without a version",
       agent: "unknown",
       expected: { version: null, verified: false },
@@ -188,6 +199,34 @@ describe("Codex CLI version", () => {
       method,
       reason: "claude_paused",
     });
+  });
+
+  test("lists Claude models on a verified version even when asked to pause", async () => {
+    const { router } = setup([], {}, "pause");
+    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromServer(initializeAnswer(VERIFIED_AGENT));
+
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    const out = parse(await router.fromServer(modelList(2, null)));
+
+    expect(out.result.data).toHaveLength(4);
+  });
+
+  test("refuses a new thread on a Claude model with the reason while paused", async () => {
+    const { router, calls } = setup([], {}, "pause");
+    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
+
+    const routed = router.fromApp(
+      encode({
+        id: 3,
+        method: "thread/start",
+        params: { cwd: "/fixture/work", model: CLAUDE },
+      }),
+    );
+
+    expect(routed).toBeNull();
+    expect(calls.map(([name]) => name)).toEqual(["reject"]);
   });
 
   test("runs a Claude turn on a verified version even when asked to pause", async () => {

@@ -168,6 +168,14 @@ export const createRouter = (
     request: AppRequest,
   ) => {
     const { id, params } = request;
+    if (
+      paused &&
+      message.method === "thread/start" &&
+      isClaudeModel(params.model)
+    ) {
+      refuse("thread/start", request, "claude_paused");
+      return null;
+    }
     const threadId =
       message.method === "thread/resume" && typeof params.threadId === "string"
         ? params.threadId
@@ -398,6 +406,7 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
 const SETTINGS_UPDATED = "thread/settings/updated";
 
 const REFUSED_METHODS = [
+  "thread/start",
   "turn/start",
   "turn/steer",
   "thread/resume",
