@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { loadLogPath, loadShutdownGraceMs, loadStatePath } from "./config.ts";
+import {
+  loadLogPath,
+  loadShutdownGraceMs,
+  loadStatePath,
+  loadUnverifiedCodexPolicy,
+} from "./config.ts";
 
 describe("loadLogPath", () => {
   test.each([
@@ -65,5 +70,17 @@ describe("loadShutdownGraceMs", () => {
     expect(loadShutdownGraceMs({ HARNEXUS_SHUTDOWN_GRACE_MS: value })).toBe(
       5000,
     );
+  });
+});
+
+describe("loadUnverifiedCodexPolicy", () => {
+  test.each([
+    { name: "pause", value: "pause", expected: "pause" },
+    { name: "an unset variable", value: undefined, expected: "warn" },
+    { name: "another value", value: "stop", expected: "warn" },
+  ])("reads $name as $expected", ({ value, expected }) => {
+    expect(
+      loadUnverifiedCodexPolicy({ HARNEXUS_UNVERIFIED_CODEX: value }),
+    ).toBe(expected);
   });
 });

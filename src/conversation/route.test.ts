@@ -108,6 +108,105 @@ describe("turn/start of a thread created by create_thread", () => {
   });
 });
 
+describe("Codex CLI version", () => {
+  test.each([
+    {
+      name: "a verified version",
+      agent: "Codex Desktop/0.158.0-alpha.2.1 (Mac OS 26.5.1; arm64)",
+      expected: { version: "0.158.0-alpha.2.1", verified: true },
+    },
+    {
+      name: "another version",
+      agent: "Codex Desktop/0.159.0 (Mac OS 26.5.1; arm64)",
+      expected: { version: "0.159.0", verified: false },
+    },
+    {
+      name: "an agent without a version",
+      agent: "unknown",
+      expected: { version: null, verified: false },
+    },
+  ])("logs $name from the initialize answer and passes it on as the same bytes", async ({
+    agent,
+    expected,
+  }) => {
+    const { router, events } = setup();
+    const answer = initializeAnswer(agent);
+
+    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    const out = await router.fromServer(answer);
+
+    expect(out).toEqual(answer);
+    expect(events).toEqual([{ event: "codex_version", ...expected }]);
+  });
+
+  test("keeps listing Claude models on an unverified version unless asked to pause", async () => {
+    const { router } = setup();
+    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
+
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    const out = parse(await router.fromServer(modelList(2, null)));
+
+    expect(out.result.data).toHaveLength(4);
+  });
+
+  test("lists no Claude model on an unverified version when asked to pause", async () => {
+    const { router } = setup([], {}, "pause");
+    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
+
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    const line = modelList(2, null);
+
+    expect(await router.fromServer(line)).toEqual(line);
+  });
+
+  test.each([
+    { method: "turn/start" },
+    { method: "turn/steer" },
+  ])("refuses $method on a Claude thread with the reason while paused", async ({
+    method,
+  }) => {
+    const { router, calls, events } = setup(["th-claude"], {}, "pause");
+    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
+
+    const routed = router.fromApp(
+      encode({ id: 6, method, params: { threadId: "th-claude" } }),
+    );
+
+    expect(routed).toBeNull();
+    expect(calls).toEqual([
+      [
+        "reject",
+        { id: 6, params: { threadId: "th-claude" } },
+        expect.stringContaining("paused"),
+      ],
+    ]);
+    expect(events).toContainEqual({
+      event: "claude_request_refused",
+      method,
+      reason: "claude_paused",
+    });
+  });
+
+  test("runs a Claude turn on a verified version even when asked to pause", async () => {
+    const { router, calls } = setup(["th-claude"], {}, "pause");
+    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromServer(initializeAnswer(VERIFIED_AGENT));
+
+    router.fromApp(
+      encode({
+        id: 6,
+        method: "turn/start",
+        params: { threadId: "th-claude" },
+      }),
+    );
+
+    expect(calls.map(([name]) => name)).toEqual(["startTurn"]);
+  });
+});
+
 describe("model/list", () => {
   test("appends the Claude models to the last page", async () => {
     const { router } = setup();
@@ -1053,6 +1152,11 @@ describe("Claude thread history", () => {
 });
 
 const CLAUDE = "claude-sonnet-5";
+const VERIFIED_AGENT = "Codex Desktop/0.158.0-alpha.2.1 (Mac OS 26.5.1; arm64)";
+const UNVERIFIED_AGENT = "Codex Desktop/0.159.0 (Mac OS 26.5.1; arm64)";
+
+const initializeAnswer = (userAgent: string) =>
+  encode({ id: 1, result: { userAgent, codexHome: "/fixture/.codex" } });
 const BRIDGE_REQUEST = "harnexus-1";
 
 const settingsNotice = (mode: string) =>
@@ -1083,6 +1187,7 @@ const settingsUpdate = (change: object) =>
 const setup = (
   claudeThreads: string[] = [],
   records: Record<string, SessionMessage[] | "unreadable"> = {},
+  unverifiedCodex: "warn" | "pause" = "warn",
 ) => {
   const calls: unknown[][] = [];
   const events: RouteEvent[] = [];
@@ -1159,6 +1264,7 @@ const setup = (
     (source, threadId) => calls.push(["delegated", source, threadId]),
     history,
     catalog.models,
+    unverifiedCodex,
   );
   return { router, calls, events, sent, reads, catalog };
 };
