@@ -715,6 +715,42 @@ describe("effort", () => {
   });
 });
 
+describe("token usage", () => {
+  test("reports a turn's usage before the turn completes", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    await completeTurn(turns, sent, claude, 10);
+
+    const methods = sent.map((message) => message.method);
+    expect(methods.indexOf("thread/tokenUsage/updated")).toBeGreaterThan(-1);
+    expect(methods.indexOf("thread/tokenUsage/updated")).toBeLessThan(
+      methods.indexOf("turn/completed"),
+    );
+  });
+
+  test("adds each turn's usage to its own thread's total", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    await completeTurn(turns, sent, claude, 10);
+    await completeTurn(turns, sent, claude, 11);
+
+    expect(
+      sent
+        .filter((message) => message.method === "thread/tokenUsage/updated")
+        .map(({ params }) => ({
+          turnId: params.turnId,
+          total: params.tokenUsage.total.totalTokens,
+          window: params.tokenUsage.modelContextWindow,
+        })),
+    ).toEqual([
+      { turnId: "turn-1", total: 40, window: 200_000 },
+      { turnId: "turn-2", total: 80, window: 200_000 },
+    ]);
+  });
+});
+
 describe("session ids", () => {
   test("resumes from the session id Claude reported even when saving it failed", async () => {
     const first = fakeClaude(SUBSCRIPTION);
@@ -2933,9 +2969,19 @@ const success = (taken?: (string | undefined)[], queued?: number) =>
     ...(queued !== undefined && { queued_turn_count: queued }),
   });
 
+// Every result carries its turn's usage, as the SDK's does.
 const result = (fields: object) => ({
   type: "result",
   errors: [],
   permission_denials: [],
+  usage: TURN_USAGE,
+  modelUsage: { [MODEL]: { contextWindow: 200_000 } },
   ...fields,
 });
+
+const TURN_USAGE = {
+  input_tokens: 4,
+  cache_read_input_tokens: 20,
+  cache_creation_input_tokens: 10,
+  output_tokens: 6,
+};

@@ -24,6 +24,11 @@ import type { ThreadRecord, ThreadStore } from "../infra/thread-store.ts";
 import { promptFor } from "../presentation/permission.ts";
 import type { UserInput } from "../presentation/protocol.ts";
 import {
+  NO_USAGE,
+  renderTokenUsage,
+  type ThreadUsage,
+} from "../presentation/token-usage.ts";
+import {
   markInterrupting,
   markToolDeclined,
   type Rendered,
@@ -248,6 +253,7 @@ export const createTurnController = ({
   const turnsInFlight = new Map<string, number>();
   // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
   const modes = new Map<string, Mode>();
+  const usages = new Map<string, ThreadUsage>();
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const materialized = new Set<string>();
   // A thread with an unknown outcome continues only on a new message the user typed after being told, so neither a resent copy of a refused message nor another thread's message counts.
@@ -791,6 +797,14 @@ export const createTurnController = ({
         await threads.setSessionId(threadId, current);
       }
       const message = received.value;
+      // Sent before the message is rendered, so a result's usage reaches the app ahead of turn/completed.
+      const usage = renderTokenUsage(
+        usages.get(threadId) ?? NO_USAGE,
+        message,
+        { threadId, turnId: request.turnId, model, now: now() },
+      );
+      usages.set(threadId, usage.usage);
+      if (usage.notification !== null) send(usage.notification);
       const steers =
         message.type === "result" ? steersAfter(active, message) : "none";
       if (message.type === "result" && steers !== "none") {
