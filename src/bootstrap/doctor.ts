@@ -86,10 +86,12 @@ async function bunCheck(): Promise<Check> {
   const text = await readTextFileIfExists(join(REPO, "package.json"));
   const parsed =
     text.isOk() && text.value !== null ? parseJson(text.value) : null;
-  const pinned =
+  const manager =
     parsed?.isOk() && isObject(parsed.value)
-      ? String(parsed.value.packageManager ?? "").replace(/^bun@/, "")
-      : "";
+      ? parsed.value.packageManager
+      : undefined;
+  const pinned =
+    typeof manager === "string" ? manager.replace(/^bun@/, "") : "";
   return pinned === Bun.version
     ? { status: "ok", name: "Bun", detail: Bun.version }
     : {
@@ -122,7 +124,7 @@ async function stateChecks(): Promise<Check[]> {
       ? {
           status: "ok",
           name: "State file",
-          detail: `${path.value} is readable`,
+          detail: `${path.value} is readable (from this shell's HARNEXUS_STATE_PATH)`,
         }
       : {
           status: "fail",
@@ -151,7 +153,7 @@ async function launcherCheck(): Promise<Check> {
     ? {
         status: "ok",
         name: "Launcher",
-        detail: `open the app with CODEX_CLI_PATH=${launcher}`,
+        detail: `open the app with CODEX_CLI_PATH=${launcher}, HARNEXUS_CODEX_PATH and HARNEXUS_BUN_PATH`,
       }
     : { status: "fail", name: "Launcher", detail: runnable.error.message };
 }
@@ -162,7 +164,7 @@ async function processesChecks(): Promise<Check[]> {
     "pid=,ppid=,command=",
   ]);
   return listed.isOk()
-    ? processChecks(parseProcesses(listed.value))
+    ? processChecks(parseProcesses(listed.value), REPO)
     : [{ status: "fail", name: "Processes", detail: "cannot list processes" }];
 }
 

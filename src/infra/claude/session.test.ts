@@ -560,12 +560,24 @@ describe("readClaudeLogin", () => {
     expect(claude.closes()).toBe(1);
   });
 
-  test("refuses a login that would bill the API", async () => {
+  test("refuses a login that would bill the API and still closes Claude", async () => {
     const claude = fakeClaude({ apiProvider: "bedrock" });
 
     const login = await readClaudeLogin(claude.runtime, "/work/tree");
 
     expect(login.isErr() && login.error._tag).toBe("ClaudeNotSubscription");
+    expect(claude.closes()).toBe(1);
+  });
+
+  test("gives up on a Claude Code that never answers and closes it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      accountAnswered: new Promise(() => {}),
+    });
+
+    const login = await readClaudeLogin(claude.runtime, "/work/tree", 10);
+
+    expect(login.isErr() && login.error._tag).toBe("ClaudeAccountUnavailable");
+    expect(claude.closes()).toBe(1);
   });
 });
 

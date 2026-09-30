@@ -22,10 +22,18 @@ export const parseProcesses = (output: string): ProcessEntry[] =>
   });
 
 // A bridge whose app-server is gone is left under launchd (ppid 1), and so is a Claude process whose bridge is gone; only pids are shown, since a command line can carry a prompt.
-export const processChecks = (processes: readonly ProcessEntry[]): Check[] => {
-  const bridges = processes.filter(({ command }) => BRIDGE.test(command));
+// Only processes run from this checkout count, so another project's server or another tool's Claude is never offered for kill.
+export const processChecks = (
+  processes: readonly ProcessEntry[],
+  repo: string,
+): Check[] => {
+  const bridge = `${repo}/src/bootstrap/main.ts`;
+  const claude = `${repo}/node_modules/@anthropic-ai/claude-agent-sdk-`;
+  const bridges = processes.filter(({ command }) => runs(command, bridge));
   const bridgePids = new Set(bridges.map(({ pid }) => pid));
-  const claudes = processes.filter(({ command }) => CLAUDE.test(command));
+  const claudes = processes.filter(
+    ({ command }) => command.includes(claude) && CLAUDE_BINARY.test(command),
+  );
   const leftBridges = bridges.filter(({ ppid }) => ppid === LAUNCHD);
   const leftClaudes = claudes.filter(({ ppid }) => ppid === LAUNCHD);
   const owned = claudes.filter(({ ppid }) => bridgePids.has(ppid));
@@ -63,10 +71,11 @@ export const failed = (checks: readonly Check[]) =>
 const pids = (entries: readonly ProcessEntry[]) =>
   entries.map(({ pid }) => pid).join(" ");
 
-const BRIDGE = /\/src\/bootstrap\/main\.ts(\s|$)/;
+const runs = (command: string, path: string) =>
+  command.endsWith(path) || command.includes(`${path} `);
 
 // The SDK starts the Claude Code binary it ships in its platform package.
-const CLAUDE = /claude-agent-sdk-[a-z0-9-]+\/claude(\s|$)/;
+const CLAUDE_BINARY = /claude-agent-sdk-[a-z0-9-]+\/claude(\s|$)/;
 
 const LAUNCHD = 1;
 

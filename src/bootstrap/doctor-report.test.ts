@@ -21,10 +21,13 @@ describe("parseProcesses", () => {
 
 describe("processChecks", () => {
   test("counts running bridges and the Claude processes they run", () => {
-    const checks = processChecks([
-      { pid: 100, ppid: 50, command: BRIDGE },
-      { pid: 200, ppid: 100, command: CLAUDE },
-    ]);
+    const checks = processChecks(
+      [
+        { pid: 100, ppid: 50, command: BRIDGE },
+        { pid: 200, ppid: 100, command: CLAUDE },
+      ],
+      REPO,
+    );
 
     expect(checks).toEqual([
       { status: "ok", name: "Bridges", detail: "1 running" },
@@ -33,10 +36,13 @@ describe("processChecks", () => {
   });
 
   test("warns about a bridge and a Claude process left under launchd with their pids only", () => {
-    const checks = processChecks([
-      { pid: 100, ppid: 1, command: `${BRIDGE} secret-prompt` },
-      { pid: 200, ppid: 1, command: `${CLAUDE} --prompt secret-prompt` },
-    ]);
+    const checks = processChecks(
+      [
+        { pid: 100, ppid: 1, command: `${BRIDGE} secret-prompt` },
+        { pid: 200, ppid: 1, command: `${CLAUDE} --prompt secret-prompt` },
+      ],
+      REPO,
+    );
 
     expect(checks.map(({ status }) => status)).toEqual(["warn", "warn"]);
     expect(checks.map(({ detail }) => detail).join("\n")).toContain("kill 100");
@@ -44,11 +50,24 @@ describe("processChecks", () => {
     expect(JSON.stringify(checks)).not.toContain("secret-prompt");
   });
 
-  test("leaves out processes that are neither a bridge nor the SDK's Claude", () => {
-    const checks = processChecks([
-      { pid: 300, ppid: 1, command: "/usr/local/bin/claude" },
-      { pid: 301, ppid: 1, command: "bun other/main.ts" },
-    ]);
+  test("leaves out processes that are not this checkout's bridge or Claude", () => {
+    const checks = processChecks(
+      [
+        { pid: 300, ppid: 1, command: "/usr/local/bin/claude" },
+        {
+          pid: 301,
+          ppid: 1,
+          command: "bun /other/project/src/bootstrap/main.ts",
+        },
+        {
+          pid: 302,
+          ppid: 1,
+          command:
+            "/other/tool/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude",
+        },
+      ],
+      REPO,
+    );
 
     expect(checks.map(({ status }) => status)).toEqual(["ok", "ok"]);
   });
@@ -74,8 +93,8 @@ describe("failed", () => {
   });
 });
 
-const BRIDGE =
-  "/usr/bin/bun --no-env-file --config=/dev/null /work/harnexus/src/bootstrap/main.ts";
+const REPO = "/work/harnexus";
 
-const CLAUDE =
-  "/work/harnexus/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude";
+const BRIDGE = `/usr/bin/bun --no-env-file --config=/dev/null ${REPO}/src/bootstrap/main.ts`;
+
+const CLAUDE = `${REPO}/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`;

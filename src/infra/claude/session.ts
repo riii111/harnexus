@@ -119,8 +119,11 @@ export const loadClaudeModels = async (
 export const readClaudeLogin = async (
   runtime: ClaudeRuntime = PROCESS_RUNTIME,
   cwd: string = process.cwd(),
+  timeoutMs: number = MODELS_TIMEOUT_MS,
 ) =>
-  (await askClaude(runtime, cwd, readAccount)).andThen((account) =>
+  (
+    await askClaude(runtime, cwd, (claude) => readAccount(claude, timeoutMs))
+  ).andThen((account) =>
     Result.gen(function* () {
       yield* checkSubscription(account);
       return Result.ok(account.subscriptionType ?? "subscription");
@@ -291,7 +294,7 @@ const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 
 const USER_SETTINGS: SettingSource[] = ["user"];
 
-// Starting Claude Code and listing takes about 3.5 s on the verification Mac.
+// Starting Claude Code and listing its models takes about 3.5 s on the verification Mac.
 const MODELS_TIMEOUT_MS = 30_000;
 
 // resolveSettings resolves settings directories such as CLAUDE_CONFIG_DIR from this process's environment, so Claude starts from the same one and differs only by the billing variables removed from it.

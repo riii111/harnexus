@@ -20,6 +20,7 @@ export const fakeClaude = (
     permissionModeError,
     effortError,
     interruptAnswered,
+    accountAnswered,
     stillQueued,
     closeEnding = { done: true, value: undefined },
     settingsEnv = {},
@@ -32,6 +33,8 @@ export const fakeClaude = (
     effortError?: Error;
     // Holds the interrupt receipt back, as the CLI may send it after the turn's result.
     interruptAnswered?: Promise<void>;
+    // Holds the account back, as a Claude Code stuck starting would.
+    accountAnswered?: Promise<void>;
     stillQueued?: string[];
     closeEnding?: Delivery;
     settingsEnv?: Record<string, string> | Error;
@@ -92,6 +95,7 @@ export const fakeClaude = (
       return models;
     },
     accountInfo: async () => {
+      await accountAnswered;
       // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
       if (account instanceof Error) throw account;
       return account;
