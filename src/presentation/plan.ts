@@ -2,6 +2,11 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { isObject } from "../runtime/object.ts";
 import type { AppNotification, TurnPlanStep } from "./protocol.ts";
 
+// A TodoWrite list has no ids, so its steps cannot be the target of a TaskUpdate.
+type PlanStep = TurnPlanStep & { id: string | null };
+
+type PlanCall = { name: string; input: unknown };
+
 // Claude's tasks live as long as its session, across turns, so the plan is kept per thread; the bridge starts it empty and a TaskList result rebuilds it.
 export type ThreadPlan = {
   readonly steps: readonly PlanStep[];
@@ -34,11 +39,6 @@ export const renderPlan = (
     },
   };
 };
-
-// A TodoWrite list has no ids, so its steps cannot be the target of a TaskUpdate.
-type PlanStep = TurnPlanStep & { id: string | null };
-
-type PlanCall = { name: string; input: unknown };
 
 // Only main-conversation calls are recorded, so a result is matched to one of them by its tool use id alone.
 const nextPlan = (plan: ThreadPlan, message: SDKMessage): ThreadPlan => {

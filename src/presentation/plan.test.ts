@@ -31,7 +31,7 @@ describe("renderPlan TodoWrite", () => {
     ]);
   });
 
-  test("sends no plan for a refused call but does for a later successful one", () => {
+  test("shows the list of a call only once it succeeds, never of a refused one", () => {
     const out = feed([
       call("tool-1", "TodoWrite", { todos: TODOS }),
       result("tool-1", "denied", { isError: true }),
