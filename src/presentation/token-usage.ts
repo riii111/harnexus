@@ -43,6 +43,7 @@ export const renderTokenUsage = (
         tokenUsage: {
           total: next.total,
           last: next.last,
+          // A model change shows no window until the new model's first result.
           modelContextWindow:
             next.windowModel === turn.model ? next.contextWindow : null,
         },
@@ -94,7 +95,7 @@ const breakdown = (usage: ApiUsage): TokenUsageBreakdown => {
   };
 };
 
-// modelUsage also lists models a subagent ran on, so the thread's own model is looked up first under the id without its context suffix; the window is kept for the model the turn ran on, so a model change shows none until its first result.
+// modelUsage also lists models a subagent ran on, so the thread's own model is looked up first under the id without its context suffix.
 const contextWindowOf = (
   modelUsage: Record<string, ModelUsage>,
   model: string,
