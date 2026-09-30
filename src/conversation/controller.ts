@@ -47,7 +47,7 @@ import {
   type TurnOutcome,
   type TurnState,
 } from "../presentation/turn.ts";
-import { skillAttachments } from "./skill-attachments.ts";
+import { readSkills } from "./skill-attachments.ts";
 import {
   type AppRequest,
   checkThread,
@@ -74,6 +74,7 @@ export type TurnEvent =
         | "session_missing"
         | "outcome_cleared"
         | "skill_unreadable"
+        | "skill_link_only"
         | "effort_unsupported";
     }
   | {
@@ -173,11 +174,13 @@ type StoreTag =
   | "RunStateNotSaved";
 
 // A session is not reused until its interrupt reports whether a send is still queued, which can arrive after the interrupted turn has ended.
+// attachedSkills maps each SKILL.md path this session was given to the body it was given.
 type SessionSlot = {
   session: ClaudeSession;
   model: string;
   pendingInterrupt: Promise<void> | null;
   link: CodexLink;
+  attachedSkills: Map<string, string>;
 };
 
 // link is the thread tool server of the session the turn ran on, read when the turn ends to see whether a write was left undecided.
@@ -734,7 +737,7 @@ export const createTurnController = ({
       active.state = markInterrupting(active.state);
     }
 
-    const skills = await skillAttachments(input.text);
+    const skills = await readSkills(input.text);
     if (skills.unreadable.length > 0) {
       log({ event: "claude_turn", step: "skill_unreadable" });
     }
@@ -777,12 +780,24 @@ export const createTurnController = ({
       return;
     }
     slot.value.link.acceptWrites();
-    const sent = slot.value.session.send(input.text, skills.attachments);
+    // A skill this Claude session already holds goes as its link alone; a new session has lost it, so it is attached again.
+    const attached = slot.value.attachedSkills;
+    const fresh = skills.skills.filter(
+      ({ path, body }) => attached.get(path) !== body,
+    );
+    if (fresh.length < skills.skills.length) {
+      log({ event: "claude_turn", step: "skill_link_only" });
+    }
+    const sent = slot.value.session.send(
+      input.text,
+      fresh.map(({ block }) => block),
+    );
     if (sent.isErr()) {
       dropSession(threadId, slot.value);
       fail(active, sent.error);
       return;
     }
+    for (const { path, body } of fresh) attached.set(path, body);
     active.slot = slot.value;
     for (const steer of active.unsentSteers.splice(0)) {
       const steered = sendSteer(active, slot.value, steer);
@@ -817,6 +832,10 @@ export const createTurnController = ({
       }
       const message = received.value;
       firstMessageMs ??= now() - sentAt;
+      // A compaction summarizes the skills attached so far, so the next turn attaches them again.
+      if (message.type === "system" && message.subtype === "compact_boundary") {
+        attached.clear();
+      }
       if (message.type === "result") {
         log({
           event: "claude_turn",
@@ -944,6 +963,7 @@ export const createTurnController = ({
       model,
       pendingInterrupt: null,
       link,
+      attachedSkills: new Map(),
     };
     sessions.set(record.threadId, slot);
     return Result.ok(slot);
@@ -1131,6 +1151,7 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
     case "session_missing":
     case "outcome_cleared":
     case "skill_unreadable":
+    case "skill_link_only":
     case "effort_unsupported":
       return { event: entry.event, step: entry.step };
     case "effort_changed":

@@ -1699,6 +1699,72 @@ describe("skill links in Claude input", () => {
     expect(steered?.message.content).toBe(`[$demo](${skill})`);
   });
 
+  test("sends a skill the Claude session already holds as its link alone and logs it", async () => {
+    const skill = await writeSkill("demo", "Do it.\n");
+    const typed = `[$demo](${skill}) go`;
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, events } = await harness([claude]);
+
+    await skillTurn(turns, sent, claude, 10, typed);
+    await skillTurn(turns, sent, claude, 11, typed);
+    const [first, second] = await readPrompts(claude, 2);
+
+    expect(Array.isArray(first?.message.content)).toBe(true);
+    expect(second?.message.content).toBe(typed);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "skill_link_only",
+    });
+  });
+
+  test("attaches a skill again when its SKILL.md changed since it was attached", async () => {
+    const skill = await writeSkill("demo", "Do it.\n");
+    const typed = `[$demo](${skill}) go`;
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    await skillTurn(turns, sent, claude, 10, typed);
+    await writeSkill("demo", "Do it differently.\n");
+    await skillTurn(turns, sent, claude, 11, typed);
+    const [, second] = await readPrompts(claude, 2);
+
+    expect(second?.message.content).toMatchObject([
+      { text: typed },
+      { text: expect.stringContaining("Do it differently.") },
+    ]);
+  });
+
+  test("attaches a skill again after Claude compacts the conversation", async () => {
+    const skill = await writeSkill("demo", "Do it.\n");
+    const typed = `[$demo](${skill}) go`;
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    await skillTurn(turns, sent, claude, 10, typed, [
+      sdk({ type: "system", subtype: "compact_boundary" }),
+    ]);
+    await skillTurn(turns, sent, claude, 11, typed);
+    const [, second] = await readPrompts(claude, 2);
+
+    expect(Array.isArray(second?.message.content)).toBe(true);
+  });
+
+  test("attaches a skill again on a new Claude session", async () => {
+    const skill = await writeSkill("demo", "Do it.\n");
+    const typed = `[$demo](${skill}) go`;
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([first, second]);
+
+    await skillTurn(turns, sent, first, 10, typed);
+    turns.changeModel(THREAD, OTHER_MODEL);
+    await skillTurn(turns, sent, second, 11, typed);
+
+    expect(Array.isArray((await firstPromptMessage(second))?.content)).toBe(
+      true,
+    );
+  });
+
   test("sends the link alone and logs it when the SKILL.md cannot be read", async () => {
     const typed = `[$gone](${join(dir, "gone", "SKILL.md")}) go`;
     const claude = fakeClaude(SUBSCRIPTION);
@@ -2873,6 +2939,30 @@ const completeTurn = async (
   claude.emit(sdk(answer(`msg-${id}`, "ok")));
   claude.emit(sdk(success()));
   await until(() => completedTurnStatuses(sent).length > before);
+};
+
+// Emits what Claude says before its result, such as a compaction boundary, and ends the turn.
+const skillTurn = async (
+  turns: ReturnType<typeof createTurnController>,
+  sent: Sent[],
+  claude: ReturnType<typeof fakeClaude>,
+  id: number,
+  text: string,
+  before: SDKMessage[] = [],
+) => {
+  const done = completedTurnStatuses(sent).length;
+  turns.startTurn(turnStart(id, text), undefined);
+  await until(() => responseTo(sent, id) !== undefined);
+  await until(() => claude.started());
+  await settle();
+  for (const message of before) claude.emit(message);
+  claude.emit(sdk(success()));
+  await until(() => completedTurnStatuses(sent).length > done);
+};
+
+const firstPromptMessage = async (claude: ReturnType<typeof fakeClaude>) => {
+  const [prompt] = await readPrompts(claude, 1);
+  return prompt?.message;
 };
 
 const turnStart = (id: number, text: string, threadId = THREAD) => ({
