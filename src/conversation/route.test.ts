@@ -213,7 +213,7 @@ describe("Codex CLI version", () => {
   });
 
   test("refuses a new thread on a Claude model with the reason while paused", async () => {
-    const { router, calls } = setup([], {}, "pause");
+    const { router, calls, events } = setup([], {}, "pause");
     router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
     await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
 
@@ -226,7 +226,18 @@ describe("Codex CLI version", () => {
     );
 
     expect(routed).toBeNull();
-    expect(calls.map(([name]) => name)).toEqual(["reject"]);
+    expect(calls).toEqual([
+      [
+        "reject",
+        expect.objectContaining({ id: 3 }),
+        expect.stringContaining("paused"),
+      ],
+    ]);
+    expect(events).toContainEqual({
+      event: "claude_request_refused",
+      method: "thread/start",
+      reason: "claude_paused",
+    });
   });
 
   test("runs a Claude turn on a verified version even when asked to pause", async () => {
