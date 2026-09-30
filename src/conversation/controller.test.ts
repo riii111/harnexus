@@ -748,6 +748,7 @@ describe("turn metrics", () => {
       step: "metrics",
       model: MODEL,
       effort: "high",
+      compaction: false,
       totalTokens: 40,
       inputTokens: 34,
       cachedInputTokens: 20,
@@ -2199,16 +2200,18 @@ describe("turn/start arriving on a busy thread", () => {
 describe("thread/compact/start on a Claude thread", () => {
   test("answers at once with an empty result, sends /compact and shows the compaction as the turn's only item", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
+    const { turns, sent, events } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+    const before = sent.length;
 
     turns.compactThread(compactStart(20));
-    await until(() => startedTurns(sent).length === 1);
-    expect(await firstPrompt(claude.prompt())).toBe("/compact");
+    await until(() => startedTurns(sent).length === 2);
+    expect((await promptsUntil(claude, 2))[1]).toBe("/compact");
     claude.emit(sdk(compactBoundary("manual")));
     claude.emit(sdk(compacted()));
-    await until(() => turnCompleted(sent) !== undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
 
-    expect(sent.map((m) => m.method ?? "response")).toEqual([
+    expect(sent.slice(before).map((m) => m.method ?? "response")).toEqual([
       "response",
       "thread/status/changed",
       "turn/started",
@@ -2220,10 +2223,15 @@ describe("thread/compact/start on a Claude thread", () => {
       "turn/completed",
     ]);
     expect(responseTo(sent, 20)?.result).toEqual({});
-    expect(completedItems(sent)).toEqual([
-      { type: "contextCompaction", id: "turn-1-item-1" },
+    expect(completedItems(sent.slice(before))).toEqual([
+      { type: "contextCompaction", id: "turn-2-item-1" },
     ]);
-    expect(turnCompleted(sent)).toMatchObject({ status: "completed" });
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
+    expect(
+      events.flatMap((event) =>
+        event.step === "metrics" ? [event.compaction] : [],
+      ),
+    ).toEqual([false, true]);
   });
 
   test("waits behind a running turn and then compacts the same Claude session", async () => {
@@ -2248,17 +2256,57 @@ describe("thread/compact/start on a Claude thread", () => {
     expect(settings).toHaveLength(1);
   });
 
+  test.each([
+    {
+      name: "a thread that never ran",
+      prepare: async () => {
+        const claude = fakeClaude(SUBSCRIPTION);
+        return { claude, ...(await harness([claude])) };
+      },
+    },
+    {
+      name: "a thread whose Claude conversation was found lost",
+      prepare: async () => {
+        const first = fakeClaude(SUBSCRIPTION);
+        const before = await harness([first]);
+        await completeTurn(before.turns, before.sent, first, 10);
+        await until(() => before.store.get(THREAD)?.runState === "idle");
+        const claude = fakeClaude(SUBSCRIPTION);
+        const after = await harness([claude], { missingSessions: ["se-1"] });
+        after.turns.startTurn(turnStart(11, "hello"), undefined);
+        await until(() => after.store.get(THREAD)?.sessionId === null);
+        await until(() => after.store.get(THREAD)?.runState === "idle");
+        return { claude, ...after };
+      },
+    },
+  ])("refuses to compact $name without starting Claude", async ({
+    prepare,
+  }) => {
+    const { claude, turns, sent } = await prepare();
+
+    turns.compactThread(compactStart(20));
+    await settle();
+
+    expect(responseTo(sent, 20)?.error.message).toBe(
+      "there is no Claude conversation to compact yet",
+    );
+    expect(claude.started()).toBe(false);
+  });
+
   test("refuses a steer into a running compaction", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
     turns.compactThread(compactStart(20));
-    await until(() => startedTurns(sent).length === 1);
+    await until(() => startedTurns(sent).length === 2);
 
-    turns.steerTurn(steer(21, "turn-1", "more"));
+    turns.steerTurn(steer(21, "turn-2", "more"));
 
     expect(responseTo(sent, 21)).toEqual(REFUSED(21));
-    expect(await firstPrompt(claude.prompt())).toBe("/compact");
-    expect(completedItems(sent)).toEqual([]);
+    expect((await promptsUntil(claude, 2))[1]).toBe("/compact");
+    expect(
+      completedItems(sent).filter((item) => item.type === "userMessage"),
+    ).toHaveLength(1);
   });
 
   test("fails a compaction on a thread whose last turn has an unknown outcome without starting Claude", async () => {

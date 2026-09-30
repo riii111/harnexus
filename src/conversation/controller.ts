@@ -88,6 +88,7 @@ export type TurnEvent =
       step: "metrics";
       model: string;
       effort: EffortLevel | null;
+      compaction: boolean;
       sessionStartMs: number | null;
       firstMessageMs: number | null;
       turnMs: number;
@@ -366,6 +367,14 @@ export const createTurnController = ({
     }
     if (closed) {
       refuse(id, "bridge_closing");
+      return;
+    }
+    // Without a conversation Claude only reports there is nothing to compact; a turn already accepted may still start one, and a session whose record vanished is found only when the turn runs, since looking it up here would let a later request start first.
+    if (
+      threads.sessionIdOf(threadId) === null &&
+      !turnsInFlight.has(threadId)
+    ) {
+      refuse(id, "nothing_to_compact");
       return;
     }
     const turn = {
@@ -922,6 +931,7 @@ export const createTurnController = ({
           step: "metrics",
           model,
           effort,
+          compaction: request.compaction,
           ...breakdown(message.usage),
           sessionStartMs,
           firstMessageMs,
@@ -1251,6 +1261,7 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
         step: entry.step,
         model: entry.model,
         effort: entry.effort,
+        compaction: entry.compaction,
         inputTokens: entry.inputTokens,
         cachedInputTokens: entry.cachedInputTokens,
         cacheWriteInputTokens: entry.cacheWriteInputTokens,

@@ -58,6 +58,7 @@ export const renderTurnStarted = (params: {
     finished: false,
     compaction: params.compaction ?? false,
     compactionError: null,
+    compacted: false,
   });
   const turn: Turn = {
     id: params.turnId,
@@ -254,6 +255,7 @@ type Draft = {
   finished: boolean;
   compaction: boolean;
   compactionError: string | null;
+  compacted: boolean;
   notifications: AppNotification[];
 };
 
@@ -294,6 +296,7 @@ const renderSystem = (draft: Draft, message: SystemMessage, now: number) => {
 // Claude reports a compaction only once it is done, so its item starts and completes together; thread/compacted is deprecated but still in the protocol for apps that read it.
 const renderCompaction = (draft: Draft, now: number) => {
   const item: ThreadItem = { type: "contextCompaction", id: nextItemId(draft) };
+  draft.compacted = true;
   itemStarted(draft, item, now);
   itemCompleted(draft, item, now);
   notify(draft, now, {
@@ -510,13 +513,16 @@ const correctDenials = (draft: Draft, toolUseIds: string[], now: number) => {
   }
 };
 
-// The CLI ends a failed compaction with a successful result, so the failure its status reported decides the outcome.
+// The CLI ends a failed compaction with a successful result, so the failure its status reported decides the outcome, and a compaction that reported neither is not shown as done.
 const resultOutcome = (draft: Draft, result: SDKResultMessage): TurnOutcome => {
   if (draft.interrupting) return { status: "interrupted" };
   if (draft.compactionError !== null) {
     return { status: "failed", message: draft.compactionError };
   }
-  return outcomeOf(result);
+  const outcome = outcomeOf(result);
+  return outcome.status === "completed" && draft.compaction && !draft.compacted
+    ? { status: "failed", message: NOT_COMPACTED }
+    : outcome;
 };
 
 const outcomeOf = (result: SDKResultMessage): TurnOutcome => {
@@ -674,3 +680,5 @@ const toSeconds = (ms: number) => Math.floor(ms / 1000);
 const CONTINUING_STOP_REASONS = new Set(["tool_use", "pause_turn"]);
 
 const COMPACTION_FAILED = "Claude could not compact the conversation";
+
+const NOT_COMPACTED = "Claude did not compact the conversation";

@@ -131,6 +131,36 @@ describe("buildHistory", () => {
     ]);
   });
 
+  test.each([
+    { name: "command", text: "<command-name>/compact</command-name>" },
+    {
+      name: "caveat",
+      text: "<local-command-caveat>Caveat: fixture</local-command-caveat>",
+    },
+    {
+      name: "output",
+      text: "<local-command-stdout>Compacted </local-command-stdout>",
+    },
+  ])("does not show a slash command's $name record as a prompt", ({
+    text: recorded,
+  }) => {
+    const history = build([
+      prompt("u1", "go"),
+      reply("a1", "m1", text("done"), "end_turn"),
+      prompt("u2", recorded),
+      prompt("u3", "next"),
+    ]);
+
+    expect(history.map(({ turn }) => turn.id)).toEqual([
+      "harnexus-history-u1",
+      "harnexus-history-u3",
+    ]);
+    expect(history[0]?.items.map(({ item }) => item.type)).toEqual([
+      "userMessage",
+      "agentMessage",
+    ]);
+  });
+
   test("opens a turn for a reply recorded before any prompt", () => {
     const [turn] = build([reply("a1", "m1", text("resumed"), "end_turn")]);
 

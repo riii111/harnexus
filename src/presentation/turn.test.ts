@@ -476,6 +476,17 @@ describe("renderSdkMessage compaction", () => {
     });
   });
 
+  test("fails a compaction the app asked for that ended without compacting", () => {
+    const out = runCompaction([
+      result({ subtype: "success", is_error: false, result: "" }),
+    ]);
+
+    expect(turnCompleted(out)).toMatchObject({
+      status: "failed",
+      error: { message: "Claude did not compact the conversation" },
+    });
+  });
+
   test("leaves a turn whose own compaction failed to end as its result says", () => {
     const out = run([
       compactionStatus({
