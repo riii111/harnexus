@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { loadLogPath, loadStatePath } from "../runtime/config.ts";
 import { checkAccess } from "../runtime/fs.boundary.ts";
 import { readCommandOutput } from "../runtime/process.boundary.ts";
 import { parseProcesses } from "./doctor-report.ts";
@@ -6,8 +7,11 @@ import { isAppRunning, openArguments } from "./open-app-plan.ts";
 
 // Opens the app with harnexus, or with --standard as the app normally runs; either way the app must be quit first, since it reads its environment only at start.
 const REPO = join(import.meta.dir, "..", "..");
-const APP = process.env.HARNEXUS_APP_PATH || "/Applications/ChatGPT.app";
-const mode = process.argv.includes("--standard") ? "standard" : "harnexus";
+const APP = resolve(
+  process.env.HARNEXUS_APP_PATH || "/Applications/ChatGPT.app",
+);
+const flags = process.argv.slice(2);
+const mode = flags.includes("--standard") ? "standard" : "harnexus";
 
 const paths = {
   app: APP,
@@ -33,11 +37,18 @@ if (opened.isErr()) {
 }
 process.stdout.write(
   mode === "standard"
-    ? `Opened ${APP} without harnexus.\n`
+    ? `Opened ${APP} without harnexus. Run bun run doctor to see that no bridge is left running.\n`
     : `Opened ${APP} with harnexus. Run bun run doctor to check the setup.\n`,
 );
 
 async function findProblem() {
+  const unknown = flags.filter((flag) => flag !== "--standard");
+  if (unknown.length > 0) return `unknown option ${unknown.join(" ")}`;
+  // The bridge refuses a relative path where nobody sees it, so it is refused here first.
+  const log = loadLogPath(process.env);
+  if (log.isErr()) return log.error.message;
+  const state = loadStatePath(process.env);
+  if (state.isErr()) return state.error.message;
   const listed = await readCommandOutput("/bin/ps", [
     "-axo",
     "pid=,ppid=,command=",

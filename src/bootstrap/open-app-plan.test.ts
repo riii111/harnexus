@@ -51,6 +51,18 @@ describe("isAppRunning", () => {
       expected: true,
     },
     {
+      name: "a helper left under Contents/Frameworks",
+      command:
+        "/Applications/ChatGPT.app/Contents/Frameworks/Codex Helper (Renderer).app/Contents/MacOS/Codex Helper (Renderer)",
+      expected: false,
+    },
+    {
+      name: "the bundled Codex CLI",
+      command:
+        "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex app-server",
+      expected: false,
+    },
+    {
       name: "a process that only names the app",
       command: "/bin/zsh -c open /Applications/ChatGPT.app/Contents/MacOS/x",
       expected: false,

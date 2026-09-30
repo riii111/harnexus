@@ -11,7 +11,7 @@ The bridge logs the Codex CLI version the app bundles and warns when harnexus wa
 
 ## Opening the app with harnexus
 
-Quit the ChatGPT app, then run `bun run open-app` to open it with harnexus, and `bun run doctor` to check the setup. Run `bun run open-app --standard` after quitting it to go back to the app as it normally runs; Claude threads then stay unavailable until the app is opened with harnexus again. The app reads these settings only when it starts, so each launch needs the command. `HARNEXUS_LOG_PATH`, `HARNEXUS_STATE_PATH` and `HARNEXUS_UNVERIFIED_CODEX` set in the shell are passed on.
+Quit the ChatGPT app, then run `bun run open-app` to open it with harnexus, and `bun run doctor` to check the setup. To go back to the app as it normally runs, quit it and run `bun run open-app --standard`; Claude threads stay unavailable until the app is opened with harnexus again. The app reads its environment only when it starts, so each launch needs the command. `HARNEXUS_LOG_PATH`, `HARNEXUS_STATE_PATH` and `HARNEXUS_UNVERIFIED_CODEX` set in the shell are passed on.
 
 ## Checking the setup
 
