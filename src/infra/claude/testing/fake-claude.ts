@@ -121,6 +121,8 @@ export const fakeClaude = (
       resolveSettings,
       env,
     } satisfies ClaudeSdk & { env: Record<string, string | undefined> },
+    // True once the consumer has handled every message emitted so far and waits for the next one.
+    drained: () => waiting !== null && queued.length === 0,
     started: () => options !== null,
     options: () => options ?? {},
     prompt: () => prompt,
