@@ -817,13 +817,15 @@ describe("turn metrics", () => {
     const [prompt, steered] = await readPrompts(claude, 2);
     claude.emit(sdk(success([prompt?.uuid], 1)));
     await settle();
-    const beforeSteer = events.filter((e) => e.step === "metrics").length;
+    const beforeSteer = events.filter(
+      (event) => event.step === "metrics",
+    ).length;
     claude.emit(sdk(success([steered?.uuid])));
     await until(() => turnCompleted(sent) !== undefined);
 
     expect({
       beforeSteer,
-      after: events.filter((e) => e.step === "metrics").length,
+      after: events.filter((event) => event.step === "metrics").length,
     }).toEqual({ beforeSteer: 1, after: 2 });
   });
 
