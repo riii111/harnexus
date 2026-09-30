@@ -22,6 +22,7 @@ import { delegatedMessage } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { ThreadRecord, ThreadStore } from "../infra/thread-store.ts";
 import { promptFor } from "../presentation/permission.ts";
+import { NO_PLAN, renderPlan, type ThreadPlan } from "../presentation/plan.ts";
 import type {
   TokenUsageBreakdown,
   UserInput,
@@ -273,6 +274,7 @@ export const createTurnController = ({
   // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
   const modes = new Map<string, Mode>();
   const usages = new Map<string, ThreadUsage>();
+  const plans = new Map<string, ThreadPlan>();
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const materialized = new Set<string>();
   // A thread with an unknown outcome continues only on a new message the user typed after being told, so neither a resent copy of a refused message nor another thread's message counts.
@@ -888,6 +890,13 @@ export const createTurnController = ({
       );
       usages.set(threadId, usage.usage);
       if (usage.notification !== null) send(usage.notification);
+      const plan = renderPlan(plans.get(threadId) ?? NO_PLAN, message, {
+        threadId,
+        turnId: request.turnId,
+        now: now(),
+      });
+      plans.set(threadId, plan.plan);
+      if (plan.notification !== null) send(plan.notification);
       const steers =
         message.type === "result" ? steersAfter(active, message) : "none";
       if (message.type === "result" && steers !== "none") {

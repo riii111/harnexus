@@ -20,6 +20,15 @@ export type AppNotificationBody =
   | Envelope<
       "thread/tokenUsage/updated",
       { threadId: string; turnId: string; tokenUsage: ThreadTokenUsage }
+    >
+  | Envelope<
+      "turn/plan/updated",
+      {
+        threadId: string;
+        turnId: string;
+        explanation: string | null;
+        plan: TurnPlanStep[];
+      }
     >;
 
 type ThreadTokenUsage = {
@@ -35,6 +44,12 @@ export type TokenUsageBreakdown = {
   cacheWriteInputTokens: number;
   outputTokens: number;
   reasoningOutputTokens: number;
+};
+
+// No recorded session carries a plan, so this shape follows the types `codex app-server generate-ts` emits.
+export type TurnPlanStep = {
+  step: string;
+  status: "pending" | "inProgress" | "completed";
 };
 
 export type Turn = {

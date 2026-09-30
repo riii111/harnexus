@@ -707,6 +707,31 @@ describe("token usage", () => {
   });
 });
 
+describe("plan", () => {
+  test("keeps a thread's tasks across turns", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    await taskTurn(turns, sent, claude, 10, [
+      taskCall("tool-1", "TaskCreate", { subject: "Alpha", description: "" }),
+      taskResult("tool-1", { task: { id: "1", subject: "Alpha" } }),
+    ]);
+    await taskTurn(turns, sent, claude, 11, [
+      taskCall("tool-2", "TaskUpdate", { taskId: "1", status: "completed" }),
+      taskResult("tool-2", { success: true, taskId: "1", updatedFields: [] }),
+    ]);
+
+    expect(
+      sent
+        .filter((message) => message.method === "turn/plan/updated")
+        .map(({ params }) => ({ turnId: params.turnId, plan: params.plan })),
+    ).toEqual([
+      { turnId: "turn-1", plan: [{ step: "Alpha", status: "pending" }] },
+      { turnId: "turn-2", plan: [{ step: "Alpha", status: "completed" }] },
+    ]);
+  });
+});
+
 describe("turn metrics", () => {
   test("keeps one Claude session across turns and logs each result's model, effort, tokens and durations with a start time only for the first", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -3067,6 +3092,48 @@ const completeTurn = async (
   claude.emit(sdk(success()));
   await until(() => completedTurnStatuses(sent).length > before);
 };
+
+const taskTurn = async (
+  turns: ReturnType<typeof createTurnController>,
+  sent: Sent[],
+  claude: ReturnType<typeof fakeClaude>,
+  id: number,
+  messages: object[],
+) => {
+  const before = completedTurnStatuses(sent).length;
+  turns.startTurn(turnStart(id, `prompt ${id}`), undefined);
+  await until(() => responseTo(sent, id) !== undefined);
+  for (const message of messages) claude.emit(sdk(message));
+  claude.emit(sdk(success()));
+  await until(() => completedTurnStatuses(sent).length > before);
+};
+
+const taskCall = (toolUseId: string, name: string, input: object) => ({
+  type: "assistant",
+  message: {
+    id: `msg-${toolUseId}`,
+    content: [{ type: "tool_use", id: toolUseId, name, input }],
+    stop_reason: "tool_use",
+  },
+  parent_tool_use_id: null,
+});
+
+const taskResult = (toolUseId: string, output: object) => ({
+  type: "user",
+  message: {
+    role: "user",
+    content: [
+      {
+        type: "tool_result",
+        tool_use_id: toolUseId,
+        content: "ok",
+        is_error: false,
+      },
+    ],
+  },
+  parent_tool_use_id: null,
+  tool_use_result: output,
+});
 
 const skillTurn = async (
   turns: ReturnType<typeof createTurnController>,
