@@ -1,4 +1,4 @@
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { loadLogPath, loadStatePath } from "../runtime/config.ts";
 import { checkAccess } from "../runtime/fs.boundary.ts";
 import { readCommandOutput } from "../runtime/process.boundary.ts";
@@ -44,11 +44,7 @@ process.stdout.write(
 async function findProblem() {
   const unknown = flags.filter((flag) => flag !== "--standard");
   if (unknown.length > 0) return `unknown option ${unknown.join(" ")}`;
-  // The bridge refuses a relative path where nobody sees it, so it is refused here first.
-  const log = loadLogPath(process.env);
-  if (log.isErr()) return log.error.message;
-  const state = loadStatePath(process.env);
-  if (state.isErr()) return state.error.message;
+
   const listed = await readCommandOutput("/bin/ps", [
     "-axo",
     "pid=,ppid=,command=",
@@ -59,6 +55,14 @@ async function findProblem() {
     return `quit ${APP} first, since it reads its environment only when it starts`;
   }
   if (mode === "standard") return null;
+  // The bridge and the launcher refuse a relative path where nobody sees it, so it is refused here first.
+  const log = loadLogPath(process.env);
+  if (log.isErr()) return log.error.message;
+  const state = loadStatePath(process.env);
+  if (state.isErr()) return state.error.message;
+  if (!isAbsolute(paths.codex)) {
+    return "HARNEXUS_CODEX_PATH must be an absolute path";
+  }
   for (const [name, path] of [
     ["the launcher", paths.launcher],
     ["the Codex CLI", paths.codex],
