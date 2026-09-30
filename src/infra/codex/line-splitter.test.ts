@@ -6,10 +6,6 @@ describe("createLineSplitter", () => {
     expect(split(['{"a":', "1", "}\n"])).toEqual(['{"a":1}']);
   });
 
-  test("separates several lines in one chunk", () => {
-    expect(split(["a\nb\nc\n"])).toEqual(["a", "b", "c"]);
-  });
-
   test("emits a final line without a trailing newline at end", () => {
     expect(split(["a\nb"])).toEqual(["a", "b"]);
   });

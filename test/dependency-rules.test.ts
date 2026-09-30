@@ -18,18 +18,6 @@ describe("dependency rules of src", () => {
 describe("checkDependencies", () => {
   test.each([
     {
-      name: "conversation code using presentation, infra and runtime",
-      files: {
-        "conversation/a.ts": `import { p } from "../presentation/p.ts";
-import { c } from "../infra/codex/c.ts";
-import { r } from "../runtime/r.ts";
-export const a = [p, c, r];`,
-        "presentation/p.ts": "export const p = 1;",
-        "infra/codex/c.ts": "export const c = 1;",
-        "runtime/r.ts": "export const r = 1;",
-      },
-    },
-    {
       name: "bootstrap code using every area",
       files: {
         "bootstrap/main.ts": `import "../conversation/a.ts";

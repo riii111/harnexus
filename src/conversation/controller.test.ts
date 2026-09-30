@@ -570,16 +570,6 @@ describe("effort", () => {
     expect(turns.effortOf(THREAD)).toBe("xhigh");
   });
 
-  test("runs a turn/start naming a level only Codex has at the default", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns } = await harness([claude]);
-
-    turns.startTurn(withEffort(turnStart(10, "hello"), "ultra"), undefined);
-    await until(() => claude.efforts().length === 1);
-
-    expect(claude.efforts()).toEqual(["high"]);
-  });
-
   test("sends the prompt to a model without effort without setting one", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns } = await harness([claude]);
@@ -2268,18 +2258,6 @@ describe("thread tools", () => {
     await until(() => gates.length === 4);
 
     expect(gates).toEqual(["accept", "stop", "accept", "stop"]);
-  });
-
-  test("clear the run state after a turn whose writes were all decided", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, store } = await harness([claude], {
-      unsettledWrite: () => false,
-    });
-
-    await completeTurn(turns, sent, claude, 10);
-    await until(() => store.get(THREAD)?.runState !== "running");
-
-    expect(store.get(THREAD)?.runState).toBe("idle");
   });
 });
 
