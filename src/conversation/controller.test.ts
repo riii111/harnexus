@@ -795,7 +795,7 @@ describe("turn metrics", () => {
     expect(await firstPrompt(claude.prompt())).toBe("hello");
     clock = 120;
     claude.emit(sdk(answer("msg-1", "hi")));
-    await settle();
+    await until(() => claude.drained());
     clock = 200;
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -1206,12 +1206,13 @@ describe("keeping the thread on the server's disk", () => {
 
   test("asks again at the next turn after a failure and logs it", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, materialized, events } = await harness([claude], {
-      materializeFailures: 1,
-    });
+    const { turns, sent, materialized, events, store } = await harness(
+      [claude],
+      { materializeFailures: 1 },
+    );
 
     await completeTurn(turns, sent, claude, 10);
-    await settle();
+    await until(() => store.get(THREAD)?.runState === "idle");
     await completeTurn(turns, sent, claude, 11);
 
     expect(materialized).toEqual([THREAD, THREAD]);
@@ -1395,9 +1396,9 @@ describe("turn/interrupt", () => {
     await until(() => claude.started());
     turns.interruptTurn(interrupt(20, "turn-1"));
     await until(() => claude.interrupts() === 1);
-    await settle();
+    await Bun.sleep(0);
     turns.interruptTurn(interrupt(21, "turn-1"));
-    await settle();
+    await until(() => responseTo(sent, 21) !== undefined);
 
     expect(responseTo(sent, 21)).toEqual({ id: 21, result: {} });
     expect(claude.interrupts()).toBe(1);
@@ -1458,7 +1459,7 @@ describe("turn/steer", () => {
     const [prompt, steered] = await readPrompts(claude, 2);
     claude.emit(sdk(answer("msg-1", "first")));
     claude.emit(sdk(success([prompt?.uuid], queued)));
-    await settle();
+    await until(() => claude.drained());
     expect(completedTurnStatuses(sent)).toEqual([]);
     claude.emit(sdk(answer("msg-2", "second")));
     claude.emit(sdk(success([steered?.uuid])));
@@ -1573,7 +1574,7 @@ describe("turn/steer", () => {
     turns.steerTurn(steer(30, "turn-1", "also this"));
     const [prompt, steered] = await readPrompts(claude, 2);
     claude.emit(sdk(success([prompt?.uuid], 1)));
-    await settle();
+    await until(() => claude.drained());
     expect(completedTurnStatuses(sent)).toEqual([]);
     turns.interruptTurn(interrupt(20, "turn-1"));
     await until(() => claude.interrupts() === 1);
@@ -2183,7 +2184,7 @@ describe("clientUserMessageId", () => {
     await until(() => responseTo(sent, 11) !== undefined);
     claude.emit(sdk(success()));
     await until(() => completedTurnStatuses(sent).length === 2);
-    await settle();
+    await until(() => responseTo(sent, 12) !== undefined);
 
     expect(responseTo(sent, 11)?.result).toBeDefined();
     expect(responseTo(sent, 12)).toEqual(DUPLICATE(12));
@@ -2960,7 +2961,7 @@ const skillTurn = async (
   turns.startTurn(turnStart(id, text), undefined);
   await until(() => responseTo(sent, id) !== undefined);
   await until(() => claude.started());
-  await settle();
+  await until(() => claude.drained());
   for (const message of before) claude.emit(message);
   claude.emit(sdk(success()));
   await until(() => completedTurnStatuses(sent).length > done);

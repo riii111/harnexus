@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { once } from "node:events";
 import { PassThrough, type Readable, Writable } from "node:stream";
 import { attachServerRequests } from "./server-requests.ts";
 
@@ -99,11 +100,11 @@ describe("attachServerRequests", () => {
       serverInput: input,
       serverOutput: output,
     });
-    requests.serverInput.on("error", () => {});
+    const inputFailed = once(requests.serverInput, "error");
     void collect(requests.serverOutput);
 
     void requests.request("first", {}, { timeoutMs: 10 });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await inputFailed;
     const result = await requests.request("second", {}, TIMEOUT);
 
     expect(result.isErr() && result.error._tag).toBe("ServerRequestNotSent");
