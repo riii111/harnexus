@@ -71,8 +71,9 @@ export const failed = (checks: readonly Check[]) =>
 const pids = (entries: readonly ProcessEntry[]) =>
   entries.map(({ pid }) => pid).join(" ");
 
+// The path must be a whole word of the command, so a checkout nested under another path does not match.
 const runs = (command: string, path: string) =>
-  command.endsWith(path) || command.includes(`${path} `);
+  ` ${command} `.includes(` ${path} `);
 
 // The SDK starts the Claude Code binary it ships in its platform package.
 const CLAUDE_BINARY = /claude-agent-sdk-[a-z0-9-]+\/claude(\s|$)/;

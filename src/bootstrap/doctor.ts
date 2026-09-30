@@ -124,7 +124,7 @@ async function stateChecks(): Promise<Check[]> {
       ? {
           status: "ok",
           name: "State file",
-          detail: `${path.value} is readable (from this shell's HARNEXUS_STATE_PATH)`,
+          detail: `${path.value} is readable (as this shell's environment sets it)`,
         }
       : {
           status: "fail",
