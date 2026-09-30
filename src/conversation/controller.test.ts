@@ -816,7 +816,7 @@ describe("turn metrics", () => {
     turns.steerTurn(steer(30, "turn-1", "also this"));
     const [prompt, steered] = await readPrompts(claude, 2);
     claude.emit(sdk(success([prompt?.uuid], 1)));
-    await settle();
+    await until(() => events.some((event) => event.step === "metrics"));
     const beforeSteer = events.filter(
       (event) => event.step === "metrics",
     ).length;
