@@ -5,6 +5,7 @@ import {
   type ModelCatalog,
 } from "../infra/claude/models.ts";
 import { delegationSource } from "../infra/codex/delegations.ts";
+import { codexVersion, isVerifiedCodex } from "../infra/codex/versions.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import {
@@ -29,6 +30,7 @@ import {
 
 export type RouteEvent =
   | { event: "model_id_collision"; model: string }
+  | { event: "codex_version"; version: string | null; verified: boolean }
   | { event: "claude_request_refused"; method: RefusedMethod; reason: Refusal }
   | HistoryEvent;
 
@@ -55,6 +57,7 @@ type History = ReturnType<typeof createHistoryRequests>;
 
 // createdModel is the Claude model a thread/start asked for, which the server never sees; history is the Claude thread's record being read while the server opens the thread.
 type Pending =
+  | { kind: "initialize" }
   | { kind: "modelList" }
   | {
       kind: "threadOpen";
@@ -71,8 +74,11 @@ export const createRouter = (
   onDelegated: (sourceThreadId: string, threadId: string) => void,
   history: History,
   claudeModels: ModelCatalog["models"],
+  unverifiedCodex: "warn" | "pause",
 ) => {
   const pending = new Map<AppRequest["id"], Pending>();
+  // Set from the server's initialize answer; while paused the app lists no Claude model and a Claude turn is refused rather than handed to Codex, which would run it without the Claude conversation.
+  let paused = false;
   // A Codex thread switched to Claude by turn/start needs a working directory that the request itself may not carry.
   const cwds = new Map<string, string>();
 
@@ -88,6 +94,9 @@ export const createRouter = (
     const params = isObject(message.params) ? message.params : {};
     const request = { id, params };
     switch (message.method) {
+      case "initialize":
+        pending.set(id, { kind: "initialize" });
+        return line;
       case "model/list":
         pending.set(id, { kind: "modelList" });
         return line;
@@ -102,10 +111,18 @@ export const createRouter = (
         ) {
           return line;
         }
+        if (paused) {
+          refuse("turn/start", request, "claude_paused");
+          return null;
+        }
         turns.startTurn(request, cwdOf(params));
         return null;
       case "turn/steer":
         if (!turns.isClaudeThread(params.threadId)) return line;
+        if (paused) {
+          refuse("turn/steer", request, "claude_paused");
+          return null;
+        }
         turns.steerTurn(request);
         return null;
       case "turn/interrupt":
@@ -151,6 +168,14 @@ export const createRouter = (
     request: AppRequest,
   ) => {
     const { id, params } = request;
+    if (
+      paused &&
+      message.method === "thread/start" &&
+      isClaudeModel(params.model)
+    ) {
+      refuse("thread/start", request, "claude_paused");
+      return null;
+    }
     const threadId =
       message.method === "thread/resume" && typeof params.threadId === "string"
         ? params.threadId
@@ -250,7 +275,15 @@ export const createRouter = (
     if (request === undefined) return line;
     pending.delete(id);
     if (!isObject(message.result)) return line;
+    if (request.kind === "initialize") {
+      const version = codexVersion(message.result.userAgent);
+      const verified = isVerifiedCodex(version);
+      paused = !verified && unverifiedCodex === "pause";
+      log({ event: "codex_version", version, verified });
+      return line;
+    }
     if (request.kind === "modelList") {
+      if (paused) return line;
       const listed = withClaudeModels(
         message.result,
         claudeModels(),
@@ -359,6 +392,12 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
       return { event: entry.event, method: entry.method, reason: entry.reason };
     case "model_id_collision":
       return { event: entry.event, model: entry.model };
+    case "codex_version":
+      return {
+        event: entry.event,
+        version: entry.version,
+        verified: entry.verified,
+      };
     case "claude_history_unreadable":
       return { event: entry.event, error: entry.error };
   }
@@ -367,6 +406,9 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
 const SETTINGS_UPDATED = "thread/settings/updated";
 
 const REFUSED_METHODS = [
+  "thread/start",
+  "turn/start",
+  "turn/steer",
   "thread/resume",
   "thread/settings/update",
   "review/start",

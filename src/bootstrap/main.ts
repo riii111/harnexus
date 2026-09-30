@@ -14,7 +14,11 @@ import { createObserver } from "../infra/codex/observe.ts";
 import { type RelayObserver, relayStreams } from "../infra/codex/relay.ts";
 import { attachServerRequests } from "../infra/codex/server-requests.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
-import { loadShutdownGraceMs, loadStatePath } from "../runtime/config.ts";
+import {
+  loadShutdownGraceMs,
+  loadStatePath,
+  loadUnverifiedCodexPolicy,
+} from "../runtime/config.ts";
 import { openServerPipes } from "../runtime/process.boundary.ts";
 import { connectClaudeThreads } from "./claude-threads.ts";
 import { createBridgeLogger } from "./logging.ts";
@@ -119,6 +123,7 @@ async function withClaude(relay: {
       catalog.effortsOf,
     ),
     claudeModels: catalog.models,
+    unverifiedCodex: loadUnverifiedCodexPolicy(process.env),
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });

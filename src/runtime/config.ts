@@ -60,6 +60,14 @@ export const loadShutdownGraceMs = (
     : DEFAULT_SHUTDOWN_GRACE_MS;
 };
 
+const UNVERIFIED_CODEX_ENV = "HARNEXUS_UNVERIFIED_CODEX";
+
+// "pause" keeps Claude threads from running on a Codex CLI the bridge was not checked on; anything else only warns.
+export const loadUnverifiedCodexPolicy = (
+  env: Record<string, string | undefined>,
+): "warn" | "pause" =>
+  env[UNVERIFIED_CODEX_ENV] === "pause" ? "pause" : "warn";
+
 const DEFAULT_SHUTDOWN_GRACE_MS = 5000;
 
 const DEFAULT_STATE_PATH = ".local/state/harnexus/threads.json";

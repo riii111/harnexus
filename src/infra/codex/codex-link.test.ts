@@ -285,6 +285,7 @@ describe("createCodexLink over the app's turn for the created thread", () => {
       delegations.observe,
       NO_HISTORY,
       createModelCatalog().models,
+      "warn",
     );
     const forwarded: (Buffer | null)[] = [];
     const { client, store } = await connect({
