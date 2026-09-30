@@ -87,6 +87,9 @@ const REFUSAL_MESSAGES = {
   duplicate_message: "this message was already delivered to the Claude thread",
   no_running_turn: "no running Claude turn matches the turn id",
   steer_not_sent: "the Claude turn ended before the steer reached it",
+  nothing_to_compact: "there is no Claude conversation to compact yet",
+  compaction_not_steerable:
+    "a compaction takes no steers; send it as the next turn",
   too_many_steers:
     "this Claude turn takes no more steers; send it as the next turn",
   bridge_closing: "the bridge is shutting down",

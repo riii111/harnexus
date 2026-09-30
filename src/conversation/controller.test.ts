@@ -748,6 +748,7 @@ describe("turn metrics", () => {
       step: "metrics",
       model: MODEL,
       effort: "high",
+      compaction: false,
       totalTokens: 40,
       inputTokens: 34,
       cachedInputTokens: 20,
@@ -2196,6 +2197,134 @@ describe("turn/start arriving on a busy thread", () => {
   });
 });
 
+describe("thread/compact/start on a Claude thread", () => {
+  test("answers at once with an empty result, sends /compact and shows the compaction as the turn's only item", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, events } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+    const before = sent.length;
+
+    turns.compactThread(compactStart(20));
+    await until(() => startedTurns(sent).length === 2);
+    expect((await promptsUntil(claude, 2))[1]).toBe("/compact");
+    claude.emit(sdk(compactBoundary("manual")));
+    claude.emit(sdk(compacted()));
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(sent.slice(before).map((m) => m.method ?? "response")).toEqual([
+      "response",
+      "thread/status/changed",
+      "turn/started",
+      "item/started",
+      "item/completed",
+      "thread/compacted",
+      "thread/tokenUsage/updated",
+      "thread/status/changed",
+      "turn/completed",
+    ]);
+    expect(responseTo(sent, 20)?.result).toEqual({});
+    expect(completedItems(sent.slice(before))).toEqual([
+      { type: "contextCompaction", id: "turn-2-item-1" },
+    ]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
+    expect(
+      events.flatMap((event) =>
+        event.step === "metrics" ? [event.compaction] : [],
+      ),
+    ).toEqual([false, true]);
+  });
+
+  test("waits behind a running turn and then compacts the same Claude session", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    turns.compactThread(compactStart(11));
+    await settle();
+    expect(responseTo(sent, 11)?.result).toEqual({});
+    expect(startedTurns(sent)).toEqual(["turn-1"]);
+    claude.emit(sdk(answer("msg-1", "hi")));
+    claude.emit(sdk(success()));
+    await until(() => startedTurns(sent).length === 2);
+    claude.emit(sdk(compactBoundary("manual")));
+    claude.emit(sdk(compacted()));
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(await promptsUntil(claude, 2)).toEqual(["hello", "/compact"]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
+    expect(settings).toHaveLength(1);
+  });
+
+  test.each([
+    {
+      name: "a thread that never ran",
+      prepare: async () => {
+        const claude = fakeClaude(SUBSCRIPTION);
+        return { claude, ...(await harness([claude])) };
+      },
+    },
+    {
+      name: "a thread whose Claude conversation was found lost",
+      prepare: async () => {
+        const first = fakeClaude(SUBSCRIPTION);
+        const before = await harness([first]);
+        await completeTurn(before.turns, before.sent, first, 10);
+        await until(() => before.store.get(THREAD)?.runState === "idle");
+        const claude = fakeClaude(SUBSCRIPTION);
+        const after = await harness([claude], { missingSessions: ["se-1"] });
+        after.turns.startTurn(turnStart(11, "hello"), undefined);
+        await until(() => after.store.get(THREAD)?.sessionId === null);
+        await until(() => after.store.get(THREAD)?.runState === "idle");
+        return { claude, ...after };
+      },
+    },
+  ])("refuses to compact $name without starting Claude", async ({
+    prepare,
+  }) => {
+    const { claude, turns, sent } = await prepare();
+
+    turns.compactThread(compactStart(20));
+    await settle();
+
+    expect(responseTo(sent, 20)?.error.message).toBe(
+      "there is no Claude conversation to compact yet",
+    );
+    expect(claude.started()).toBe(false);
+  });
+
+  test("refuses a steer into a running compaction", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+    turns.compactThread(compactStart(20));
+    await until(() => startedTurns(sent).length === 2);
+
+    turns.steerTurn(steer(21, "turn-2", "more"));
+
+    expect(responseTo(sent, 21)).toEqual(REFUSED(21));
+    expect((await promptsUntil(claude, 2))[1]).toBe("/compact");
+    expect(
+      completedItems(sent).filter((item) => item.type === "userMessage"),
+    ).toHaveLength(1);
+  });
+
+  test("fails a compaction on a thread whose last turn has an unknown outcome without starting Claude", async () => {
+    const second = fakeClaude(SUBSCRIPTION);
+    const after = await restartedWithUnknownOutcome([second]);
+
+    after.turns.compactThread(compactStart(20));
+    await until(() => turnCompleted(after.sent) !== undefined);
+
+    expect(responseTo(after.sent, 20)?.result).toEqual({});
+    expect(turnCompleted(after.sent)).toMatchObject({
+      status: "failed",
+      error: { message: OUTCOME_UNKNOWN },
+    });
+    expect(second.started()).toBe(false);
+  });
+});
+
 describe("clientUserMessageId", () => {
   test("refuses a copy of a message that is still waiting to run", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -3166,6 +3295,11 @@ const turnStart = (id: number, text: string, threadId = THREAD) => ({
   } as Record<string, unknown>,
 });
 
+const compactStart = (id: number) => ({
+  id,
+  params: { threadId: THREAD } as Record<string, unknown>,
+});
+
 const steer = (id: number, turnId: string, text: string) => ({
   id,
   params: {
@@ -3355,6 +3489,16 @@ const success = (taken?: (string | undefined)[], queued?: number) =>
     ...(taken !== undefined && { user_message_uuids: taken }),
     ...(queued !== undefined && { queued_turn_count: queued }),
   });
+
+const compactBoundary = (trigger: "manual" | "auto") => ({
+  type: "system",
+  subtype: "compact_boundary",
+  compact_metadata: { trigger, pre_tokens: 20_000, post_tokens: 2_000 },
+});
+
+// The CLI ends /compact with an empty successful result.
+const compacted = () =>
+  result({ subtype: "success", is_error: false, result: "" });
 
 // Every result carries its turn's usage, as the SDK's does.
 const result = (fields: object) => ({

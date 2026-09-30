@@ -40,12 +40,13 @@ describe("createBridgeLogger", () => {
     expect(log).not.toContain("private text");
   });
 
-  test("records a turn's metrics with only its counts, durations, model and effort", () => {
+  test("records a turn's metrics with only its counts, durations, model, effort and whether it compacted", () => {
     const entry = {
       event: "claude_turn",
       step: "metrics",
       model: "claude-sonnet-5-5",
       effort: "high",
+      compaction: true,
       totalTokens: 40,
       inputTokens: 34,
       cachedInputTokens: 20,

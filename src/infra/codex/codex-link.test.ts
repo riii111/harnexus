@@ -781,6 +781,7 @@ const CODEX_ONLY_TURNS: Parameters<typeof createRouter>[0] = {
   adopt: () => expect.unreachable("no Claude thread in this session"),
   changeModel: () => expect.unreachable("no Claude thread in this session"),
   startTurn: () => expect.unreachable("no Claude thread in this session"),
+  compactThread: () => expect.unreachable("no Claude thread in this session"),
   steerTurn: () => expect.unreachable("no Claude thread in this session"),
   interruptTurn: () => expect.unreachable("no Claude thread in this session"),
   reject: () => expect.unreachable("no Claude thread in this session"),

@@ -44,7 +44,7 @@ export const buildHistory = (
         }
       } else if (INTERRUPTED.test(prompt)) {
         if (replay !== null) replay = interrupt(replay);
-      } else {
+      } else if (!LOCAL_COMMAND.test(prompt)) {
         if (replay !== null) turns.push(close(replay));
         replay = start(thread, message.uuid, prompt, at);
       }
@@ -222,3 +222,7 @@ const HISTORY_TURN_PREFIX = "harnexus-history-";
 
 // Claude Code writes these as user messages when a turn is stopped.
 const INTERRUPTED = /^\[Request interrupted by user/;
+
+// A slash command such as /compact is recorded as its command, caveat and output rather than as a prompt Claude answered.
+const LOCAL_COMMAND =
+  /^<(command-name|local-command-stdout|local-command-caveat)>/;

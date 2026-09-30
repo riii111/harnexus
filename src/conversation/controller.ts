@@ -88,6 +88,7 @@ export type TurnEvent =
       step: "metrics";
       model: string;
       effort: EffortLevel | null;
+      compaction: boolean;
       sessionStartMs: number | null;
       firstMessageMs: number | null;
       turnMs: number;
@@ -203,6 +204,7 @@ type TurnRequest = {
   turnId: string;
   answered: boolean;
   stopped: boolean;
+  compaction: boolean;
 };
 
 type TextInput = {
@@ -334,10 +336,6 @@ export const createTurnController = ({
     // A turn/start without an effort, such as another thread's reply, runs at the thread's level.
     const effort = requestedEffort(params);
     if (effort !== undefined) selectEffort(threadId, effort);
-    cancelIdleClose(threadId);
-    const inFlight = turnsInFlight.get(threadId) ?? 0;
-    if (inFlight > 0) log({ event: "claude_turn", step: "queued" });
-    turnsInFlight.set(threadId, inFlight + 1);
     const turn = {
       ...input,
       permissionMode: selectMode(
@@ -352,33 +350,84 @@ export const createTurnController = ({
         threads.threadOf,
       ),
     };
+    acceptTurn(id, threadId, checked.thread, turn, messageId, false);
+  };
+
+  // A compaction runs as a turn whose prompt is Claude's /compact, so it waits behind a running turn and meets the same stops and unknown outcomes; the app's empty answer comes on acceptance and the turn's notifications show the rest.
+  const compactThread = ({ id, params }: AppRequest) => {
+    const threadId = params.threadId;
+    if (typeof threadId !== "string") {
+      refuse(id, "missing_thread");
+      return;
+    }
+    const checked = checkThread(params, threads.threadOf(threadId), undefined);
+    if ("refusal" in checked) {
+      refuse(id, checked.refusal);
+      return;
+    }
+    if (closed) {
+      refuse(id, "bridge_closing");
+      return;
+    }
+    // Without a conversation Claude only reports there is nothing to compact; a turn already accepted may still start one, and a session whose record vanished is found only when the turn runs, since looking it up here would let a later request start first.
+    if (
+      threads.sessionIdOf(threadId) === null &&
+      !turnsInFlight.has(threadId)
+    ) {
+      refuse(id, "nothing_to_compact");
+      return;
+    }
+    const turn = {
+      items: [],
+      toolOutput: null,
+      text: COMPACT_PROMPT,
+      permissionMode: modes.get(threadId) ?? "default",
+      effort: threads.pickedEffortOf(threadId),
+      requester: null,
+    };
+    acceptTurn(id, threadId, checked.thread, turn, null, true);
+  };
+
+  const acceptTurn = (
+    id: AppRequest["id"],
+    threadId: string,
+    thread: Thread,
+    turn: TurnInput,
+    messageId: string | null,
+    compaction: boolean,
+  ) => {
+    cancelIdleClose(threadId);
+    const inFlight = turnsInFlight.get(threadId) ?? 0;
+    if (inFlight > 0) log({ event: "claude_turn", step: "queued" });
+    turnsInFlight.set(threadId, inFlight + 1);
     const request = {
       id,
       turnId: newTurnId(),
-      answered: inFlight > 0,
+      answered: compaction || inFlight > 0,
       stopped: false,
+      compaction,
     };
-    if (request.answered) {
-      waitingTurns.set(request.turnId, { threadId, request });
+    if (inFlight > 0) waitingTurns.set(request.turnId, { threadId, request });
+    if (compaction) {
+      send({ id, result: {} });
+    } else if (request.answered) {
       const waiting = renderTurnStarted({
         threadId,
         turnId: request.turnId,
-        cwd: checked.thread.cwd,
+        cwd: thread.cwd,
         now: now(),
       });
       send({ id, result: { turn: waiting.turn } });
     }
-    void runTurn(request, checked.thread, threadId, turn, messageId).then(
-      () => {
-        const left = (turnsInFlight.get(threadId) ?? 1) - 1;
-        if (left > 0) {
-          turnsInFlight.set(threadId, left);
-          return;
-        }
-        turnsInFlight.delete(threadId);
-        scheduleIdleClose(threadId);
-      },
-    );
+    void runTurn(request, thread, threadId, turn, messageId).then(() => {
+      const left = (turnsInFlight.get(threadId) ?? 1) - 1;
+      if (left > 0) {
+        turnsInFlight.set(threadId, left);
+        return;
+      }
+      turnsInFlight.delete(threadId);
+      scheduleIdleClose(threadId);
+    });
   };
 
   // Each worker keeps its own Claude process, so an idle one is closed; without a session id its next turn could not resume the conversation, so it stays.
@@ -413,6 +462,11 @@ export const createTurnController = ({
       state.turnId !== params.expectedTurnId
     ) {
       refuse(id, "no_running_turn");
+      return;
+    }
+    // Codex also takes no steer into a compaction, whose prompt Claude runs as a command rather than a conversation turn.
+    if (state.compaction) {
+      refuse(id, "compaction_not_steerable");
       return;
     }
     const input = textInput(params.input, null);
@@ -751,6 +805,7 @@ export const createTurnController = ({
       turnId: request.turnId,
       cwd: record.worktree,
       now: now(),
+      compaction: request.compaction,
     });
     apply(active, started);
     if (!request.answered)
@@ -876,6 +931,7 @@ export const createTurnController = ({
           step: "metrics",
           model,
           effort,
+          compaction: request.compaction,
           ...breakdown(message.usage),
           sessionStartMs,
           firstMessageMs,
@@ -1157,6 +1213,7 @@ export const createTurnController = ({
 
   return {
     startTurn,
+    compactThread,
     steerTurn,
     interruptTurn,
     changeModel: threads.changeModel,
@@ -1204,6 +1261,7 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
         step: entry.step,
         model: entry.model,
         effort: entry.effort,
+        compaction: entry.compaction,
         inputTokens: entry.inputTokens,
         cachedInputTokens: entry.cachedInputTokens,
         cacheWriteInputTokens: entry.cacheWriteInputTokens,
@@ -1424,6 +1482,8 @@ const isTextItem = (item: unknown): item is { type: "text"; text: string } =>
   typeof item.text === "string";
 
 const INVALID_REQUEST = -32600;
+
+const COMPACT_PROMPT = "/compact";
 
 const IDLE_SESSION_MS = 10 * 60_000;
 

@@ -404,6 +404,105 @@ describe("renderSdkMessage turn end", () => {
   });
 });
 
+describe("renderSdkMessage compaction", () => {
+  test("shows a compaction Claude made on its own inside the turn and keeps the turn's reply", () => {
+    const out = run([
+      compactBoundary("auto"),
+      assistant("msg-1", [{ type: "text", text: "after" }], "end_turn"),
+      success(),
+    ]);
+
+    expect(itemEvents(out)).toEqual([
+      "item/started userMessage",
+      "item/completed userMessage",
+      "item/started contextCompaction",
+      "item/completed contextCompaction",
+      "item/started agentMessage",
+      "item/completed agentMessage",
+    ]);
+    expect(
+      notificationsOf(out, "thread/compacted").map((n) => n.params),
+    ).toEqual([{ threadId: "th-1", turnId: "tu-1" }]);
+    expect(messageTexts(out)).toEqual(["after"]);
+    expect(turnCompleted(out)).toMatchObject({ status: "completed" });
+  });
+
+  test("shows a compaction the app asked for as its only item, past the summary Claude continues from", () => {
+    const out = runCompaction([
+      compactionStatus({ status: "compacting" }),
+      compactionStatus({ status: null, compact_result: "success" }),
+      compactBoundary("manual"),
+      {
+        type: "user",
+        message: { role: "user", content: "summary of earlier turns" },
+        parent_tool_use_id: null,
+        isSynthetic: true,
+      },
+      result({ subtype: "success", is_error: false, result: "" }),
+    ]);
+
+    expect(itemEvents(out)).toEqual([
+      "item/started contextCompaction",
+      "item/completed contextCompaction",
+    ]);
+    expect(notificationsOf(out, "thread/compacted")).toHaveLength(1);
+    expect(turnCompleted(out)).toMatchObject({ status: "completed" });
+  });
+
+  test("fails a compaction the app asked for with Claude's reason instead of showing it as a reply", () => {
+    const out = runCompaction([
+      compactionStatus({ status: "compacting" }),
+      compactionStatus({
+        status: null,
+        compact_result: "failed",
+        compact_error: "Not enough messages to compact.",
+      }),
+      assistant(
+        "msg-1",
+        [{ type: "text", text: "Not enough messages to compact." }],
+        "end_turn",
+      ),
+      result({
+        subtype: "success",
+        is_error: false,
+        result: "Not enough messages to compact.",
+      }),
+    ]);
+
+    expect(itemEvents(out)).toEqual([]);
+    expect(turnCompleted(out)).toMatchObject({
+      status: "failed",
+      error: { message: "Not enough messages to compact." },
+    });
+  });
+
+  test("fails a compaction the app asked for that ended without compacting", () => {
+    const out = runCompaction([
+      result({ subtype: "success", is_error: false, result: "" }),
+    ]);
+
+    expect(turnCompleted(out)).toMatchObject({
+      status: "failed",
+      error: { message: "Claude did not compact the conversation" },
+    });
+  });
+
+  test("leaves a turn whose own compaction failed to end as its result says", () => {
+    const out = run([
+      compactionStatus({
+        status: null,
+        compact_result: "failed",
+        compact_error: "compaction failed",
+      }),
+      assistant("msg-1", [{ type: "text", text: "done anyway" }], "end_turn"),
+      success(),
+    ]);
+
+    expect(messageTexts(out)).toEqual(["done anyway"]);
+    expect(turnCompleted(out)).toMatchObject({ status: "completed" });
+  });
+});
+
 describe("renderInterimResult", () => {
   test("corrects denials and keeps the turn open for the Claude turn that follows", () => {
     const before = run([
@@ -664,6 +763,26 @@ const run = (messages: object[]) => {
   return { state, notifications: all };
 };
 
+const runCompaction = (messages: object[]) => {
+  let { state, notifications } = renderTurnStarted({
+    threadId: "th-1",
+    turnId: "tu-1",
+    cwd: "/fixture/work",
+    now: NOW,
+    compaction: true,
+  });
+  const all = [...notifications];
+  for (const message of messages) {
+    ({ state, notifications } = renderSdkMessage(
+      deepFreeze(state),
+      sdk(message),
+      NOW,
+    ));
+    all.push(...notifications);
+  }
+  return { state, notifications: all };
+};
+
 // Callers may keep earlier states, so rendering must not mutate its input.
 const deepFreeze = <T>(value: T): T => {
   if (typeof value === "object" && value !== null && !Object.isFrozen(value)) {
@@ -766,6 +885,18 @@ const toolResult = (
 
 const success = () =>
   result({ subtype: "success", is_error: false, result: "done" });
+
+const compactBoundary = (trigger: "manual" | "auto") => ({
+  type: "system",
+  subtype: "compact_boundary",
+  compact_metadata: { trigger, pre_tokens: 20_000, post_tokens: 2_000 },
+});
+
+const compactionStatus = (fields: object) => ({
+  type: "system",
+  subtype: "status",
+  ...fields,
+});
 
 const result = (fields: object) => ({
   type: "result",
