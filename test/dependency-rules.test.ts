@@ -67,79 +67,48 @@ export const p = [o, j];`,
     expect(problems).toEqual([]);
   });
 
-  test.each([
-    {
-      name: "a value import from infra into conversation",
-      files: {
+  test("reports value, type-only, dynamic, import-type and re-export references breaking the area rules", async () => {
+    const references = await collectReferences(
+      await writeProject({
         "infra/codex/c.ts": `import { a } from "../../conversation/a.ts";
 export const c = a;`,
-        "conversation/a.ts": "export const a = 1;",
-      },
-      expected: [
-        "infra/codex/c.ts -> conversation/a.ts: infra/ may not reference conversation/",
-      ],
-    },
-    {
-      name: "a type-only import from runtime into presentation",
-      files: {
         "runtime/r.ts": `import type { P } from "../presentation/p.ts";
 export type R = P;`,
-        "presentation/p.ts": "export type P = 1;",
-      },
-      expected: [
-        "runtime/r.ts -> presentation/p.ts: runtime/ may not reference presentation/",
-      ],
-    },
-    {
-      name: "a re-export of infra/codex from infra/claude",
-      files: {
         "infra/claude/s.ts": `export * from "../codex/c.ts";`,
-        "infra/codex/c.ts": "export const c = 1;",
-      },
-      expected: [
-        "infra/claude/s.ts -> infra/codex/c.ts: infra/claude/ may not reference infra/codex/",
-      ],
-    },
-    {
-      name: "a dynamic import of infra from presentation",
-      files: {
-        "presentation/p.ts": `export const load = () => import("../infra/thread-store.ts");`,
+        "presentation/p.ts": `export type P = 1;
+export const load = () => import("../infra/thread-store.ts");`,
+        "conversation/a.ts": `export const a = 1;
+export type M = typeof import("../bootstrap/main.ts");`,
         "infra/thread-store.ts": "export const s = 1;",
-      },
-      expected: [
-        "presentation/p.ts -> infra/thread-store.ts: presentation/ may not reference infra/",
-      ],
-    },
-    {
-      name: "an import type of bootstrap from conversation",
-      files: {
-        "conversation/a.ts": `export type M = typeof import("../bootstrap/main.ts");`,
         "bootstrap/main.ts": "export const m = 1;",
-      },
-      expected: [
-        "conversation/a.ts -> bootstrap/main.ts: conversation/ may not reference bootstrap/",
-      ],
-    },
-    {
-      name: "an I/O boundary used from presentation",
-      files: {
-        "presentation/p.ts": `import { f } from "../runtime/fs.boundary.ts";
-export const p = f;`,
-        "runtime/fs.boundary.ts": "export const f = 1;",
-      },
-      expected: [
-        "presentation/p.ts -> runtime/fs.boundary.ts: presentation/ may not reference an I/O boundary",
-      ],
-    },
-  ])("reports a reference breaking the area rules through $name", async ({
-    files,
-    expected,
-  }) => {
-    const references = await collectReferences(await writeProject(files));
+      }),
+    );
 
     const problems = checkDependencies(references, []);
 
-    expect(problems).toEqual(expected);
+    expect(problems).toEqual([
+      "conversation/a.ts -> bootstrap/main.ts: conversation/ may not reference bootstrap/",
+      "infra/claude/s.ts -> infra/codex/c.ts: infra/claude/ may not reference infra/codex/",
+      "infra/codex/c.ts -> conversation/a.ts: infra/ may not reference conversation/",
+      "presentation/p.ts -> infra/thread-store.ts: presentation/ may not reference infra/",
+      "runtime/r.ts -> presentation/p.ts: runtime/ may not reference presentation/",
+    ]);
+  });
+
+  test("reports an I/O boundary used from presentation", async () => {
+    const references = await collectReferences(
+      await writeProject({
+        "presentation/p.ts": `import { f } from "../runtime/fs.boundary.ts";
+export const p = f;`,
+        "runtime/fs.boundary.ts": "export const f = 1;",
+      }),
+    );
+
+    const problems = checkDependencies(references, []);
+
+    expect(problems).toEqual([
+      "presentation/p.ts -> runtime/fs.boundary.ts: presentation/ may not reference an I/O boundary",
+    ]);
   });
 
   test.each([

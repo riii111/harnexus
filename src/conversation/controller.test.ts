@@ -6,6 +6,7 @@ import {
   type AccountInfo,
   type CanUseTool,
   createSdkMcpServer,
+  type EffortLevel,
   type SDKMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -46,9 +47,9 @@ afterEach(async () => {
 });
 
 describe("turn/start on a Claude thread", () => {
-  test("answers with the turn, sends the prompt and completes from Claude's result", async () => {
+  test("answers with the turn, sends the prompt, completes from Claude's result and logs it as finished", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, store, settings } = await harness([claude]);
+    const { turns, sent, store, settings, events } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => responseTo(sent, 10) !== undefined);
@@ -74,14 +75,6 @@ describe("turn/start on a Claude thread", () => {
       worktree: dir,
       model: MODEL,
     });
-  });
-
-  test("logs a turn Claude completes as finished", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, events } = await harness([claude]);
-
-    await completeTurn(turns, sent, claude, 10);
-
     expect(
       events.filter(
         (event) => event.event === "claude_turn" && event.step === "finished",
@@ -94,17 +87,6 @@ describe("turn/start on a Claude thread", () => {
         error: null,
       },
     ]);
-  });
-
-  test("keeps one Claude session for the thread across turns", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, settings } = await harness([claude]);
-
-    await completeTurn(turns, sent, claude, 10);
-    await completeTurn(turns, sent, claude, 11);
-
-    expect(settings).toHaveLength(1);
-    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
   });
 
   test("accepts the next turn sent while the app receives turn/completed", async () => {
@@ -135,6 +117,43 @@ describe("turn/start on a Claude thread", () => {
 
     expect(responseTo(sent, 10)?.result).toBeDefined();
     expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
+  });
+
+  test.each<{
+    name: string;
+    options: NonNullable<Parameters<typeof fakeClaude>[1]>;
+    request: () => ReturnType<typeof turnStart>;
+    tag: string;
+  }>([
+    {
+      name: "the mode",
+      options: { permissionModeError: new Error("no control channel") },
+      request: () => turnStart(10, "hello"),
+      tag: "ClaudePermissionModeFailed",
+    },
+    {
+      name: "the effort",
+      options: { effortError: new Error("no control channel") },
+      request: () => withEffort(turnStart(10, "hello"), "high"),
+      tag: "ClaudeEffortFailed",
+    },
+  ])("fails the turn without sending the prompt when Claude refuses $name", async ({
+    options,
+    request,
+    tag,
+  }) => {
+    const claude = fakeClaude(SUBSCRIPTION, options);
+    const { turns, sent, events } = await harness([claude]);
+
+    turns.startTurn(request(), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
+    expect(events).toContainEqual(
+      expect.objectContaining({ step: "finished", error: tag }),
+    );
+    expect(claude.closes()).toBe(1);
+    expect(await claude.prompts()).toEqual([]);
   });
 
   test("resumes the session after the stream fails", async () => {
@@ -284,36 +303,39 @@ describe("tool approval", () => {
     );
   });
 
-  test.each<{ name: string; stop: (turns: Turns) => void }>([
+  test.each<{
+    name: string;
+    stop: (turns: Turns, claude: ReturnType<typeof fakeClaude>) => void;
+    status: string | undefined;
+  }>([
     {
       name: "the turn is interrupted",
       stop: (turns) => turns.interruptTurn(interrupt(20, "turn-1")),
+      status: undefined,
     },
-    { name: "the bridge closes", stop: (turns) => turns.closeAll() },
+    {
+      name: "the bridge closes",
+      stop: (turns) => turns.closeAll(),
+      status: undefined,
+    },
+    {
+      name: "the turn fails",
+      stop: (_turns, claude) => claude.fail(new Error("socket closed")),
+      status: "failed",
+    },
   ])("denies a waiting tool and closes its prompt when $name", async ({
     stop,
+    status,
   }) => {
     const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
     const { turns, sent } = await startedTurn(claude);
 
     const decision = askTool(claude, "Bash", { command: "ls" });
     const request = await appRequest(sent);
-    stop(turns);
+    stop(turns, claude);
 
     expect((await decision)?.behavior).toBe("deny");
-    expect(resolvedRequests(sent)).toEqual([request.id]);
-  });
-
-  test("denies a waiting tool and closes its prompt when the turn fails", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { sent } = await startedTurn(claude);
-
-    const decision = askTool(claude, "Bash", { command: "ls" });
-    const request = await appRequest(sent);
-    claude.fail(new Error("socket closed"));
-
-    expect((await decision)?.behavior).toBe("deny");
-    expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
+    expect(turnCompleted(sent)?.status).toBe(status);
     expect(resolvedRequests(sent)).toEqual([request.id]);
   });
 
@@ -400,26 +422,6 @@ describe("permission mode", () => {
     expect(claude.modes()).toEqual([expected]);
   });
 
-  test("fails the turn without sending the prompt when Claude refuses the mode", async () => {
-    const claude = fakeClaude(SUBSCRIPTION, {
-      permissionModeError: new Error("no control channel"),
-    });
-    const { turns, sent, events } = await harness([claude]);
-
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => turnCompleted(sent) !== undefined);
-
-    expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        step: "finished",
-        error: "ClaudePermissionModeFailed",
-      }),
-    );
-    expect(claude.closes()).toBe(1);
-    expect(await claude.prompts()).toEqual([]);
-  });
-
   test("runs a turn without a mode in the mode picked earlier", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns } = await harness([claude]);
@@ -433,43 +435,50 @@ describe("permission mode", () => {
 });
 
 describe("effort", () => {
-  test("sets the effort a turn/start names and logs the level", async () => {
+  test.each<{
+    name: string;
+    request: () => ReturnType<typeof turnStart>;
+    expected: EffortLevel;
+  }>([
+    {
+      name: "the turn/start",
+      request: () => withEffort(turnStart(10, "hello"), "high"),
+      expected: "high",
+    },
+    {
+      name: "the collaboration mode when the turn/start has none",
+      request: () => {
+        const request = turnStart(10, "hello");
+        return {
+          ...request,
+          params: {
+            ...request.params,
+            collaborationMode: {
+              mode: "default",
+              settings: { model: MODEL, reasoning_effort: "xhigh" },
+            },
+          },
+        };
+      },
+      expected: "xhigh",
+    },
+  ])("sets the effort $name names and logs the level", async ({
+    request,
+    expected,
+  }) => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, events } = await harness([claude]);
 
-    turns.startTurn(withEffort(turnStart(10, "hello"), "high"), undefined);
+    turns.startTurn(request(), undefined);
     await until(() => claude.started());
 
     expect(await firstPrompt(claude.prompt())).toBe("hello");
-    expect(claude.efforts()).toEqual(["high"]);
+    expect(claude.efforts()).toEqual([expected]);
     expect(events).toContainEqual({
       event: "claude_turn",
       step: "effort_applied",
-      effort: "high",
+      effort: expected,
     });
-  });
-
-  test("reads the effort from the collaboration mode when the turn/start has none", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns } = await harness([claude]);
-    const request = turnStart(10, "hello");
-
-    turns.startTurn(
-      {
-        ...request,
-        params: {
-          ...request.params,
-          collaborationMode: {
-            mode: "default",
-            settings: { model: MODEL, reasoning_effort: "xhigh" },
-          },
-        },
-      },
-      undefined,
-    );
-    await until(() => claude.efforts().length === 1);
-
-    expect(claude.efforts()).toEqual(["xhigh"]);
   });
 
   test("runs another thread's reply, which names no effort, at the thread's effort", async () => {
@@ -591,39 +600,6 @@ describe("effort", () => {
     expect(store.get(THREAD)?.effort).toBe("high");
   });
 
-  test("fails the turn without sending the prompt when Claude refuses the effort", async () => {
-    const claude = fakeClaude(SUBSCRIPTION, {
-      effortError: new Error("no control channel"),
-    });
-    const { turns, sent, events } = await harness([claude]);
-
-    turns.startTurn(withEffort(turnStart(10, "hello"), "high"), undefined);
-    await until(() => turnCompleted(sent) !== undefined);
-
-    expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        step: "finished",
-        error: "ClaudeEffortFailed",
-      }),
-    );
-    expect(claude.closes()).toBe(1);
-    expect(await claude.prompts()).toEqual([]);
-  });
-
-  test("sets the effort again on the session restarted for a model change", async () => {
-    const first = fakeClaude(SUBSCRIPTION);
-    const second = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([first, second]);
-    await completeTurn(turns, sent, first, 10, undefined, "xhigh");
-
-    turns.changeModel(THREAD, OTHER_MODEL);
-    await completeTurn(turns, sent, second, 11);
-
-    expect(first.efforts()).toEqual(["xhigh"]);
-    expect(second.efforts()).toEqual(["xhigh"]);
-  });
-
   test("saves the effort so the thread runs at it after a restart", async () => {
     const before = fakeClaude(SUBSCRIPTION);
     const first = await harness([before]);
@@ -706,20 +682,7 @@ describe("effort", () => {
 });
 
 describe("token usage", () => {
-  test("reports a turn's usage before the turn completes", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
-
-    await completeTurn(turns, sent, claude, 10);
-
-    const methods = sent.map((message) => message.method);
-    expect(methods.indexOf("thread/tokenUsage/updated")).toBeGreaterThan(-1);
-    expect(methods.indexOf("thread/tokenUsage/updated")).toBeLessThan(
-      methods.indexOf("turn/completed"),
-    );
-  });
-
-  test("adds each turn's usage to its own thread's total", async () => {
+  test("adds each turn's usage to its own thread's total and reports it before the turn completes", async () => {
     const first = fakeClaude(SUBSCRIPTION);
     const second = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await twoWorkers([first, second]);
@@ -736,35 +699,44 @@ describe("token usage", () => {
       { threadId: OTHER_THREAD, total: 40, window: 200_000 },
       { threadId: THREAD, total: 80, window: 200_000 },
     ]);
+    const methods = sent.map((message) => message.method);
+    expect(methods.indexOf("thread/tokenUsage/updated")).toBeGreaterThan(-1);
+    expect(methods.indexOf("thread/tokenUsage/updated")).toBeLessThan(
+      methods.indexOf("turn/completed"),
+    );
   });
 });
 
 describe("turn metrics", () => {
-  test("logs each result's model, effort, tokens and durations", async () => {
+  test("keeps one Claude session across turns and logs each result's model, effort, tokens and durations with a start time only for the first", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     let clock = 1_700_000_000_000;
-    const { turns, sent, events } = await harness([claude], {
+    const { turns, sent, events, settings } = await harness([claude], {
       now: () => (clock += 10),
     });
 
     await completeTurn(turns, sent, claude, 10);
+    await completeTurn(turns, sent, claude, 11);
 
+    const metrics = {
+      event: "claude_turn",
+      step: "metrics",
+      model: MODEL,
+      effort: "high",
+      totalTokens: 40,
+      inputTokens: 34,
+      cachedInputTokens: 20,
+      cacheWriteInputTokens: 10,
+      outputTokens: 6,
+      reasoningOutputTokens: 0,
+      firstMessageMs: expect.any(Number),
+      turnMs: expect.any(Number),
+    } as const;
+    expect(settings).toHaveLength(1);
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
     expect(events.filter((event) => event.step === "metrics")).toEqual([
-      {
-        event: "claude_turn",
-        step: "metrics",
-        model: MODEL,
-        effort: "high",
-        totalTokens: 40,
-        inputTokens: 34,
-        cachedInputTokens: 20,
-        cacheWriteInputTokens: 10,
-        outputTokens: 6,
-        reasoningOutputTokens: 0,
-        sessionStartMs: expect.any(Number),
-        firstMessageMs: expect.any(Number),
-        turnMs: expect.any(Number),
-      },
+      { ...metrics, sessionStartMs: expect.any(Number) },
+      { ...metrics, sessionStartMs: null },
     ]);
   });
 
@@ -818,20 +790,6 @@ describe("turn metrics", () => {
       after: events.filter((event) => event.step === "metrics").length,
     }).toEqual({ beforeSteer: 1, after: 2 });
   });
-
-  test("logs no start time for a turn on a Claude session already running", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, events } = await harness([claude]);
-
-    await completeTurn(turns, sent, claude, 10);
-    await completeTurn(turns, sent, claude, 11);
-
-    expect(
-      events
-        .filter((event) => event.step === "metrics")
-        .map((event) => "sessionStartMs" in event && event.sessionStartMs),
-    ).toEqual([0, null]);
-  });
 });
 
 describe("session ids", () => {
@@ -881,6 +839,10 @@ describe("a thread whose last turn has an unknown outcome", () => {
 
     expect(responseTo(sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
     expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "outcome_unknown",
+    });
     expect(events).toContainEqual({
       event: "claude_turn",
       step: "outcome_cleared",
@@ -1211,19 +1173,6 @@ describe("keeping the thread on the server's disk", () => {
       step: "thread_not_materialized",
       error: "ServerRequestUnanswered",
     });
-  });
-
-  test("does not ask for a turn refused before it runs", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, materialized } = await harness([claude]);
-
-    turns.startTurn(
-      { id: 10, params: { threadId: THREAD, input: [{ type: "image" }] } },
-      undefined,
-    );
-    await until(() => responseTo(sent, 10) !== undefined);
-
-    expect(materialized).toEqual([]);
   });
 });
 
@@ -1780,17 +1729,19 @@ describe("skill links in Claude input", () => {
 });
 
 describe("model changes", () => {
-  test("restart Claude on the new model at the next turn and resume the conversation", async () => {
+  test("restart Claude on the new model at the next turn and resume the conversation at the same effort", async () => {
     const first = fakeClaude(SUBSCRIPTION);
     const second = fakeClaude(SUBSCRIPTION);
     const { turns, sent, settings, store } = await harness([first, second]);
 
-    await completeTurn(turns, sent, first, 10);
+    await completeTurn(turns, sent, first, 10, undefined, "xhigh");
     turns.changeModel(THREAD, OTHER_MODEL);
     await completeTurn(turns, sent, second, 11);
 
     expect(first.closes()).toBe(1);
     expect(settings[1]).toMatchObject({ model: OTHER_MODEL, resume: "se-1" });
+    expect(first.efforts()).toEqual(["xhigh"]);
+    expect(second.efforts()).toEqual(["xhigh"]);
     expect(turns.threadOf(THREAD)?.model).toBe(OTHER_MODEL);
     await until(() => store.get(THREAD)?.model === OTHER_MODEL);
   });
@@ -1938,9 +1889,11 @@ describe("refused requests", () => {
       },
     },
     { name: "another working directory", override: { cwd: "/elsewhere" } },
-  ])("refuses $name without starting Claude", async ({ override }) => {
+  ])("refuses $name without starting Claude or asking the server", async ({
+    override,
+  }) => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
+    const { turns, sent, materialized } = await harness([claude]);
 
     const request = turnStart(10, "hello");
     turns.startTurn(
@@ -1951,6 +1904,7 @@ describe("refused requests", () => {
 
     expect(sent).toEqual([REFUSED(10)]);
     expect(claude.started()).toBe(false);
+    expect(materialized).toEqual([]);
   });
 
   test("answers a rejected request with the given message", async () => {
@@ -2279,25 +2233,6 @@ describe("thread tools", () => {
     expect(settings[1]?.mcpServers?.codex_link).not.toBe(
       settings[0]?.mcpServers?.codex_link,
     );
-  });
-
-  test("leave the thread as outcome unknown after a turn with an undecided write and refuse the next turn", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, store, events } = await harness([claude], {
-      unsettledWrite: () => true,
-    });
-
-    await completeTurn(turns, sent, claude, 10);
-    await until(() => store.get(THREAD)?.runState !== "running");
-    turns.startTurn(turnStart(11, "again"), undefined);
-    await until(() => responseTo(sent, 11) !== undefined);
-
-    expect(store.get(THREAD)?.runState).toBe("outcomeUnknown");
-    expect(events).toContainEqual({
-      event: "claude_turn",
-      step: "outcome_unknown",
-    });
-    expect(responseTo(sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
   });
 
   test("stop taking writes when the turn is stopped", async () => {

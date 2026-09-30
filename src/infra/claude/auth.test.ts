@@ -17,6 +17,30 @@ describe("withoutApiBilling", () => {
       CLAUDE_CONFIG_DIR: "/home/user/.claude",
     });
   });
+
+  test.each([
+    {
+      name: "a mix of auth headers and others",
+      env: {
+        ANTHROPIC_CUSTOM_HEADERS:
+          "Authorization: Bearer other\r\nX-Trace: 1\nx-api-key: key",
+      },
+      expected: { ANTHROPIC_CUSTOM_HEADERS: "X-Trace: 1" },
+    },
+    {
+      name: "only auth headers",
+      env: {
+        PATH: "/usr/bin",
+        ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer other",
+      },
+      expected: { PATH: "/usr/bin" },
+    },
+  ])("keeps only the custom headers that cannot replace the login for $name", ({
+    env,
+    expected,
+  }) => {
+    expect(withoutApiBilling(env)).toEqual(expected);
+  });
 });
 
 describe("checkSubscription", () => {

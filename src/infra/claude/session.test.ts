@@ -16,6 +16,7 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { Result } from "better-result";
 import {
   type ClaudeSessionSettings,
   claudeSessionExists,
@@ -42,6 +43,7 @@ describe("startClaudeSession options", () => {
       includePartialMessages: true,
       mcpServers: {},
       allowedTools: [],
+      canUseTool: SETTINGS.canUseTool,
     });
     expect(claude.options().systemPrompt).toEqual({
       type: "preset",
@@ -67,7 +69,7 @@ describe("startClaudeSession options", () => {
     });
   });
 
-  test("keeps API billing variables away from Claude", async () => {
+  test("keeps API billing variables and auth headers away from Claude", async () => {
     const claude = fakeClaude(SUBSCRIPTION, {
       env: {
         PATH: "/usr/bin",
@@ -76,6 +78,7 @@ describe("startClaudeSession options", () => {
         ANTHROPIC_API_KEY: "api-key",
         ANTHROPIC_AUTH_TOKEN: "bearer",
         CLAUDE_CODE_USE_BEDROCK: "1",
+        ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer other\r\nX-Trace: 1",
       },
     });
 
@@ -85,43 +88,8 @@ describe("startClaudeSession options", () => {
       PATH: "/usr/bin",
       HOME: "/home/user",
       CLAUDE_CODE_OAUTH_TOKEN: "subscription-token",
-    });
-  });
-
-  test("keeps custom headers that cannot replace the login", async () => {
-    const claude = fakeClaude(SUBSCRIPTION, {
-      env: {
-        ANTHROPIC_CUSTOM_HEADERS:
-          "Authorization: Bearer other\r\nX-Trace: 1\nx-api-key: key",
-      },
-    });
-
-    await startClaudeSession(SETTINGS, claude.runtime);
-
-    expect(claude.options().env).toEqual({
       ANTHROPIC_CUSTOM_HEADERS: "X-Trace: 1",
     });
-  });
-
-  test("drops custom headers made only of auth headers", async () => {
-    const claude = fakeClaude(SUBSCRIPTION, {
-      env: {
-        PATH: "/usr/bin",
-        ANTHROPIC_CUSTOM_HEADERS: "Authorization: Bearer other",
-      },
-    });
-
-    await startClaudeSession(SETTINGS, claude.runtime);
-
-    expect(claude.options().env).toEqual({ PATH: "/usr/bin" });
-  });
-
-  test("asks the given canUseTool about tools that need approval", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-
-    await startClaudeSession(SETTINGS, claude.runtime);
-
-    expect(claude.options().canUseTool).toBe(SETTINGS.canUseTool);
   });
 });
 
@@ -400,44 +368,70 @@ describe("startClaudeSession started session", () => {
     expect(sent.isErr() && sent.error._tag).toBe("ClaudeSessionClosed");
   });
 
-  test("refuses input and interrupts after close", async () => {
+  test.each<{
+    name: string;
+    act: (
+      session: StartedSession,
+    ) => Promise<Result<unknown, { _tag: string }>>;
+    reached: (claude: ReturnType<typeof fakeClaude>) => unknown;
+    none: unknown;
+  }>([
+    {
+      name: "input",
+      act: async (session) => session.send("late"),
+      reached: (claude) => claude.prompts(),
+      none: [],
+    },
+    {
+      name: "an interrupt",
+      act: (session) => session.interrupt(),
+      reached: (claude) => claude.interrupts(),
+      none: 0,
+    },
+    {
+      name: "a permission mode change",
+      act: (session) => session.setPermissionMode("plan"),
+      reached: (claude) => claude.modes(),
+      none: [],
+    },
+    {
+      name: "an effort change",
+      act: (session) => session.setEffort("low"),
+      reached: (claude) => claude.efforts(),
+      none: [],
+    },
+  ])("refuses $name after close and never calls Claude", async ({
+    act,
+    reached,
+    none,
+  }) => {
     const claude = fakeClaude(SUBSCRIPTION);
     const session = await startedSession(claude);
 
     session.close();
-    const sent = session.send("late");
-    const interrupted = await session.interrupt();
+    const refused = await act(session);
 
-    expect(sent.isErr() && sent.error._tag).toBe("ClaudeSessionClosed");
-    expect(interrupted.isErr() && interrupted.error._tag).toBe(
-      "ClaudeSessionClosed",
-    );
-    expect(claude.interrupts()).toBe(0);
+    expect(refused.isErr() && refused.error._tag).toBe("ClaudeSessionClosed");
+    expect(await reached(claude)).toEqual(none);
   });
 
-  test("switches Claude's permission mode until closed", async () => {
+  test("switches Claude's permission mode", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const session = await startedSession(claude);
 
     const switched = await session.setPermissionMode("plan");
-    session.close();
-    const late = await session.setPermissionMode("default");
 
     expect(switched.isOk()).toBe(true);
-    expect(late.isErr() && late.error._tag).toBe("ClaudeSessionClosed");
     expect(claude.modes()).toEqual(["plan"]);
   });
 
-  test("sets Claude's effort through the session flag settings until closed", async () => {
+  test("sets Claude's effort through the session flag settings", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const session = await startedSession(claude);
 
     const switched = await session.setEffort("max");
-    session.close();
-    const late = await session.setEffort("low");
 
     expect(switched.isOk()).toBe(true);
-    expect(late.isErr() && late.error._tag).toBe("ClaudeSessionClosed");
     expect(claude.efforts()).toEqual(["max"]);
   });
 
@@ -739,6 +733,8 @@ const SUBSCRIPTION: AccountInfo = {
 
 const writeUserSettings = (dir: string, env: Record<string, string>) =>
   writeFileSync(join(dir, "settings.json"), JSON.stringify({ env }));
+
+type StartedSession = Awaited<ReturnType<typeof startedSession>>;
 
 const startedSession = async (claude: ReturnType<typeof fakeClaude>) => {
   const started = await startClaudeSession(SETTINGS, claude.runtime);

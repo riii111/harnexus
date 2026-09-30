@@ -482,13 +482,6 @@ describe("ThreadStore.runWrite", () => {
 
     await expect(rejected).rejects.toThrow("boom");
     expect(store.get("thread-1")?.runState).toBe("outcomeUnknown");
-    await store.resolveOutcomeUnknown("thread-1");
-    const retried = await store.runWrite(
-      "thread-1",
-      async () => Result.ok("sent"),
-      neverUnknown,
-    );
-    expect(retried.isOk() && retried.value).toBe("sent");
   });
 
   test("stays outcome unknown while the marker cannot be removed", async () => {
@@ -548,7 +541,7 @@ describe("ThreadStore.runWrite", () => {
     expect(store.get("thread-1")?.runState).toBe("idle");
   });
 
-  test("refuses to run again after a write with an unknown outcome", async () => {
+  test("refuses to run again after a write with an unknown outcome until it is resolved", async () => {
     const store = await openStore();
     await store.register(ENTRY);
     await store.runWrite(
@@ -572,25 +565,16 @@ describe("ThreadStore.runWrite", () => {
     expect((await openStore()).get("thread-1")?.runState).toBe(
       "outcomeUnknown",
     );
-  });
 
-  test("allows writes again once the unknown outcome is resolved", async () => {
-    const store = await openStore();
-    await store.register(ENTRY);
-    await store.runWrite(
-      "thread-1",
-      async () => Result.err(new SendUncertain({ message: "lost" })),
-      isSendUncertain,
-    );
-    await store.resolveOutcomeUnknown("thread-1");
-
-    const retried = await store.runWrite(
+    const resolved = await store.resolveOutcomeUnknown("thread-1");
+    const resumed = await store.runWrite(
       "thread-1",
       async () => Result.ok("sent"),
       neverUnknown,
     );
 
-    expect(retried.isOk() && retried.value).toBe("sent");
+    expect(resolved.isOk()).toBe(true);
+    expect(resumed.isOk() && resumed.value).toBe("sent");
   });
 
   test.each([
