@@ -715,6 +715,40 @@ describe("effort", () => {
   });
 });
 
+describe("token usage", () => {
+  test("reports a turn's usage before the turn completes", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    await completeTurn(turns, sent, claude, 10);
+
+    const methods = sent.map((message) => message.method);
+    expect(methods.indexOf("thread/tokenUsage/updated")).toBeGreaterThan(-1);
+    expect(methods.indexOf("thread/tokenUsage/updated")).toBeLessThan(
+      methods.indexOf("turn/completed"),
+    );
+  });
+
+  test("adds each turn's usage to its own thread's total", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await twoWorkers([first, second]);
+    await until(() => second.started());
+
+    first.emit(sdk(success()));
+    await until(() => usageTotals(sent).length === 1);
+    second.emit(sdk(success()));
+    await until(() => usageTotals(sent).length === 2);
+    await completeTurn(turns, sent, first, 12);
+
+    expect(usageTotals(sent)).toEqual([
+      { threadId: THREAD, total: 40, window: 200_000 },
+      { threadId: OTHER_THREAD, total: 40, window: 200_000 },
+      { threadId: THREAD, total: 80, window: 200_000 },
+    ]);
+  });
+});
+
 describe("session ids", () => {
   test("resumes from the session id Claude reported even when saving it failed", async () => {
     const first = fakeClaude(SUBSCRIPTION);
@@ -2545,6 +2579,15 @@ const reply = (id: number, threadId: string, source: string) => ({
 const delegation = (source: string) =>
   `<codex_delegation>\n  <source_thread_id>${source}</source_thread_id>\n  <input>review done</input>\n</codex_delegation>`;
 
+const usageTotals = (sent: Sent[]) =>
+  sent
+    .filter((message) => message.method === "thread/tokenUsage/updated")
+    .map(({ params }) => ({
+      threadId: params.threadId,
+      total: params.tokenUsage.total.totalTokens,
+      window: params.tokenUsage.modelContextWindow,
+    }));
+
 const startedTurns = (sent: Sent[]) =>
   sent
     .filter((message) => message.method === "turn/started")
@@ -2933,9 +2976,19 @@ const success = (taken?: (string | undefined)[], queued?: number) =>
     ...(queued !== undefined && { queued_turn_count: queued }),
   });
 
+// Every result carries its turn's usage, as the SDK's does.
 const result = (fields: object) => ({
   type: "result",
   errors: [],
   permission_denials: [],
+  usage: TURN_USAGE,
+  modelUsage: { [MODEL]: { contextWindow: 200_000 } },
   ...fields,
 });
+
+const TURN_USAGE = {
+  input_tokens: 4,
+  cache_read_input_tokens: 20,
+  cache_creation_input_tokens: 10,
+  output_tokens: 6,
+};
