@@ -8,7 +8,8 @@
     "check": "biome ci --error-on-warnings .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "bun test"
+    "test": "bun test",
+    "doctor": "bun --no-env-file --config=/dev/null src/bootstrap/doctor.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.13",

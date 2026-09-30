@@ -122,9 +122,13 @@ export const openQuery = (
       new ClaudeStartFailed({ cause, message: "cannot start Claude" }),
   });
 
-export const readAccount = (query: ClaudeQuery) =>
+// Without a limit a session waits for the account as long as Claude Code starts; a caller outside a session gives a limit so a stuck start cannot hold it.
+export const readAccount = (query: ClaudeQuery, timeoutMs?: number) =>
   Result.tryPromise({
-    try: () => query.accountInfo(),
+    try: () =>
+      timeoutMs === undefined
+        ? query.accountInfo()
+        : withinTime(query.accountInfo(), timeoutMs),
     catch: (cause) =>
       new ClaudeAccountUnavailable({
         cause,
@@ -169,22 +173,7 @@ export const setQueryPermissionMode = (
 // A Claude Code that never answers would otherwise keep its process running for the whole bridge.
 export const readSupportedModels = (query: ClaudeQuery, timeoutMs: number) =>
   Result.tryPromise({
-    try: async () => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        return await Promise.race([
-          query.supportedModels(),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error("Claude Code did not list its models")),
-              timeoutMs,
-            );
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
-    },
+    try: () => withinTime(query.supportedModels(), timeoutMs),
     catch: (cause) =>
       new ClaudeModelsUnavailable({
         cause,
@@ -222,4 +211,22 @@ export const closeQuery = (query: ClaudeQuery) => {
   try {
     query.close();
   } catch {}
+};
+
+const withinTime = async <T>(pending: Promise<T>, timeoutMs: number) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(new Error(`Claude Code did not answer in ${timeoutMs} ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 };
