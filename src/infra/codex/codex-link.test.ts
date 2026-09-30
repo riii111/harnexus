@@ -790,6 +790,7 @@ const CODEX_ONLY_TURNS: Parameters<typeof createRouter>[0] = {
   selectEffort: () => expect.unreachable("no Claude thread in this session"),
   effortOf: () => null,
   effortRule: () => null,
+  claudeRateLimits: () => null,
 };
 
 const NO_HISTORY: Parameters<typeof createRouter>[3] = {

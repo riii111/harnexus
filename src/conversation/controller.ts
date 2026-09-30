@@ -28,6 +28,11 @@ import type {
   UserInput,
 } from "../presentation/protocol.ts";
 import {
+  NO_LIMITS,
+  recordRateLimits,
+  renderClaudeLimits,
+} from "../presentation/rate-limits.ts";
+import {
   breakdown,
   NO_USAGE,
   renderTokenUsage,
@@ -275,6 +280,8 @@ export const createTurnController = ({
   const modes = new Map<string, Mode>();
   const usages = new Map<string, ThreadUsage>();
   const plans = new Map<string, ThreadPlan>();
+  // The subscription's limits are the account's, not a thread's, and none are known until a turn reports them.
+  let claudeLimits = NO_LIMITS;
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const materialized = new Set<string>();
   // A thread with an unknown outcome continues only on a new message the user typed after being told, so neither a resent copy of a refused message nor another thread's message counts.
@@ -897,6 +904,7 @@ export const createTurnController = ({
       });
       plans.set(threadId, plan.plan);
       if (plan.notification !== null) send(plan.notification);
+      claudeLimits = recordRateLimits(claudeLimits, message);
       const steers =
         message.type === "result" ? steersAfter(active, message) : "none";
       if (message.type === "result" && steers !== "none") {
@@ -1178,6 +1186,7 @@ export const createTurnController = ({
     threadOf: threads.threadOf,
     sessionIdOf: threads.sessionIdOf,
     adopt: threads.adopt,
+    claudeRateLimits: () => renderClaudeLimits(claudeLimits, now()),
   };
 };
 

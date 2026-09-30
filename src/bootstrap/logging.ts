@@ -93,6 +93,7 @@ const serializeLogEvent = (entry: LogEvent) => {
       return serializeTurnEvent(entry);
     case "claude_request_refused":
     case "model_id_collision":
+    case "claude_limit_id_collision":
     case "codex_version":
     case "claude_history_unreadable":
       return serializeRouteEvent(entry);

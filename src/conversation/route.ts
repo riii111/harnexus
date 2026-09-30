@@ -6,6 +6,10 @@ import {
 } from "../infra/claude/models.ts";
 import { delegationSource } from "../infra/codex/delegations.ts";
 import { codexVersion, isVerifiedCodex } from "../infra/codex/versions.ts";
+import {
+  type renderClaudeLimits,
+  withClaudeLimits,
+} from "../presentation/rate-limits.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import {
@@ -31,6 +35,7 @@ import {
 export type RouteEvent =
   | { event: "model_id_collision"; model: string }
   | { event: "codex_version"; version: string | null; verified: boolean }
+  | { event: "claude_limit_id_collision" }
   | { event: "claude_request_refused"; method: RefusedMethod; reason: Refusal }
   | HistoryEvent;
 
@@ -49,6 +54,7 @@ type Turns = {
   selectEffort: (threadId: string, effort: string) => void;
   effortOf: (threadId: string) => EffortLevel | null;
   effortRule: EffortRule;
+  claudeRateLimits: () => ReturnType<typeof renderClaudeLimits>;
 };
 
 type RefusedMethod = (typeof REFUSED_METHODS)[number];
@@ -59,6 +65,7 @@ type History = ReturnType<typeof createHistoryRequests>;
 type Pending =
   | { kind: "initialize" }
   | { kind: "modelList" }
+  | { kind: "rateLimits" }
   | {
       kind: "threadOpen";
       createdModel: string | null;
@@ -99,6 +106,9 @@ export const createRouter = (
         return line;
       case "model/list":
         pending.set(id, { kind: "modelList" });
+        return line;
+      case "account/rateLimits/read":
+        pending.set(id, { kind: "rateLimits" });
         return line;
       case "thread/start":
       case "thread/resume":
@@ -294,6 +304,16 @@ export const createRouter = (
       }
       return encode({ ...message, result: listed.result });
     }
+    // No account/rateLimits/updated carries Claude's limits: its single snapshot sits under the name of Codex's single-bucket view, so a client merging it there would show Claude's values as Codex's; the next read shows them instead.
+    if (request.kind === "rateLimits") {
+      const snapshot = turns.claudeRateLimits();
+      if (snapshot === null) return line;
+      const added = withClaudeLimits(message.result, snapshot);
+      if (added.collision) log({ event: "claude_limit_id_collision" });
+      return added.result === message.result
+        ? line
+        : encode({ ...message, result: added.result });
+    }
     const result = message.result;
     if (request.kind === "threadRead") {
       return request.history.then((loaded) =>
@@ -392,6 +412,8 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
       return { event: entry.event, method: entry.method, reason: entry.reason };
     case "model_id_collision":
       return { event: entry.event, model: entry.model };
+    case "claude_limit_id_collision":
+      return { event: entry.event };
     case "codex_version":
       return {
         event: entry.event,

@@ -707,6 +707,38 @@ describe("token usage", () => {
   });
 });
 
+describe("Claude rate limits", () => {
+  test("are unknown before any turn reports them", async () => {
+    const { turns } = await harness([fakeClaude(SUBSCRIPTION)]);
+
+    expect(turns.claudeRateLimits()).toBeNull();
+  });
+
+  test("follow the latest event from any thread's turn without notifying the app", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await twoWorkers([first, second]);
+    await until(() => second.started());
+
+    first.emit(sdk(rateLimitEvent(0.26)));
+    await until(() => turns.claudeRateLimits()?.primary?.usedPercent === 26);
+    second.emit(sdk(rateLimitEvent(0.4)));
+    await until(() => turns.claudeRateLimits()?.primary?.usedPercent === 40);
+    first.emit(sdk(success()));
+    second.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(turns.claudeRateLimits()).toMatchObject({
+      limitId: "claude",
+      primary: { usedPercent: 40, resetsAt: FIVE_HOUR_RESET },
+      secondary: { usedPercent: 56, resetsAt: SEVEN_DAY_RESET },
+    });
+    expect(
+      sent.filter((message) => message.method === "account/rateLimits/updated"),
+    ).toEqual([]);
+  });
+});
+
 describe("plan", () => {
   test("keeps a thread's tasks across turns", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -3345,6 +3377,24 @@ const toolError = (toolUseId: string) => ({
   },
   parent_tool_use_id: null,
 });
+
+// Shaped after what the CLI sent in a real turn, where only unifiedWindows carried the usage.
+const rateLimitEvent = (fiveHour: number) => ({
+  type: "rate_limit_event",
+  rate_limit_info: {
+    status: "allowed",
+    resetsAt: FIVE_HOUR_RESET,
+    rateLimitType: "five_hour",
+    unifiedWindows: {
+      five_hour: { utilization: fiveHour, resetsAt: FIVE_HOUR_RESET },
+      seven_day: { utilization: 0.56, resetsAt: SEVEN_DAY_RESET },
+    },
+  },
+});
+
+const FIVE_HOUR_RESET = 1_700_010_000;
+
+const SEVEN_DAY_RESET = 1_700_300_000;
 
 // The CLI names the sends a turn took and counts those still queued; leaving them out stands for an older CLI.
 const success = (taken?: (string | undefined)[], queued?: number) =>

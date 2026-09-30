@@ -396,6 +396,59 @@ describe("model/list", () => {
   });
 });
 
+describe("account/rateLimits/read", () => {
+  test("adds the Claude limits under their own id and leaves every Codex value as the server sent it", async () => {
+    const { router, reportLimits } = setup();
+    reportLimits(CLAUDE_LIMITS);
+
+    router.fromApp(READ_LIMITS);
+    const out = parse(await router.fromServer(limitsAnswer(CODEX_LIMITS)));
+
+    expect(out.result).toEqual({
+      ...CODEX_LIMITS,
+      rateLimitsByLimitId: {
+        ...CODEX_LIMITS.rateLimitsByLimitId,
+        claude: CLAUDE_LIMITS,
+      },
+    });
+  });
+
+  test.each([
+    { name: "no Claude limits are known", limits: null, result: CODEX_LIMITS },
+    {
+      name: "the server gives no multi-bucket view",
+      limits: CLAUDE_LIMITS,
+      result: { ...CODEX_LIMITS, rateLimitsByLimitId: null },
+    },
+  ])("passes the server's answer through as the same bytes when $name", ({
+    limits,
+    result,
+  }) => {
+    const { router, reportLimits } = setup();
+    reportLimits(limits);
+
+    router.fromApp(READ_LIMITS);
+    const line = limitsAnswer(result);
+
+    expect(router.fromServer(line)).toEqual(line);
+  });
+
+  test("keeps a server limit that already has the Claude id and logs it", () => {
+    const { router, events, reportLimits } = setup();
+    reportLimits(CLAUDE_LIMITS);
+    const taken = {
+      ...CODEX_LIMITS,
+      rateLimitsByLimitId: { claude: CODEX_LIMITS.rateLimits },
+    };
+
+    router.fromApp(READ_LIMITS);
+    const line = limitsAnswer(taken);
+
+    expect(router.fromServer(line)).toEqual(line);
+    expect(events).toEqual([{ event: "claude_limit_id_collision" }]);
+  });
+});
+
 describe("threads with a Claude model", () => {
   test("creates the thread on the server's default model and reports the Claude one", async () => {
     const { router, calls } = setup();
@@ -1211,6 +1264,7 @@ const setup = (
   const efforts = new Map<string, EffortLevel>();
   const catalog = createModelCatalog();
   const rule = effortRule({}, catalog.effortsOf);
+  let limits: ClaudeRateLimits = null;
   const router = createRouter(
     {
       isClaudeThread: (threadId) =>
@@ -1250,6 +1304,7 @@ const setup = (
           : rule(model, efforts.get(threadId) ?? null);
       },
       effortRule: rule,
+      claudeRateLimits: () => limits,
     },
     (event) => events.push(event),
     (source, threadId) => calls.push(["delegated", source, threadId]),
@@ -1257,8 +1312,15 @@ const setup = (
     catalog.models,
     unverifiedCodex,
   );
-  return { router, calls, events, sent, reads, catalog };
+  const reportLimits = (reported: ClaudeRateLimits) => {
+    limits = reported;
+  };
+  return { router, calls, events, sent, reads, catalog, reportLimits };
 };
+
+type ClaudeRateLimits = ReturnType<
+  Parameters<typeof createRouter>[0]["claudeRateLimits"]
+>;
 
 const fixtureLines = (file: string) =>
   readFileSync(join(FIXTURE_DIR, file), "utf8")
@@ -1302,7 +1364,52 @@ const threadResponse = (
     },
   });
 
+const CODEX_SNAPSHOT = {
+  limitId: "codex",
+  limitName: null,
+  normalModelSlug: null,
+  primary: {
+    usedPercent: 12,
+    windowDurationMins: 300,
+    resetsAt: 1_700_010_000,
+  },
+  secondary: {
+    usedPercent: 40,
+    windowDurationMins: 10_080,
+    resetsAt: 1_700_300_000,
+  },
+  credits: null,
+  individualLimit: null,
+  spendControlReached: null,
+  planType: "plus",
+  rateLimitReachedType: null,
+};
+
+const CODEX_LIMITS = {
+  ordinaryUsageAllowed: true,
+  rateLimits: CODEX_SNAPSHOT,
+  rateLimitsByLimitId: { codex: CODEX_SNAPSHOT },
+  rateLimitResetCredits: null,
+  accountId: null,
+  rateLimitUpsell: null,
+};
+
+const CLAUDE_LIMITS = {
+  ...CODEX_SNAPSHOT,
+  limitId: "claude",
+  limitName: "Claude",
+  planType: null,
+};
+
 const encode = (message: object) => Buffer.from(`${JSON.stringify(message)}\n`);
+
+const READ_LIMITS = encode({
+  id: 3,
+  method: "account/rateLimits/read",
+  params: null,
+});
+
+const limitsAnswer = (result: object) => encode({ id: 3, result });
 
 // The bridge answers history requests itself, so their responses are among what it sent to the app.
 const responseTo = (sent: object[], id: number) =>
