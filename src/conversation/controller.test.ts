@@ -2501,6 +2501,74 @@ describe("turn/start carrying another thread's message", () => {
       },
     ]);
   });
+
+  test.each([
+    { name: "its own reviewer", source: OTHER_REVIEWER, expected: [] },
+    {
+      name: "a thread that is no reviewer",
+      source: "th-lead",
+      expected: ["th-lead"],
+    },
+  ])("saves a sender that is $name as a thread Claude may answer only when it is no one's reviewer", async ({
+    source,
+    expected,
+  }) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, store } = await registeredWorkers([claude]);
+
+    turns.startTurn(reply(10, OTHER_THREAD, source), undefined);
+    await until(() => claude.started());
+
+    expect(store.get(OTHER_THREAD)?.requesterThreadIds).toEqual(expected);
+  });
+
+  test.each([
+    { tool: "create_thread" },
+    { tool: "send_message_to_thread" },
+  ])("lets Claude message the Codex worker that delegated work by $tool but not an unrelated thread", async ({
+    tool,
+  }) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, settings, toolCalls } = await harness([claude], {
+      linkRequest: async () => Result.ok(TOOL_ANSWER),
+    });
+
+    turns.startTurn(reply(10, THREAD, CODEX_WORKER, tool), undefined);
+    await until(() => claude.started());
+    const [answered, unrelated] = await messageThreads(settings[0], [
+      CODEX_WORKER,
+      "th-fixture-unrelated",
+    ]);
+
+    expect(answered?.isError).toBeFalsy();
+    expect(unrelated?.isError).toBe(true);
+    expect(toolCalls).toEqual([
+      expect.objectContaining({
+        tool: "send_message_to_thread",
+        arguments: { threadId: CODEX_WORKER, prompt: "review this" },
+      }),
+    ]);
+  });
+
+  test("refuses a delegated message whose sender cannot be saved without starting Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    let failWrites = false;
+    const { turns, sent, store } = await registeredWorkers([claude], {
+      writeState: async (target, content) =>
+        failWrites ? diskFull(target) : writeFileAtomic(target, content),
+    });
+    failWrites = true;
+
+    turns.startTurn(reply(10, THREAD, CODEX_WORKER), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    await settle();
+
+    expect(responseTo(sent, 10)?.error.message).toBe(
+      "the thread that sent this message could not be saved, so Claude could not answer it and the message was not run",
+    );
+    expect(claude.started()).toBe(false);
+    expect(store.get(THREAD)?.requesterThreadIds).toEqual([]);
+  });
 });
 
 describe("idle Claude sessions", () => {
@@ -2710,13 +2778,18 @@ const registeredWorkers = async (
   return started;
 };
 
-const reply = (id: number, threadId: string, source: string) => ({
+const reply = (
+  id: number,
+  threadId: string,
+  source: string,
+  tool = "send_message_to_thread",
+) => ({
   id,
   params: {
     threadId,
     input: [],
     toolOutput: {
-      name: "send_message_to_thread",
+      name: tool,
       namespace: "codex_app",
       output: delegation(source),
     },
@@ -2760,6 +2833,7 @@ const OTHER_THREAD = "th-fixture-2";
 const OTHER_DIR = "/work/other-worktree";
 const OTHER_REVIEWER = "th-fixture-reviewer-2";
 const NEW_REVIEWER = "th-fixture-reviewer-1";
+const CODEX_WORKER = "th-fixture-codex-worker";
 const MODEL = "claude-sonnet-5";
 const OTHER_MODEL = "claude-opus-5-5";
 const HAIKU = "claude-haiku-4-5";
@@ -2880,6 +2954,15 @@ const harness = async (
 };
 
 const messageReviewer = async (session: ClaudeSessionSettings | undefined) => {
+  const [sent] = await messageThreads(session, [NEW_REVIEWER]);
+  return sent ?? expect.unreachable("no message was sent");
+};
+
+// One server instance takes one connection, so every message goes through the same client.
+const messageThreads = async (
+  session: ClaudeSessionSettings | undefined,
+  threadIds: string[],
+) => {
   const server = session?.mcpServers?.codex_link;
   if (server === undefined || !("instance" in server)) {
     return expect.unreachable("Claude has no thread tool server");
@@ -2889,10 +2972,16 @@ const messageReviewer = async (session: ClaudeSessionSettings | undefined) => {
   await server.instance.connect(serverTransport);
   const client = new Client({ name: "test", version: "0" });
   await client.connect(clientTransport);
-  return client.callTool({
-    name: "send_message_to_thread",
-    arguments: { threadId: NEW_REVIEWER, prompt: "review this" },
-  });
+  const results = [];
+  for (const threadId of threadIds) {
+    results.push(
+      await client.callTool({
+        name: "send_message_to_thread",
+        arguments: { threadId, prompt: "review this" },
+      }),
+    );
+  }
+  return results;
 };
 
 const restartedWithUnknownOutcome = async (

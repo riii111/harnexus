@@ -344,6 +344,56 @@ describe("createCodexLink target checks", () => {
     expect(requests).toEqual([]);
   });
 
+  test("allows messaging, reading and waiting on a thread that sent it work but not an unrelated thread", async () => {
+    const { client, requests } = await connect({
+      requesters: [WORKER],
+      answer: () => Result.ok(textAnswer("ok")),
+    });
+
+    const allowed = [
+      await client.callTool({
+        name: "send_message_to_thread",
+        arguments: { threadId: WORKER, prompt: "review done" },
+      }),
+      await client.callTool({
+        name: "read_thread",
+        arguments: { threadId: WORKER },
+      }),
+      await client.callTool({
+        name: "wait_threads",
+        arguments: { targets: [{ threadId: WORKER }], timeoutMs: 1_000 },
+      }),
+    ];
+    const unrelated = await client.callTool({
+      name: "send_message_to_thread",
+      arguments: { threadId: OTHER_WORKER, prompt: "review done" },
+    });
+
+    expect(allowed.map((result) => result.isError ?? false)).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    expect(unrelated.isError).toBe(true);
+    expect(requests.map((request) => request.params.tool)).toEqual([
+      "send_message_to_thread",
+      "read_thread",
+      "wait_threads",
+    ]);
+  });
+
+  test("refuses messaging itself even when it is saved as a thread that sent it work", async () => {
+    const { client, requests } = await connect({ requesters: [CALLER] });
+
+    const sent = await client.callTool({
+      name: "send_message_to_thread",
+      arguments: { threadId: CALLER, prompt: "note" },
+    });
+
+    expect(sent.isError).toBe(true);
+    expect(requests).toEqual([]);
+  });
+
   test("refuses everything for a caller that is not a registered Claude thread", async () => {
     const { client, requests } = await connect({ callerRegistered: false });
 
@@ -580,6 +630,7 @@ describe("createCodexLink write outcomes", () => {
 const connect = async ({
   caller = CALLER,
   reviewers = {},
+  requesters = [],
   callerRegistered = true,
   addReviewerFails = false,
   delegations = createDelegationWatch(() => {}),
@@ -592,6 +643,7 @@ const connect = async ({
   ) => Result<unknown, ServerRequestError>;
   caller?: string;
   reviewers?: Record<string, string[]>;
+  requesters?: string[];
   callerRegistered?: boolean;
   addReviewerFails?: boolean;
   answer?: (
@@ -603,6 +655,7 @@ const connect = async ({
   const store = fakeStore(
     callerRegistered ? { [caller]: [], ...reviewers } : reviewers,
     addReviewerFails,
+    { [caller]: requesters },
   );
   const requests: RecordedRequest[] = [];
   const modelLists: unknown[] = [];
@@ -633,12 +686,18 @@ const connect = async ({
 const fakeStore = (
   initial: Record<string, string[]>,
   addReviewerFails: boolean,
+  requesters: Record<string, string[]>,
 ) => {
   const reviewers = new Map(Object.entries(initial));
   return {
     get: (threadId: string) => {
       const ids = reviewers.get(threadId);
-      return ids === undefined ? undefined : { reviewerThreadIds: ids };
+      return ids === undefined
+        ? undefined
+        : {
+            reviewerThreadIds: ids,
+            requesterThreadIds: requesters[threadId] ?? [],
+          };
     },
     addReviewer: async (threadId: string, reviewerThreadId: string) => {
       if (addReviewerFails) return Result.err(new FakeSaveFailed());
@@ -770,4 +829,5 @@ const TARGET = {
 };
 const REVIEWER = "019a0000-0000-7000-8000-000000000001";
 const OTHER_WORKER = "thread-other-worker";
+const WORKER = "thread-codex-worker";
 const OTHER_REVIEWER = "thread-other-reviewer";
