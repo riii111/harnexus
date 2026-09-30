@@ -38,7 +38,7 @@ export const createModelCatalog = () => {
   let listed: readonly ClaudeModel[] | null = null;
   return {
     replace: (models: readonly ClaudeModel[]) => {
-      listed = models;
+      listed = newestFirst(models);
     },
     models: (): {
       offered: readonly ClaudeModel[];
@@ -60,6 +60,13 @@ export const createModelCatalog = () => {
       )?.efforts ?? EFFORT_ORDER,
   };
 };
+
+// The SDK gives no release date, so the version in the name stands in for it across families; a tie keeps the given order and a name without a version goes last.
+export const newestFirst = (models: readonly ClaudeModel[]): ClaudeModel[] =>
+  models
+    .map((model) => ({ model, version: versionOf(model.displayName) }))
+    .sort((a, b) => compareVersions(b.version, a.version))
+    .map(({ model }) => model);
 
 // An alias such as sonnet is pinned to the model it resolves to now, while an explicit id keeps a suffix such as [1m] that picks the context window.
 export const modelsFromSdk = (infos: readonly ModelInfo[]): ClaudeModel[] => {
@@ -116,6 +123,26 @@ const versionedName = (info: ModelInfo) => {
 };
 
 const rank = (effort: EffortLevel) => EFFORT_ORDER.indexOf(effort);
+
+// The first number in a name such as "Claude Opus 4.6 (1M)", so a context size is not read as a version.
+const versionOf = (displayName: string): readonly number[] | null => {
+  const version = VERSION.exec(displayName)?.[1];
+  return version === undefined ? null : version.split(".").map(Number);
+};
+
+const compareVersions = (
+  a: readonly number[] | null,
+  b: readonly number[] | null,
+): number => {
+  if (a === null || b === null) return a === b ? 0 : a === null ? -1 : 1;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const difference = (a[i] ?? 0) - (b[i] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+};
+
+const VERSION = /(?:^|\s)(\d+(?:\.\d+)*)(?=\s|$)/;
 
 const CLAUDE_PREFIX = "claude-";
 

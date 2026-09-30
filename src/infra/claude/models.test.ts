@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { EffortLevel, ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import {
+  type ClaudeModel,
   createModelCatalog,
   type EffortSettings,
   effortRule,
   isClaudeModel,
   modelsFromSdk,
+  newestFirst,
 } from "./models.ts";
 
 describe("isClaudeModel", () => {
@@ -83,6 +85,45 @@ describe("modelsFromSdk", () => {
   });
 });
 
+describe("newestFirst", () => {
+  test("orders models by the version in their names, highest first", () => {
+    const models = newestFirst(
+      [
+        "Claude Opus 5 (1M context)",
+        "Claude Haiku 4.5",
+        "Claude Fable 5.1",
+        "Claude Opus 4.6 (1M)",
+        "Claude Opus 5.5",
+        "Claude Sonnet 5.5",
+      ].map(named),
+    );
+
+    expect(models.map(({ displayName }) => displayName)).toEqual([
+      "Claude Opus 5.5",
+      "Claude Sonnet 5.5",
+      "Claude Fable 5.1",
+      "Claude Opus 5 (1M context)",
+      "Claude Opus 4.6 (1M)",
+      "Claude Haiku 4.5",
+    ]);
+  });
+
+  test("keeps the given order of a tie and puts a name without a version last", () => {
+    const models = newestFirst(
+      ["Claude Next", "Claude Sonnet 5.5", "Claude Opus 5.5", "Claude 4"].map(
+        named,
+      ),
+    );
+
+    expect(models.map(({ displayName }) => displayName)).toEqual([
+      "Claude Sonnet 5.5",
+      "Claude Opus 5.5",
+      "Claude 4",
+      "Claude Next",
+    ]);
+  });
+});
+
 describe("createModelCatalog", () => {
   test("offers the built-in models until Claude Code's list is read", () => {
     const catalog = createModelCatalog();
@@ -103,6 +144,26 @@ describe("createModelCatalog", () => {
       offered: ["claude-sonnet-5-5", "claude-opus-5-5"],
       retired: ["claude-sonnet-5", "claude-haiku-4-5"],
     });
+  });
+
+  test("offers the listed models newest first", () => {
+    const catalog = createModelCatalog();
+
+    catalog.replace(
+      modelsFromSdk([
+        {
+          ...SONNET_ALIAS,
+          resolvedModel: "claude-sonnet-4-6",
+          description: "Sonnet 4.6 · Older",
+        },
+        OPUS_ALIAS,
+      ]),
+    );
+
+    expect(catalog.models().offered.map(({ id }) => id)).toEqual([
+      "claude-opus-5-5",
+      "claude-sonnet-4-6",
+    ]);
   });
 
   test("takes a listed model's levels over the built-in ones, keeps those of a retired model and gives an unnamed model every level", () => {
@@ -272,3 +333,10 @@ const OPUS_ALIAS: ModelInfo = {
   supportsEffort: true,
   supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
 };
+
+const named = (displayName: string): ClaudeModel => ({
+  id: `claude-${displayName}`,
+  displayName,
+  description: displayName,
+  efforts: [],
+});
