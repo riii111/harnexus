@@ -1,5 +1,5 @@
-import { skillBlock, skillLinks } from "../presentation/skill-prompt.ts";
-import { readRegularTextFile } from "../runtime/fs.boundary.ts";
+import { skillBlock, skillLinks } from "../../presentation/skill-prompt.ts";
+import { readRegularTextFile } from "../../runtime/fs.boundary.ts";
 
 // A file that cannot be read leaves only its link in the prompt, which Claude may still follow.
 export const readSkills = async (text: string) => {

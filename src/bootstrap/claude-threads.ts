@@ -1,11 +1,11 @@
 import {
   type ClaudeLogEvent,
   createClaudeRuntime,
-  createThreadValues,
-  createTurnController,
-} from "../conversation/controller.ts";
+} from "../conversation/claude/runtime.ts";
+import { createTurnController } from "../conversation/controller.ts";
 import { createHistoryRequests } from "../conversation/history-request.ts";
 import { createRouter, type RouteEvent } from "../conversation/route.ts";
+import { createThreadValues } from "../conversation/thread-values.ts";
 import { createCodexLink } from "../infra/codex/codex-link.ts";
 import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
