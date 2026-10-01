@@ -505,6 +505,8 @@ export const createClaudeRuntime = ({
           title: options.title,
           reason: options.decisionReason,
           defaultToNo: options.defaultToNo === true,
+          suggestions: options.suggestions ?? [],
+          suppressAlwaysAllow: options.suppressAlwaysAllowRule === true,
         },
         {
           threadId,

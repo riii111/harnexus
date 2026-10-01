@@ -1,4 +1,8 @@
-import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  PermissionResult,
+  PermissionUpdate,
+  PermissionUpdateDestination,
+} from "@anthropic-ai/claude-agent-sdk";
 import { isObject } from "../runtime/object.ts";
 import type { ToolItem } from "./protocol.ts";
 
@@ -11,6 +15,10 @@ export type ToolCall = {
   reason: string | undefined;
   // Set by the SDK when the prompt must open on its refusal and never approve on a single keystroke.
   defaultToNo: boolean;
+  // Claude's proposed updates that stop it asking again; empty when it proposes none.
+  suggestions: PermissionUpdate[];
+  // Set by the SDK when a saved rule would grant more than this call, so no persistent allow may be offered.
+  suppressAlwaysAllow: boolean;
 };
 
 export type PromptTarget = {
@@ -41,25 +49,44 @@ export const promptFor = (call: ToolCall, target: PromptTarget): AppPrompt => {
   return toolPrompt(call, target);
 };
 
-// Session-wide and policy choices are not offered, since Claude's own settings decide what is allowed and the bridge never writes them.
+// The app's policy amendment only displays the prefix; the saved rule is Claude's own suggestion, so it is offered only when that rule is one command prefix.
 const commandPrompt = (
   call: ToolCall,
   item: Extract<ToolItem, { type: "commandExecution" }>,
   target: PromptTarget,
-): AppPrompt => ({
-  method: "item/commandExecution/requestApproval",
-  params: {
-    ...itemParams(target),
-    kind: "command",
-    environmentId: "local",
-    reason: call.reason ?? null,
-    command: item.command,
-    cwd: item.cwd,
-    commandActions: item.commandActions,
-    availableDecisions: ["accept", "decline", "cancel"],
-  },
-  decide: (answer) => decideApproval(call, answer),
-});
+): AppPrompt => {
+  const prefix = call.suppressAlwaysAllow
+    ? null
+    : commandPrefix(call.suggestions);
+  const alwaysRules = prefix === null ? [] : savableRules(call.suggestions);
+  return {
+    method: "item/commandExecution/requestApproval",
+    params: {
+      ...itemParams(target),
+      kind: "command",
+      environmentId: "local",
+      reason: call.reason ?? null,
+      command: item.command,
+      cwd: item.cwd,
+      commandActions: item.commandActions,
+      ...(prefix === null ? {} : { proposedExecpolicyAmendment: prefix }),
+      availableDecisions: [
+        "accept",
+        ...(call.suggestions.length > 0 ? ["acceptForSession"] : []),
+        ...(prefix === null
+          ? []
+          : [
+              {
+                acceptWithExecpolicyAmendment: { execpolicy_amendment: prefix },
+              },
+            ]),
+        "decline",
+        "cancel",
+      ],
+    },
+    decide: (answer) => decideApproval(call, alwaysRules, answer),
+  };
+};
 
 const fileChangePrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
   method: "item/fileChange/requestApproval",
@@ -68,7 +95,7 @@ const fileChangePrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
     reason: call.reason ?? null,
     grantRoot: null,
   },
-  decide: (answer) => decideApproval(call, answer),
+  decide: (answer) => decideApproval(call, [], answer),
 });
 
 // Claude's AskUserQuestion reads answers keyed by question text, with several choices joined by commas; the app's choices are single-select, so a multi-select question is asked as free text listing its choices.
@@ -141,44 +168,123 @@ const planPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
   },
 });
 
-const toolPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
-  method: REQUEST_USER_INPUT,
-  params: userInputParams(target, [
-    {
-      id: APPROVAL_QUESTION,
-      header: "Approval",
-      question:
-        [
-          call.title ?? `Allow Claude to use ${call.toolName}?`,
-          JSON.stringify(call.input, null, 2),
-        ].join("\n\n") + typedApproval(call, ALLOW),
-      isOther: call.defaultToNo,
-      isSecret: false,
-      options: choicesFor(call, [
-        { label: ALLOW, description: "Run this tool call once" },
-        { label: DENY, description: "Refuse this tool call" },
-      ]),
+// A call that must default to no is never remembered, since a typed answer could otherwise save a rule.
+const toolPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => {
+  const sessionUpdates = call.defaultToNo ? [] : call.suggestions;
+  const alwaysRules =
+    call.defaultToNo || call.suppressAlwaysAllow
+      ? []
+      : savableRules(call.suggestions);
+  return {
+    method: REQUEST_USER_INPUT,
+    params: userInputParams(target, [
+      {
+        id: APPROVAL_QUESTION,
+        header: "Approval",
+        question:
+          [
+            call.title ?? `Allow Claude to use ${call.toolName}?`,
+            JSON.stringify(call.input, null, 2),
+          ].join("\n\n") + typedApproval(call, ALLOW),
+        isOther: call.defaultToNo,
+        isSecret: false,
+        options: choicesFor(call, [
+          { label: ALLOW, description: "Run this tool call once" },
+          ...(sessionUpdates.length > 0
+            ? [
+                {
+                  label: ALLOW_FOR_SESSION,
+                  description: "Stop asking for this in this session",
+                },
+              ]
+            : []),
+          ...(alwaysRules.length > 0
+            ? [
+                {
+                  label: ALWAYS_ALLOW,
+                  description: `Save ${ruleNames(alwaysRules)} to ${PROJECT_SETTINGS_FILE}`,
+                },
+              ]
+            : []),
+          { label: DENY, description: "Refuse this tool call" },
+        ]),
+      },
+    ]),
+    decide: (answer) => {
+      const [chosen] = answersTo(answer, APPROVAL_QUESTION);
+      if (chosen === undefined) return unanswered(call);
+      if (isChoice(chosen, ALLOW)) return { behavior: "allow" };
+      if (isChoice(chosen, ALLOW_FOR_SESSION) && sessionUpdates.length > 0) {
+        return allowSaving(sessionUpdates, "session");
+      }
+      if (isChoice(chosen, ALWAYS_ALLOW) && alwaysRules.length > 0) {
+        return allowSaving(alwaysRules, "projectSettings");
+      }
+      return declined(call);
     },
-  ]),
-  decide: (answer) => {
-    const [chosen] = answersTo(answer, APPROVAL_QUESTION);
-    if (chosen === undefined) return unanswered(call);
-    return isChoice(chosen, ALLOW) ? { behavior: "allow" } : declined(call);
-  },
-});
+  };
+};
 
-// Codex policy amendments are never written to Claude's settings, so they allow only this call.
-const decideApproval = (call: ToolCall, answer: unknown): PermissionResult => {
+// The bridge writes no files: only on the user's choice does it hand Claude its own suggestions, and Claude saves them.
+const decideApproval = (
+  call: ToolCall,
+  alwaysRules: PermissionUpdate[],
+  answer: unknown,
+): PermissionResult => {
   if (!isObject(answer) || answer.decision === undefined) {
     return unanswered(call);
   }
   const decision = answer.decision;
-  const accepted =
-    decision === "accept" ||
-    decision === "acceptForSession" ||
-    (isObject(decision) && "acceptWithExecpolicyAmendment" in decision);
-  return accepted ? { behavior: "allow" } : declined(call);
+  if (decision === "accept") return { behavior: "allow" };
+  if (decision === "acceptForSession") {
+    return allowSaving(call.suggestions, "session");
+  }
+  if (isObject(decision) && "acceptWithExecpolicyAmendment" in decision) {
+    return allowSaving(alwaysRules, "projectSettings");
+  }
+  return declined(call);
 };
+
+const allowSaving = (
+  updates: PermissionUpdate[],
+  destination: PermissionUpdateDestination,
+): PermissionResult =>
+  updates.length === 0
+    ? { behavior: "allow" }
+    : {
+        behavior: "allow",
+        updatedPermissions: updates.map((update) => ({
+          ...update,
+          destination,
+        })),
+      };
+
+// Only allow rules are saved to the shared settings, so a suggested mode or directory never persists beyond the session.
+const savableRules = (suggestions: PermissionUpdate[]) =>
+  suggestions.filter(
+    (update) => update.type === "addRules" && update.behavior === "allow",
+  );
+
+// Claude writes a command prefix rule as "npm test:*" or "npm test *"; anything else cannot be shown as the app's token prefix.
+const commandPrefix = (suggestions: PermissionUpdate[]): string[] | null => {
+  const bashRules = savableRules(suggestions)
+    .flatMap((update) => ("rules" in update ? update.rules : []))
+    .filter((rule) => rule.toolName === BASH);
+  const [rule] = bashRules;
+  if (bashRules.length !== 1 || rule?.ruleContent === undefined) return null;
+  const prefix = rule.ruleContent.match(/^(.*?)(?::\*| \*)$/)?.[1];
+  if (prefix === undefined) return null;
+  const tokens = prefix.trim().split(/\s+/);
+  return tokens.every((token) => PLAIN_TOKEN.test(token)) ? tokens : null;
+};
+
+const ruleNames = (updates: PermissionUpdate[]) =>
+  updates
+    .flatMap((update) => ("rules" in update ? update.rules : []))
+    .map(({ toolName, ruleContent }) =>
+      ruleContent === undefined ? toolName : `${toolName}(${ruleContent})`,
+    )
+    .join(", ");
 
 // The app picks and submits a choice on a single number key, so a call that must default to no offers no choices and approves only when the approving word is typed.
 const choicesFor = <T>(call: ToolCall, choices: T[]) =>
@@ -287,4 +393,11 @@ const APPROVAL_QUESTION = "approval";
 const APPROVE_PLAN = "Approve";
 const KEEP_PLANNING = "Keep planning";
 const ALLOW = "Allow";
+const ALLOW_FOR_SESSION = "Allow for this session";
+const ALWAYS_ALLOW = "Always allow";
 const DENY = "Deny";
+const BASH = "Bash";
+// Rejects quoting, globs and shell operators, which a token prefix cannot express.
+const PLAIN_TOKEN = /^[\w@%+=:,./-]+$/;
+// Where Claude saves projectSettings rules; fixed there by decision even when Claude suggests another file.
+const PROJECT_SETTINGS_FILE = ".claude/settings.json";
