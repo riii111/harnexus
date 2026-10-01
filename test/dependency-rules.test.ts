@@ -41,6 +41,15 @@ export const c = [s, t];`,
       },
     },
     {
+      name: "conversation/claude code using the conversation core, and bootstrap code using conversation/claude",
+      files: {
+        "bootstrap/main.ts": `import "../conversation/claude/r.ts";`,
+        "conversation/claude/r.ts": `import { c } from "../controller.ts";
+export const r = c;`,
+        "conversation/controller.ts": "export const c = 1;",
+      },
+    },
+    {
       name: "presentation code using a pure runtime helper and the JSON boundary",
       files: {
         "presentation/p.ts": `import { o } from "../runtime/object.ts";
@@ -92,6 +101,22 @@ export type M = typeof import("../bootstrap/main.ts");`,
       "infra/codex/c.ts -> conversation/a.ts: infra/ may not reference conversation/",
       "presentation/p.ts -> infra/thread-store.ts: presentation/ may not reference infra/",
       "runtime/r.ts -> presentation/p.ts: runtime/ may not reference presentation/",
+    ]);
+  });
+
+  test("reports conversation code outside claude/ referencing conversation/claude/", async () => {
+    const references = await collectReferences(
+      await writeProject({
+        "conversation/controller.ts": `import { r } from "./claude/r.ts";
+export const c = r;`,
+        "conversation/claude/r.ts": "export const r = 1;",
+      }),
+    );
+
+    const problems = checkDependencies(references, []);
+
+    expect(problems).toEqual([
+      "conversation/controller.ts -> conversation/claude/r.ts: conversation/ outside claude/ may not reference conversation/claude/",
     ]);
   });
 
@@ -301,6 +326,12 @@ const brokenRule = (from: string, to: string) => {
     return "presentation/ may not reference an I/O boundary";
   if (from.startsWith("infra/claude/") && to.startsWith("infra/codex/"))
     return "infra/claude/ may not reference infra/codex/";
+  if (
+    from.startsWith("conversation/") &&
+    !from.startsWith("conversation/claude/") &&
+    to.startsWith("conversation/claude/")
+  )
+    return "conversation/ outside claude/ may not reference conversation/claude/";
   return undefined;
 };
 
