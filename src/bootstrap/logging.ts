@@ -3,8 +3,8 @@ import {
   type ClaudeLogEvent,
   isClaudeTurnEvent,
   serializeClaudeTurnEvent,
-  serializeTurnEvent,
-} from "../conversation/controller.ts";
+} from "../conversation/claude/runtime.ts";
+import { serializeTurnEvent } from "../conversation/controller.ts";
 import { type RouteEvent, serializeRouteEvent } from "../conversation/route.ts";
 import type {
   loadClaudeModels,
