@@ -19,6 +19,8 @@ export const connectClaudeThreads = ({
   request,
   startSession,
   findSession,
+  listConversations,
+  lastRecordOf,
   readSession,
   effortRule,
   claudeModels,
@@ -30,6 +32,8 @@ export const connectClaudeThreads = ({
   request: ServerRequest;
   startSession: Runtime["startSession"];
   findSession: Runtime["findSession"];
+  listConversations: Runtime["listConversations"];
+  lastRecordOf: Runtime["lastRecordOf"];
   readSession: Parameters<typeof createHistoryRequests>[0]["readSession"];
   effortRule: Runtime["effortRule"];
   claudeModels: Parameters<typeof createRouter>[4];
@@ -43,6 +47,8 @@ export const connectClaudeThreads = ({
     threads,
     startSession,
     findSession,
+    listConversations,
+    lastRecordOf,
     openLink: (callerThreadId) =>
       createCodexLink({ callerThreadId, store, request, delegations }),
     send,

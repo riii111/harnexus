@@ -25,6 +25,10 @@ import {
 } from "../../presentation/plan.ts";
 import type { TokenUsageBreakdown } from "../../presentation/protocol.ts";
 import {
+  RECORD_ADVANCED,
+  sessionReplyText,
+} from "../../presentation/session-reply.ts";
+import {
   breakdown,
   NO_USAGE,
   renderTokenUsage,
@@ -33,6 +37,7 @@ import {
 import {
   markToolDeclined,
   renderInterimResult,
+  renderNotice,
   renderSdkMessage,
   renderToolRequest,
   runningToolItem,
@@ -46,7 +51,14 @@ import type {
   TurnLink,
   TurnRuntime,
 } from "../turn-runtime.ts";
+import {
+  createSessionCommands,
+  type SessionCommand,
+  type SessionEvent,
+} from "./session-commands.ts";
 import { readSkills } from "./skill-attachments.ts";
+
+type SessionCommandsDeps = Parameters<typeof createSessionCommands>[0];
 
 type SessionStart = Awaited<ReturnType<typeof startClaudeSession>>;
 
@@ -104,7 +116,8 @@ type ClaudeTurnEvent =
       firstMessageMs: number | null;
       turnMs: number;
     } & TokenUsageBreakdown)
-  | { event: "claude_turn"; step: "interrupt_failed"; error: InterruptTag };
+  | { event: "claude_turn"; step: "interrupt_failed"; error: InterruptTag }
+  | SessionEvent;
 
 export type ClaudeLogEvent = TurnEvent<ClaudeFailureTag> | ClaudeTurnEvent;
 
@@ -119,7 +132,10 @@ type SessionSlot = {
 };
 
 // Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken.
+// command marks a turn the bridge answers itself, such as /session, and completed one Claude ended with a successful result.
 type ClaudeTurn = {
+  command: boolean;
+  completed: boolean;
   slot: SessionSlot | null;
   unsentSteers: string[];
   pendingSteers: Set<string>;
@@ -143,6 +159,8 @@ export const createClaudeRuntime = ({
   threads,
   startSession,
   findSession,
+  listConversations,
+  lastRecordOf,
   openLink,
   send,
   log,
@@ -153,6 +171,8 @@ export const createClaudeRuntime = ({
   threads: ThreadValues;
   startSession: StartSession;
   findSession: FindSession;
+  listConversations: SessionCommandsDeps["listConversations"];
+  lastRecordOf: SessionCommandsDeps["lastRecordOf"];
   openLink: (threadId: string) => CodexLink;
   send: (message: object) => void;
   log: (event: ClaudeTurnEvent) => void;
@@ -168,6 +188,14 @@ export const createClaudeRuntime = ({
   const plans = new Map<string, ThreadPlan>();
   const turns = new WeakMap<Turn, ClaudeTurn>();
   const runningTurns = new Map<string, Turn>();
+  const commands = createSessionCommands({
+    threads,
+    listConversations,
+    lastRecordOf,
+    findSession,
+    log,
+    now,
+  });
   let closed = false;
 
   // Each worker keeps its own Claude process, so an idle one is closed; without a session id its next turn could not resume the conversation, so it stays.
@@ -191,18 +219,61 @@ export const createClaudeRuntime = ({
   };
 
   const run = async (turn: Turn) => {
+    const command = commands.take(turn.threadId, typedText(turn.input));
     const claude: ClaudeTurn = {
+      command: command !== null,
+      completed: false,
       slot: null,
       unsentSteers: [],
       pendingSteers: new Set(),
       steers: 0,
     };
     turns.set(turn, claude);
+    if (command !== null) {
+      await answerCommand(turn, command);
+      return;
+    }
     runningTurns.set(turn.threadId, turn);
     await stream(turn, claude);
     if (runningTurns.get(turn.threadId) === turn) {
       runningTurns.delete(turn.threadId);
     }
+    // A turn cut short may still be writing records, which would read as the conversation continuing elsewhere.
+    if (claude.completed) {
+      await commands.remember(
+        turn.threadId,
+        threads.sessionIdOf(turn.threadId),
+      );
+    } else {
+      commands.forget(turn.threadId);
+    }
+  };
+
+  // The turn shows what the user typed and the bridge's reply, and nothing reaches Claude or its record.
+  const answerCommand = async (turn: Turn, command: SessionCommand) => {
+    if (turn.state().interrupting) {
+      turn.finish({ status: "interrupted" }, null);
+      return;
+    }
+    const reply = await commands.answer(
+      turn.threadId,
+      turn.record.worktree,
+      command,
+    );
+    turn.apply(
+      renderNotice(
+        turn.state(),
+        sessionReplyText(reply, now()),
+        "final_answer",
+        now(),
+      ),
+    );
+    turn.finish(
+      turn.state().interrupting
+        ? { status: "interrupted" }
+        : { status: "completed" },
+      null,
+    );
   };
 
   const stream = async (turn: Turn, claude: ClaudeTurn) => {
@@ -215,6 +286,14 @@ export const createClaudeRuntime = ({
     if (turn.state().interrupting) {
       turn.finish({ status: "interrupted" }, null);
       return;
+    }
+    // A running Claude holds the conversation as it was, so it restarts to resume from the records written elsewhere.
+    if (await commands.advanced(threadId, threads.sessionIdOf(threadId))) {
+      turn.apply(
+        renderNotice(turn.state(), RECORD_ADVANCED, "commentary", now()),
+      );
+      const stale = sessions.get(threadId);
+      if (stale !== undefined) dropSession(threadId, stale);
     }
     const reused = sessions.get(threadId)?.model === model;
     const sessionAskedAt = now();
@@ -363,6 +442,12 @@ export const createClaudeRuntime = ({
         return;
       }
       turn.apply(renderSdkMessage(turn.state(), message, now()));
+      if (message.type === "result") {
+        claude.completed =
+          message.subtype === "success" &&
+          !message.is_error &&
+          !turn.state().interrupting;
+      }
       // A failed result leaves its steers unrun, so the session goes with them rather than run them into the next turn; after a stop, the interrupt receipt decides instead.
       const state = turn.state();
       if (
@@ -378,6 +463,7 @@ export const createClaudeRuntime = ({
   const steer = (turn: Turn, text: string): Refusal | null => {
     const claude = turns.get(turn);
     if (claude === undefined) return "no_running_turn";
+    if (claude.command) return "command_not_steerable";
     if (claude.steers >= MAX_STEERS_PER_TURN) return "too_many_steers";
     if (claude.slot === null) {
       claude.unsentSteers.push(text);
@@ -604,7 +690,18 @@ export const serializeClaudeTurnEvent = (entry: ClaudeTurnEvent) => {
         firstMessageMs: entry.firstMessageMs,
         turnMs: entry.turnMs,
       };
+    case "session_command":
+      return {
+        event: entry.event,
+        step: entry.step,
+        command: entry.command,
+        reply: entry.reply,
+        error: entry.error,
+      };
+    case "record_advanced":
+      return { event: entry.event, step: entry.step };
     case "interrupt_failed":
+    case "record_unreadable":
       return { event: entry.event, step: entry.step, error: entry.error };
   }
 };
@@ -629,6 +726,10 @@ const steersAfter = (
   return complete || (result.queued_turn_count ?? 0) > 0 ? "queued" : "unknown";
 };
 
+// Only what the user typed can be a session command, never another thread's message or a compaction.
+const typedText = (input: RunningTurn<string>["input"]) =>
+  input.toolOutput === null && input.items.length > 0 ? input.text : null;
+
 const resumeFrom = (sessionId: string | null) =>
   sessionId === null ? {} : { resume: sessionId };
 
@@ -640,6 +741,9 @@ const CLAUDE_STEPS: Record<ClaudeTurnEvent["step"], true> = {
   effort_applied: true,
   metrics: true,
   interrupt_failed: true,
+  session_command: true,
+  record_advanced: true,
+  record_unreadable: true,
 };
 
 const COMPACT_PROMPT = "/compact";

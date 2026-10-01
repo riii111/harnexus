@@ -8,6 +8,10 @@ import {
   readClaudeSession,
   startClaudeSession,
 } from "../infra/claude/session.ts";
+import {
+  listClaudeConversations,
+  readLastRecordUuid,
+} from "../infra/claude/transcripts.ts";
 import { createLineInjector } from "../infra/codex/inject.ts";
 import { createLineRewriter } from "../infra/codex/line-rewriter.ts";
 import { createObserver } from "../infra/codex/observe.ts";
@@ -116,6 +120,8 @@ async function withClaude(relay: {
     request: serverCalls.request,
     startSession: startClaudeSession,
     findSession: claudeSessionExists,
+    listConversations: (cwd, since) => listClaudeConversations(cwd, { since }),
+    lastRecordOf: (sessionId) => readLastRecordUuid(sessionId),
     readSession: (sessionId) => readClaudeSession(sessionId),
     // Unreadable settings leave threads with none picked on the model default, which is still the level the app shows.
     effortRule: effortRule(

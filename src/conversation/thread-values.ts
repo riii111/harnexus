@@ -66,6 +66,23 @@ export const createThreadValues = (
     if (store.get(threadId) === undefined) adopted.set(threadId, thread);
   };
 
+  // An id set here but not saved wins over the store's, as in sessionIdOf.
+  const isBound = (sessionId: string) => {
+    for (const id of sessionIds.values()) if (id === sessionId) return true;
+    const owner = store.sessionOwner(sessionId);
+    return owner !== undefined && !sessionIds.has(owner);
+  };
+
+  // Unlike an id Claude reports, a picked conversation applies only once the store holds it, so a restart never drops it unannounced; a save whose sync failed already holds it.
+  const bindSession = async (threadId: string, sessionId: string) => {
+    if (isBound(sessionId))
+      return { bound: false, error: "SessionTaken" as const };
+    const saved = await store.bindSession(threadId, sessionId);
+    const bound = store.get(threadId)?.sessionId === sessionId;
+    if (bound) sessionIds.set(threadId, sessionId);
+    return { bound, error: saved.isErr() ? saved.error._tag : null };
+  };
+
   // A model or effort picked while the thread was being registered is saved now, since the registration carried the earlier one.
   const markRegistered = (threadId: string) => {
     adopted.delete(threadId);
@@ -138,6 +155,8 @@ export const createThreadValues = (
     pickedEffortOf,
     sessionIdOf,
     adopt,
+    isBound,
+    bindSession,
     markRegistered,
     changeModel,
     changeEffort,

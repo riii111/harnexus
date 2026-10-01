@@ -22,6 +22,10 @@ import {
   startClaudeSession,
 } from "../../infra/claude/session.ts";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
+import {
+  listClaudeConversations,
+  readLastRecordUuid,
+} from "../../infra/claude/transcripts.ts";
 import { createCodexLink } from "../../infra/codex/codex-link.ts";
 import { createDelegationWatch } from "../../infra/codex/delegations.ts";
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
@@ -215,6 +219,9 @@ export const harness = async (
       sessionLookupFails
         ? claudeSessionExists(sessionId, await unlistableConfigDir())
         : Result.ok(!missingSessions.includes(sessionId)),
+    listConversations: (cwd, since) =>
+      listClaudeConversations(cwd, { since, configDir: claudeDir() }),
+    lastRecordOf: (sessionId) => readLastRecordUuid(sessionId, claudeDir()),
     openLink: (threadId) => {
       links.push(threadId);
       if (linkRequest !== undefined) {
@@ -344,6 +351,9 @@ export const ALLOWED_TOOLS = ["mcp__codex_link__read_thread"];
 
 export const OUTCOME_UNKNOWN =
   "the previous Claude turn on this thread stopped before its outcome was known; check what that turn did, such as changed files or messages to other threads, then send a message yourself to continue";
+
+// Claude's records for the harness live under the test directory, so a test writes the conversations it lists.
+export const claudeDir = () => join(dir, "claude-records");
 
 // A link to itself cannot be listed, as an unreadable folder cannot, and still leaves the test directory removable.
 export const unlistableConfigDir = async () => {

@@ -90,6 +90,8 @@ const REFUSAL_MESSAGES = {
   nothing_to_compact: "there is no Claude conversation to compact yet",
   compaction_not_steerable:
     "a compaction takes no steers; send it as the next turn",
+  command_not_steerable:
+    "the bridge answers this turn itself and takes no steers; send it as the next turn",
   too_many_steers:
     "this Claude turn takes no more steers; send it as the next turn",
   bridge_closing: "the bridge is shutting down",

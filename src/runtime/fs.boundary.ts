@@ -99,6 +99,41 @@ export const readRegularTextFile = (path: string) =>
       new FileReadFailed({ path, cause, message: `cannot read ${path}` }),
   });
 
+// A file removed after its folder was listed is null, as is anything that is not a regular file.
+export const statFileIfExists = (path: string) =>
+  Result.tryPromise({
+    try: async () => {
+      try {
+        const found = await stat(path);
+        return found.isFile()
+          ? { size: found.size, modifiedMs: Math.trunc(found.mtimeMs) }
+          : null;
+      } catch (cause) {
+        if (isMissingFile(cause)) return null;
+        throw cause;
+      }
+    },
+    catch: (cause) =>
+      new FileReadFailed({ path, cause, message: `cannot read ${path}` }),
+  });
+
+// Reads at most length bytes, so a large record is never held whole; a multibyte character cut at either end decodes as a replacement character.
+export const readFileSlice = (path: string, start: number, length: number) =>
+  Result.tryPromise({
+    try: async () => {
+      const file = await open(path, "r");
+      try {
+        const buffer = Buffer.alloc(length);
+        const { bytesRead } = await file.read(buffer, 0, length, start);
+        return buffer.subarray(0, bytesRead).toString("utf8");
+      } finally {
+        await file.close();
+      }
+    },
+    catch: (cause) =>
+      new FileReadFailed({ path, cause, message: `cannot read ${path}` }),
+  });
+
 // FileSyncFailed means the file already holds the new content but the rename may not survive a crash.
 export const writeFileAtomic = (path: string, content: string) =>
   Result.gen(async function* () {
