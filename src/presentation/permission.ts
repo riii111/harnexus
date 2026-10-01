@@ -17,6 +17,8 @@ export type ToolCall = {
   defaultToNo: boolean;
   // Claude's proposed updates that stop it asking again; empty when it proposes none.
   suggestions: PermissionUpdate[];
+  // Set by the SDK when a saved rule would grant more than this call, so no persistent allow may be offered.
+  suppressAlwaysAllow: boolean;
 };
 
 export type PromptTarget = {
@@ -53,7 +55,9 @@ const commandPrompt = (
   item: Extract<ToolItem, { type: "commandExecution" }>,
   target: PromptTarget,
 ): AppPrompt => {
-  const prefix = commandPrefix(call.suggestions);
+  const prefix = call.suppressAlwaysAllow
+    ? null
+    : commandPrefix(call.suggestions);
   const alwaysRules = prefix === null ? [] : savableRules(call.suggestions);
   return {
     method: "item/commandExecution/requestApproval",
@@ -167,7 +171,10 @@ const planPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
 // A call that must default to no is never remembered, since a typed answer could otherwise save a rule.
 const toolPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => {
   const sessionUpdates = call.defaultToNo ? [] : call.suggestions;
-  const alwaysRules = call.defaultToNo ? [] : savableRules(call.suggestions);
+  const alwaysRules =
+    call.defaultToNo || call.suppressAlwaysAllow
+      ? []
+      : savableRules(call.suggestions);
   return {
     method: REQUEST_USER_INPUT,
     params: userInputParams(target, [

@@ -238,6 +238,43 @@ describe("tool approval", () => {
     });
   });
 
+  test("saves no rule when the SDK forbids a persistent allow", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await startedTurn(claude);
+    const rule: PermissionUpdate = {
+      type: "addRules",
+      rules: [{ toolName: "Bash", ruleContent: "npm test:*" }],
+      behavior: "allow",
+      destination: "localSettings",
+    };
+
+    const decision = askTool(
+      claude,
+      "Bash",
+      { command: "npm test" },
+      { suggestions: [rule], suppressAlwaysAllowRule: true },
+    );
+    const request = await appRequest(sent);
+    turns.answerRequest({
+      id: request.id,
+      result: {
+        decision: {
+          acceptWithExecpolicyAmendment: {
+            execpolicy_amendment: ["npm", "test"],
+          },
+        },
+      },
+    });
+
+    expect(request.params.availableDecisions).toEqual([
+      "accept",
+      "acceptForSession",
+      "decline",
+      "cancel",
+    ]);
+    expect(await decision).toEqual({ behavior: "allow" });
+  });
+
   test("shows a tool the app declined as declined", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await startedTurn(claude);
@@ -2935,6 +2972,7 @@ const askTool = (
     signal?: AbortSignal;
     defaultToNo?: boolean;
     suggestions?: PermissionUpdate[];
+    suppressAlwaysAllowRule?: boolean;
   } = {},
 ) => {
   const canUseTool = claude.options().canUseTool as CanUseTool;
@@ -2949,6 +2987,9 @@ const askTool = (
     ...(options.suggestions === undefined
       ? {}
       : { suggestions: options.suggestions }),
+    ...(options.suppressAlwaysAllowRule === undefined
+      ? {}
+      : { suppressAlwaysAllowRule: options.suppressAlwaysAllowRule }),
   });
 };
 

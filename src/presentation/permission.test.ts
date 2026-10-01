@@ -574,6 +574,61 @@ describe("promptFor remembering choices on another tool", () => {
   });
 });
 
+describe("promptFor calls whose rule must not be saved", () => {
+  test("offers a command only the session and saves nothing on a policy amendment", () => {
+    const prompt = promptFor(
+      { ...suggested("Bash", COMMAND, [NPM_TEST]), suppressAlwaysAllow: true },
+      TARGET,
+    );
+
+    const decision = prompt.decide({
+      decision: {
+        acceptWithExecpolicyAmendment: {
+          execpolicy_amendment: ["npm", "test"],
+        },
+      },
+    });
+
+    expect(prompt.params.availableDecisions).toEqual([
+      "accept",
+      "acceptForSession",
+      "decline",
+      "cancel",
+    ]);
+    expect(prompt.params).not.toHaveProperty("proposedExecpolicyAmendment");
+    expect(decision).toEqual({ behavior: "allow" });
+  });
+
+  test("offers another tool only the session and saves nothing on always allow", () => {
+    const prompt = promptFor(
+      {
+        ...suggested("WebFetch", null, [WEB_FETCH]),
+        suppressAlwaysAllow: true,
+      },
+      TARGET,
+    );
+    const chose = (label: string) =>
+      prompt.decide({ answers: { approval: { answers: [label] } } });
+
+    const [question] = prompt.params.questions as {
+      options: { label: string }[];
+    }[];
+    expect(question?.options.map(({ label }) => label)).toEqual([
+      "Allow",
+      "Allow for this session",
+      "Deny",
+    ]);
+    expect(chose("Always allow")).toEqual({
+      behavior: "deny",
+      message: expect.any(String),
+    });
+    expect(chose("Allow for this session")).toEqual({
+      behavior: "allow",
+      updatedPermissions: [{ ...WEB_FETCH, destination: "session" }],
+    });
+  });
+});
+
 const call = (
   toolName: string,
   input: Record<string, unknown>,
@@ -587,6 +642,7 @@ const call = (
   reason,
   defaultToNo: false,
   suggestions: [],
+  suppressAlwaysAllow: false,
 });
 
 const suggested = (

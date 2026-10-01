@@ -1098,6 +1098,7 @@ export const createTurnController = ({
           reason: options.decisionReason,
           defaultToNo: options.defaultToNo === true,
           suggestions: options.suggestions ?? [],
+          suppressAlwaysAllow: options.suppressAlwaysAllowRule === true,
         },
         {
           threadId,
