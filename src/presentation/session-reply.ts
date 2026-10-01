@@ -12,7 +12,7 @@ export type SessionReply =
   | { kind: "taken" }
   | { kind: "recordGone" }
   | { kind: "notSaved" }
-  | { kind: "selected"; title: string }
+  | { kind: "selected"; title: string; unsynced: boolean }
   | { kind: "session"; cwd: string; sessionId: string | null };
 
 export type ListedConversation = {
@@ -36,9 +36,16 @@ export const sessionReplyText = (reply: SessionReply, now: number): string => {
     case "recordGone":
       return "Claude Code no longer has that conversation's record. Send /resume to list the others.";
     case "notSaved":
-      return "Harnexus could not save the conversation for this thread, so it was not continued. Send the number again to retry.";
+      return "Harnexus could not save the conversation for this thread, so it was not continued. Send /resume and pick it again to retry.";
     case "selected":
-      return `This thread now continues "${shortTitle(reply.title)}". Your next message goes to that Claude conversation; reopen the thread to see its earlier messages.`;
+      return [
+        `This thread now continues "${shortTitle(reply.title)}". Your next message goes to that Claude conversation; reopen the thread to see its earlier messages.`,
+        ...(reply.unsynced
+          ? [
+              "Harnexus could not confirm the choice reached the disk, so it may be lost if the machine stops before the next save.",
+            ]
+          : []),
+      ].join(" ");
     case "session":
       return sessionText(reply.cwd, reply.sessionId);
   }
@@ -76,7 +83,7 @@ const sessionText = (cwd: string, sessionId: string | null) =>
         "Continue this conversation in a terminal:",
         "",
         "```sh",
-        `cd ${shellQuote(cwd)} && claude --resume ${sessionId}`,
+        `cd ${shellQuote(cwd)} && claude --resume ${shellQuote(sessionId)}`,
         "```",
       ].join("\n");
 

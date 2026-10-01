@@ -1,12 +1,12 @@
 import type { InferErr } from "better-result";
-import type { claudeSessionExists } from "../infra/claude/session.ts";
+import type { claudeSessionExists } from "../../infra/claude/session.ts";
 import type {
   ClaudeConversation,
   listClaudeConversations,
   readLastRecordUuid,
-} from "../infra/claude/transcripts.ts";
-import type { ThreadStore } from "../infra/thread-store.ts";
-import type { SessionReply } from "../presentation/session-reply.ts";
+} from "../../infra/claude/transcripts.ts";
+import type { SessionReply } from "../../presentation/session-reply.ts";
+import type { ThreadValues } from "../thread-values.ts";
 
 export type SessionCommand =
   | { kind: "list" }
@@ -38,17 +38,14 @@ type FindSession = (
   sessionId: string,
 ) => ReturnType<typeof claudeSessionExists>;
 
-type BindSession = (
-  threadId: string,
-  sessionId: string,
-) => ReturnType<ThreadStore["setSessionId"]>;
-
 type ErrorTagOf<F extends (...args: never[]) => unknown> =
   InferErr<Awaited<ReturnType<F>>> extends { _tag: infer T } ? T : never;
 
 type RecordErrorTag = ErrorTagOf<LastRecordOf>;
 
-type BindErrorTag = ErrorTagOf<BindSession>;
+type BindErrorTag = NonNullable<
+  Awaited<ReturnType<ThreadValues["bindSession"]>>["error"]
+>;
 
 type SessionErrorTag = ErrorTagOf<ListConversations> | BindErrorTag;
 
@@ -61,11 +58,7 @@ export const createSessionCommands = ({
   log,
   now,
 }: {
-  threads: {
-    sessionIdOf: (threadId: string) => string | null;
-    isBound: (sessionId: string) => boolean;
-    bindSession: BindSession;
-  };
+  threads: Pick<ThreadValues, "sessionIdOf" | "isBound" | "bindSession">;
   listConversations: ListConversations;
   lastRecordOf: LastRecordOf;
   findSession: FindSession;
@@ -160,12 +153,24 @@ export const createSessionCommands = ({
     if (threads.isBound(chosen.sessionId)) return answered({ kind: "taken" });
     const found = await findSession(chosen.sessionId);
     if (found.isOk() && !found.value) return answered({ kind: "recordGone" });
-    const bound = await threads.bindSession(threadId, chosen.sessionId);
-    if (bound.isErr()) {
-      return { reply: { kind: "notSaved" } as const, error: bound.error._tag };
+    const { bound, error } = await threads.bindSession(
+      threadId,
+      chosen.sessionId,
+    );
+    if (!bound) {
+      const reply: SessionReply =
+        error === "SessionTaken" ? { kind: "taken" } : { kind: "notSaved" };
+      return { reply, error };
     }
     await remember(threadId, chosen.sessionId);
-    return answered({ kind: "selected", title: chosen.title });
+    return {
+      reply: {
+        kind: "selected",
+        title: chosen.title,
+        unsynced: error !== null,
+      } as const,
+      error,
+    };
   };
 
   // A record that cannot be read is not compared, so the next turn is not wrongly reported as continued elsewhere.

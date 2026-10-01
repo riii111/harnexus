@@ -1,8 +1,10 @@
 import { type InferErr, Result } from "better-result";
 import {
-  serializeTurnEvent,
-  type TurnEvent,
-} from "../conversation/controller.ts";
+  type ClaudeLogEvent,
+  isClaudeTurnEvent,
+  serializeClaudeTurnEvent,
+} from "../conversation/claude/runtime.ts";
+import { serializeTurnEvent } from "../conversation/controller.ts";
 import { type RouteEvent, serializeRouteEvent } from "../conversation/route.ts";
 import type {
   loadClaudeModels,
@@ -34,7 +36,7 @@ type LogEvent =
   | { event: "claude_models_loaded"; count: number }
   | { event: "bridge_signaled"; signal: Signal }
   | ObservationEvent
-  | TurnEvent
+  | ClaudeLogEvent
   | RouteEvent;
 
 type StartupFailure = "ServerPipesUnavailable";
@@ -90,7 +92,9 @@ const serializeLogEvent = (entry: LogEvent) => {
     case "claude_models_loaded":
       return { event: entry.event, count: entry.count };
     case "claude_turn":
-      return serializeTurnEvent(entry);
+      return isClaudeTurnEvent(entry)
+        ? serializeClaudeTurnEvent(entry)
+        : serializeTurnEvent(entry);
     case "claude_request_refused":
     case "model_id_collision":
     case "codex_version":

@@ -149,6 +149,20 @@ describe("listClaudeConversations", () => {
     expect(listed.isOk() && listed.value[0]?.title).toBe("real ask");
   });
 
+  test("lists a conversation whose first record is larger than one read", async () => {
+    const long = `big ask ${"x".repeat(200 * 1024)}`;
+    await writeRecord(PROJECT_FOLDER, "se-big", conversation(long));
+
+    const listed = await listClaudeConversations(PROJECT, {
+      since: NOW - 14 * DAY,
+      configDir: dir,
+    });
+
+    expect(
+      listed.isOk() && listed.value.map((found) => found.sessionId),
+    ).toEqual(["se-big"]);
+  });
+
   test("lists nothing when Claude has no records yet", async () => {
     const listed = await listClaudeConversations(PROJECT, {
       since: NOW - 14 * DAY,

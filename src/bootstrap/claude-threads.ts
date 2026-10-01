@@ -1,15 +1,17 @@
 import {
-  createTurnController,
-  type TurnEvent,
-} from "../conversation/controller.ts";
+  type ClaudeLogEvent,
+  createClaudeRuntime,
+} from "../conversation/claude/runtime.ts";
+import { createTurnController } from "../conversation/controller.ts";
 import { createHistoryRequests } from "../conversation/history-request.ts";
 import { createRouter, type RouteEvent } from "../conversation/route.ts";
+import { createThreadValues } from "../conversation/thread-values.ts";
 import { createCodexLink } from "../infra/codex/codex-link.ts";
 import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
 
-type Controller = Parameters<typeof createTurnController>[0];
+type Runtime = Parameters<typeof createClaudeRuntime>[0];
 
 // The router, the turn controller and each session's thread tools share one store and one watch for created threads, so a reviewer is traced to its worker whichever of them sees it first.
 export const connectClaudeThreads = ({
@@ -28,32 +30,41 @@ export const connectClaudeThreads = ({
 }: {
   store: ThreadStore;
   request: ServerRequest;
-  startSession: Controller["startSession"];
-  findSession: Controller["findSession"];
-  listConversations: Controller["listConversations"];
-  lastRecordOf: Controller["lastRecordOf"];
+  startSession: Runtime["startSession"];
+  findSession: Runtime["findSession"];
+  listConversations: Runtime["listConversations"];
+  lastRecordOf: Runtime["lastRecordOf"];
   readSession: Parameters<typeof createHistoryRequests>[0]["readSession"];
-  effortRule: Controller["effortRule"];
+  effortRule: Runtime["effortRule"];
   claudeModels: Parameters<typeof createRouter>[4];
   unverifiedCodex: Parameters<typeof createRouter>[5];
   send: (message: object) => void;
-  log: (event: TurnEvent | RouteEvent) => void;
+  log: (event: ClaudeLogEvent | RouteEvent) => void;
 }) => {
   const delegations = createDelegationWatch(store.claimReviewer);
-  const turns = createTurnController({
-    store,
+  const threads = createThreadValues(store, log);
+  const runtime = createClaudeRuntime({
+    threads,
     startSession,
     findSession,
     listConversations,
     lastRecordOf,
+    openLink: (callerThreadId) =>
+      createCodexLink({ callerThreadId, store, request, delegations }),
+    send,
+    log,
+    effortRule,
+  });
+  const turns = createTurnController({
+    store,
+    threads,
+    runtime,
     materializeThread: (threadId) =>
       request(
         "thread/inject_items",
         { threadId, items: [THREAD_NOTE] },
         { timeoutMs: INJECT_TIMEOUT_MS },
       ),
-    openLink: (callerThreadId) =>
-      createCodexLink({ callerThreadId, store, request, delegations }),
     send,
     log,
     effortRule,

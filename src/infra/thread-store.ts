@@ -63,6 +63,11 @@ class ReviewerTaken extends TaggedError("ReviewerTaken")<{
   message: string;
 }> {}
 
+class SessionTaken extends TaggedError("SessionTaken")<{
+  threadId: string;
+  message: string;
+}> {}
+
 class WriteOutcomeUnknown extends TaggedError("WriteOutcomeUnknown")<{
   threadId: string;
   message: string;
@@ -311,12 +316,23 @@ const createThreadStore = (
       ownerIn(mappings, reviewerThreadId) ??
       claimedReviewers.get(reviewerThreadId),
 
-    sessionOwner: (sessionId: string) => {
-      for (const mapping of mappings.values()) {
-        if (mapping.sessionId === sessionId) return mapping.threadId;
-      }
-      return undefined;
-    },
+    sessionOwner: (sessionId: string) => ownerOfSession(mappings, sessionId),
+
+    // The check runs in the file queue with the write, so of two threads picking one conversation at once only the first gets it.
+    bindSession: (threadId: string, sessionId: string) =>
+      persistThenCommit<ThreadNotFound | SessionTaken>((current) => {
+        const mapping = current.get(threadId);
+        if (mapping === undefined) return Result.err(notFound(threadId));
+        const owner = ownerOfSession(current, sessionId);
+        return owner === undefined || owner === threadId
+          ? Result.ok({ ...mapping, sessionId })
+          : Result.err(
+              new SessionTaken({
+                threadId,
+                message: "the Claude conversation is already in another thread",
+              }),
+            );
+      }),
 
     // A requester that sends again moves to the end, so the cap drops the one that asked longest ago.
     addRequester: (threadId: string, requesterThreadId: string) =>
@@ -409,6 +425,16 @@ const takenReviewer = (
   return owner === undefined || owner === threadId
     ? null
     : "another thread's reviewer";
+};
+
+const ownerOfSession = (
+  mappings: ReadonlyMap<string, ThreadMapping>,
+  sessionId: string,
+) => {
+  for (const mapping of mappings.values()) {
+    if (mapping.sessionId === sessionId) return mapping.threadId;
+  }
+  return undefined;
 };
 
 const ownerIn = (

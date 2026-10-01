@@ -99,13 +99,13 @@ const readConversation = async (
   if (file.isErr() || file.value === null) return null;
   const { size, modifiedMs } = file.value;
   if (modifiedMs < since) return null;
-  const head = await readFileSlice(path, 0, Math.min(size, END_BYTES));
+  const head = await readHead(path, size);
   const tailStart = Math.max(0, size - END_BYTES);
   const tail = await readFileSlice(path, tailStart, size - tailStart);
   if (head.isErr() || tail.isErr()) return null;
-  const first = wholeRecords(head.value, {
+  const first = wholeRecords(head.value.text, {
     cutStart: false,
-    cutEnd: size > END_BYTES,
+    cutEnd: head.value.length < size,
   });
   const last = wholeRecords(tail.value, {
     cutStart: tailStart > 0,
@@ -131,6 +131,17 @@ const readConversation = async (
     updatedAtMs: modifiedMs,
     entrypoint: typeof entrypoint === "string" ? entrypoint : null,
   };
+};
+
+// The first record holds the directory and often the first prompt, so the read widens until it is whole, however long a pasted prompt makes it.
+const readHead = async (path: string, size: number) => {
+  for (let length = Math.min(size, END_BYTES); ; length *= 2) {
+    const read = Math.min(size, length);
+    const text = await readFileSlice(path, 0, read);
+    if (text.isErr() || read === size || text.value.includes("\n")) {
+      return text.map((value) => ({ text: value, length: read }));
+    }
+  }
 };
 
 // Claude replaces every character other than a letter or digit with a hyphen and cuts a long name, adding a hash this does not reproduce, so a long name matches by its kept prefix and the record's own directory decides.
