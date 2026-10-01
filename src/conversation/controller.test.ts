@@ -24,6 +24,10 @@ import {
   startClaudeSession,
 } from "../infra/claude/session.ts";
 import { fakeClaude } from "../infra/claude/testing/fake-claude.ts";
+import {
+  listClaudeConversations,
+  readLastRecordUuid,
+} from "../infra/claude/transcripts.ts";
 import { createCodexLink } from "../infra/codex/codex-link.ts";
 import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
@@ -2325,6 +2329,153 @@ describe("thread/compact/start on a Claude thread", () => {
   });
 });
 
+describe("session commands", () => {
+  test("answers /resume with the directory's conversations other threads do not continue, without starting Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store, events } = await harness([claude]);
+    await continuedByOtherThread(store, "se-other");
+    await writeClaudeRecord(
+      "se-other",
+      conversationRecords("other fixture ask"),
+    );
+    await writeClaudeRecord("se-a", conversationRecords("fixture ask"));
+
+    turns.startTurn(turnStart(10, "/resume"), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(responseTo(sent, 10)?.result.turn).toMatchObject({ id: "turn-1" });
+    expect(turnCompleted(sent)).toMatchObject({ status: "completed" });
+    const reply = agentTexts(sent).at(-1) ?? "";
+    expect(reply).toContain("1. fixture ask");
+    expect(reply).not.toContain("other fixture ask");
+    expect(claude.started()).toBe(false);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "session_command",
+      command: "list",
+      reply: "listed",
+      error: null,
+    });
+    expect(JSON.stringify(events)).not.toContain("fixture ask");
+  });
+
+  test("continues the picked conversation from the next turn without sending the number to Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store, settings } = await harness([claude]);
+    await writeClaudeRecord("se-a", conversationRecords("fixture ask"));
+    turns.startTurn(turnStart(10, "/resume"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 1);
+
+    turns.startTurn(turnStart(11, "1"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+    const bound = store.get(THREAD)?.sessionId;
+    await completeTurn(turns, sent, claude, 12);
+
+    expect(agentTexts(sent)[1]).toContain('continues "fixture ask"');
+    expect(bound).toBe("se-a");
+    expect(settings).toHaveLength(1);
+    expect(settings[0]).toMatchObject({ resume: "se-a" });
+    expect(await promptsUntil(claude, 1)).toEqual(["prompt 12"]);
+  });
+
+  test("refuses /resume on a thread that already has a conversation and lists nothing", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    await writeClaudeRecord("se-a", conversationRecords("fixture ask"));
+    await completeTurn(turns, sent, claude, 10);
+
+    turns.startTurn(turnStart(11, "/resume"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    const reply = agentTexts(sent).at(-1) ?? "";
+    expect(reply).toContain("already has a Claude conversation");
+    expect(reply).not.toContain("fixture ask");
+    expect(await promptsUntil(claude, 1)).toEqual(["prompt 10"]);
+  });
+
+  test("sends a number to Claude when no list came before it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude]);
+    await writeClaudeRecord("se-a", conversationRecords("fixture ask"));
+
+    turns.startTurn(turnStart(10, "1"), undefined);
+    await until(() => claude.started());
+
+    expect(await promptsUntil(claude, 1)).toEqual(["1"]);
+  });
+
+  test("sends a number to Claude when another turn followed the list", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store } = await harness([claude]);
+    await writeClaudeRecord("se-a", conversationRecords("fixture ask"));
+    turns.startTurn(turnStart(10, "/resume"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 1);
+    await completeTurn(turns, sent, claude, 11);
+
+    turns.startTurn(turnStart(12, "1"), undefined);
+
+    expect(await promptsUntil(claude, 2)).toEqual(["prompt 11", "1"]);
+    expect(store.get(THREAD)?.sessionId).toBe("se-1");
+  });
+
+  test("answers /session with the directory and the command to continue in a terminal, without sending it to Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+
+    turns.startTurn(turnStart(11, "/session"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    const reply = agentTexts(sent).at(-1) ?? "";
+    expect(reply).toContain(`cd '${dir}' && claude --resume se-1`);
+    expect(await promptsUntil(claude, 1)).toEqual(["prompt 10"]);
+  });
+
+  test("answers /session on a thread with no conversation yet without starting Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "/session"), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(agentTexts(sent).at(-1)).toContain("no Claude conversation yet");
+    expect(claude.started()).toBe(false);
+  });
+});
+
+describe("a conversation continued outside its thread", () => {
+  test("tells the user and resumes from the latest record on a new Claude only after the record moved on", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings, events } = await harness([first, second]);
+    await writeClaudeRecord("se-1", conversationRecords("fixture ask"));
+    await completeTurn(turns, sent, first, 10);
+    await completeTurn(turns, sent, first, 11);
+    expect(agentTexts(sent).join("\n")).not.toContain(OUTSIDE);
+    await writeClaudeRecord("se-1", [
+      ...conversationRecords("fixture ask"),
+      { type: "assistant", uuid: "a-cli", message: { content: [] } },
+    ]);
+
+    await completeTurn(turns, sent, second, 12);
+
+    const texts = agentTexts(sent);
+    expect(texts.filter((text) => text.includes(OUTSIDE))).toHaveLength(1);
+    expect(first.closes()).toBe(1);
+    expect(settings).toHaveLength(2);
+    expect(settings[1]).toMatchObject({ resume: "se-1" });
+    expect(completedTurnStatuses(sent)).toEqual([
+      "completed",
+      "completed",
+      "completed",
+    ]);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "record_advanced",
+    });
+  });
+});
+
 describe("clientUserMessageId", () => {
   test("refuses a copy of a message that is still waiting to run", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -3101,6 +3252,9 @@ const harness = async (
       sessionLookupFails
         ? claudeSessionExists(sessionId, await unlistableConfigDir())
         : Result.ok(!missingSessions.includes(sessionId)),
+    listConversations: (cwd, since) =>
+      listClaudeConversations(cwd, { since, configDir: claudeDir() }),
+    lastRecordOf: (sessionId) => readLastRecordUuid(sessionId, claudeDir()),
     materializeThread: async (threadId) => {
       materialized.push(threadId);
       if (failuresLeft === 0) return Result.ok({});
@@ -3347,6 +3501,54 @@ const UNANSWERED = {
 
 const OUTCOME_UNKNOWN =
   "the previous Claude turn on this thread stopped before its outcome was known; check what that turn did, such as changed files or messages to other threads, then send a message yourself to continue";
+
+const claudeDir = () => join(dir, "claude-records");
+
+// Claude names a project folder after its directory with every other character as a hyphen.
+const writeClaudeRecord = async (sessionId: string, records: object[]) => {
+  const folder = join(
+    claudeDir(),
+    "projects",
+    dir.replace(/[^a-zA-Z0-9]/g, "-"),
+  );
+  await mkdir(folder, { recursive: true });
+  await writeFile(
+    join(folder, `${sessionId}.jsonl`),
+    records.map((record) => `${JSON.stringify(record)}\n`).join(""),
+  );
+};
+
+const conversationRecords = (prompt: string) => [
+  {
+    type: "user",
+    uuid: "u-1",
+    cwd: dir,
+    entrypoint: "cli",
+    message: { role: "user", content: prompt },
+  },
+  { type: "assistant", uuid: "a-1", message: { content: [] } },
+];
+
+const continuedByOtherThread = async (
+  store: Awaited<ReturnType<typeof harness>>["store"],
+  sessionId: string,
+) => {
+  const registered = await store.register({
+    threadId: OTHER_THREAD,
+    model: MODEL,
+    worktree: dir,
+  });
+  expect(registered.isOk()).toBe(true);
+  const bound = await store.setSessionId(OTHER_THREAD, sessionId);
+  expect(bound.isOk()).toBe(true);
+};
+
+const agentTexts = (sent: Sent[]): string[] =>
+  completedItems(sent)
+    .filter((item) => item.type === "agentMessage")
+    .map((item) => item.text);
+
+const OUTSIDE = "continued outside this thread";
 
 // A link to itself cannot be listed, as an unreadable folder cannot, and still leaves the test directory removable.
 const unlistableConfigDir = async () => {

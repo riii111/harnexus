@@ -17,6 +17,8 @@ export const connectClaudeThreads = ({
   request,
   startSession,
   findSession,
+  listConversations,
+  lastRecordOf,
   readSession,
   effortRule,
   claudeModels,
@@ -28,6 +30,8 @@ export const connectClaudeThreads = ({
   request: ServerRequest;
   startSession: Controller["startSession"];
   findSession: Controller["findSession"];
+  listConversations: Controller["listConversations"];
+  lastRecordOf: Controller["lastRecordOf"];
   readSession: Parameters<typeof createHistoryRequests>[0]["readSession"];
   effortRule: Controller["effortRule"];
   claudeModels: Parameters<typeof createRouter>[4];
@@ -40,6 +44,8 @@ export const connectClaudeThreads = ({
     store,
     startSession,
     findSession,
+    listConversations,
+    lastRecordOf,
     materializeThread: (threadId) =>
       request(
         "thread/inject_items",

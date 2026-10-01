@@ -1,5 +1,3 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
 import {
   type CanUseTool,
   type EffortLevel,
@@ -14,10 +12,7 @@ import {
   type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result, TaggedError } from "better-result";
-import {
-  listDirectoryIfExists,
-  readTextFileIfExists,
-} from "../../runtime/fs.boundary.ts";
+import { readTextFileIfExists } from "../../runtime/fs.boundary.ts";
 import {
   checkSettingsEnv,
   checkSubscription,
@@ -42,6 +37,7 @@ import {
   setQueryEffort,
   setQueryPermissionMode,
 } from "./sdk.boundary.ts";
+import { claudeConfigDir, findSessionFile } from "./transcripts.ts";
 
 export type ClaudeSessionSettings = {
   cwd: string;
@@ -182,22 +178,6 @@ export const readClaudeSession = (
     return Result.ok(messages);
   });
 
-const findSessionFile = (sessionId: string, configDir: string) =>
-  Result.gen(async function* () {
-    const projectsDir = join(configDir, "projects");
-    const projects = yield* Result.await(listDirectoryIfExists(projectsDir));
-    const fileName = `${sessionId}.jsonl`;
-    for (const project of projects ?? []) {
-      const files = yield* Result.await(
-        listDirectoryIfExists(join(projectsDir, project)),
-      );
-      if (files?.includes(fileName)) {
-        return Result.ok<string | null>(join(projectsDir, project, fileName));
-      }
-    }
-    return Result.ok<string | null>(null);
-  });
-
 // A record that is absent is an empty conversation, but one that exists or may exist without being readable is a failure.
 const checkRecordReadable = async (sessionId: string, configDir: string) =>
   (
@@ -286,9 +266,6 @@ async function* readMessages(
     close();
   }
 }
-
-const claudeConfigDir = (env: NodeJS.ProcessEnv) =>
-  env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
 
 const SETTING_SOURCES: SettingSource[] = ["user", "project", "local"];
 

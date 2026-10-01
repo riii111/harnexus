@@ -311,6 +311,13 @@ const createThreadStore = (
       ownerIn(mappings, reviewerThreadId) ??
       claimedReviewers.get(reviewerThreadId),
 
+    sessionOwner: (sessionId: string) => {
+      for (const mapping of mappings.values()) {
+        if (mapping.sessionId === sessionId) return mapping.threadId;
+      }
+      return undefined;
+    },
+
     // A requester that sends again moves to the end, so the cap drops the one that asked longest ago.
     addRequester: (threadId: string, requesterThreadId: string) =>
       update(threadId, (mapping) => ({

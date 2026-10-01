@@ -121,6 +121,21 @@ export const renderUserInput = (
   return seal(draft);
 };
 
+// The bridge's own message, such as an answer to /session, appears as an agent message but never reaches Claude's record.
+export const renderNotice = (
+  state: TurnState,
+  text: string,
+  phase: "commentary" | "final_answer",
+  now: number,
+): Rendered => {
+  if (state.finished) return { state, notifications: [] };
+  const draft = open(state);
+  const item = agentMessage(nextItemId(draft), text, phase);
+  itemStarted(draft, agentMessage(item.id, "", null), now);
+  completeMessage(draft, item, now);
+  return seal(draft);
+};
+
 // Subagent messages stay inside their parent tool item, and anything after the turn ends is dropped.
 export const renderSdkMessage = (
   state: TurnState,

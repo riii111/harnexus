@@ -97,6 +97,8 @@ const workerA = async () => {
       return startClaudeSession(session, claude.runtime);
     },
     findSession: async () => Result.ok(true),
+    listConversations: async () => Result.ok([]),
+    lastRecordOf: async () => Result.ok(null),
     readSession: async () => Result.ok([]),
     effortRule: effortRule({}, catalog.effortsOf),
     claudeModels: catalog.models,

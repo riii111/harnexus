@@ -16,6 +16,10 @@ import type {
   claudeSessionExists,
   startClaudeSession,
 } from "../infra/claude/session.ts";
+import type {
+  listClaudeConversations,
+  readLastRecordUuid,
+} from "../infra/claude/transcripts.ts";
 import { createAppRequests } from "../infra/codex/app-requests.ts";
 import type { createCodexLink } from "../infra/codex/codex-link.ts";
 import { delegatedMessage } from "../infra/codex/delegations.ts";
@@ -28,6 +32,10 @@ import type {
   UserInput,
 } from "../presentation/protocol.ts";
 import {
+  RECORD_ADVANCED,
+  sessionReplyText,
+} from "../presentation/session-reply.ts";
+import {
   breakdown,
   NO_USAGE,
   renderTokenUsage,
@@ -38,6 +46,7 @@ import {
   markToolDeclined,
   type Rendered,
   renderInterimResult,
+  renderNotice,
   renderSdkMessage,
   renderToolOutput,
   renderToolRequest,
@@ -48,6 +57,11 @@ import {
   type TurnOutcome,
   type TurnState,
 } from "../presentation/turn.ts";
+import {
+  createSessionCommands,
+  type SessionCommand,
+  type SessionEvent,
+} from "./session-commands.ts";
 import { readSkills } from "./skill-attachments.ts";
 import {
   type AppRequest,
@@ -119,7 +133,8 @@ export type TurnEvent =
         | "effort_not_saved"
         | "run_state_not_saved";
       error: StoreTag;
-    };
+    }
+  | SessionEvent;
 
 type SessionStart = Awaited<ReturnType<typeof startClaudeSession>>;
 
@@ -130,6 +145,15 @@ type StartSession = (settings: ClaudeSessionSettings) => Promise<SessionStart>;
 type FindSession = (
   sessionId: string,
 ) => ReturnType<typeof claudeSessionExists>;
+
+type ListConversations = (
+  cwd: string,
+  since: number,
+) => ReturnType<typeof listClaudeConversations>;
+
+type LastRecordOf = (
+  sessionId: string,
+) => ReturnType<typeof readLastRecordUuid>;
 
 type MaterializeThread = (
   threadId: string,
@@ -188,9 +212,12 @@ type SessionSlot = {
 
 // link is the thread tool server of the session the turn ran on, read when the turn ends to see whether a write was left undecided.
 // Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken.
+// command marks a turn the bridge answers itself, such as /session, which no steer can join.
 type ActiveTurn = {
   threadId: string;
   state: TurnState | null;
+  outcome: TurnOutcome["status"] | null;
+  command: boolean;
   link: CodexLink | null;
   slot: SessionSlot | null;
   unsentSteers: string[];
@@ -246,6 +273,8 @@ export const createTurnController = ({
   store,
   startSession,
   findSession,
+  listConversations,
+  lastRecordOf,
   materializeThread,
   openLink,
   send,
@@ -258,6 +287,8 @@ export const createTurnController = ({
   store: ThreadStore;
   startSession: StartSession;
   findSession: FindSession;
+  listConversations: ListConversations;
+  lastRecordOf: LastRecordOf;
   materializeThread: MaterializeThread;
   openLink: (threadId: string) => CodexLink;
   send: (message: object) => void;
@@ -286,6 +317,14 @@ export const createTurnController = ({
     { threadId: string; request: TurnRequest }
   >();
   const appRequests = createAppRequests({ send, now });
+  const commands = createSessionCommands({
+    threads,
+    listConversations,
+    lastRecordOf,
+    findSession,
+    log,
+    now,
+  });
   let closed = false;
 
   // fallbackCwd is the thread's directory as last reported by the server, used when a Codex thread switches to Claude.
@@ -469,6 +508,10 @@ export const createTurnController = ({
       refuse(id, "compaction_not_steerable");
       return;
     }
+    if (active.command) {
+      refuse(id, "command_not_steerable");
+      return;
+    }
     const input = textInput(params.input, null);
     if (input === null) {
       refuse(id, "text_only");
@@ -644,6 +687,8 @@ export const createTurnController = ({
         const active: ActiveTurn = {
           threadId,
           state: null,
+          outcome: null,
+          command: false,
           link: null,
           slot: null,
           unsentSteers: [],
@@ -651,6 +696,19 @@ export const createTurnController = ({
           steers: 0,
         };
         activeTurns.set(threadId, active);
+        const command = commands.take(threadId, typedText(input));
+        if (command !== null) {
+          active.command = true;
+          await answerCommand(
+            request,
+            record,
+            active,
+            input,
+            messageId,
+            command,
+          );
+          return Result.ok();
+        }
         await streamTurn(
           request,
           record,
@@ -660,6 +718,12 @@ export const createTurnController = ({
           messageId,
         );
         release(active);
+        // A turn cut short may still be writing records, which would read as the conversation continuing elsewhere.
+        if (active.outcome === "completed") {
+          await commands.remember(threadId, threads.sessionIdOf(threadId));
+        } else {
+          commands.forget(threadId);
+        }
         const link = active.link;
         link?.stopWrites();
         if (link === null || !link.hasUnsettledWrite()) return Result.ok();
@@ -826,6 +890,17 @@ export const createTurnController = ({
       finish(active, { status: "interrupted" }, null);
       return;
     }
+    // A running Claude holds the conversation as it was, so it restarts to resume from the records written elsewhere.
+    if (await commands.advanced(threadId, threads.sessionIdOf(threadId))) {
+      if (active.state !== null) {
+        apply(
+          active,
+          renderNotice(active.state, RECORD_ADVANCED, "commentary", now()),
+        );
+      }
+      const stale = sessions.get(threadId);
+      if (stale !== undefined) dropSession(threadId, stale);
+    }
     const reused = sessions.get(threadId)?.model === model;
     const sessionAskedAt = now();
     const slot = await sessionFor(record, model);
@@ -977,6 +1052,54 @@ export const createTurnController = ({
         dropSession(threadId, slot.value);
       }
     }
+  };
+
+  // The turn shows what the user typed and the bridge's reply, and nothing reaches Claude or its record.
+  const answerCommand = async (
+    request: TurnRequest,
+    record: ThreadRecord,
+    active: ActiveTurn,
+    input: TextInput,
+    messageId: string | null,
+    command: SessionCommand,
+  ) => {
+    const started = renderTurnStarted({
+      threadId: record.threadId,
+      turnId: request.turnId,
+      cwd: record.worktree,
+      now: now(),
+    });
+    apply(active, started);
+    if (!request.answered)
+      send({ id: request.id, result: { turn: started.turn } });
+    apply(active, renderInput(started.state, input, messageId));
+    waitingTurns.delete(request.turnId);
+    if (request.stopped) {
+      finish(active, { status: "interrupted" }, null);
+      return;
+    }
+    const reply = await commands.answer(
+      record.threadId,
+      record.worktree,
+      command,
+    );
+    if (active.state === null) return;
+    apply(
+      active,
+      renderNotice(
+        active.state,
+        sessionReplyText(reply, now()),
+        "final_answer",
+        now(),
+      ),
+    );
+    finish(
+      active,
+      active.state.interrupting
+        ? { status: "interrupted" }
+        : { status: "completed" },
+      null,
+    );
   };
 
   const renderInput = (
@@ -1144,6 +1267,7 @@ export const createTurnController = ({
         notification.params.turn.status !== "inProgress" &&
         !wasFinished
       ) {
+        active.outcome = notification.params.turn.status;
         log({
           event: "claude_turn",
           step: "finished",
@@ -1286,7 +1410,18 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
         reason: entry.reason,
         error: entry.error,
       };
+    case "session_command":
+      return {
+        event: entry.event,
+        step: entry.step,
+        command: entry.command,
+        reply: entry.reply,
+        error: entry.error,
+      };
+    case "record_advanced":
+      return { event: entry.event, step: entry.step };
     case "interrupt_failed":
+    case "record_unreadable":
     case "thread_not_materialized":
     case "session_not_saved":
     case "model_not_saved":
@@ -1332,6 +1467,20 @@ const createThreadValues = (
 
   const adopt = (threadId: string, thread: Thread) => {
     if (store.get(threadId) === undefined) adopted.set(threadId, thread);
+  };
+
+  // An id set here but not saved wins over the store's, as in sessionIdOf.
+  const isBound = (sessionId: string) => {
+    for (const id of sessionIds.values()) if (id === sessionId) return true;
+    const owner = store.sessionOwner(sessionId);
+    return owner !== undefined && !sessionIds.has(owner);
+  };
+
+  // Unlike an id Claude reports, a picked conversation is kept only once saved, so a restart never drops it unannounced.
+  const bindSession = async (threadId: string, sessionId: string) => {
+    const saved = await store.setSessionId(threadId, sessionId);
+    if (saved.isOk()) sessionIds.set(threadId, sessionId);
+    return saved;
   };
 
   // A model or effort picked while the thread was being registered is saved now, since the registration carried the earlier one.
@@ -1406,6 +1555,8 @@ const createThreadValues = (
     pickedEffortOf,
     sessionIdOf,
     adopt,
+    isBound,
+    bindSession,
     markRegistered,
     changeModel,
     changeEffort,
@@ -1472,6 +1623,10 @@ const textInput = (
     text: texts.join("\n"),
   };
 };
+
+// Only what the user typed can be a session command, never another thread's message or a compaction.
+const typedText = (input: TextInput) =>
+  input.toolOutput === null && input.items.length > 0 ? input.text : null;
 
 const isTextItem = (item: unknown): item is { type: "text"; text: string } =>
   typeof item === "object" &&
