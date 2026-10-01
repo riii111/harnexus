@@ -99,18 +99,25 @@ const readConversation = async (
   if (file.isErr() || file.value === null) return null;
   const { size, modifiedMs } = file.value;
   if (modifiedMs < since) return null;
-  const head = await readHead(path, size);
   const tailStart = Math.max(0, size - END_BYTES);
   const tail = await readFileSlice(path, tailStart, size - tailStart);
-  if (head.isErr() || tail.isErr()) return null;
-  const first = wholeRecords(head.value.text, {
-    cutStart: false,
-    cutEnd: head.value.length < size,
-  });
+  if (tail.isErr()) return null;
   const last = wholeRecords(tail.value, {
     cutStart: tailStart > 0,
     cutEnd: false,
   });
+  const named =
+    lastString(last, "customTitle") !== null ||
+    lastString(last, "aiTitle") !== null;
+  const head = await readHead(
+    path,
+    size,
+    (records) =>
+      firstPrompt(records) !== null ||
+      (named && records.some((record) => typeof record.cwd === "string")),
+  );
+  if (head.isErr()) return null;
+  const first = head.value;
   // A subagent's record is marked from its first line, which is how Claude's own session list leaves it out.
   if (first[0]?.isSidechain === true) return null;
   const ranIn = first.find((record) => typeof record.cwd === "string")?.cwd;
@@ -133,14 +140,21 @@ const readConversation = async (
   };
 };
 
-// The first record holds the directory and often the first prompt, so the read widens until it is whole, however long a pasted prompt makes it.
-const readHead = async (path: string, size: number) => {
+// A pasted prompt can make a record longer than the first read, even after short slash-command records, so the read widens until the records it needs are whole.
+const readHead = async (
+  path: string,
+  size: number,
+  enough: (records: Record<string, unknown>[]) => boolean,
+) => {
   for (let length = Math.min(size, END_BYTES); ; length *= 2) {
     const read = Math.min(size, length);
     const text = await readFileSlice(path, 0, read);
-    if (text.isErr() || read === size || text.value.includes("\n")) {
-      return text.map((value) => ({ text: value, length: read }));
-    }
+    if (text.isErr()) return text;
+    const records = wholeRecords(text.value, {
+      cutStart: false,
+      cutEnd: read < size,
+    });
+    if (read === size || enough(records)) return Result.ok(records);
   }
 };
 

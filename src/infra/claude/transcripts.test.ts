@@ -163,6 +163,22 @@ describe("listClaudeConversations", () => {
     ).toEqual(["se-big"]);
   });
 
+  test("titles a conversation whose first prompt after a slash command is larger than one read", async () => {
+    await writeRecord(PROJECT_FOLDER, "se-big", [
+      userRecord("u-0", "<command-name>/model</command-name>"),
+      userRecord("u-1", `big ask ${"x".repeat(200 * 1024)}`),
+    ]);
+
+    const listed = await listClaudeConversations(PROJECT, {
+      since: NOW - 14 * DAY,
+      configDir: dir,
+    });
+
+    expect(listed.isOk() && listed.value[0]?.title.startsWith("big ask")).toBe(
+      true,
+    );
+  });
+
   test("lists nothing when Claude has no records yet", async () => {
     const listed = await listClaudeConversations(PROJECT, {
       since: NOW - 14 * DAY,
