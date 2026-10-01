@@ -1097,6 +1097,7 @@ export const createTurnController = ({
           title: options.title,
           reason: options.decisionReason,
           defaultToNo: options.defaultToNo === true,
+          suggestions: options.suggestions ?? [],
         },
         {
           threadId,

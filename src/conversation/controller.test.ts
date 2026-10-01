@@ -7,6 +7,7 @@ import {
   type CanUseTool,
   createSdkMcpServer,
   type EffortLevel,
+  type PermissionUpdate,
   type SDKMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -200,6 +201,41 @@ describe("tool approval", () => {
       },
     });
     expect(resolvedRequests(sent)).toEqual(["harnexus-1"]);
+  });
+
+  test("hands Claude its suggested rule to save when the app always allows a command", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await startedTurn(claude);
+    const rule: PermissionUpdate = {
+      type: "addRules",
+      rules: [{ toolName: "Bash", ruleContent: "npm test:*" }],
+      behavior: "allow",
+      destination: "localSettings",
+    };
+
+    const decision = askTool(
+      claude,
+      "Bash",
+      { command: "npm test" },
+      { suggestions: [rule] },
+    );
+    const request = await appRequest(sent);
+    turns.answerRequest({
+      id: request.id,
+      result: {
+        decision: {
+          acceptWithExecpolicyAmendment: {
+            execpolicy_amendment: ["npm", "test"],
+          },
+        },
+      },
+    });
+
+    expect(request.params.proposedExecpolicyAmendment).toEqual(["npm", "test"]);
+    expect(await decision).toEqual({
+      behavior: "allow",
+      updatedPermissions: [{ ...rule, destination: "projectSettings" }],
+    });
   });
 
   test("shows a tool the app declined as declined", async () => {
@@ -2898,6 +2934,7 @@ const askTool = (
     agentID?: string;
     signal?: AbortSignal;
     defaultToNo?: boolean;
+    suggestions?: PermissionUpdate[];
   } = {},
 ) => {
   const canUseTool = claude.options().canUseTool as CanUseTool;
@@ -2909,6 +2946,9 @@ const askTool = (
     ...(options.defaultToNo === undefined
       ? {}
       : { defaultToNo: options.defaultToNo }),
+    ...(options.suggestions === undefined
+      ? {}
+      : { suggestions: options.suggestions }),
   });
 };
 

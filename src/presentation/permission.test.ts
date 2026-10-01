@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import type {
+  PermissionResult,
+  PermissionUpdate,
+} from "@anthropic-ai/claude-agent-sdk";
 import { promptFor, type ToolCall } from "./permission.ts";
 import type { ToolItem } from "./protocol.ts";
 
@@ -38,7 +42,7 @@ describe("promptFor requests", () => {
     expect(promptFor(call, TARGET).method).toBe(expected);
   });
 
-  test("points a command approval at the command's item without session-wide choices", () => {
+  test("points a command approval at the command's item without remembering choices when Claude suggests none", () => {
     const prompt = promptFor(
       call("Bash", { command: "ls" }, COMMAND, "outside the project"),
       TARGET,
@@ -304,6 +308,272 @@ describe("promptFor decisions", () => {
   });
 });
 
+describe("promptFor remembering choices on a command", () => {
+  test("offers the session and Claude's prefix rule when Claude suggests one", () => {
+    const prompt = promptFor(suggested("Bash", COMMAND, [NPM_TEST]), TARGET);
+
+    expect(prompt.params).toMatchObject({
+      proposedExecpolicyAmendment: ["npm", "test"],
+      availableDecisions: [
+        "accept",
+        "acceptForSession",
+        {
+          acceptWithExecpolicyAmendment: {
+            execpolicy_amendment: ["npm", "test"],
+          },
+        },
+        "decline",
+        "cancel",
+      ],
+    });
+  });
+
+  test.each<{ name: string; suggestions: PermissionUpdate[] }>([
+    { name: "an exact command rule", suggestions: [bashRule("git status")] },
+    {
+      name: "two command rules",
+      suggestions: [bashRule("npm test:*"), bashRule("npm run lint:*")],
+    },
+    { name: "a quoted prefix", suggestions: [bashRule("echo 'a b':*")] },
+    { name: "a bare wildcard", suggestions: [bashRule(":*")] },
+    { name: "only a mode change", suggestions: [ACCEPT_EDITS] },
+  ])("offers only the session for $name", ({ suggestions }) => {
+    const prompt = promptFor(suggested("Bash", COMMAND, suggestions), TARGET);
+
+    expect(prompt.params.availableDecisions).toEqual([
+      "accept",
+      "acceptForSession",
+      "decline",
+      "cancel",
+    ]);
+    expect(prompt.params).not.toHaveProperty("proposedExecpolicyAmendment");
+  });
+
+  test.each<{ name: string; decision: unknown; expected: PermissionResult }>([
+    { name: "accept", decision: "accept", expected: { behavior: "allow" } },
+    {
+      name: "accept for the session",
+      decision: "acceptForSession",
+      expected: {
+        behavior: "allow",
+        updatedPermissions: [{ ...NPM_TEST, destination: "session" }],
+      },
+    },
+    {
+      name: "a policy amendment with other tokens",
+      decision: {
+        acceptWithExecpolicyAmendment: { execpolicy_amendment: ["rm"] },
+      },
+      expected: {
+        behavior: "allow",
+        updatedPermissions: [{ ...NPM_TEST, destination: "projectSettings" }],
+      },
+    },
+  ])("returns Claude's rules for $name to where the choice keeps them", ({
+    decision,
+    expected,
+  }) => {
+    const prompt = promptFor(suggested("Bash", COMMAND, [NPM_TEST]), TARGET);
+
+    expect(prompt.decide({ decision })).toEqual(expected);
+  });
+
+  test("keeps only Claude's allow rules when always allowing", () => {
+    const prompt = promptFor(
+      suggested("Bash", COMMAND, [NPM_TEST, ACCEPT_EDITS]),
+      TARGET,
+    );
+
+    const decision = prompt.decide({
+      decision: {
+        acceptWithExecpolicyAmendment: {
+          execpolicy_amendment: ["npm", "test"],
+        },
+      },
+    });
+
+    expect(decision).toEqual({
+      behavior: "allow",
+      updatedPermissions: [{ ...NPM_TEST, destination: "projectSettings" }],
+    });
+  });
+
+  test.each<{ name: string; suggestions: PermissionUpdate[] }>([
+    { name: "no suggestion", suggestions: [] },
+    {
+      name: "a rule the app cannot show",
+      suggestions: [bashRule("git status")],
+    },
+  ])("allows a policy amendment only once with $name", ({ suggestions }) => {
+    const prompt = promptFor(suggested("Bash", COMMAND, suggestions), TARGET);
+
+    const decision = prompt.decide({
+      decision: {
+        acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git"] },
+      },
+    });
+
+    expect(decision).toEqual({ behavior: "allow" });
+  });
+
+  test("allows the session only once when Claude suggests nothing", () => {
+    const prompt = promptFor(suggested("Bash", COMMAND, []), TARGET);
+
+    expect(prompt.decide({ decision: "acceptForSession" })).toEqual({
+      behavior: "allow",
+    });
+  });
+
+  test.each([
+    { name: "decline", answer: { decision: "decline" } },
+    { name: "cancel", answer: { decision: "cancel" } },
+    { name: "no answer", answer: null },
+  ])("returns no rules on $name", ({ answer }) => {
+    const prompt = promptFor(suggested("Bash", COMMAND, [NPM_TEST]), TARGET);
+
+    expect(prompt.decide(answer)).toEqual({
+      behavior: "deny",
+      message: expect.any(String),
+    });
+  });
+});
+
+describe("promptFor remembering choices on a file change", () => {
+  test.each<{ name: string; decision: unknown; expected: PermissionResult }>([
+    { name: "accept", decision: "accept", expected: { behavior: "allow" } },
+    {
+      name: "accept for the session",
+      decision: "acceptForSession",
+      expected: {
+        behavior: "allow",
+        updatedPermissions: [{ ...ACCEPT_EDITS, destination: "session" }],
+      },
+    },
+  ])("returns Claude's suggestions only for the session on $name", ({
+    decision,
+    expected,
+  }) => {
+    const prompt = promptFor(
+      suggested("Edit", FILE_CHANGE, [ACCEPT_EDITS]),
+      TARGET,
+    );
+
+    expect(prompt.decide({ decision })).toEqual(expected);
+  });
+
+  test("returns no rules on decline", () => {
+    const prompt = promptFor(
+      suggested("Edit", FILE_CHANGE, [ACCEPT_EDITS]),
+      TARGET,
+    );
+
+    expect(prompt.decide({ decision: "decline" }).behavior).toBe("deny");
+  });
+});
+
+describe("promptFor remembering choices on another tool", () => {
+  test.each<{
+    name: string;
+    suggestions: PermissionUpdate[];
+    expected: string[];
+  }>([
+    {
+      name: "an allow rule",
+      suggestions: [WEB_FETCH],
+      expected: ["Allow", "Allow for this session", "Always allow", "Deny"],
+    },
+    {
+      name: "only a mode change",
+      suggestions: [ACCEPT_EDITS],
+      expected: ["Allow", "Allow for this session", "Deny"],
+    },
+    { name: "no suggestion", suggestions: [], expected: ["Allow", "Deny"] },
+  ])("offers choices that fit $name", ({ suggestions, expected }) => {
+    const prompt = promptFor(suggested("WebFetch", null, suggestions), TARGET);
+
+    const [question] = prompt.params.questions as {
+      options: { label: string }[];
+    }[];
+    expect(question?.options.map(({ label }) => label)).toEqual(expected);
+  });
+
+  test("names the rule an always allow saves and where", () => {
+    const prompt = promptFor(suggested("WebFetch", null, [WEB_FETCH]), TARGET);
+
+    expect(prompt.params.questions).toMatchObject([
+      {
+        options: expect.arrayContaining([
+          {
+            label: "Always allow",
+            description:
+              "Save WebFetch(domain:example.com) to .claude/settings.json",
+          },
+        ]),
+      },
+    ]);
+  });
+
+  test.each<{ name: string; expected: PermissionResult }>([
+    { name: "Allow", expected: { behavior: "allow" } },
+    {
+      name: "Allow for this session",
+      expected: {
+        behavior: "allow",
+        updatedPermissions: [{ ...WEB_FETCH, destination: "session" }],
+      },
+    },
+    {
+      name: "Always allow",
+      expected: {
+        behavior: "allow",
+        updatedPermissions: [{ ...WEB_FETCH, destination: "projectSettings" }],
+      },
+    },
+  ])("returns Claude's rules to where $name keeps them", ({
+    name,
+    expected,
+  }) => {
+    const prompt = promptFor(suggested("WebFetch", null, [WEB_FETCH]), TARGET);
+
+    expect(
+      prompt.decide({ answers: { approval: { answers: [name] } } }),
+    ).toEqual(expected);
+  });
+
+  test.each([
+    { name: "Deny", answer: { answers: { approval: { answers: ["Deny"] } } } },
+    { name: "no answer", answer: { answers: {} } },
+  ])("returns no rules on $name", ({ answer }) => {
+    const prompt = promptFor(suggested("WebFetch", null, [WEB_FETCH]), TARGET);
+
+    expect(prompt.decide(answer)).toEqual({
+      behavior: "deny",
+      message: expect.any(String),
+    });
+  });
+
+  test.each([
+    { name: "a command", item: COMMAND, toolName: "Bash", rule: NPM_TEST },
+    { name: "another tool", item: null, toolName: "WebFetch", rule: WEB_FETCH },
+  ])("never remembers $name that must default to no", ({
+    item,
+    toolName,
+    rule,
+  }) => {
+    const prompt = promptFor(
+      { ...suggested(toolName, item, [rule]), defaultToNo: true },
+      TARGET,
+    );
+    const typed = (word: string) =>
+      prompt.decide({ answers: { approval: { answers: [word] } } });
+
+    expect(prompt.params.questions).toMatchObject([{ options: null }]);
+    expect(typed("Allow")).toEqual({ behavior: "allow" });
+    expect(typed("Always allow").behavior).toBe("deny");
+    expect(typed("Allow for this session").behavior).toBe("deny");
+  });
+});
+
 const call = (
   toolName: string,
   input: Record<string, unknown>,
@@ -316,7 +586,36 @@ const call = (
   title: undefined,
   reason,
   defaultToNo: false,
+  suggestions: [],
 });
+
+const suggested = (
+  toolName: string,
+  item: ToolItem | null,
+  suggestions: PermissionUpdate[],
+): ToolCall => ({ ...call(toolName, {}, item), suggestions });
+
+const bashRule = (ruleContent: string): PermissionUpdate => ({
+  type: "addRules",
+  rules: [{ toolName: "Bash", ruleContent }],
+  behavior: "allow",
+  destination: "localSettings",
+});
+
+const NPM_TEST = bashRule("npm test:*");
+
+const ACCEPT_EDITS: PermissionUpdate = {
+  type: "setMode",
+  mode: "acceptEdits",
+  destination: "session",
+};
+
+const WEB_FETCH: PermissionUpdate = {
+  type: "addRules",
+  rules: [{ toolName: "WebFetch", ruleContent: "domain:example.com" }],
+  behavior: "allow",
+  destination: "localSettings",
+};
 
 const TARGET = {
   threadId: "th-1",
