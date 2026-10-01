@@ -34,7 +34,12 @@ import {
   removeFile,
   writeFileAtomic,
 } from "../runtime/fs.boundary.ts";
-import { createTurnController, type TurnEvent } from "./controller.ts";
+import {
+  type ClaudeLogEvent,
+  createClaudeRuntime,
+  createThreadValues,
+  createTurnController,
+} from "./controller.ts";
 
 let dir: string;
 
@@ -298,6 +303,28 @@ describe("tool approval", () => {
     const decision = await askTool(claude, "Bash", { command: "ls" });
 
     expect(decision?.behavior).toBe("deny");
+    expect(sent.filter((m) => m.method?.endsWith("requestApproval"))).toEqual(
+      [],
+    );
+  });
+
+  test("denies a tool asked while the app receives turn/completed without asking the app", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const asked: { decision?: ReturnType<typeof askTool> } = {};
+    const { turns, sent } = await harness([claude], {
+      onSend: (message) => {
+        if (message.method === "turn/completed") {
+          asked.decision = askTool(claude, "Bash", { command: "ls" });
+        }
+      },
+    });
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect((await asked.decision)?.behavior).toBe("deny");
     expect(sent.filter((m) => m.method?.endsWith("requestApproval"))).toEqual(
       [],
     );
@@ -3087,7 +3114,7 @@ const harness = async (
   if (opened.isErr()) return expect.unreachable(opened.error.message);
   const store = opened.value;
   const sent: Sent[] = [];
-  const events: TurnEvent[] = [];
+  const events: ClaudeLogEvent[] = [];
   const settings: ClaudeSessionSettings[] = [];
   const links: string[] = [];
   const gates: string[] = [];
@@ -3095,18 +3122,18 @@ const harness = async (
   const toolCalls: unknown[] = [];
   let failuresLeft = materializeFailures;
   let turnCount = 0;
-  const turns = createTurnController({
-    store,
+  const send = (message: Sent) => {
+    sent.push(message);
+    onSend(message);
+  };
+  const log = (event: ClaudeLogEvent) => events.push(event);
+  const threads = createThreadValues(store, log);
+  const runtime = createClaudeRuntime({
+    threads,
     findSession: async (sessionId) =>
       sessionLookupFails
         ? claudeSessionExists(sessionId, await unlistableConfigDir())
         : Result.ok(!missingSessions.includes(sessionId)),
-    materializeThread: async (threadId) => {
-      materialized.push(threadId);
-      if (failuresLeft === 0) return Result.ok({});
-      failuresLeft -= 1;
-      return Result.err({ _tag: "ServerRequestUnanswered" as const });
-    },
     openLink: (threadId) => {
       links.push(threadId);
       if (linkRequest !== undefined) {
@@ -3128,11 +3155,8 @@ const harness = async (
         acceptWrites: () => gates.push("accept"),
       };
     },
-    send: (message) => {
-      sent.push(message);
-      onSend(message);
-    },
-    log: (event) => events.push(event),
+    send,
+    log,
     startSession: async (session) => {
       const fake = fakes[settings.length];
       settings.push(session);
@@ -3141,9 +3165,24 @@ const harness = async (
       return startClaudeSession(session, fake.runtime);
     },
     now,
-    newTurnId: () => `turn-${++turnCount}`,
     effortRule,
     ...(idleSessionMs !== undefined && { idleSessionMs }),
+  });
+  const turns = createTurnController({
+    store,
+    threads,
+    runtime,
+    materializeThread: async (threadId) => {
+      materialized.push(threadId);
+      if (failuresLeft === 0) return Result.ok({});
+      failuresLeft -= 1;
+      return Result.err({ _tag: "ServerRequestUnanswered" as const });
+    },
+    send,
+    log,
+    now,
+    newTurnId: () => `turn-${++turnCount}`,
+    effortRule,
   });
   if (adopt) turns.adopt(THREAD, { model: MODEL, cwd: dir });
   return {

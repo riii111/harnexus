@@ -62,7 +62,9 @@ import {
 } from "./thread-request.ts";
 
 // Only steps, turn statuses, models, effort levels, token counts, durations, refusal reasons and error tags are logged, never thread ids or text.
-export type TurnEvent =
+// Tag is the failure tags a runtime declares, so only a tag written in code can reach the log as a turn's error.
+export type TurnEvent<Tag extends string = string> =
+  | ThreadValueEvent
   | {
       event: "claude_turn";
       step:
@@ -70,34 +72,14 @@ export type TurnEvent =
         | "queued"
         | "outcome_unknown"
         | "steered"
-        | "model_changed"
-        | "idle_closed"
-        | "session_missing"
         | "outcome_cleared"
-        | "skill_unreadable"
-        | "skill_link_only"
         | "effort_unsupported";
     }
   | {
       event: "claude_turn";
-      step: "effort_changed" | "effort_applied";
-      effort: EffortLevel;
-    }
-  | ({
-      event: "claude_turn";
-      step: "metrics";
-      model: string;
-      effort: EffortLevel | null;
-      compaction: boolean;
-      sessionStartMs: number | null;
-      firstMessageMs: number | null;
-      turnMs: number;
-    } & TokenUsageBreakdown)
-  | {
-      event: "claude_turn";
       step: "finished";
       status: TurnOutcome["status"];
-      error: FailureTag | null;
+      error: Tag | null;
     }
   | {
       event: "claude_turn";
@@ -105,63 +87,69 @@ export type TurnEvent =
       reason: Refusal;
       error: StoreTag | null;
     }
-  | { event: "claude_turn"; step: "interrupt_failed"; error: InterruptTag }
   | {
       event: "claude_turn";
       step: "thread_not_materialized";
       error: ErrorTag<ReturnType<ServerRequest>>;
     }
+  | { event: "claude_turn"; step: "run_state_not_saved"; error: StoreTag };
+
+// What the controller hands a runtime for one turn; the runtime reads the turn's state and moves it only through apply, finish and fail, so the order in which the app is told stays with the controller.
+type RunningTurn<Tag extends string> = {
+  threadId: string;
+  turnId: string;
+  record: ThreadRecord;
+  model: string;
+  input: TurnInput;
+  compaction: boolean;
+  startedAtMs: number;
+  state: () => TurnState;
+  apply: (rendered: Rendered, error?: Tag | null) => void;
+  finish: (outcome: TurnOutcome, error: Tag | null) => void;
+  fail: (error: { _tag: Tag; message: string }) => void;
+  isOpen: () => boolean;
+  useLink: (link: TurnLink) => void;
+  ask: (
+    method: string,
+    params: Record<string, unknown>,
+    signal: AbortSignal,
+  ) => Promise<unknown>;
+};
+
+// run sends the turn and reports its progress until it ends; threadBusy and threadIdle mark when the thread has turns accepted and when it has none left.
+type TurnRuntime<Tag extends string> = {
+  compactPrompt: string;
+  run: (turn: RunningTurn<Tag>) => Promise<void>;
+  steer: (turn: RunningTurn<Tag>, text: string) => Refusal | null;
+  interrupt: (turn: RunningTurn<Tag>, repeated: boolean) => void;
+  dropSession: (threadId: string, link: TurnLink) => void;
+  threadBusy: (threadId: string) => void;
+  threadIdle: (threadId: string) => void;
+  closeAll: () => void;
+};
+
+type ThreadValues = ReturnType<typeof createThreadValues>;
+
+type ThreadValueEvent =
+  | { event: "claude_turn"; step: "model_changed" }
+  | { event: "claude_turn"; step: "effort_changed"; effort: EffortLevel }
   | {
       event: "claude_turn";
-      step:
-        | "session_not_saved"
-        | "model_not_saved"
-        | "effort_not_saved"
-        | "run_state_not_saved";
+      step: "session_not_saved" | "model_not_saved" | "effort_not_saved";
       error: StoreTag;
     };
-
-type SessionStart = Awaited<ReturnType<typeof startClaudeSession>>;
-
-type ClaudeSession = InferOk<SessionStart>;
-
-type StartSession = (settings: ClaudeSessionSettings) => Promise<SessionStart>;
-
-type FindSession = (
-  sessionId: string,
-) => ReturnType<typeof claudeSessionExists>;
 
 type MaterializeThread = (
   threadId: string,
 ) => Promise<Result<unknown, { _tag: ErrorTag<ReturnType<ServerRequest>> }>>;
 
-type CodexLink = Pick<
+// The thread tool server of the session a turn ran on, read when the turn ends to see whether a write was left undecided.
+type TurnLink = Pick<
   ReturnType<typeof createCodexLink>,
-  | "server"
-  | "allowedTools"
-  | "hasUnsettledWrite"
-  | "stopWrites"
-  | "acceptWrites"
+  "hasUnsettledWrite" | "stopWrites"
 >;
 
 type ErrorTag<R> = InferErr<Awaited<R>> extends { _tag: infer T } ? T : never;
-
-type StreamedMessage =
-  ClaudeSession["messages"] extends AsyncGenerator<infer R> ? R : never;
-
-type InterruptTag = ErrorTag<ReturnType<ClaudeSession["interrupt"]>>;
-
-type FailureTag =
-  | ErrorTag<SessionStart>
-  | ErrorTag<ReturnType<ClaudeSession["send"]>>
-  | ErrorTag<ReturnType<ClaudeSession["setPermissionMode"]>>
-  | ErrorTag<ReturnType<ClaudeSession["setEffort"]>>
-  | InferErr<StreamedMessage>["_tag"]
-  | InterruptTag
-  | BridgeClosing["_tag"]
-  | StreamEnded["_tag"]
-  | SessionMissing["_tag"]
-  | "SteerUnconfirmed";
 
 // runWrite is generic in the operation's error, so the store's own tags are listed; a new tag there fails to compile here.
 type StoreTag =
@@ -176,26 +164,12 @@ type StoreTag =
   | "WriteNotStarted"
   | "RunStateNotSaved";
 
-// A session is not reused until its interrupt reports whether a send is still queued, which can arrive after the interrupted turn has ended.
-// attachedSkills maps each SKILL.md path this session was given to the body it was given.
-type SessionSlot = {
-  session: ClaudeSession;
-  model: string;
-  pendingInterrupt: Promise<void> | null;
-  link: CodexLink;
-  attachedSkills: Map<string, string>;
-};
-
-// link is the thread tool server of the session the turn ran on, read when the turn ends to see whether a write was left undecided.
-// Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken.
-type ActiveTurn = {
+// turn is set once the turn is shown to the app as started, and link by the runtime once its session is up.
+type ActiveTurn<Tag extends string> = {
   threadId: string;
   state: TurnState | null;
-  link: CodexLink | null;
-  slot: SessionSlot | null;
-  unsentSteers: string[];
-  pendingSteers: Set<string>;
-  steers: number;
+  turn: RunningTurn<Tag> | null;
+  link: TurnLink | null;
 };
 
 // answered is set when the app got the turn as soon as it was accepted, so a turn that cannot run is shown as failed rather than refused.
@@ -225,59 +199,37 @@ type TurnInput = TextInput & {
   requester: string | null;
 };
 
-class BridgeClosing extends TaggedError("BridgeClosing")<{
-  message: string;
-}> {}
-
-class StreamEnded extends TaggedError("StreamEnded")<{
-  message: string;
-}> {}
-
 class LinkWriteUnsettled extends TaggedError("LinkWriteUnsettled")<{
   message: string;
 }> {}
 
-class SessionMissing extends TaggedError("SessionMissing")<{
-  message: string;
-}> {}
-
-// A thread keeps one Claude session across turns; a session that fails is dropped and the next turn resumes it from the stored session id.
-export const createTurnController = ({
+export const createTurnController = <Tag extends string>({
   store,
-  startSession,
-  findSession,
+  threads,
+  runtime,
   materializeThread,
-  openLink,
   send,
   log,
   now = Date.now,
   newTurnId = () => `harnexus-turn-${randomUUID()}`,
-  idleSessionMs = IDLE_SESSION_MS,
   effortRule,
 }: {
   store: ThreadStore;
-  startSession: StartSession;
-  findSession: FindSession;
+  threads: ThreadValues;
+  runtime: TurnRuntime<Tag>;
   materializeThread: MaterializeThread;
-  openLink: (threadId: string) => CodexLink;
   send: (message: object) => void;
-  log: (event: TurnEvent) => void;
+  log: (event: TurnEvent<Tag>) => void;
   now?: () => number;
   newTurnId?: () => string;
-  idleSessionMs?: number;
   effortRule: EffortRule;
 }) => {
-  const threads = createThreadValues(store, log);
-  const sessions = new Map<string, SessionSlot>();
-  const activeTurns = new Map<string, ActiveTurn>();
+  const activeTurns = new Map<string, ActiveTurn<Tag>>();
   // Message ids accepted but not yet saved, so a copy arriving while the first waits or runs is caught too.
   const acceptedMessageIds = new Map<string, Set<string>>();
   const turnsInFlight = new Map<string, number>();
   // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
   const modes = new Map<string, Mode>();
-  const usages = new Map<string, ThreadUsage>();
-  const plans = new Map<string, ThreadPlan>();
-  const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const materialized = new Set<string>();
   // A thread with an unknown outcome continues only on a new message the user typed after being told, so neither a resent copy of a refused message nor another thread's message counts.
   const refusedForUnknown = new Map<string, Set<string>>();
@@ -380,7 +332,7 @@ export const createTurnController = ({
     const turn = {
       items: [],
       toolOutput: null,
-      text: COMPACT_PROMPT,
+      text: runtime.compactPrompt,
       permissionMode: modes.get(threadId) ?? "default",
       effort: threads.pickedEffortOf(threadId),
       requester: null,
@@ -396,7 +348,7 @@ export const createTurnController = ({
     messageId: string | null,
     compaction: boolean,
   ) => {
-    cancelIdleClose(threadId);
+    runtime.threadBusy(threadId);
     const inFlight = turnsInFlight.get(threadId) ?? 0;
     if (inFlight > 0) log({ event: "claude_turn", step: "queued" });
     turnsInFlight.set(threadId, inFlight + 1);
@@ -426,28 +378,8 @@ export const createTurnController = ({
         return;
       }
       turnsInFlight.delete(threadId);
-      scheduleIdleClose(threadId);
+      runtime.threadIdle(threadId);
     });
-  };
-
-  // Each worker keeps its own Claude process, so an idle one is closed; without a session id its next turn could not resume the conversation, so it stays.
-  const scheduleIdleClose = (threadId: string) => {
-    cancelIdleClose(threadId);
-    const timer = setTimeout(() => {
-      idleTimers.delete(threadId);
-      const slot = sessions.get(threadId);
-      if (slot === undefined) return;
-      if (threads.sessionIdOf(threadId) == null) return;
-      dropSession(threadId, slot);
-      log({ event: "claude_turn", step: "idle_closed" });
-    }, idleSessionMs);
-    timer.unref();
-    idleTimers.set(threadId, timer);
-  };
-
-  const cancelIdleClose = (threadId: string) => {
-    clearTimeout(idleTimers.get(threadId));
-    idleTimers.delete(threadId);
   };
 
   // Claude takes a steer at its next tool boundary, or runs it as its next turn when the running one has ended, and either way the app turn stays open until Claude has taken it.
@@ -456,6 +388,7 @@ export const createTurnController = ({
     const state = active?.state;
     if (
       active === undefined ||
+      active.turn === null ||
       state == null ||
       state.finished ||
       state.interrupting ||
@@ -474,17 +407,11 @@ export const createTurnController = ({
       refuse(id, "text_only");
       return;
     }
-    if (active.steers >= MAX_STEERS_PER_TURN) {
-      refuse(id, "too_many_steers");
+    const refusal = runtime.steer(active.turn, input.text);
+    if (refusal !== null) {
+      refuse(id, refusal);
       return;
     }
-    if (active.slot === null) {
-      active.unsentSteers.push(input.text);
-    } else if (sendSteer(active, active.slot, input.text).isErr()) {
-      refuse(id, "steer_not_sent");
-      return;
-    }
-    active.steers += 1;
     send({ id, result: { turnId: state.turnId } });
     log({ event: "claude_turn", step: "steered" });
     apply(active, renderUserInput(state, input.items, null, now()));
@@ -496,6 +423,7 @@ export const createTurnController = ({
     const active = activeTurns.get(threadId);
     if (
       active?.state == null ||
+      active.turn === null ||
       active.state.finished ||
       active.state.turnId !== params.turnId
     ) {
@@ -507,26 +435,7 @@ export const createTurnController = ({
     active.state = markInterrupting(active.state);
     send({ id, result: {} });
     appRequests.cancel(threadId);
-    const slot = sessions.get(threadId);
-    slot?.link.stopWrites();
-    if (slot === undefined || repeated || slot.pendingInterrupt !== null) {
-      return;
-    }
-    // A send still queued in Claude would run after the interrupt, and an old CLI cannot say whether one is, so either way the session is closed and the next turn resumes it.
-    slot.pendingInterrupt = slot.session.interrupt().then((interrupted) => {
-      slot.pendingInterrupt = null;
-      if (interrupted.isErr()) {
-        log({
-          event: "claude_turn",
-          step: "interrupt_failed",
-          error: interrupted.error._tag,
-        });
-      } else if (interrupted.value?.length === 0) {
-        return;
-      }
-      dropSession(threadId, slot);
-      finish(active, { status: "interrupted" }, null);
-    });
+    runtime.interrupt(active.turn, repeated);
   };
 
   // The running turn's prompts are left open, since the stop is for a turn behind it.
@@ -559,12 +468,11 @@ export const createTurnController = ({
     threads.changeEffort(threadId, effort);
   };
 
-  // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
+  // The runtime closes its sessions, which ends each active turn's message stream, so no Claude process outlives the bridge.
   const closeAll = () => {
     closed = true;
-    for (const threadId of [...idleTimers.keys()]) cancelIdleClose(threadId);
     appRequests.cancel(null);
-    for (const [threadId, slot] of sessions) dropSession(threadId, slot);
+    runtime.closeAll();
   };
 
   // A failed turn is shown to the user, who decides whether to send it again, so no turn outcome is treated as unknown here; only a crash or a thread tool write left undecided leaves the marker.
@@ -641,14 +549,11 @@ export const createTurnController = ({
         }
         responded = true;
         materialize(threadId);
-        const active: ActiveTurn = {
+        const active: ActiveTurn<Tag> = {
           threadId,
           state: null,
+          turn: null,
           link: null,
-          slot: null,
-          unsentSteers: [],
-          pendingSteers: new Set(),
-          steers: 0,
         };
         activeTurns.set(threadId, active);
         await streamTurn(
@@ -664,8 +569,7 @@ export const createTurnController = ({
         link?.stopWrites();
         if (link === null || !link.hasUnsettledWrite()) return Result.ok();
         // An undecided write stays on its link, so the session goes with it and the turn the user continues with starts on a new link.
-        const slot = sessions.get(threadId);
-        if (slot?.link === link) dropSession(threadId, slot);
+        runtime.dropSession(threadId, link);
         return Result.err(
           new LinkWriteUnsettled({
             message: "a thread tool write has an unknown outcome",
@@ -794,7 +698,7 @@ export const createTurnController = ({
     request: TurnRequest,
     record: ThreadRecord,
     model: string,
-    active: ActiveTurn,
+    active: ActiveTurn<Tag>,
     input: TurnInput,
     messageId: string | null,
   ) => {
@@ -807,6 +711,16 @@ export const createTurnController = ({
       now: now(),
       compaction: request.compaction,
     });
+    const turn = runningTurn(
+      active,
+      request,
+      record,
+      model,
+      input,
+      turnStartedAt,
+      started.state,
+    );
+    active.turn = turn;
     apply(active, started);
     if (!request.answered)
       send({ id: request.id, result: { turn: started.turn } });
@@ -816,168 +730,37 @@ export const createTurnController = ({
     if (request.stopped && active.state !== null) {
       active.state = markInterrupting(active.state);
     }
-
-    const skills = await readSkills(input.text);
-    if (skills.unreadable.length > 0) {
-      log({ event: "claude_turn", step: "skill_unreadable" });
-    }
-    await waitForPendingInterrupt(threadId);
-    if (active.state?.interrupting) {
-      finish(active, { status: "interrupted" }, null);
-      return;
-    }
-    const reused = sessions.get(threadId)?.model === model;
-    const sessionAskedAt = now();
-    const slot = await sessionFor(record, model);
-    if (slot.isErr()) {
-      fail(active, slot.error);
-      return;
-    }
-    const sessionStartMs = reused ? null : now() - sessionAskedAt;
-    active.link = slot.value.link;
-    // Claude leaves plan mode when a plan is approved, so the mode the app asks for is set again on every turn.
-    const mode = await slot.value.session.setPermissionMode(
-      input.permissionMode,
-    );
-    if (mode.isErr()) {
-      dropSession(threadId, slot.value);
-      fail(active, mode.error);
-      return;
-    }
-    // Set on every turn, even with none picked, so Claude runs at the level the app shows rather than at project settings, and a restarted session gets it again.
-    const effort = effortRule(model, input.effort);
-    if (effort !== null) {
-      const applied = await slot.value.session.setEffort(effort);
-      if (applied.isErr()) {
-        dropSession(threadId, slot.value);
-        fail(active, applied.error);
-        return;
-      }
-      log({ event: "claude_turn", step: "effort_applied", effort });
-    }
-    if (active.state?.interrupting) {
-      finish(active, { status: "interrupted" }, null);
-      return;
-    }
-    slot.value.link.acceptWrites();
-    // A skill this Claude session already holds goes as its link alone; a new session has lost it, so it is attached again.
-    const attached = slot.value.attachedSkills;
-    const fresh = skills.skills.filter(
-      ({ path, body }) => attached.get(path) !== body,
-    );
-    if (fresh.length < skills.skills.length) {
-      log({ event: "claude_turn", step: "skill_link_only" });
-    }
-    const sent = slot.value.session.send(
-      input.text,
-      fresh.map(({ block }) => block),
-    );
-    if (sent.isErr()) {
-      dropSession(threadId, slot.value);
-      fail(active, sent.error);
-      return;
-    }
-    for (const { path, body } of fresh) attached.set(path, body);
-    active.slot = slot.value;
-    for (const steer of active.unsentSteers.splice(0)) {
-      const steered = sendSteer(active, slot.value, steer);
-      if (steered.isErr()) {
-        dropSession(threadId, slot.value);
-        fail(active, steered.error);
-        return;
-      }
-    }
-    const sentAt = now();
-    let firstMessageMs: number | null = null;
-    let sessionId = threads.sessionIdOf(threadId);
-    while (active.state !== null && !active.state.finished) {
-      const next = await slot.value.session.messages.next();
-      const received =
-        next.done === true
-          ? Result.err(
-              new StreamEnded({
-                message: "Claude stopped before the turn finished",
-              }),
-            )
-          : next.value;
-      if (received.isErr()) {
-        dropSession(threadId, slot.value);
-        fail(active, received.error);
-        return;
-      }
-      const current = received.value.session_id;
-      if (current !== undefined && current !== sessionId) {
-        sessionId = current;
-        await threads.setSessionId(threadId, current);
-      }
-      const message = received.value;
-      // Status and system messages follow the send at once, so the wait is measured to the first reply of the main conversation, not of a subagent, and a turn without one logs null.
-      if (
-        (message.type === "stream_event" || message.type === "assistant") &&
-        message.parent_tool_use_id === null
-      ) {
-        firstMessageMs ??= now() - sentAt;
-      }
-      // A compaction summarizes the skills attached so far and a reset such as /clear drops them, so the next turn attaches them again.
-      if (
-        (message.type === "system" && message.subtype === "compact_boundary") ||
-        message.type === "conversation_reset"
-      ) {
-        attached.clear();
-      }
-      if (message.type === "result") {
-        log({
-          event: "claude_turn",
-          step: "metrics",
-          model,
-          effort,
-          compaction: request.compaction,
-          ...breakdown(message.usage),
-          sessionStartMs,
-          firstMessageMs,
-          turnMs: now() - turnStartedAt,
-        });
-      }
-      // Sent before the message is rendered, so a result's usage reaches the app ahead of turn/completed.
-      const usage = renderTokenUsage(
-        usages.get(threadId) ?? NO_USAGE,
-        message,
-        { threadId, turnId: request.turnId, model, now: now() },
-      );
-      usages.set(threadId, usage.usage);
-      if (usage.notification !== null) send(usage.notification);
-      const plan = renderPlan(plans.get(threadId) ?? NO_PLAN, message, {
-        threadId,
-        turnId: request.turnId,
-        now: now(),
-      });
-      plans.set(threadId, plan.plan);
-      if (plan.notification !== null) send(plan.notification);
-      const steers =
-        message.type === "result" ? steersAfter(active, message) : "none";
-      if (message.type === "result" && steers !== "none") {
-        apply(active, renderInterimResult(active.state, message, now()));
-        if (steers === "queued") continue;
-        // The steer may never run, so the user is told to send it again, and the session goes so a late run cannot leak into the next turn.
-        dropSession(threadId, slot.value);
-        finish(
-          active,
-          { status: "failed", message: STEER_UNCONFIRMED },
-          "SteerUnconfirmed",
-        );
-        return;
-      }
-      apply(active, renderSdkMessage(active.state, message, now()));
-      // A failed result leaves its steers unrun, so the session goes with them rather than run them into the next turn; after a stop, the interrupt receipt decides instead.
-      if (
-        active.state.finished &&
-        !active.state.interrupting &&
-        active.pendingSteers.size > 0
-      ) {
-        dropSession(threadId, slot.value);
-      }
-    }
+    await runtime.run(turn);
   };
+
+  // opened is the state the turn started with, which the app has been shown before the runtime can read it.
+  const runningTurn = (
+    active: ActiveTurn<Tag>,
+    request: TurnRequest,
+    record: ThreadRecord,
+    model: string,
+    input: TurnInput,
+    startedAtMs: number,
+    opened: TurnState,
+  ): RunningTurn<Tag> => ({
+    threadId: record.threadId,
+    turnId: request.turnId,
+    record,
+    model,
+    input,
+    compaction: request.compaction,
+    startedAtMs,
+    state: () => active.state ?? opened,
+    apply: (rendered, error = null) => apply(active, rendered, error),
+    finish: (outcome, error) => finish(active, outcome, error),
+    fail: (error) => fail(active, error),
+    isOpen: () => activeTurns.get(record.threadId) === active,
+    useLink: (link) => {
+      active.link = link;
+    },
+    ask: (method, params, signal) =>
+      appRequests.ask(record.threadId, method, params, signal),
+  });
 
   const renderInput = (
     state: TurnState,
@@ -1001,138 +784,11 @@ export const createTurnController = ({
     };
   };
 
-  const sendSteer = (active: ActiveTurn, slot: SessionSlot, text: string) => {
-    const sent = slot.session.send(text);
-    if (sent.isOk()) active.pendingSteers.add(sent.value);
-    return sent;
-  };
-
-  const waitForPendingInterrupt = async (threadId: string) => {
-    await sessions.get(threadId)?.pendingInterrupt;
-  };
-
-  // model is the one the turn was accepted with, since a change that arrives while the turn waits applies to the next turn.
-  const sessionFor = async (
-    record: ThreadRecord,
-    model: string,
-  ): Promise<
-    Result<SessionSlot, InferErr<SessionStart> | BridgeClosing | SessionMissing>
-  > => {
-    const existing = sessions.get(record.threadId);
-    if (existing?.model === model) return Result.ok(existing);
-    if (existing !== undefined) dropSession(record.threadId, existing);
-    if (closed) {
-      return Result.err(
-        new BridgeClosing({ message: refusalMessage("bridge_closing") }),
-      );
-    }
-    const resume = threads.sessionIdOf(record.threadId);
-    if (resume !== null && !(await sessionFound(resume))) {
-      log({ event: "claude_turn", step: "session_missing" });
-      void threads.setSessionId(record.threadId, null);
-      return Result.err(
-        new SessionMissing({
-          message:
-            "Claude's record of this conversation is gone, so it cannot continue; send again to start a new Claude conversation in this thread",
-        }),
-      );
-    }
-    // Each session gets its own thread tool server, since one server instance serves one Claude process.
-    const link = openLink(record.threadId);
-    const started = await startSession({
-      cwd: record.worktree,
-      model,
-      ...resumeFrom(resume),
-      mcpServers: { [link.server.name]: link.server },
-      allowedTools: link.allowedTools,
-      canUseTool: approveTool(record.threadId),
-    });
-    if (started.isErr()) return Result.err(started.error);
-    // Shutdown may have happened while Claude was starting.
-    if (closed) {
-      started.value.close();
-      return Result.err(
-        new BridgeClosing({ message: refusalMessage("bridge_closing") }),
-      );
-    }
-    const slot: SessionSlot = {
-      session: started.value,
-      model,
-      pendingInterrupt: null,
-      link,
-      attachedSkills: new Map(),
-    };
-    sessions.set(record.threadId, slot);
-    return Result.ok(slot);
-  };
-
-  // A record that cannot be looked up is left for Claude to resume, which reports its own failure.
-  const sessionFound = async (sessionId: string) => {
-    const found = await findSession(sessionId);
-    return found.isErr() || found.value;
-  };
-
-  // The SDK reports no message when a call is refused here, so the refusal is recorded on the turn to show its item as declined.
-  const approveTool =
-    (threadId: string): CanUseTool =>
-    async (toolName, input, options) => {
-      const active = activeTurns.get(threadId);
-      const state = active?.state;
-      if (active === undefined || !state || state.interrupting) {
-        return declineTool(active, options.toolUseID, NO_TURN);
-      }
-      const block = { id: options.toolUseID, name: toolName, input };
-      // A subagent's call has no item in the thread, so its prompt carries an id of its own.
-      if (options.agentID === undefined) {
-        apply(active, renderToolRequest(state, block, now()));
-      }
-      const item = active.state
-        ? runningToolItem(active.state, options.toolUseID)
-        : null;
-      const prompt = promptFor(
-        {
-          toolName,
-          input,
-          item,
-          title: options.title,
-          reason: options.decisionReason,
-          defaultToNo: options.defaultToNo === true,
-        },
-        {
-          threadId,
-          turnId: state.turnId,
-          itemId: item?.id ?? `${state.turnId}-${options.toolUseID}`,
-          now: now(),
-        },
-      );
-      const answer = await appRequests.ask(
-        threadId,
-        prompt.method,
-        prompt.params,
-        options.signal,
-      );
-      const decision = prompt.decide(answer);
-      return decision.behavior === "deny"
-        ? declineTool(active, options.toolUseID, decision.message)
-        : decision;
-    };
-
-  const declineTool = (
-    active: ActiveTurn | undefined,
-    toolUseId: string,
-    message: string,
-  ) => {
-    if (active?.state) {
-      active.state = markToolDeclined(active.state, toolUseId);
-    }
-    return { behavior: "deny" as const, message };
-  };
-
   // The app may start the next turn as soon as it sees turn/completed, so the thread stops counting as active then; the store's per-thread queue still holds that turn until this one's marker is cleared.
   const apply = (
-    active: ActiveTurn,
+    active: ActiveTurn<Tag>,
     rendered: Rendered,
-    error: FailureTag | null = null,
+    error: Tag | null = null,
   ) => {
     const wasFinished = active.state?.finished ?? false;
     active.state = rendered.state;
@@ -1156,8 +812,8 @@ export const createTurnController = ({
 
   // A turn the user already stopped ends as interrupted whatever went wrong afterwards.
   const fail = (
-    active: ActiveTurn,
-    error: { _tag: FailureTag; message: string },
+    active: ActiveTurn<Tag>,
+    error: { _tag: Tag; message: string },
   ) =>
     finish(
       active,
@@ -1168,25 +824,20 @@ export const createTurnController = ({
     );
 
   const finish = (
-    active: ActiveTurn,
+    active: ActiveTurn<Tag>,
     outcome: TurnOutcome,
-    error: FailureTag | null,
+    error: Tag | null,
   ) => {
     if (active.state === null || active.state.finished) return;
     apply(active, renderTurnCompleted(active.state, outcome, now()), error);
   };
 
   // A prompt still open when its turn ends can no longer change what Claude did, so it is closed with the turn.
-  const release = (active: ActiveTurn) => {
+  const release = (active: ActiveTurn<Tag>) => {
     if (activeTurns.get(active.threadId) === active) {
       activeTurns.delete(active.threadId);
       appRequests.cancel(active.threadId);
     }
-  };
-
-  const dropSession = (threadId: string, slot: SessionSlot) => {
-    if (sessions.get(threadId) === slot) sessions.delete(threadId);
-    slot.session.close();
   };
 
   const refuse = (
@@ -1245,33 +896,11 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
     case "outcome_unknown":
     case "steered":
     case "model_changed":
-    case "idle_closed":
-    case "session_missing":
     case "outcome_cleared":
-    case "skill_unreadable":
-    case "skill_link_only":
     case "effort_unsupported":
       return { event: entry.event, step: entry.step };
     case "effort_changed":
-    case "effort_applied":
       return { event: entry.event, step: entry.step, effort: entry.effort };
-    case "metrics":
-      return {
-        event: entry.event,
-        step: entry.step,
-        model: entry.model,
-        effort: entry.effort,
-        compaction: entry.compaction,
-        inputTokens: entry.inputTokens,
-        cachedInputTokens: entry.cachedInputTokens,
-        cacheWriteInputTokens: entry.cacheWriteInputTokens,
-        outputTokens: entry.outputTokens,
-        reasoningOutputTokens: entry.reasoningOutputTokens,
-        totalTokens: entry.totalTokens,
-        sessionStartMs: entry.sessionStartMs,
-        firstMessageMs: entry.firstMessageMs,
-        turnMs: entry.turnMs,
-      };
     case "finished":
       return {
         event: entry.event,
@@ -1286,7 +915,6 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
         reason: entry.reason,
         error: entry.error,
       };
-    case "interrupt_failed":
     case "thread_not_materialized":
     case "session_not_saved":
     case "model_not_saved":
@@ -1296,10 +924,58 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
   }
 };
 
+// A reviewer's reply is already answerable and the thread cannot message itself, and a Claude sender is left out since Claude-to-Claude round trips are outside O2 and would raise usage.
+const requesterOf = (
+  threadId: string,
+  source: string | null | undefined,
+  owner: string | undefined,
+  claudeThreadOf: (threadId: string) => Thread | undefined,
+) =>
+  source == null ||
+  source === threadId ||
+  owner !== undefined ||
+  claudeThreadOf(source) !== undefined
+    ? null
+    : source;
+
+const clientMessageId = (params: Record<string, unknown>) =>
+  typeof params.clientUserMessageId === "string" &&
+  params.clientUserMessageId !== ""
+    ? params.clientUserMessageId
+    : null;
+
+const textInput = (
+  value: unknown,
+  delegated: { text: string; toolOutput: ToolOutput } | null,
+): TextInput | null => {
+  const items = Array.isArray(value) ? value : [];
+  if (items.length === 0 && delegated === null) return null;
+  const texts = delegated === null ? [] : [delegated.text];
+  for (const item of items) {
+    if (!isTextItem(item)) return null;
+    texts.push(item.text);
+  }
+  return {
+    items: items as UserInput[],
+    toolOutput: delegated?.toolOutput ?? null,
+    text: texts.join("\n"),
+  };
+};
+
+const isTextItem = (item: unknown): item is { type: "text"; text: string } =>
+  typeof item === "object" &&
+  item !== null &&
+  "type" in item &&
+  item.type === "text" &&
+  "text" in item &&
+  typeof item.text === "string";
+
+const INVALID_REQUEST = -32600;
+
 // The model, effort and session id a thread runs with are set here before the store saves them and win over what it holds, so a failed save still applies while the bridge runs; a null session id is one Claude lost.
-const createThreadValues = (
+export const createThreadValues = (
   store: ThreadStore,
-  log: (event: TurnEvent) => void,
+  log: (event: ThreadValueEvent) => void,
 ) => {
   // Threads created with a Claude model are saved to the store only on their first turn, so a thread never used leaves nothing behind.
   const adopted = new Map<string, Thread>();
@@ -1413,21 +1089,581 @@ const createThreadValues = (
   };
 };
 
+type SessionStart = Awaited<ReturnType<typeof startClaudeSession>>;
+
+type ClaudeSession = InferOk<SessionStart>;
+
+type StartSession = (settings: ClaudeSessionSettings) => Promise<SessionStart>;
+
+type FindSession = (
+  sessionId: string,
+) => ReturnType<typeof claudeSessionExists>;
+
+type CodexLink = Pick<
+  ReturnType<typeof createCodexLink>,
+  | "server"
+  | "allowedTools"
+  | "hasUnsettledWrite"
+  | "stopWrites"
+  | "acceptWrites"
+>;
+
+type StreamedMessage =
+  ClaudeSession["messages"] extends AsyncGenerator<infer R> ? R : never;
+
+type InterruptTag = ErrorTag<ReturnType<ClaudeSession["interrupt"]>>;
+
+type ClaudeFailureTag =
+  | ErrorTag<SessionStart>
+  | ErrorTag<ReturnType<ClaudeSession["send"]>>
+  | ErrorTag<ReturnType<ClaudeSession["setPermissionMode"]>>
+  | ErrorTag<ReturnType<ClaudeSession["setEffort"]>>
+  | InferErr<StreamedMessage>["_tag"]
+  | InterruptTag
+  | BridgeClosing["_tag"]
+  | StreamEnded["_tag"]
+  | SessionMissing["_tag"]
+  | "SteerUnconfirmed";
+
+type ClaudeTurnEvent =
+  | {
+      event: "claude_turn";
+      step:
+        | "idle_closed"
+        | "session_missing"
+        | "skill_unreadable"
+        | "skill_link_only";
+    }
+  | { event: "claude_turn"; step: "effort_applied"; effort: EffortLevel }
+  | ({
+      event: "claude_turn";
+      step: "metrics";
+      model: string;
+      effort: EffortLevel | null;
+      compaction: boolean;
+      sessionStartMs: number | null;
+      firstMessageMs: number | null;
+      turnMs: number;
+    } & TokenUsageBreakdown)
+  | { event: "claude_turn"; step: "interrupt_failed"; error: InterruptTag };
+
+export type ClaudeLogEvent = TurnEvent<ClaudeFailureTag> | ClaudeTurnEvent;
+
+// A session is not reused until its interrupt reports whether a send is still queued, which can arrive after the interrupted turn has ended.
+// attachedSkills maps each SKILL.md path this session was given to the body it was given.
+type SessionSlot = {
+  session: ClaudeSession;
+  model: string;
+  pendingInterrupt: Promise<void> | null;
+  link: CodexLink;
+  attachedSkills: Map<string, string>;
+};
+
+// Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken.
+type ClaudeTurn = {
+  slot: SessionSlot | null;
+  unsentSteers: string[];
+  pendingSteers: Set<string>;
+  steers: number;
+};
+
+class BridgeClosing extends TaggedError("BridgeClosing")<{
+  message: string;
+}> {}
+
+class StreamEnded extends TaggedError("StreamEnded")<{
+  message: string;
+}> {}
+
+class SessionMissing extends TaggedError("SessionMissing")<{
+  message: string;
+}> {}
+
+// A thread keeps one Claude session across turns; a session that fails is dropped and the next turn resumes it from the stored session id.
+export const createClaudeRuntime = ({
+  threads,
+  startSession,
+  findSession,
+  openLink,
+  send,
+  log,
+  now = Date.now,
+  idleSessionMs = IDLE_SESSION_MS,
+  effortRule,
+}: {
+  threads: ThreadValues;
+  startSession: StartSession;
+  findSession: FindSession;
+  openLink: (threadId: string) => CodexLink;
+  send: (message: object) => void;
+  log: (event: ClaudeTurnEvent) => void;
+  now?: () => number;
+  idleSessionMs?: number;
+  effortRule: EffortRule;
+}): TurnRuntime<ClaudeFailureTag> => {
+  type Turn = RunningTurn<ClaudeFailureTag>;
+
+  const sessions = new Map<string, SessionSlot>();
+  const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const usages = new Map<string, ThreadUsage>();
+  const plans = new Map<string, ThreadPlan>();
+  const turns = new WeakMap<Turn, ClaudeTurn>();
+  const runningTurns = new Map<string, Turn>();
+  let closed = false;
+
+  // Each worker keeps its own Claude process, so an idle one is closed; without a session id its next turn could not resume the conversation, so it stays.
+  const scheduleIdleClose = (threadId: string) => {
+    cancelIdleClose(threadId);
+    const timer = setTimeout(() => {
+      idleTimers.delete(threadId);
+      const slot = sessions.get(threadId);
+      if (slot === undefined) return;
+      if (threads.sessionIdOf(threadId) == null) return;
+      dropSession(threadId, slot);
+      log({ event: "claude_turn", step: "idle_closed" });
+    }, idleSessionMs);
+    timer.unref();
+    idleTimers.set(threadId, timer);
+  };
+
+  const cancelIdleClose = (threadId: string) => {
+    clearTimeout(idleTimers.get(threadId));
+    idleTimers.delete(threadId);
+  };
+
+  const run = async (turn: Turn) => {
+    const claude: ClaudeTurn = {
+      slot: null,
+      unsentSteers: [],
+      pendingSteers: new Set(),
+      steers: 0,
+    };
+    turns.set(turn, claude);
+    runningTurns.set(turn.threadId, turn);
+    await stream(turn, claude);
+    if (runningTurns.get(turn.threadId) === turn) {
+      runningTurns.delete(turn.threadId);
+    }
+  };
+
+  const stream = async (turn: Turn, claude: ClaudeTurn) => {
+    const { threadId, record, model, input } = turn;
+    const skills = await readSkills(input.text);
+    if (skills.unreadable.length > 0) {
+      log({ event: "claude_turn", step: "skill_unreadable" });
+    }
+    await waitForPendingInterrupt(threadId);
+    if (turn.state().interrupting) {
+      turn.finish({ status: "interrupted" }, null);
+      return;
+    }
+    const reused = sessions.get(threadId)?.model === model;
+    const sessionAskedAt = now();
+    const slot = await sessionFor(record, model);
+    if (slot.isErr()) {
+      turn.fail(slot.error);
+      return;
+    }
+    const sessionStartMs = reused ? null : now() - sessionAskedAt;
+    turn.useLink(slot.value.link);
+    // Claude leaves plan mode when a plan is approved, so the mode the app asks for is set again on every turn.
+    const mode = await slot.value.session.setPermissionMode(
+      input.permissionMode,
+    );
+    if (mode.isErr()) {
+      dropSession(threadId, slot.value);
+      turn.fail(mode.error);
+      return;
+    }
+    // Set on every turn, even with none picked, so Claude runs at the level the app shows rather than at project settings, and a restarted session gets it again.
+    const effort = effortRule(model, input.effort);
+    if (effort !== null) {
+      const applied = await slot.value.session.setEffort(effort);
+      if (applied.isErr()) {
+        dropSession(threadId, slot.value);
+        turn.fail(applied.error);
+        return;
+      }
+      log({ event: "claude_turn", step: "effort_applied", effort });
+    }
+    if (turn.state().interrupting) {
+      turn.finish({ status: "interrupted" }, null);
+      return;
+    }
+    slot.value.link.acceptWrites();
+    // A skill this Claude session already holds goes as its link alone; a new session has lost it, so it is attached again.
+    const attached = slot.value.attachedSkills;
+    const fresh = skills.skills.filter(
+      ({ path, body }) => attached.get(path) !== body,
+    );
+    if (fresh.length < skills.skills.length) {
+      log({ event: "claude_turn", step: "skill_link_only" });
+    }
+    const sent = slot.value.session.send(
+      input.text,
+      fresh.map(({ block }) => block),
+    );
+    if (sent.isErr()) {
+      dropSession(threadId, slot.value);
+      turn.fail(sent.error);
+      return;
+    }
+    for (const { path, body } of fresh) attached.set(path, body);
+    claude.slot = slot.value;
+    for (const steer of claude.unsentSteers.splice(0)) {
+      const steered = sendSteer(claude, slot.value, steer);
+      if (steered.isErr()) {
+        dropSession(threadId, slot.value);
+        turn.fail(steered.error);
+        return;
+      }
+    }
+    const sentAt = now();
+    let firstMessageMs: number | null = null;
+    let sessionId = threads.sessionIdOf(threadId);
+    while (!turn.state().finished) {
+      const next = await slot.value.session.messages.next();
+      const received =
+        next.done === true
+          ? Result.err(
+              new StreamEnded({
+                message: "Claude stopped before the turn finished",
+              }),
+            )
+          : next.value;
+      if (received.isErr()) {
+        dropSession(threadId, slot.value);
+        turn.fail(received.error);
+        return;
+      }
+      const current = received.value.session_id;
+      if (current !== undefined && current !== sessionId) {
+        sessionId = current;
+        await threads.setSessionId(threadId, current);
+      }
+      const message = received.value;
+      // Status and system messages follow the send at once, so the wait is measured to the first reply of the main conversation, not of a subagent, and a turn without one logs null.
+      if (
+        (message.type === "stream_event" || message.type === "assistant") &&
+        message.parent_tool_use_id === null
+      ) {
+        firstMessageMs ??= now() - sentAt;
+      }
+      // A compaction summarizes the skills attached so far and a reset such as /clear drops them, so the next turn attaches them again.
+      if (
+        (message.type === "system" && message.subtype === "compact_boundary") ||
+        message.type === "conversation_reset"
+      ) {
+        attached.clear();
+      }
+      if (message.type === "result") {
+        log({
+          event: "claude_turn",
+          step: "metrics",
+          model,
+          effort,
+          compaction: turn.compaction,
+          ...breakdown(message.usage),
+          sessionStartMs,
+          firstMessageMs,
+          turnMs: now() - turn.startedAtMs,
+        });
+      }
+      // Sent before the message is rendered, so a result's usage reaches the app ahead of turn/completed.
+      const usage = renderTokenUsage(
+        usages.get(threadId) ?? NO_USAGE,
+        message,
+        { threadId, turnId: turn.turnId, model, now: now() },
+      );
+      usages.set(threadId, usage.usage);
+      if (usage.notification !== null) send(usage.notification);
+      const plan = renderPlan(plans.get(threadId) ?? NO_PLAN, message, {
+        threadId,
+        turnId: turn.turnId,
+        now: now(),
+      });
+      plans.set(threadId, plan.plan);
+      if (plan.notification !== null) send(plan.notification);
+      const steers =
+        message.type === "result"
+          ? steersAfter(
+              claude.pendingSteers,
+              turn.state().interrupting,
+              message,
+            )
+          : "none";
+      if (message.type === "result" && steers !== "none") {
+        turn.apply(renderInterimResult(turn.state(), message, now()));
+        if (steers === "queued") continue;
+        // The steer may never run, so the user is told to send it again, and the session goes so a late run cannot leak into the next turn.
+        dropSession(threadId, slot.value);
+        turn.finish(
+          { status: "failed", message: STEER_UNCONFIRMED },
+          "SteerUnconfirmed",
+        );
+        return;
+      }
+      turn.apply(renderSdkMessage(turn.state(), message, now()));
+      // A failed result leaves its steers unrun, so the session goes with them rather than run them into the next turn; after a stop, the interrupt receipt decides instead.
+      const state = turn.state();
+      if (
+        state.finished &&
+        !state.interrupting &&
+        claude.pendingSteers.size > 0
+      ) {
+        dropSession(threadId, slot.value);
+      }
+    }
+  };
+
+  const steer = (turn: Turn, text: string): Refusal | null => {
+    const claude = turns.get(turn);
+    if (claude === undefined) return "no_running_turn";
+    if (claude.steers >= MAX_STEERS_PER_TURN) return "too_many_steers";
+    if (claude.slot === null) {
+      claude.unsentSteers.push(text);
+    } else if (sendSteer(claude, claude.slot, text).isErr()) {
+      return "steer_not_sent";
+    }
+    claude.steers += 1;
+    return null;
+  };
+
+  const sendSteer = (claude: ClaudeTurn, slot: SessionSlot, text: string) => {
+    const sent = slot.session.send(text);
+    if (sent.isOk()) claude.pendingSteers.add(sent.value);
+    return sent;
+  };
+
+  const interrupt = (turn: Turn, repeated: boolean) => {
+    const threadId = turn.threadId;
+    const slot = sessions.get(threadId);
+    slot?.link.stopWrites();
+    if (slot === undefined || repeated || slot.pendingInterrupt !== null) {
+      return;
+    }
+    // A send still queued in Claude would run after the interrupt, and an old CLI cannot say whether one is, so either way the session is closed and the next turn resumes it.
+    slot.pendingInterrupt = slot.session.interrupt().then((interrupted) => {
+      slot.pendingInterrupt = null;
+      if (interrupted.isErr()) {
+        log({
+          event: "claude_turn",
+          step: "interrupt_failed",
+          error: interrupted.error._tag,
+        });
+      } else if (interrupted.value?.length === 0) {
+        return;
+      }
+      dropSession(threadId, slot);
+      turn.finish({ status: "interrupted" }, null);
+    });
+  };
+
+  const waitForPendingInterrupt = async (threadId: string) => {
+    await sessions.get(threadId)?.pendingInterrupt;
+  };
+
+  // model is the one the turn was accepted with, since a change that arrives while the turn waits applies to the next turn.
+  const sessionFor = async (
+    record: ThreadRecord,
+    model: string,
+  ): Promise<
+    Result<SessionSlot, InferErr<SessionStart> | BridgeClosing | SessionMissing>
+  > => {
+    const existing = sessions.get(record.threadId);
+    if (existing?.model === model) return Result.ok(existing);
+    if (existing !== undefined) dropSession(record.threadId, existing);
+    if (closed) {
+      return Result.err(
+        new BridgeClosing({ message: refusalMessage("bridge_closing") }),
+      );
+    }
+    const resume = threads.sessionIdOf(record.threadId);
+    if (resume !== null && !(await sessionFound(resume))) {
+      log({ event: "claude_turn", step: "session_missing" });
+      void threads.setSessionId(record.threadId, null);
+      return Result.err(
+        new SessionMissing({
+          message:
+            "Claude's record of this conversation is gone, so it cannot continue; send again to start a new Claude conversation in this thread",
+        }),
+      );
+    }
+    // Each session gets its own thread tool server, since one server instance serves one Claude process.
+    const link = openLink(record.threadId);
+    const started = await startSession({
+      cwd: record.worktree,
+      model,
+      ...resumeFrom(resume),
+      mcpServers: { [link.server.name]: link.server },
+      allowedTools: link.allowedTools,
+      canUseTool: approveTool(record.threadId),
+    });
+    if (started.isErr()) return Result.err(started.error);
+    // Shutdown may have happened while Claude was starting.
+    if (closed) {
+      started.value.close();
+      return Result.err(
+        new BridgeClosing({ message: refusalMessage("bridge_closing") }),
+      );
+    }
+    const slot: SessionSlot = {
+      session: started.value,
+      model,
+      pendingInterrupt: null,
+      link,
+      attachedSkills: new Map(),
+    };
+    sessions.set(record.threadId, slot);
+    return Result.ok(slot);
+  };
+
+  // A record that cannot be looked up is left for Claude to resume, which reports its own failure.
+  const sessionFound = async (sessionId: string) => {
+    const found = await findSession(sessionId);
+    return found.isErr() || found.value;
+  };
+
+  // The SDK reports no message when a call is refused here, so the refusal is recorded on the turn to show its item as declined.
+  const approveTool =
+    (threadId: string): CanUseTool =>
+    async (toolName, input, options) => {
+      const turn = openTurn(threadId);
+      if (turn === undefined || turn.state().interrupting) {
+        return declineTool(turn, options.toolUseID, NO_TURN);
+      }
+      const block = { id: options.toolUseID, name: toolName, input };
+      // A subagent's call has no item in the thread, so its prompt carries an id of its own.
+      if (options.agentID === undefined) {
+        turn.apply(renderToolRequest(turn.state(), block, now()));
+      }
+      const item = runningToolItem(turn.state(), options.toolUseID);
+      const prompt = promptFor(
+        {
+          toolName,
+          input,
+          item,
+          title: options.title,
+          reason: options.decisionReason,
+          defaultToNo: options.defaultToNo === true,
+        },
+        {
+          threadId,
+          turnId: turn.turnId,
+          itemId: item?.id ?? `${turn.turnId}-${options.toolUseID}`,
+          now: now(),
+        },
+      );
+      const answer = await turn.ask(
+        prompt.method,
+        prompt.params,
+        options.signal,
+      );
+      const decision = prompt.decide(answer);
+      return decision.behavior === "deny"
+        ? declineTool(turn, options.toolUseID, decision.message)
+        : decision;
+    };
+
+  const openTurn = (threadId: string) => {
+    const turn = runningTurns.get(threadId);
+    return turn?.isOpen() ? turn : undefined;
+  };
+
+  const declineTool = (
+    turn: Turn | undefined,
+    toolUseId: string,
+    message: string,
+  ) => {
+    if (turn !== undefined) {
+      turn.apply({
+        state: markToolDeclined(turn.state(), toolUseId),
+        notifications: [],
+      });
+    }
+    return { behavior: "deny" as const, message };
+  };
+
+  const dropSession = (threadId: string, slot: SessionSlot) => {
+    if (sessions.get(threadId) === slot) sessions.delete(threadId);
+    slot.session.close();
+  };
+
+  const dropSessionOf = (threadId: string, link: TurnLink) => {
+    const slot = sessions.get(threadId);
+    if (slot?.link === link) dropSession(threadId, slot);
+  };
+
+  // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
+  const closeAll = () => {
+    closed = true;
+    for (const threadId of [...idleTimers.keys()]) cancelIdleClose(threadId);
+    for (const [threadId, slot] of sessions) dropSession(threadId, slot);
+  };
+
+  return {
+    compactPrompt: COMPACT_PROMPT,
+    run,
+    steer,
+    interrupt,
+    dropSession: dropSessionOf,
+    threadBusy: cancelIdleClose,
+    threadIdle: scheduleIdleClose,
+    closeAll,
+  };
+};
+
+export const isClaudeTurnEvent = (
+  entry: ClaudeLogEvent,
+): entry is ClaudeTurnEvent => Object.hasOwn(CLAUDE_STEPS, entry.step);
+
+export const serializeClaudeTurnEvent = (entry: ClaudeTurnEvent) => {
+  switch (entry.step) {
+    case "idle_closed":
+    case "session_missing":
+    case "skill_unreadable":
+    case "skill_link_only":
+      return { event: entry.event, step: entry.step };
+    case "effort_applied":
+      return { event: entry.event, step: entry.step, effort: entry.effort };
+    case "metrics":
+      return {
+        event: entry.event,
+        step: entry.step,
+        model: entry.model,
+        effort: entry.effort,
+        compaction: entry.compaction,
+        inputTokens: entry.inputTokens,
+        cachedInputTokens: entry.cachedInputTokens,
+        cacheWriteInputTokens: entry.cacheWriteInputTokens,
+        outputTokens: entry.outputTokens,
+        reasoningOutputTokens: entry.reasoningOutputTokens,
+        totalTokens: entry.totalTokens,
+        sessionStartMs: entry.sessionStartMs,
+        firstMessageMs: entry.firstMessageMs,
+        turnMs: entry.turnMs,
+      };
+    case "interrupt_failed":
+      return { event: entry.event, step: entry.step, error: entry.error };
+  }
+};
+
 // A list under its cap names every send the turn took, so a steer it leaves out runs as a later turn, even one that reached Claude after this result was written; a queued send the CLI counts promises that turn too.
 // A capped list or the single last uuid of an older CLI may leave out a steer already taken, so with nothing counted as queued whether the steer runs is unknown.
 // A failed result ends the turn, since the steer's run would otherwise hide its error.
 const steersAfter = (
-  active: ActiveTurn,
+  pendingSteers: Set<string>,
+  interrupting: boolean,
   result: SDKResultMessage,
 ): "none" | "queued" | "unknown" => {
   const listed = result.user_message_uuids;
   const taken =
     listed ??
     (result.user_message_uuid === undefined ? [] : [result.user_message_uuid]);
-  for (const uuid of taken) active.pendingSteers.delete(uuid);
-  if (active.state?.interrupting) return "none";
+  for (const uuid of taken) pendingSteers.delete(uuid);
+  if (interrupting) return "none";
   if (result.subtype !== "success" || result.is_error) return "none";
-  if (active.pendingSteers.size === 0) return "none";
+  if (pendingSteers.size === 0) return "none";
   const complete = listed !== undefined && listed.length < TAKEN_UUIDS_LIMIT;
   return complete || (result.queued_turn_count ?? 0) > 0 ? "queued" : "unknown";
 };
@@ -1435,53 +1671,15 @@ const steersAfter = (
 const resumeFrom = (sessionId: string | null) =>
   sessionId === null ? {} : { resume: sessionId };
 
-// A reviewer's reply is already answerable and the thread cannot message itself, and a Claude sender is left out since Claude-to-Claude round trips are outside O2 and would raise usage.
-const requesterOf = (
-  threadId: string,
-  source: string | null | undefined,
-  owner: string | undefined,
-  claudeThreadOf: (threadId: string) => Thread | undefined,
-) =>
-  source == null ||
-  source === threadId ||
-  owner !== undefined ||
-  claudeThreadOf(source) !== undefined
-    ? null
-    : source;
-
-const clientMessageId = (params: Record<string, unknown>) =>
-  typeof params.clientUserMessageId === "string" &&
-  params.clientUserMessageId !== ""
-    ? params.clientUserMessageId
-    : null;
-
-const textInput = (
-  value: unknown,
-  delegated: { text: string; toolOutput: ToolOutput } | null,
-): TextInput | null => {
-  const items = Array.isArray(value) ? value : [];
-  if (items.length === 0 && delegated === null) return null;
-  const texts = delegated === null ? [] : [delegated.text];
-  for (const item of items) {
-    if (!isTextItem(item)) return null;
-    texts.push(item.text);
-  }
-  return {
-    items: items as UserInput[],
-    toolOutput: delegated?.toolOutput ?? null,
-    text: texts.join("\n"),
-  };
+const CLAUDE_STEPS: Record<ClaudeTurnEvent["step"], true> = {
+  idle_closed: true,
+  session_missing: true,
+  skill_unreadable: true,
+  skill_link_only: true,
+  effort_applied: true,
+  metrics: true,
+  interrupt_failed: true,
 };
-
-const isTextItem = (item: unknown): item is { type: "text"; text: string } =>
-  typeof item === "object" &&
-  item !== null &&
-  "type" in item &&
-  item.type === "text" &&
-  "text" in item &&
-  typeof item.text === "string";
-
-const INVALID_REQUEST = -32600;
 
 const COMPACT_PROMPT = "/compact";
 
