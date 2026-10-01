@@ -6,6 +6,7 @@ import {
   type AccountInfo,
   type CanUseTool,
   createSdkMcpServer,
+  type PermissionUpdate,
   type SDKMessage,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -55,6 +56,8 @@ export const askTool = (
     agentID?: string;
     signal?: AbortSignal;
     defaultToNo?: boolean;
+    suggestions?: PermissionUpdate[];
+    suppressAlwaysAllowRule?: boolean;
   } = {},
 ) => {
   const canUseTool = claude.options().canUseTool as CanUseTool;
@@ -66,6 +69,12 @@ export const askTool = (
     ...(options.defaultToNo === undefined
       ? {}
       : { defaultToNo: options.defaultToNo }),
+    ...(options.suggestions === undefined
+      ? {}
+      : { suggestions: options.suggestions }),
+    ...(options.suppressAlwaysAllowRule === undefined
+      ? {}
+      : { suppressAlwaysAllowRule: options.suppressAlwaysAllowRule }),
   });
 };
 

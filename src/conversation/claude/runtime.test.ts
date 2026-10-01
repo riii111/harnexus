@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   EffortLevel,
+  PermissionUpdate,
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -79,6 +80,78 @@ describe("tool approval", () => {
       },
     });
     expect(resolvedRequests(sent)).toEqual(["harnexus-1"]);
+  });
+
+  test("hands Claude its suggested rule to save when the app always allows a command", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await startedTurn(claude);
+    const rule: PermissionUpdate = {
+      type: "addRules",
+      rules: [{ toolName: "Bash", ruleContent: "npm test:*" }],
+      behavior: "allow",
+      destination: "localSettings",
+    };
+
+    const decision = askTool(
+      claude,
+      "Bash",
+      { command: "npm test" },
+      { suggestions: [rule] },
+    );
+    const request = await appRequest(sent);
+    turns.answerRequest({
+      id: request.id,
+      result: {
+        decision: {
+          acceptWithExecpolicyAmendment: {
+            execpolicy_amendment: ["npm", "test"],
+          },
+        },
+      },
+    });
+
+    expect(request.params.proposedExecpolicyAmendment).toEqual(["npm", "test"]);
+    expect(await decision).toEqual({
+      behavior: "allow",
+      updatedPermissions: [{ ...rule, destination: "projectSettings" }],
+    });
+  });
+
+  test("saves no rule when the SDK forbids a persistent allow", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await startedTurn(claude);
+    const rule: PermissionUpdate = {
+      type: "addRules",
+      rules: [{ toolName: "Bash", ruleContent: "npm test:*" }],
+      behavior: "allow",
+      destination: "localSettings",
+    };
+
+    const decision = askTool(
+      claude,
+      "Bash",
+      { command: "npm test" },
+      { suggestions: [rule], suppressAlwaysAllowRule: true },
+    );
+    const request = await appRequest(sent);
+    turns.answerRequest({
+      id: request.id,
+      result: {
+        decision: {
+          acceptWithExecpolicyAmendment: {
+            execpolicy_amendment: ["npm", "test"],
+          },
+        },
+      },
+    });
+
+    expect(request.params.availableDecisions).toEqual([
+      "accept",
+      "acceptForSession",
+      "decline",
+      "cancel",
+    ]);
+    expect(await decision).toEqual({ behavior: "allow" });
   });
 
   test("shows a tool the app declined as declined", async () => {
