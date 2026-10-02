@@ -187,6 +187,7 @@ describe("a number sent after /resume", () => {
 
     turns.startTurn(turnStart(11, "1"), undefined);
     await until(() => sent.includes(replay[0]));
+    await until(() => events.some((e) => e.step === "thread_not_renamed"));
 
     expect(renames).toHaveLength(1);
     expect(store.get(THREAD)?.sessionId).toBe("se-a");

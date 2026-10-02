@@ -370,11 +370,11 @@ export const createClaudeRuntime = ({
       null,
     );
     if (reply.kind !== "selected") return;
-    if (reply.name !== null) await nameThread(turn.threadId, reply.name);
+    if (reply.name !== null) void nameThread(turn.threadId, reply.name);
     await showPicked(turn);
   };
 
-  // A failed rename leaves the thread's name as it was, and the pick still stands.
+  // Not awaited, since the thread's next message waits for this turn and the name only changes what the app shows; a failed rename leaves the name as it was and the pick still stands.
   const nameThread = async (threadId: string, name: string) => {
     const renamed = await renameThread(threadId, name);
     if (renamed.isErr()) {
