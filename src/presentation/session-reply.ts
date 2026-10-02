@@ -15,10 +15,13 @@ export type SessionReply =
   | { kind: "selected"; title: string; name: string | null; unsynced: boolean }
   | { kind: "session"; cwd: string; sessionId: string | null };
 
+// continued marks a conversation another thread already continues.
 export type ListedConversation = {
   title: string;
   updatedAtMs: number;
   entrypoint: string | null;
+  worktree: string | null;
+  continued: boolean;
 };
 
 export const sessionReplyText = (reply: SessionReply, now: number): string => {
@@ -59,11 +62,18 @@ const listText = (
   now: number,
 ) => {
   if (conversations.length === 0) {
-    return `No Claude Code conversation from the last ${maxAgeDays} days in \`${cwd}\` can be continued here. Conversations already continued in a thread are not listed.`;
+    return `No Claude Code conversation from the last ${maxAgeDays} days in \`${cwd}\` or its Claude Code worktrees can be continued here.`;
   }
-  const lines = conversations.map(
-    (conversation, index) =>
-      `${index + 1}. ${shortTitle(conversation.title)} · ${ago(conversation.updatedAtMs, now)} · ${originOf(conversation.entrypoint)}`,
+  const lines = conversations.map((conversation, index) =>
+    [
+      `${index + 1}. ${shortTitle(conversation.title)}`,
+      ago(conversation.updatedAtMs, now),
+      originOf(conversation.entrypoint),
+      ...(conversation.worktree === null
+        ? []
+        : [`worktree \`${conversation.worktree}\``]),
+      ...(conversation.continued ? ["continued in another thread"] : []),
+    ].join(" · "),
   );
   return [
     `Claude Code conversations from the last ${maxAgeDays} days in \`${cwd}\`:`,

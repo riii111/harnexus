@@ -37,6 +37,7 @@ describe("listClaudeConversations", () => {
     expect(listed.isOk() && listed.value).toEqual([
       {
         sessionId: "se-new",
+        worktree: null,
         name: "Fixture title",
         title: "Fixture title",
         updatedAtMs: NOW - HOUR,
@@ -44,6 +45,7 @@ describe("listClaudeConversations", () => {
       },
       {
         sessionId: "se-old",
+        worktree: null,
         name: null,
         title: "first ask",
         updatedAtMs: NOW - DAY,
@@ -95,15 +97,15 @@ describe("listClaudeConversations", () => {
         }),
     },
     {
-      name: "a conversation in a worktree of the directory",
+      name: "a conversation in a subdirectory of a worktree",
       write: () =>
         writeRecord(
-          "-work-fixture-project--claude-worktrees-w1",
+          "-work-fixture-project--claude-worktrees-w1-sub",
           "se-tree",
           conversation(
             "tree ask",
             "cli",
-            "/work/fixture-project/.claude/worktrees/w1",
+            "/work/fixture-project/.claude/worktrees/w1/sub",
           ),
         ),
     },
@@ -135,6 +137,27 @@ describe("listClaudeConversations", () => {
     expect(
       listed.isOk() && listed.value.map((found) => found.sessionId),
     ).toEqual(["se-kept"]);
+  });
+
+  test("lists a conversation from a Claude Code worktree of the directory with the worktree's name", async () => {
+    await writeRecord(
+      "-work-fixture-project--claude-worktrees-w1",
+      "se-tree",
+      conversation(
+        "tree ask",
+        "claude-desktop",
+        `${PROJECT}/.claude/worktrees/w1`,
+      ),
+    );
+
+    const listed = await listClaudeConversations(PROJECT, {
+      since: NOW - 14 * DAY,
+      configDir: dir,
+    });
+
+    expect(listed.isOk() && listed.value).toMatchObject([
+      { sessionId: "se-tree", worktree: "w1", title: "tree ask" },
+    ]);
   });
 
   test("titles a conversation with its first typed prompt after slash command records", async () => {
