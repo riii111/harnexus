@@ -38,6 +38,11 @@ type Turns = {
   isClaudeThread: (threadId: unknown) => boolean;
   threadOf: (threadId: string) => Thread | undefined;
   adopt: (threadId: string, thread: Thread) => void;
+  adoptFork: (
+    threadId: string,
+    thread: Thread,
+    sourceId: string,
+  ) => Promise<void>;
   changeModel: (threadId: string, model: string) => void;
   startTurn: (request: AppRequest, fallbackCwd: string | undefined) => void;
   compactThread: (request: AppRequest) => void;
@@ -63,6 +68,8 @@ type Pending =
   | {
       kind: "threadOpen";
       createdModel: string | null;
+      // The Claude thread a thread/fork copies, whose model the fork keeps.
+      forkOf: string | null;
       history: ReturnType<History["load"]> | null;
       params: Record<string, unknown>;
     }
@@ -104,6 +111,8 @@ export const createRouter = (
       case "thread/start":
       case "thread/resume":
         return routeThreadOpen(line, message, request);
+      case "thread/fork":
+        return routeFork(line, request);
       case "turn/start":
         noteDelegation(params);
         if (
@@ -205,6 +214,7 @@ export const createRouter = (
     pending.set(id, {
       kind: "threadOpen",
       createdModel: created ? String(params.model) : null,
+      forkOf: null,
       history:
         threadId !== undefined && known !== undefined
           ? history.load(threadId)
@@ -214,6 +224,32 @@ export const createRouter = (
     if (!isClaudeModel(params.model)) return line;
     const { model: _model, ...rest } = params;
     return encode({ ...message, params: rest });
+  };
+
+  // The server copies its own record of the thread, which holds none of the Claude conversation, so the fork learns of it here.
+  const routeFork = (line: Buffer, request: AppRequest) => {
+    const { id, params } = request;
+    if (!turns.isClaudeThread(params.threadId)) return line;
+    const sourceId = String(params.threadId);
+    // Claude's conversation is forked whole, so a fork from an earlier turn would carry the turns after it.
+    if (params.lastTurnId != null || params.beforeTurnId != null) {
+      refuse("thread/fork", request, "unsupported_request");
+      return null;
+    }
+    // Claude's conversation stays where the source runs, so a fork into another directory would work on the source's files.
+    const checked = checkThread(params, turns.threadOf(sourceId), undefined);
+    if ("refusal" in checked) {
+      refuse("thread/fork", request, checked.refusal);
+      return null;
+    }
+    pending.set(id, {
+      kind: "threadOpen",
+      createdModel: null,
+      forkOf: sourceId,
+      history: null,
+      params,
+    });
+    return line;
   };
 
   // Settings that do not reach Claude, such as the approval policy, still go to the server; only what Claude would have to follow is checked.
@@ -318,6 +354,25 @@ export const createRouter = (
     if (request.createdModel !== null && typeof result.cwd === "string") {
       turns.adopt(threadId, { model: request.createdModel, cwd: result.cwd });
     }
+    const source =
+      request.forkOf === null ? undefined : turns.threadOf(request.forkOf);
+    // The app is shown the fork only once where its source stood has been read, so nothing the source says after the fork appears reaches it.
+    if (request.forkOf !== null && source !== undefined) {
+      return turns
+        .adoptFork(threadId, source, request.forkOf)
+        .then(() => openedResponse(line, message, request, threadId));
+    }
+    return openedResponse(line, message, request, threadId);
+  };
+
+  const openedResponse = (
+    line: Buffer,
+    message: Record<string, unknown>,
+    request: Extract<Pending, { kind: "threadOpen" }>,
+    threadId: string,
+  ): Buffer | Promise<Buffer> => {
+    const result = isObject(message.result) ? message.result : {};
+    const thread = isObject(result.thread) ? result.thread : {};
     const model = turns.threadOf(threadId)?.model;
     if (model === undefined) return line;
     const reasoningEffort = shownEffort(turns.effortOf(threadId));
@@ -416,6 +471,7 @@ const SETTINGS_UPDATED = "thread/settings/updated";
 
 const REFUSED_METHODS = [
   "thread/start",
+  "thread/fork",
   "turn/start",
   "turn/steer",
   "thread/resume",

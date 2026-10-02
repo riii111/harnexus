@@ -12,6 +12,7 @@ export type ObservationEvent =
       id: RequestId | null;
       tools: readonly ToolDefinition[];
       mcpStartup: McpStartup | null;
+      threadOpen: ThreadOpen | null;
     }
   | { event: "rpc_unobserved"; direction: Direction; reason: UnobservedReason };
 
@@ -33,6 +34,21 @@ type McpStartup = {
   status: "starting" | "ready" | "failed" | "cancelled" | "<redacted>";
   failure: "pipe_closed" | "pipe_missing" | "other" | null;
 };
+
+// How the app opens a side chat: the fields a thread/start or thread/fork names, and what the server says it opened. Field names outside the protocol, ids and text are never kept; a missing ephemeral reads as null, which a Rust client sends for false.
+type ThreadOpen =
+  | {
+      side: "request";
+      params: readonly string[];
+      ephemeral: boolean | null;
+      threadSource: string | null;
+    }
+  | {
+      side: "response";
+      ephemeral: boolean | null;
+      forked: boolean;
+      hasParent: boolean;
+    };
 
 type SchemaShape =
   | boolean
@@ -78,6 +94,7 @@ export const createObserver = (
     if (kind === "request") requests.remember(direction, id, method);
     const tools = toolDefinitions(kind, method, message);
     const mcpStartup = mcpStartupStatus(kind, method, message);
+    const threadOpen = threadOpenShape(direction, kind, method, message);
     record({
       event: "rpc_message",
       direction,
@@ -86,6 +103,7 @@ export const createObserver = (
       id,
       tools,
       mcpStartup,
+      threadOpen,
     });
   };
 
@@ -127,6 +145,20 @@ export const serializeObservationEvent = (entry: ObservationEvent) => {
             status: entry.mcpStartup.status,
             failure: entry.mcpStartup.failure,
           },
+        }),
+        ...(entry.threadOpen !== null && {
+          threadOpen:
+            entry.threadOpen.side === "request"
+              ? {
+                  params: entry.threadOpen.params,
+                  ephemeral: entry.threadOpen.ephemeral,
+                  threadSource: entry.threadOpen.threadSource,
+                }
+              : {
+                  ephemeral: entry.threadOpen.ephemeral,
+                  forked: entry.threadOpen.forked,
+                  hasParent: entry.threadOpen.hasParent,
+                },
         }),
         ...(entry.tools.length > 0 && {
           tools: entry.tools.map(({ name, inputSchema }) => ({
@@ -219,6 +251,43 @@ const mcpStartupStatus = (
         : REDACTED,
     failure: startupFailure(error),
   };
+};
+
+// Besides its fixed values, threadSource carries any feature name the client picks; only a plain lowercase word is kept, since a side chat may be told apart by that name, while a value with digits, case or separators could be a key or a path.
+const threadSource = (value: Json | undefined) => {
+  if (typeof value !== "string") return null;
+  return SOURCE_LABEL.test(value) ? value : REDACTED;
+};
+
+const threadOpenShape = (
+  direction: Direction,
+  kind: MessageKind,
+  method: string | null,
+  message: JsonObject,
+): ThreadOpen | null => {
+  if (method !== "thread/start" && method !== "thread/fork") return null;
+  if (kind === "request" && direction === "app_to_server") {
+    const params = asObject(message.params) ?? {};
+    const names = Object.keys(params).map((name) =>
+      THREAD_OPEN_PARAMS.has(name) ? name : REDACTED,
+    );
+    return {
+      side: "request",
+      params: [...new Set(names)].sort(),
+      ephemeral: asBoolean(params.ephemeral),
+      threadSource: threadSource(params.threadSource),
+    };
+  }
+  if (kind === "response" && direction === "server_to_app") {
+    const thread = asObject(asObject(message.result)?.thread);
+    return {
+      side: "response",
+      ephemeral: asBoolean(thread?.ephemeral),
+      forked: typeof thread?.forkedFromId === "string",
+      hasParent: typeof thread?.parentThreadId === "string",
+    };
+  }
+  return null;
 };
 
 // The protocol types the error as `string | null`.
@@ -360,6 +429,9 @@ const isObject = (value: Json | undefined): value is JsonObject =>
 
 const asObject = (value: Json | undefined) => (isObject(value) ? value : null);
 
+const asBoolean = (value: Json | undefined) =>
+  typeof value === "boolean" ? value : null;
+
 const asArray = (value: Json | undefined) =>
   Array.isArray(value) ? value : [];
 
@@ -371,6 +443,43 @@ const IDENTIFIER = /^[A-Za-z0-9_$.:/-]{1,128}$/;
 const REDACTED = "<redacted>";
 const MAX_DEPTH = 32;
 const MAX_PENDING_REQUESTS = 10_000;
+
+const SOURCE_LABEL = /^[a-z][a-z_]{0,39}$/;
+// The fields of ThreadStartParams and ThreadForkParams in the app-server protocol.
+const THREAD_OPEN_PARAMS = new Set([
+  "allowProviderModelFallback",
+  "approvalPolicy",
+  "approvalsReviewer",
+  "baseInstructions",
+  "beforeTurnId",
+  "config",
+  "cwd",
+  "daybreakEnabled",
+  "deferGoalContinuation",
+  "developerInstructions",
+  "dynamicTools",
+  "environments",
+  "ephemeral",
+  "excludeTurns",
+  "experimentalRawEvents",
+  "historyMode",
+  "lastTurnId",
+  "model",
+  "modelProvider",
+  "multiAgentMode",
+  "path",
+  "permissions",
+  "personality",
+  "projectId",
+  "runtimeWorkspaceRoots",
+  "sandbox",
+  "selectedCapabilityRoots",
+  "serviceName",
+  "serviceTier",
+  "sessionStartSource",
+  "threadId",
+  "threadSource",
+]);
 
 const LOCAL_REF = /^#\/(definitions|\$defs)\/[A-Za-z0-9_$.:-]{1,128}$/;
 const STARTUP_STATES = new Set(["starting", "ready", "failed", "cancelled"]);

@@ -37,6 +37,8 @@ export type TurnRuntime<Tag extends string> = {
   steer: (turn: RunningTurn<Tag>, text: string) => Refusal | null;
   interrupt: (turn: RunningTurn<Tag>, repeated: boolean) => void;
   dropSession: (threadId: string, link: TurnLink) => void;
+  // Called when a thread forked from another is adopted, and settles once the fork is pinned to where the source stood.
+  noteFork: (threadId: string) => Promise<void>;
   threadBusy: (threadId: string) => void;
   threadIdle: (threadId: string) => void;
   listen: (startOwnTurn: (threadId: string) => boolean) => void;

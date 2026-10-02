@@ -66,6 +66,11 @@ describe("createObserver", () => {
         kind: "request",
         method: "thread/start",
         id: 1,
+        threadOpen: {
+          params: ["<redacted>", "cwd"],
+          ephemeral: null,
+          threadSource: null,
+        },
       },
       {
         event: "rpc_message",
@@ -80,6 +85,7 @@ describe("createObserver", () => {
         kind: "response",
         method: "thread/start",
         id: 1,
+        threadOpen: { ephemeral: null, forked: false, hasParent: false },
       },
       {
         event: "rpc_message",
@@ -299,6 +305,121 @@ describe("createObserver", () => {
       { event: "rpc_unobserved", direction, reason: expected },
     ]);
     expect(log).not.toContain(SECRET);
+  });
+
+  test("records the protocol fields a thread fork names and what the server opened, without ids or text", () => {
+    const { log, records } = observe([
+      toServer({
+        id: 2,
+        method: "thread/fork",
+        params: {
+          threadId: SECRET,
+          ephemeral: true,
+          threadSource: "user",
+          developerInstructions: PROMPT,
+          [SECRET]: 1,
+          "/private/path": 2,
+        },
+      }),
+      toApp({
+        id: 2,
+        result: {
+          thread: {
+            id: SECRET,
+            ephemeral: true,
+            forkedFromId: SECRET,
+            parentThreadId: null,
+          },
+        },
+      }),
+    ]);
+
+    expect(records.map((record) => record.threadOpen)).toEqual([
+      {
+        params: [
+          "<redacted>",
+          "developerInstructions",
+          "ephemeral",
+          "threadId",
+          "threadSource",
+        ],
+        ephemeral: true,
+        threadSource: "user",
+      },
+      { ephemeral: true, forked: true, hasParent: false },
+    ]);
+    expect(log).not.toContain(SECRET);
+    expect(log).not.toContain(PROMPT);
+    expect(log).not.toContain("/private/path");
+  });
+
+  test.each([
+    {
+      name: "missing params",
+      message: { id: 3, method: "thread/fork" },
+      expected: { params: [], ephemeral: null, threadSource: null },
+    },
+    {
+      name: "params that are not an object",
+      message: { id: 4, method: "thread/fork", params: [SECRET] },
+      expected: { params: [], ephemeral: null, threadSource: null },
+    },
+    {
+      name: "mistyped values",
+      message: {
+        id: 5,
+        method: "thread/start",
+        params: { ephemeral: "yes", threadSource: PROMPT },
+      },
+      expected: {
+        params: ["ephemeral", "threadSource"],
+        ephemeral: null,
+        threadSource: "<redacted>",
+      },
+    },
+  ])("reads a thread open with $name as naming nothing", ({
+    message,
+    expected,
+  }) => {
+    const { log, records } = observe([toServer(message)]);
+
+    expect(records[0].threadOpen).toEqual(expected);
+    expect(log).not.toContain(SECRET);
+    expect(log).not.toContain(PROMPT);
+  });
+
+  test.each([
+    { source: "user", expected: "user" },
+    { source: "guardian_review", expected: "guardian_review" },
+    { source: "side_chat", expected: "side_chat" },
+    { source: "sk-ant-api03-Key0", expected: "<redacted>" },
+    { source: "/private/path", expected: "<redacted>" },
+    { source: "Feature", expected: "<redacted>" },
+  ])("records the thread source $source as $expected", ({
+    source,
+    expected,
+  }) => {
+    const { records } = observe([
+      toServer({
+        id: 1,
+        method: "thread/fork",
+        params: { threadSource: source },
+      }),
+    ]);
+
+    expect(records[0].threadOpen.threadSource).toBe(expected);
+  });
+
+  test("does not read a thread open sent the other way", () => {
+    const { records } = observe([
+      toApp({ id: 6, method: "thread/start", params: { cwd: "/w" } }),
+      toServer({ id: 6, result: { thread: { ephemeral: true } } }),
+    ]);
+
+    expect(records.map((record) => record.threadOpen)).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 
   test("records nothing for an empty line", () => {

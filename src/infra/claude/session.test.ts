@@ -69,6 +69,21 @@ describe("startClaudeSession options", () => {
     });
   });
 
+  test("forks the resumed session into a new one up to the given record when asked", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+
+    await startClaudeSession(
+      { ...SETTINGS, resume: "session-1", forkSession: true, resumeAt: "a-1" },
+      claude.runtime,
+    );
+
+    expect(claude.options()).toMatchObject({
+      resume: "session-1",
+      forkSession: true,
+      resumeSessionAt: "a-1",
+    });
+  });
+
   test("keeps API billing variables and auth headers away from Claude", async () => {
     const claude = fakeClaude(SUBSCRIPTION, {
       env: {

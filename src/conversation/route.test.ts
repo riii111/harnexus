@@ -439,6 +439,127 @@ describe("threads with a Claude model", () => {
     expect(calls.map(([name]) => name)).toEqual([expected]);
   });
 
+  test("makes a fork of a Claude thread, such as a side chat, a Claude thread on the source's model", async () => {
+    const { router, calls } = setup(["th-claude"]);
+    const line = encode({
+      id: 9,
+      method: "thread/fork",
+      params: { threadId: "th-claude", ephemeral: true },
+    });
+
+    expect(router.fromApp(line)).toBe(line);
+    const out = parse(await router.fromServer(threadResponse(9, "th-side")));
+
+    expect(calls).toEqual([
+      [
+        "adoptFork",
+        "th-side",
+        { model: CLAUDE, cwd: "/fixture/work" },
+        "th-claude",
+      ],
+    ]);
+    expect(out.result.model).toBe(CLAUDE);
+    expect(out.result.thread.model).toBe(CLAUDE);
+  });
+
+  test("holds the fork's response until where its source stood is fixed", async () => {
+    const { router, pinFork } = setup(["th-claude"], {}, "warn", true);
+    router.fromApp(
+      encode({
+        id: 9,
+        method: "thread/fork",
+        params: { threadId: "th-claude" },
+      }),
+    );
+    let answered = false;
+    const response = Promise.resolve(
+      router.fromServer(threadResponse(9, "th-side")),
+    ).then((line) => {
+      answered = true;
+      return line;
+    });
+
+    await Bun.sleep(0);
+    const beforePinned = answered;
+    pinFork();
+
+    expect(beforePinned).toBe(false);
+    expect(parse(await response).result.model).toBe(CLAUDE);
+  });
+
+  test("runs the turns of a fork in the source's directory on Claude", async () => {
+    const { router, calls } = setup(["th-claude"]);
+    const fork = encode({
+      id: 9,
+      method: "thread/fork",
+      params: { threadId: "th-claude", cwd: "/fixture/work/" },
+    });
+    const turn = encode({
+      id: 10,
+      method: "turn/start",
+      params: { threadId: "th-side", input: [] },
+    });
+
+    expect(router.fromApp(fork)).toBe(fork);
+    await router.fromServer(threadResponse(9, "th-side"));
+
+    expect(router.fromApp(turn)).toBeNull();
+    expect(calls.map(([name]) => name)).toEqual(["adoptFork", "startTurn"]);
+  });
+
+  test("refuses a fork of a Claude thread into another directory before the server makes it", () => {
+    const { router, calls, events } = setup(["th-claude"]);
+    const line = encode({
+      id: 9,
+      method: "thread/fork",
+      params: { threadId: "th-claude", cwd: "/elsewhere" },
+    });
+
+    expect(router.fromApp(line)).toBeNull();
+    expect(calls.map(([name]) => name)).toEqual(["reject"]);
+    expect(events).toContainEqual({
+      event: "claude_request_refused",
+      method: "thread/fork",
+      reason: "directory_change",
+    });
+  });
+
+  test.each([
+    { field: "lastTurnId" },
+    { field: "beforeTurnId" },
+  ])("refuses a fork of a Claude thread from an earlier turn named by $field", ({
+    field,
+  }) => {
+    const { router, calls, events } = setup(["th-claude"]);
+    const line = encode({
+      id: 9,
+      method: "thread/fork",
+      params: { threadId: "th-claude", [field]: "turn-1" },
+    });
+
+    expect(router.fromApp(line)).toBeNull();
+    expect(calls.map(([name]) => name)).toEqual(["reject"]);
+    expect(events).toContainEqual({
+      event: "claude_request_refused",
+      method: "thread/fork",
+      reason: "unsupported_request",
+    });
+  });
+
+  test("leaves the fork of a Codex thread as the same bytes", async () => {
+    const { router, calls } = setup();
+    const line = encode({
+      id: 9,
+      method: "thread/fork",
+      params: { threadId: "th-codex" },
+    });
+    const response = threadResponse(9, "th-side");
+
+    expect(router.fromApp(line)).toBe(line);
+    expect(await router.fromServer(response)).toBe(response);
+    expect(calls).toEqual([]);
+  });
+
   test("refuses a resume of a Claude thread in another working directory", () => {
     const { router, calls, events } = setup(["th-claude"]);
     const line = encode({
@@ -1184,9 +1305,15 @@ const setup = (
   claudeThreads: string[] = [],
   records: Record<string, SessionMessage[] | "unreadable"> = {},
   unverifiedCodex: "warn" | "pause" = "warn",
+  holdForks = false,
 ) => {
   const calls: unknown[][] = [];
   const events: RouteEvent[] = [];
+  let pinFork = () => {};
+  const forkPinned = new Promise<void>((resolve) => {
+    pinFork = resolve;
+  });
+  if (!holdForks) pinFork();
   const sent: object[] = [];
   const reads: string[] = [];
   const threads = new Map(
@@ -1224,6 +1351,11 @@ const setup = (
       adopt: (threadId, thread) => {
         calls.push(["adopt", threadId, thread]);
         threads.set(threadId, thread);
+      },
+      adoptFork: (threadId, thread, sourceId) => {
+        calls.push(["adoptFork", threadId, thread, sourceId]);
+        threads.set(threadId, thread);
+        return forkPinned;
       },
       changeModel: (threadId, model) => {
         calls.push(["changeModel", threadId, model]);
@@ -1263,7 +1395,7 @@ const setup = (
     catalog.models,
     unverifiedCodex,
   );
-  return { router, calls, events, sent, reads, catalog };
+  return { router, calls, events, sent, reads, catalog, pinFork };
 };
 
 const fixtureLines = (file: string) =>

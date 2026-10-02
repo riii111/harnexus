@@ -797,6 +797,10 @@ export const createTurnController = <Tag extends string>({
     threadOf: threads.threadOf,
     sessionIdOf: threads.sessionIdOf,
     adopt: threads.adopt,
+    adoptFork: (threadId: string, thread: Thread, sourceId: string) => {
+      threads.adoptFork(threadId, thread, sourceId);
+      return runtime.noteFork(threadId);
+    },
   };
 };
 
