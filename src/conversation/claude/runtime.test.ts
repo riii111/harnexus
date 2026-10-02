@@ -1050,6 +1050,27 @@ describe("turns Claude starts between app turns", () => {
     expect(claude.closes()).toBe(0);
   });
 
+  test("asks the app about a tool Claude wants before its own turn is shown", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const decisions: ReturnType<typeof askTool>[] = [];
+    const { turns, sent } = await harness([claude], {
+      onSend: (message) => {
+        if (isTurnStarted("turn-2")(message)) {
+          decisions.push(askTool(claude, "Bash", { command: "ls" }));
+        }
+      },
+    });
+    await completeTurn(turns, sent, claude, 10);
+
+    claude.emit(sdk(INIT));
+    await until(() => decisions.length === 1);
+    const request = await appRequest(sent);
+    turns.answerRequest({ id: request.id, result: { decision: "accept" } });
+
+    expect(await decisions[0]).toEqual({ behavior: "allow" });
+    expect(request.params).toMatchObject({ turnId: "turn-2", command: "ls" });
+  });
+
   test("starts a turn of Claude's own that begins right as the last turn ends", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);

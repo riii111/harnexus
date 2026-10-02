@@ -128,7 +128,7 @@ export type ClaudeLogEvent = TurnEvent<ClaudeFailureTag> | ClaudeTurnEvent;
 
 // A session is not reused until its interrupt reports whether a send is still queued, which can arrive after the interrupted turn has ended.
 // attachedSkills maps each SKILL.md path this session was given to the body it was given.
-// reader is the inbox Claude's messages go to; pending is that inbox while no turn reads it yet, kept for a turn Claude started on its own when own is set and otherwise for the turn the thread has accepted. backgroundTasks counts the tasks Claude runs in the background.
+// reader is the inbox Claude's messages go to, and unclaimed says whom it waits for while no turn reads it: a turn Claude started on its own, or the turn the thread has accepted. backgroundTasks counts the tasks Claude runs in the background.
 type SessionSlot = {
   session: ClaudeSession;
   model: string;
@@ -136,7 +136,7 @@ type SessionSlot = {
   link: CodexLink;
   attachedSkills: Map<string, string>;
   reader: Inbox<StreamedNext> | null;
-  pending: { inbox: Inbox<StreamedNext>; own: boolean } | null;
+  unclaimed: "own" | "turn" | null;
   backgroundTasks: number;
 };
 
@@ -209,7 +209,8 @@ export const createClaudeRuntime = ({
     now,
   });
   let closed = false;
-  let startOwnTurn = (_threadId: string) => {};
+  let startOwnTurn = (_threadId: string) => false;
+  const ownTurnWaiters = new Map<string, (() => void)[]>();
 
   // Each worker keeps its own Claude process, so an idle one is closed; without a session id its next turn could not resume the conversation, so it stays.
   // Closing would end the tasks Claude runs in the background, so the close waits until none is left.
@@ -359,13 +360,17 @@ export const createClaudeRuntime = ({
       log({ event: "claude_turn", step: "skill_link_only" });
     }
     const inbox = claimReader(slot.value);
-    if (sendPrompt(turn, claude, slot.value, fresh)) {
-      await read(turn, claude, slot.value, inbox, {
-        sessionStartMs,
-        sentAt: now(),
-      });
+    try {
+      if (sendPrompt(turn, claude, slot.value, fresh)) {
+        await read(turn, claude, slot.value, inbox, {
+          effort,
+          sessionStartMs,
+          sentAt: now(),
+        });
+      }
+    } finally {
+      releaseReader(threadId, slot.value, inbox);
     }
-    releaseReader(threadId, slot.value, inbox);
   };
 
   // The prompt goes only once the turn reads the session, so its reply cannot be taken for a turn of Claude's own.
@@ -402,9 +407,10 @@ export const createClaudeRuntime = ({
   // A turn the app started took them first if it came ahead of this one, which then has nothing to show.
   const streamOwn = async (turn: Turn, claude: ClaudeTurn) => {
     const threadId = turn.threadId;
+    await waitForPendingInterrupt(threadId);
     const slot = sessions.get(threadId);
-    const inbox = slot?.pending?.own === true ? slot.pending.inbox : null;
-    if (slot === undefined || inbox === null) {
+    const inbox = slot?.unclaimed === "own" ? slot.reader : null;
+    if (slot === undefined || inbox == null) {
       turn.finish(
         turn.state().interrupting
           ? { status: "interrupted" }
@@ -413,18 +419,37 @@ export const createClaudeRuntime = ({
       );
       return;
     }
-    slot.pending = null;
+    slot.unclaimed = null;
     claude.own = true;
     claude.slot = slot;
     turn.useLink(slot.link);
     slot.link.acceptWrites();
+    showOwnTurn(threadId);
     // A stop that came while the turn waited to be shown reaches Claude now.
     if (turn.state().interrupting) interrupt(turn, false);
-    await read(turn, claude, slot, inbox, {
-      sessionStartMs: null,
-      sentAt: now(),
+    try {
+      await read(turn, claude, slot, inbox, {
+        effort: effortRule(turn.model, turn.input.effort),
+        sessionStartMs: null,
+        sentAt: now(),
+      });
+    } finally {
+      releaseReader(threadId, slot, inbox);
+    }
+  };
+
+  // Claude may ask for a tool in a turn of its own before the app has been shown that turn.
+  const ownTurnShown = (threadId: string) =>
+    new Promise<void>((resolve) => {
+      ownTurnWaiters.set(threadId, [
+        ...(ownTurnWaiters.get(threadId) ?? []),
+        resolve,
+      ]);
     });
-    releaseReader(threadId, slot, inbox);
+
+  const showOwnTurn = (threadId: string) => {
+    for (const resolve of ownTurnWaiters.get(threadId) ?? []) resolve();
+    ownTurnWaiters.delete(threadId);
   };
 
   const read = async (
@@ -433,12 +458,16 @@ export const createClaudeRuntime = ({
     slot: SessionSlot,
     inbox: Inbox<StreamedNext>,
     {
+      effort,
       sessionStartMs,
       sentAt,
-    }: { sessionStartMs: number | null; sentAt: number },
+    }: {
+      effort: EffortLevel | null;
+      sessionStartMs: number | null;
+      sentAt: number;
+    },
   ) => {
     const { threadId, model } = turn;
-    const effort = effortRule(model, turn.input.effort);
     let firstMessageMs: number | null = null;
     let sessionId = threads.sessionIdOf(threadId);
     while (!turn.state().finished) {
@@ -584,14 +613,13 @@ export const createClaudeRuntime = ({
       }
       if (!startsTurn(next.value.value)) return null;
     }
+    // A turn the app cannot be shown, as when the bridge is closing, is left to Claude.
+    if (own && !startOwnTurn(threadId)) return null;
+    if (own) log({ event: "claude_turn", step: "own_turn" });
     const inbox = createInbox<StreamedNext>();
     inbox.push(next);
     slot.reader = inbox;
-    slot.pending = { inbox, own };
-    if (own) {
-      log({ event: "claude_turn", step: "own_turn" });
-      startOwnTurn(threadId);
-    }
+    slot.unclaimed = own ? "own" : "turn";
     return inbox;
   };
 
@@ -600,7 +628,7 @@ export const createClaudeRuntime = ({
     const inbox = createInbox<StreamedNext>();
     for (const next of slot.reader?.drain() ?? []) inbox.push(next);
     slot.reader = inbox;
-    slot.pending = null;
+    slot.unclaimed = null;
     return inbox;
   };
 
@@ -616,15 +644,19 @@ export const createClaudeRuntime = ({
   };
 
   // What waited for turns that took none of it, such as a turn Claude started right as the last one ended, is read again once the thread has no turn left.
+  // A turn of Claude's own that could not run was shown as failed, so what it held is not shown again.
   const threadIdle = (threadId: string) => {
     busyThreads.delete(threadId);
     scheduleIdleClose(threadId);
+    showOwnTurn(threadId);
     const slot = sessions.get(threadId);
-    if (slot?.pending == null || slot.pending.own) return;
-    const { inbox } = slot.pending;
-    slot.pending = null;
+    if (slot?.reader == null || slot.unclaimed === null) return;
+    const left = slot.reader.drain();
+    const waitedFor = slot.unclaimed;
     slot.reader = null;
-    for (const next of inbox.drain()) route(threadId, slot, next);
+    slot.unclaimed = null;
+    if (waitedFor === "own") return;
+    for (const next of left) route(threadId, slot, next);
   };
 
   const threadBusy = (threadId: string) => {
@@ -734,7 +766,7 @@ export const createClaudeRuntime = ({
       link,
       attachedSkills: new Map(),
       reader: null,
-      pending: null,
+      unclaimed: null,
       backgroundTasks: 0,
     };
     sessions.set(record.threadId, slot);
@@ -752,6 +784,12 @@ export const createClaudeRuntime = ({
   const approveTool =
     (threadId: string): CanUseTool =>
     async (toolName, input, options) => {
+      if (
+        openTurn(threadId) === undefined &&
+        sessions.get(threadId)?.unclaimed === "own"
+      ) {
+        await ownTurnShown(threadId);
+      }
       const turn = openTurn(threadId);
       if (turn === undefined || turn.state().interrupting) {
         return declineTool(turn, options.toolUseID, NO_TURN);
@@ -824,6 +862,7 @@ export const createClaudeRuntime = ({
   const closeAll = () => {
     closed = true;
     for (const threadId of [...idleTimers.keys()]) cancelIdleClose(threadId);
+    for (const threadId of [...ownTurnWaiters.keys()]) showOwnTurn(threadId);
     for (const [threadId, slot] of sessions) dropSession(threadId, slot);
   };
 

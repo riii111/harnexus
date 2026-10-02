@@ -30,7 +30,7 @@ export type RunningTurn<Tag extends string> = {
 };
 
 // run sends the turn and reports its progress until it ends; threadBusy and threadIdle mark when the thread has turns accepted and when it has none left.
-// listen takes how the runtime starts a turn its agent began on its own, such as after a background task reported back.
+// listen takes how the runtime starts a turn its agent began on its own, such as after a background task reported back, which answers whether the turn will be shown.
 export type TurnRuntime<Tag extends string> = {
   compactPrompt: string;
   run: (turn: RunningTurn<Tag>) => Promise<void>;
@@ -39,7 +39,7 @@ export type TurnRuntime<Tag extends string> = {
   dropSession: (threadId: string, link: TurnLink) => void;
   threadBusy: (threadId: string) => void;
   threadIdle: (threadId: string) => void;
-  listen: (startOwnTurn: (threadId: string) => void) => void;
+  listen: (startOwnTurn: (threadId: string) => boolean) => void;
   closeAll: () => void;
 };
 
