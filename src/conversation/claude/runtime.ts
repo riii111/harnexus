@@ -422,6 +422,11 @@ export const createClaudeRuntime = ({
       });
       plans.set(threadId, plan.plan);
       if (plan.notification !== null) send(plan.notification);
+      // Its items stay in this turn, since the app has no turn of Claude's own to show them in.
+      if (message.type === "result" && ranOnItsOwn(message)) {
+        turn.apply(renderInterimResult(turn.state(), message, now()));
+        continue;
+      }
       const steers =
         message.type === "result"
           ? steersAfter(
@@ -715,16 +720,22 @@ const steersAfter = (
   result: SDKResultMessage,
 ): "none" | "queued" | "unknown" => {
   const listed = result.user_message_uuids;
-  const taken =
-    listed ??
-    (result.user_message_uuid === undefined ? [] : [result.user_message_uuid]);
-  for (const uuid of taken) pendingSteers.delete(uuid);
+  for (const uuid of takenUuids(result)) pendingSteers.delete(uuid);
   if (interrupting) return "none";
   if (result.subtype !== "success" || result.is_error) return "none";
   if (pendingSteers.size === 0) return "none";
   const complete = listed !== undefined && listed.length < TAKEN_UUIDS_LIMIT;
   return complete || (result.queued_turn_count ?? 0) > 0 ? "queued" : "unknown";
 };
+
+// Claude runs a turn of its own when a background task it started reports back, and one that ran while nothing read the session reaches the next turn ahead of that turn's reply; it took no send, so it ends neither the turn nor its steers.
+const ranOnItsOwn = (result: SDKResultMessage) =>
+  result.origin?.kind === "task-notification" &&
+  takenUuids(result).length === 0;
+
+const takenUuids = (result: SDKResultMessage) =>
+  result.user_message_uuids ??
+  (result.user_message_uuid === undefined ? [] : [result.user_message_uuid]);
 
 // Only what the user typed can be a session command, never another thread's message or a compaction.
 const typedText = (input: RunningTurn<string>["input"]) =>

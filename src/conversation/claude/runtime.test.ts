@@ -943,6 +943,67 @@ describe("a saved session Claude no longer has", () => {
   });
 });
 
+describe("Claude's own turns", () => {
+  // A background task that reports back after the last turn ended starts a turn of Claude's own, which reaches the next turn ahead of its reply.
+  test("keeps the turn open through a turn Claude ran on its own before taking the prompt", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    const [prompt] = await readPrompts(claude, 1);
+    claude.emit(sdk(answer("msg-1", "the agent finished")));
+    claude.emit(sdk(ownResult()));
+    await until(() => claude.drained());
+    expect(completedTurnStatuses(sent)).toEqual([]);
+    claude.emit(sdk(answer("msg-2", "hi")));
+    claude.emit(sdk(success([prompt?.uuid])));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
+    expect(turnCompleted(sent).items).toMatchObject([{ text: "hi" }]);
+    expect(claude.closes()).toBe(0);
+  });
+
+  test("keeps a steer pending through a turn Claude ran on its own", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    turns.steerTurn(steer(30, "turn-1", "also this"));
+    const [prompt, steered] = await readPrompts(claude, 2);
+    claude.emit(sdk(answer("msg-1", "first")));
+    claude.emit(sdk(success([prompt?.uuid], 1)));
+    claude.emit(sdk(answer("msg-2", "the agent finished")));
+    claude.emit(sdk(ownResult()));
+    await until(() => claude.drained());
+    expect(completedTurnStatuses(sent)).toEqual([]);
+    claude.emit(sdk(answer("msg-3", "second")));
+    claude.emit(sdk(success([steered?.uuid])));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
+    expect(turnCompleted(sent).items).toMatchObject([{ text: "second" }]);
+    expect(claude.closes()).toBe(0);
+  });
+
+  // A prompt sent while Claude's own turn runs joins it, and the result then names it.
+  test("ends the turn with a turn Claude started on its own that took the prompt", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    const [prompt] = await readPrompts(claude, 1);
+    claude.emit(sdk(answer("msg-1", "hi")));
+    claude.emit(sdk(ownResult({ user_message_uuids: [prompt?.uuid] })));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
+  });
+});
+
 describe("turn/steer", () => {
   test("answers with the turn id, passes the steer to Claude and shows it in the turn", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -1661,6 +1722,16 @@ const steer = (id: number, turnId: string, text: string) => ({
     input: [{ type: "text", text, text_elements: [] }],
   } as Record<string, unknown>,
 });
+
+// The result of a turn Claude started when a background task reported back, which names no send unless one joined it.
+const ownResult = (fields: object = {}) =>
+  result({
+    subtype: "success",
+    is_error: false,
+    result: "done",
+    origin: { kind: "task-notification", producer: "session-task" },
+    ...fields,
+  });
 
 const writeSkill = async (name: string, body: string) => {
   const path = join(dir, "skills", name, "SKILL.md");
