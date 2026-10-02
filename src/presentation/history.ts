@@ -24,7 +24,7 @@ export type HistoryItem = {
   completedAtMs: number | null;
 };
 
-// The record is replayed through the live turn renderer, so a reopened thread shows the same items the turn showed while it ran.
+// The record is replayed through the live turn renderer, so a reopened thread shows the same items the turn showed while it ran, except the tools a subagent called, which Claude records apart from the conversation.
 // Each prompt opens a turn, so a steer taken mid-turn appears as a turn of its own, and a record keeps no bridge turn ids, so turn ids are made from the prompt's record uuid.
 export const buildHistory = (
   messages: readonly SessionMessage[],
@@ -134,7 +134,7 @@ const close = (replay: Replay): HistoryTurn => {
 
 // A completion replaces the item it closes, since the renderer may complete one item twice to correct a denial.
 const collect = (replay: Replay, rendered: Rendered): Replay => {
-  const items = new Map(replay.items);
+  const items = replay.items;
   for (const notification of rendered.notifications) {
     noteItem(items, notification);
   }

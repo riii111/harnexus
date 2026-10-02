@@ -123,12 +123,22 @@ export const openQuery = (
   });
 
 // Without a limit a session waits for the account as long as Claude Code starts; a caller outside a session gives a limit so a stuck start cannot hold it.
-export const readAccount = (query: ClaudeQuery, timeoutMs?: number) =>
+export const readAccount = (
+  query: ClaudeQuery,
+  timeoutMs?: number,
+  signal?: AbortSignal,
+) =>
   Result.tryPromise({
-    try: () =>
-      timeoutMs === undefined
-        ? query.accountInfo()
-        : withinTime(query.accountInfo(), timeoutMs),
+    try: () => {
+      if (signal?.aborted)
+        return Promise.reject(new Error("operation aborted"));
+      const account = query.accountInfo();
+      const pending =
+        timeoutMs === undefined ? account : withinTime(account, timeoutMs);
+      return signal === undefined
+        ? pending
+        : withinAbortSignal(pending, signal);
+    },
     catch: (cause) =>
       new ClaudeAccountUnavailable({
         cause,
@@ -230,3 +240,17 @@ const withinTime = async <T>(pending: Promise<T>, timeoutMs: number) => {
     clearTimeout(timer);
   }
 };
+
+const withinAbortSignal = <T>(pending: Promise<T>, signal: AbortSignal) =>
+  new Promise<T>((resolve, reject) => {
+    const finish = (action: () => void) => {
+      signal.removeEventListener("abort", abort);
+      action();
+    };
+    const abort = () => finish(() => reject(new Error("operation aborted")));
+    signal.addEventListener("abort", abort, { once: true });
+    pending.then(
+      (value) => finish(() => resolve(value)),
+      (cause: unknown) => finish(() => reject(cause)),
+    );
+  });

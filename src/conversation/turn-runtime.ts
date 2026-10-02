@@ -30,6 +30,7 @@ export type RunningTurn<Tag extends string> = {
 };
 
 // run sends the turn and reports its progress until it ends; threadBusy and threadIdle mark when the thread has turns accepted and when it has none left.
+// listen takes how the runtime starts a turn its agent began on its own, such as after a background task reported back, which answers whether the turn will be shown.
 export type TurnRuntime<Tag extends string> = {
   compactPrompt: string;
   run: (turn: RunningTurn<Tag>) => Promise<void>;
@@ -38,6 +39,7 @@ export type TurnRuntime<Tag extends string> = {
   dropSession: (threadId: string, link: TurnLink) => void;
   threadBusy: (threadId: string) => void;
   threadIdle: (threadId: string) => void;
+  listen: (startOwnTurn: (threadId: string) => boolean) => void;
   closeAll: () => void;
 };
 
@@ -58,11 +60,12 @@ export type ToolOutput = NonNullable<
 >["toolOutput"];
 
 // effort is the thread's level when the turn was accepted, so a change made while it waits or runs applies to the next turn.
-// requester is the thread that delegated this turn's message, saved before the turn runs so Claude can answer it.
+// requester is the thread that delegated this turn's message, saved before the turn runs so Claude can answer it; startedBy says whether the app or the agent itself started the turn.
 export type TurnInput = TextInput & {
   permissionMode: Mode;
   effort: EffortLevel | null;
   requester: string | null;
+  startedBy: "app" | "claude";
 };
 
 export type ErrorTag<R> =
