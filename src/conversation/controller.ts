@@ -79,11 +79,10 @@ type MaterializeThread = (
   threadId: string,
 ) => Promise<Result<unknown, { _tag: ErrorTag<ReturnType<ServerRequest>> }>>;
 
-// turn is set once the turn is shown to the app as started, and link by the runtime once its session is up.
 type ActiveTurn<Tag extends string> = {
   threadId: string;
-  state: TurnState | null;
-  turn: RunningTurn<Tag> | null;
+  state: TurnState;
+  turn: RunningTurn<Tag>;
   link: TurnLink | null;
 };
 
@@ -302,18 +301,16 @@ export const createTurnController = <Tag extends string>({
   // Claude takes a steer at its next tool boundary, or runs it as its next turn when the running one has ended, and either way the app turn stays open until Claude has taken it.
   const steerTurn = ({ id, params }: AppRequest) => {
     const active = activeTurns.get(String(params.threadId));
-    const state = active?.state;
     if (
       active === undefined ||
-      active.turn === null ||
-      state == null ||
-      state.finished ||
-      state.interrupting ||
-      state.turnId !== params.expectedTurnId
+      active.state.finished ||
+      active.state.interrupting ||
+      active.state.turnId !== params.expectedTurnId
     ) {
       refuse(id, "no_running_turn");
       return;
     }
+    const state = active.state;
     // Codex also takes no steer into a compaction, whose prompt Claude runs as a command rather than a conversation turn.
     if (state.compaction) {
       refuse(id, "compaction_not_steerable");
@@ -339,8 +336,7 @@ export const createTurnController = <Tag extends string>({
     const threadId = String(params.threadId);
     const active = activeTurns.get(threadId);
     if (
-      active?.state == null ||
-      active.turn === null ||
+      active === undefined ||
       active.state.finished ||
       active.state.turnId !== params.turnId
     ) {
@@ -466,18 +462,10 @@ export const createTurnController = <Tag extends string>({
         }
         responded = true;
         materialize(threadId);
-        const active: ActiveTurn<Tag> = {
-          threadId,
-          state: null,
-          turn: null,
-          link: null,
-        };
-        activeTurns.set(threadId, active);
-        await streamTurn(
+        const active = await streamTurn(
           request,
           record,
           thread.model,
-          active,
           input,
           messageId,
         );
@@ -615,10 +603,9 @@ export const createTurnController = <Tag extends string>({
     request: TurnRequest,
     record: ThreadRecord,
     model: string,
-    active: ActiveTurn<Tag>,
     input: TurnInput,
     messageId: string | null,
-  ) => {
+  ): Promise<ActiveTurn<Tag>> => {
     const threadId = record.threadId;
     const turnStartedAt = now();
     const started = renderTurnStarted({
@@ -628,8 +615,7 @@ export const createTurnController = <Tag extends string>({
       now: now(),
       compaction: request.compaction,
     });
-    const turn = runningTurn(
-      active,
+    const active = activeTurn(
       request,
       record,
       model,
@@ -637,47 +623,51 @@ export const createTurnController = <Tag extends string>({
       turnStartedAt,
       started.state,
     );
-    active.turn = turn;
+    activeTurns.set(threadId, active);
     apply(active, started);
     if (!request.answered)
       send({ id: request.id, result: { turn: started.turn } });
     log({ event: "claude_turn", step: "started" });
     apply(active, renderInput(started.state, input, messageId));
     waitingTurns.delete(request.turnId);
-    if (request.stopped && active.state !== null) {
+    if (request.stopped) {
       active.state = markInterrupting(active.state);
     }
-    await runtime.run(turn);
+    await runtime.run(active.turn);
+    return active;
   };
 
-  // opened is the state the turn started with, which the app has been shown before the runtime can read it.
-  const runningTurn = (
-    active: ActiveTurn<Tag>,
+  const activeTurn = (
     request: TurnRequest,
     record: ThreadRecord,
     model: string,
     input: TurnInput,
     startedAtMs: number,
-    opened: TurnState,
-  ): RunningTurn<Tag> => ({
-    threadId: record.threadId,
-    turnId: request.turnId,
-    record,
-    model,
-    input,
-    compaction: request.compaction,
-    startedAtMs,
-    state: () => active.state ?? opened,
-    apply: (rendered, error = null) => apply(active, rendered, error),
-    finish: (outcome, error) => finish(active, outcome, error),
-    fail: (error) => fail(active, error),
-    isOpen: () => activeTurns.get(record.threadId) === active,
-    useLink: (link) => {
-      active.link = link;
-    },
-    ask: (method, params, signal) =>
-      appRequests.ask(record.threadId, method, params, signal),
-  });
+    state: TurnState,
+  ): ActiveTurn<Tag> => {
+    let active: ActiveTurn<Tag>;
+    const turn: RunningTurn<Tag> = {
+      threadId: record.threadId,
+      turnId: request.turnId,
+      record,
+      model,
+      input,
+      compaction: request.compaction,
+      startedAtMs,
+      state: () => active.state,
+      apply: (rendered, error = null) => apply(active, rendered, error),
+      finish: (outcome, error) => finish(active, outcome, error),
+      fail: (error) => fail(active, error),
+      isOpen: () => activeTurns.get(record.threadId) === active,
+      useLink: (link) => {
+        active.link = link;
+      },
+      ask: (method, params, signal) =>
+        appRequests.ask(record.threadId, method, params, signal),
+    };
+    active = { threadId: record.threadId, state, turn, link: null };
+    return active;
+  };
 
   const renderInput = (
     state: TurnState,
@@ -707,7 +697,7 @@ export const createTurnController = <Tag extends string>({
     rendered: Rendered,
     error: Tag | null = null,
   ) => {
-    const wasFinished = active.state?.finished ?? false;
+    const wasFinished = active.state.finished;
     active.state = rendered.state;
     if (rendered.state.finished) release(active);
     for (const notification of rendered.notifications) {
@@ -734,7 +724,7 @@ export const createTurnController = <Tag extends string>({
   ) =>
     finish(
       active,
-      active.state?.interrupting
+      active.state.interrupting
         ? { status: "interrupted" }
         : { status: "failed", message: error.message },
       error._tag,
@@ -745,7 +735,7 @@ export const createTurnController = <Tag extends string>({
     outcome: TurnOutcome,
     error: Tag | null,
   ) => {
-    if (active.state === null || active.state.finished) return;
+    if (active.state.finished) return;
     apply(active, renderTurnCompleted(active.state, outcome, now()), error);
   };
 
