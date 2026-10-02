@@ -73,7 +73,7 @@ describe("/resume", () => {
 describe("a number sent after /resume", () => {
   test("continues the picked conversation from the next turn without reaching Claude", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, store, settings } = await harness([claude]);
+    const { turns, sent, store, settings, events } = await harness([claude]);
     await writeClaudeRecord("se-a", conversationRecords("fixture ask"));
     turns.startTurn(turnStart(10, "/resume"), undefined);
     await until(() => completedTurnStatuses(sent).length === 1);
@@ -85,6 +85,11 @@ describe("a number sent after /resume", () => {
 
     expect(agentTexts(sent)[1]).toContain('continues "fixture ask"');
     expect(bound).toBe("se-a");
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "session_picked",
+      thread: THREAD.slice(0, 8),
+    });
     expect([turns.takePicked(THREAD), turns.takePicked(THREAD)]).toEqual([
       true,
       false,

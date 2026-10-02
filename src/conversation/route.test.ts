@@ -1028,6 +1028,7 @@ describe("Claude thread history", () => {
       {
         event: "claude_history_served",
         method: "thread/resume",
+        thread: "th-claud",
         excludeTurns: true,
         initialPage: false,
         picked: false,
@@ -1036,6 +1037,7 @@ describe("Claude thread history", () => {
       {
         event: "claude_history_served",
         method: "thread/read",
+        thread: "th-claud",
         excludeTurns: false,
         initialPage: false,
         picked: false,

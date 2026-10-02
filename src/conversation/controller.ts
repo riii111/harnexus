@@ -813,6 +813,8 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
         reason: entry.reason,
         error: entry.error,
       };
+    case "session_picked":
+      return { event: entry.event, step: entry.step, thread: entry.thread };
     case "thread_not_materialized":
     case "session_not_saved":
     case "model_not_saved":

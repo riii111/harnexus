@@ -35,6 +35,7 @@ export type RouteEvent =
   | {
       event: "claude_history_served";
       method: "thread/resume" | "thread/read";
+      thread: string;
       excludeTurns: boolean;
       initialPage: boolean;
       picked: boolean;
@@ -316,6 +317,7 @@ export const createRouter = (
         log({
           event: "claude_history_served",
           method: "thread/read",
+          thread: threadIdOf(result),
           excludeTurns: false,
           initialPage: false,
           picked: false,
@@ -355,6 +357,7 @@ export const createRouter = (
       log({
         event: "claude_history_served",
         method: "thread/resume",
+        thread: threadId.slice(0, 8),
         excludeTurns: params.excludeTurns === true,
         initialPage: isObject(params.initialTurnsPage),
         picked,
@@ -433,6 +436,7 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
       return {
         event: entry.event,
         method: entry.method,
+        thread: entry.thread,
         excludeTurns: entry.excludeTurns,
         initialPage: entry.initialPage,
         picked: entry.picked,
@@ -454,6 +458,12 @@ const REFUSED_METHODS = [
   "review/start",
   "thread/compact/start",
 ] as const;
+
+// The id's head is enough to tell threads apart in a log without carrying the whole id.
+const threadIdOf = (result: Record<string, unknown>) =>
+  isObject(result.thread) && typeof result.thread.id === "string"
+    ? result.thread.id.slice(0, 8)
+    : "";
 
 const parseMessage = (line: Buffer) => {
   const parsed = parseJson(line.toString("utf8"));

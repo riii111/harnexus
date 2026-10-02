@@ -8,6 +8,7 @@ export type ThreadValues = ReturnType<typeof createThreadValues>;
 
 export type ThreadValueEvent =
   | { event: "claude_turn"; step: "model_changed" }
+  | { event: "claude_turn"; step: "session_picked"; thread: string }
   | { event: "claude_turn"; step: "effort_changed"; effort: EffortLevel }
   | {
       event: "claude_turn";
@@ -84,6 +85,11 @@ export const createThreadValues = (
     if (bound) {
       sessionIds.set(threadId, sessionId);
       picked.add(threadId);
+      log({
+        event: "claude_turn",
+        step: "session_picked",
+        thread: threadId.slice(0, 8),
+      });
     }
     return { bound, error: saved.isErr() ? saved.error._tag : null };
   };
