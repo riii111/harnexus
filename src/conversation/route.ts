@@ -38,7 +38,11 @@ type Turns = {
   isClaudeThread: (threadId: unknown) => boolean;
   threadOf: (threadId: string) => Thread | undefined;
   adopt: (threadId: string, thread: Thread) => void;
-  adoptFork: (threadId: string, thread: Thread, sourceId: string) => void;
+  adoptFork: (
+    threadId: string,
+    thread: Thread,
+    sourceId: string,
+  ) => Promise<void>;
   changeModel: (threadId: string, model: string) => void;
   startTurn: (request: AppRequest, fallbackCwd: string | undefined) => void;
   compactThread: (request: AppRequest) => void;
@@ -352,10 +356,23 @@ export const createRouter = (
     }
     const source =
       request.forkOf === null ? undefined : turns.threadOf(request.forkOf);
-    // Claude keeps the fork where the source's conversation lives, whatever directory the fork names.
+    // The app is shown the fork only once where its source stood has been read, so nothing the source says after the fork appears reaches it.
     if (request.forkOf !== null && source !== undefined) {
-      turns.adoptFork(threadId, source, request.forkOf);
+      return turns
+        .adoptFork(threadId, source, request.forkOf)
+        .then(() => openedResponse(line, message, request, threadId));
     }
+    return openedResponse(line, message, request, threadId);
+  };
+
+  const openedResponse = (
+    line: Buffer,
+    message: Record<string, unknown>,
+    request: Extract<Pending, { kind: "threadOpen" }>,
+    threadId: string,
+  ): Buffer | Promise<Buffer> => {
+    const result = isObject(message.result) ? message.result : {};
+    const thread = isObject(result.thread) ? result.thread : {};
     const model = turns.threadOf(threadId)?.model;
     if (model === undefined) return line;
     const reasoningEffort = shownEffort(turns.effortOf(threadId));

@@ -103,6 +103,7 @@ type ClaudeFailureTag =
   | StreamEnded["_tag"]
   | SessionMissing["_tag"]
   | ForkNotSeparate["_tag"]
+  | ForkPointUnknown["_tag"]
   | "SteerUnconfirmed";
 
 type SessionStartup = {
@@ -182,6 +183,10 @@ class SessionMissing extends TaggedError("SessionMissing")<{
 }> {}
 
 class ForkNotSeparate extends TaggedError("ForkNotSeparate")<{
+  message: string;
+}> {}
+
+class ForkPointUnknown extends TaggedError("ForkPointUnknown")<{
   message: string;
 }> {}
 
@@ -531,16 +536,14 @@ export const createClaudeRuntime = ({
     ownTurnWaiters.delete(threadId);
   };
 
-  // Where each fork's source stood when the fork was made; a source whose record cannot be read leaves the fork its whole conversation.
-  const forkPoints = new Map<string, Promise<string | null>>();
+  // The last record of each fork's source when the fork was made, null when the source had said nothing yet; a fork whose source could not be read has none.
+  const forkPoints = new Map<string, { at: string | null }>();
 
-  const noteFork = (threadId: string) => {
+  const noteFork = async (threadId: string) => {
     const source = threads.forkSourceOf(threadId);
     if (source === null) return;
-    forkPoints.set(
-      threadId,
-      lastRecordOf(source).then((read) => (read.isOk() ? read.value : null)),
-    );
+    const read = await lastRecordOf(source);
+    if (read.isOk()) forkPoints.set(threadId, { at: read.value });
   };
 
   const read = async (
@@ -855,6 +858,7 @@ export const createClaudeRuntime = ({
       | InferErr<SessionStart>
       | BridgeClosing
       | SessionMissing
+      | ForkPointUnknown
       | SessionStartCancelled
     >
   > => {
@@ -889,20 +893,25 @@ export const createClaudeRuntime = ({
     }
     const forkFrom =
       resume === null ? threads.forkSourceOf(record.threadId) : null;
-    // A fork whose source conversation is gone starts a conversation of its own.
+    const forkPoint =
+      forkFrom === null ? null : forkPoints.get(record.threadId);
+    // Without the point it was made at, a fork would take whatever its source said since.
+    if (forkPoint === undefined) {
+      clearSessionStart(record.threadId, pending);
+      return Result.err(
+        new ForkPointUnknown({
+          message:
+            "the conversation this side chat was opened from could not be read, so it cannot start",
+        }),
+      );
+    }
+    const forkAt = forkPoint?.at ?? null;
+    // A fork whose source had said nothing, or whose source conversation is gone, starts a conversation of its own.
     const forkFound =
-      forkFrom === null
+      forkFrom === null || forkAt === null
         ? false
-        : await waitForAbort(
-            Promise.all([
-              sessionFound(forkFrom),
-              forkPoints.get(record.threadId) ?? null,
-            ]),
-            pending.controller.signal,
-          );
+        : await waitForAbort(sessionFound(forkFrom), pending.controller.signal);
     if (forkFound === ABORTED) return Result.err(sessionStartCancelled());
-    const forked = forkFrom !== null && forkFound !== false && forkFound[0];
-    const forkPoint = forkFound === false ? null : forkFound[1];
     if (!isCurrent()) return Result.err(sessionStartCancelled());
     // Each session gets its own thread tool server, since one server instance serves one Claude process.
     const link = openLink(record.threadId);
@@ -911,12 +920,8 @@ export const createClaudeRuntime = ({
       {
         cwd: record.worktree,
         model,
-        ...(forked
-          ? {
-              resume: forkFrom,
-              forkSession: true,
-              ...(forkPoint !== null && { resumeAt: forkPoint }),
-            }
+        ...(forkFound && forkFrom !== null && forkAt !== null
+          ? { resume: forkFrom, forkSession: true, resumeAt: forkAt }
           : resumeFrom(resume)),
         mcpServers: { [link.server.name]: link.server },
         allowedTools: link.allowedTools,

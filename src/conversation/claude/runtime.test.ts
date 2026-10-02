@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   EffortLevel,
@@ -1196,18 +1196,33 @@ describe("a fork of a Claude thread", () => {
     await until(() => completedTurnStatuses(started.sent).length === 2);
   };
 
+  // The source's turn leaves its conversation as se-1, whose record ends at the given records.
+  const forkAfterSource = async (
+    started: Awaited<ReturnType<typeof harness>>,
+    source: ReturnType<typeof fakeClaude>,
+    records: string[],
+  ) => {
+    await completeTurn(started.turns, started.sent, source, 10);
+    if (records.length > 0) await writeSourceRecord(records);
+    await started.turns.adoptFork(
+      OTHER_THREAD,
+      { model: MODEL, cwd: dir },
+      THREAD,
+    );
+  };
+
   test("starts its own conversation from the source's and leaves the source's alone", async () => {
     const source = fakeClaude(SUBSCRIPTION);
     const fork = fakeClaude(SUBSCRIPTION);
     const started = await harness([source, fork]);
-    await completeTurn(started.turns, started.sent, source, 10);
-    started.turns.adoptFork(OTHER_THREAD, { model: MODEL, cwd: dir }, THREAD);
+    await forkAfterSource(started, source, ["a-1"]);
 
     await forkTurn(started, fork, 11);
 
     expect(started.settings[1]).toMatchObject({
       resume: "se-1",
       forkSession: true,
+      resumeAt: "a-1",
     });
     await until(() => started.store.get(OTHER_THREAD)?.sessionId === "se-fork");
     expect(started.store.get(THREAD)?.sessionId).toBe("se-1");
@@ -1217,19 +1232,25 @@ describe("a fork of a Claude thread", () => {
     const source = fakeClaude(SUBSCRIPTION);
     const fork = fakeClaude(SUBSCRIPTION);
     const started = await harness([source, fork]);
-    await completeTurn(started.turns, started.sent, source, 10);
-    await writeSourceRecord(["a-1"]);
-    started.turns.adoptFork(OTHER_THREAD, { model: MODEL, cwd: dir }, THREAD);
-    await settle();
+    await forkAfterSource(started, source, ["a-1"]);
     await writeSourceRecord(["a-1", "a-2"]);
 
     await forkTurn(started, fork, 11);
 
-    expect(started.settings[1]).toMatchObject({
-      resume: "se-1",
-      forkSession: true,
-      resumeAt: "a-1",
-    });
+    expect(started.settings[1]).toMatchObject({ resumeAt: "a-1" });
+  });
+
+  test("starts a conversation of its own when the source had said nothing when forked, even once it has", async () => {
+    const source = fakeClaude(SUBSCRIPTION);
+    const fork = fakeClaude(SUBSCRIPTION);
+    const started = await harness([source, fork]);
+    await forkAfterSource(started, source, []);
+    await writeSourceRecord(["a-1"]);
+
+    await forkTurn(started, fork, 11);
+
+    expect(started.settings[1]?.resume).toBeUndefined();
+    expect(started.settings[1]?.forkSession).toBeUndefined();
   });
 
   test("starts a conversation of its own when the source's is gone", async () => {
@@ -1238,8 +1259,7 @@ describe("a fork of a Claude thread", () => {
     const started = await harness([source, fork], {
       missingSessions: ["se-1"],
     });
-    await completeTurn(started.turns, started.sent, source, 10);
-    started.turns.adoptFork(OTHER_THREAD, { model: MODEL, cwd: dir }, THREAD);
+    await forkAfterSource(started, source, ["a-1"]);
 
     await forkTurn(started, fork, 11);
 
@@ -1251,7 +1271,11 @@ describe("a fork of a Claude thread", () => {
     const source = fakeClaude(SUBSCRIPTION);
     const fork = fakeClaude(SUBSCRIPTION);
     const started = await harness([source, fork]);
-    started.turns.adoptFork(OTHER_THREAD, { model: MODEL, cwd: dir }, THREAD);
+    await started.turns.adoptFork(
+      OTHER_THREAD,
+      { model: MODEL, cwd: dir },
+      THREAD,
+    );
     await completeTurn(started.turns, started.sent, source, 10);
 
     await forkTurn(started, fork, 11);
@@ -1259,12 +1283,32 @@ describe("a fork of a Claude thread", () => {
     expect(started.settings[1]?.resume).toBeUndefined();
   });
 
+  test("fails the turn without starting Claude when the source's record could not be read at the fork", async () => {
+    const source = fakeClaude(SUBSCRIPTION);
+    const fork = fakeClaude(SUBSCRIPTION);
+    const started = await harness([source, fork]);
+    // A project folder that links to itself cannot be listed.
+    const project = join(claudeDir(), "projects", "-work-tree");
+    await mkdir(join(claudeDir(), "projects"), { recursive: true });
+    await symlink(project, project);
+    await forkAfterSource(started, source, []);
+
+    started.turns.startTurn(turnStart(11, "aside", OTHER_THREAD), undefined);
+    await until(() => completedTurnStatuses(started.sent).length === 2);
+
+    expect(completedTurns(started.sent).at(-1)).toMatchObject({
+      status: "failed",
+      error: { message: expect.stringContaining("could not be read") },
+    });
+    expect(fork.started()).toBe(false);
+    expect(started.settings).toHaveLength(1);
+  });
+
   test("fails the turn and keeps the source's id off the fork when Claude stays in the source's conversation", async () => {
     const source = fakeClaude(SUBSCRIPTION);
     const fork = fakeClaude(SUBSCRIPTION);
     const started = await harness([source, fork]);
-    await completeTurn(started.turns, started.sent, source, 10);
-    started.turns.adoptFork(OTHER_THREAD, { model: MODEL, cwd: dir }, THREAD);
+    await forkAfterSource(started, source, ["a-1"]);
 
     started.turns.startTurn(turnStart(11, "aside", OTHER_THREAD), undefined);
     await until(() => responseTo(started.sent, 11) !== undefined);

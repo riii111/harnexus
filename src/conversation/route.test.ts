@@ -462,6 +462,31 @@ describe("threads with a Claude model", () => {
     expect(out.result.thread.model).toBe(CLAUDE);
   });
 
+  test("holds the fork's response until where its source stood is fixed", async () => {
+    const { router, pinFork } = setup(["th-claude"], {}, "warn", true);
+    router.fromApp(
+      encode({
+        id: 9,
+        method: "thread/fork",
+        params: { threadId: "th-claude" },
+      }),
+    );
+    let answered = false;
+    const response = Promise.resolve(
+      router.fromServer(threadResponse(9, "th-side")),
+    ).then((line) => {
+      answered = true;
+      return line;
+    });
+
+    await Bun.sleep(0);
+    const beforePinned = answered;
+    pinFork();
+
+    expect(beforePinned).toBe(false);
+    expect(parse(await response).result.model).toBe(CLAUDE);
+  });
+
   test("runs the turns of a fork in the source's directory on Claude", async () => {
     const { router, calls } = setup(["th-claude"]);
     const fork = encode({
@@ -1280,9 +1305,15 @@ const setup = (
   claudeThreads: string[] = [],
   records: Record<string, SessionMessage[] | "unreadable"> = {},
   unverifiedCodex: "warn" | "pause" = "warn",
+  holdForks = false,
 ) => {
   const calls: unknown[][] = [];
   const events: RouteEvent[] = [];
+  let pinFork = () => {};
+  const forkPinned = new Promise<void>((resolve) => {
+    pinFork = resolve;
+  });
+  if (!holdForks) pinFork();
   const sent: object[] = [];
   const reads: string[] = [];
   const threads = new Map(
@@ -1324,6 +1355,7 @@ const setup = (
       adoptFork: (threadId, thread, sourceId) => {
         calls.push(["adoptFork", threadId, thread, sourceId]);
         threads.set(threadId, thread);
+        return forkPinned;
       },
       changeModel: (threadId, model) => {
         calls.push(["changeModel", threadId, model]);
@@ -1363,7 +1395,7 @@ const setup = (
     catalog.models,
     unverifiedCodex,
   );
-  return { router, calls, events, sent, reads, catalog };
+  return { router, calls, events, sent, reads, catalog, pinFork };
 };
 
 const fixtureLines = (file: string) =>
