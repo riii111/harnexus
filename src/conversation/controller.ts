@@ -87,9 +87,9 @@ type ActiveTurn<Tag extends string> = {
   link: TurnLink | null;
 };
 
-// answered is set when the app got the turn as soon as it was accepted, so a turn that cannot run is shown as failed rather than refused.
+// answered is set when the app got the turn as soon as it was accepted, so a turn that cannot run is shown as failed rather than refused; a turn Claude started on its own answers no request.
 type TurnRequest = {
-  id: AppRequest["id"];
+  id: AppRequest["id"] | null;
   turnId: string;
   answered: boolean;
   stopped: boolean;
@@ -198,6 +198,7 @@ export const createTurnController = <Tag extends string>({
         owner,
         threads.threadOf,
       ),
+      startedBy: "app" as const,
     };
     acceptTurn(id, threadId, checked.thread, turn, messageId, false);
   };
@@ -233,12 +234,30 @@ export const createTurnController = <Tag extends string>({
       permissionMode: modes.get(threadId) ?? "default",
       effort: threads.pickedEffortOf(threadId),
       requester: null,
+      startedBy: "app" as const,
     };
     acceptTurn(id, threadId, checked.thread, turn, null, true);
   };
 
+  // Claude starts turns of its own, such as when a background task reports back, and the app is shown each as a turn nobody typed, behind any turn already accepted.
+  const startOwnTurn = (threadId: string) => {
+    const thread = threads.threadOf(threadId);
+    if (thread === undefined || closed) return;
+    const turn: TurnInput = {
+      items: [],
+      toolOutput: null,
+      text: "",
+      permissionMode: modes.get(threadId) ?? "default",
+      effort: threads.pickedEffortOf(threadId),
+      requester: null,
+      startedBy: "claude",
+    };
+    acceptTurn(null, threadId, thread, turn, null, false);
+  };
+  runtime.listen(startOwnTurn);
+
   const acceptTurn = (
-    id: AppRequest["id"],
+    id: AppRequest["id"] | null,
     threadId: string,
     thread: Thread,
     turn: TurnInput,
@@ -252,14 +271,14 @@ export const createTurnController = <Tag extends string>({
     const request = {
       id,
       turnId: newTurnId(),
-      answered: compaction || inFlight > 0,
+      answered: compaction || inFlight > 0 || id === null,
       stopped: false,
       compaction,
     };
     if (inFlight > 0) waitingTurns.set(request.turnId, { threadId, request });
     if (compaction) {
       send({ id, result: {} });
-    } else if (request.answered) {
+    } else if (request.answered && id !== null) {
       const waiting = renderTurnStarted({
         threadId,
         turnId: request.turnId,
@@ -532,7 +551,7 @@ export const createTurnController = <Tag extends string>({
     cause: { _tag: StoreTag } | null = null,
     message: string = refusalMessage(reason),
   ) => {
-    if (!request.answered) {
+    if (!request.answered && request.id !== null) {
       refuse(request.id, reason, cause, message);
       return;
     }
