@@ -954,6 +954,30 @@ describe("Claude thread history", () => {
     expect(out.result).not.toHaveProperty("initialTurnsPage");
   });
 
+  test("fills the turns of the first resume after a conversation was picked, though the app excludes them", async () => {
+    const { router, picked } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+    picked.add("th-claude");
+    const resume = (id: number) => {
+      router.fromApp(
+        encode({
+          id,
+          method: "thread/resume",
+          params: { threadId: "th-claude", excludeTurns: true },
+        }),
+      );
+      return router.fromServer(threadResponse(id, "th-claude"));
+    };
+
+    const first = parse(await resume(4));
+    const second = parse(await resume(5));
+
+    expect(first.result.thread.turns).toHaveLength(2);
+    expect(typeof first.result.turnsBackwardsCursor).toBe("string");
+    expect(second.result.thread).not.toHaveProperty("turns");
+  });
+
   test("logs the shape of the resume request and how many turns answered it, without the conversation", async () => {
     const { router, events } = setup(["th-claude"], {
       "th-claude": conversation(),
@@ -982,6 +1006,7 @@ describe("Claude thread history", () => {
         method: "thread/resume",
         excludeTurns: true,
         initialPage: false,
+        picked: false,
         turns: 2,
       },
       {
@@ -989,6 +1014,7 @@ describe("Claude thread history", () => {
         method: "thread/read",
         excludeTurns: false,
         initialPage: false,
+        picked: false,
         turns: 2,
       },
     ]);
@@ -1229,6 +1255,7 @@ const setup = (
   const events: RouteEvent[] = [];
   const sent: object[] = [];
   const reads: string[] = [];
+  const picked = new Set<string>();
   const threads = new Map(
     claudeThreads.map((id) => [id, { model: CLAUDE, cwd: "/fixture/work" }]),
   );
@@ -1237,6 +1264,7 @@ const setup = (
       threadOf: (threadId) => threads.get(threadId),
       sessionIdOf: (threadId) =>
         threadId in records ? `session-${threadId}` : null,
+      takePicked: (threadId) => picked.delete(threadId),
     },
     readSession: (sessionId) => {
       reads.push(sessionId);
@@ -1303,7 +1331,7 @@ const setup = (
     catalog.models,
     unverifiedCodex,
   );
-  return { router, calls, events, sent, reads, catalog };
+  return { router, calls, events, sent, reads, picked, catalog };
 };
 
 const fixtureLines = (file: string) =>

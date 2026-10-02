@@ -38,6 +38,8 @@ export const createThreadValues = (
   const models = new Map<string, string>();
   const efforts = new Map<string, EffortLevel>();
   const sessionIds = new Map<string, string | null>();
+  // Threads given a picked conversation since the app last opened them, whose history the app does not hold yet.
+  const picked = new Set<string>();
 
   const threadOf = (threadId: string): Thread | undefined => {
     const record = store.get(threadId);
@@ -79,7 +81,10 @@ export const createThreadValues = (
       return { bound: false, error: "SessionTaken" as const };
     const saved = await store.bindSession(threadId, sessionId);
     const bound = store.get(threadId)?.sessionId === sessionId;
-    if (bound) sessionIds.set(threadId, sessionId);
+    if (bound) {
+      sessionIds.set(threadId, sessionId);
+      picked.add(threadId);
+    }
     return { bound, error: saved.isErr() ? saved.error._tag : null };
   };
 
@@ -150,10 +155,14 @@ export const createThreadValues = (
     });
   };
 
+  // True once per pick, so only the first reopen after it carries the whole history.
+  const takePicked = (threadId: string) => picked.delete(threadId);
+
   return {
     threadOf,
     pickedEffortOf,
     sessionIdOf,
+    takePicked,
     adopt,
     isBound,
     bindSession,

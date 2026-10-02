@@ -37,6 +37,7 @@ export type RouteEvent =
       method: "thread/resume" | "thread/read";
       excludeTurns: boolean;
       initialPage: boolean;
+      picked: boolean;
       turns: number;
     }
   | HistoryEvent;
@@ -71,6 +72,7 @@ type Pending =
       kind: "threadOpen";
       createdModel: string | null;
       history: ReturnType<History["load"]> | null;
+      picked: boolean;
       params: Record<string, unknown>;
     }
   | { kind: "threadRead"; history: ReturnType<History["load"]> };
@@ -209,13 +211,12 @@ export const createRouter = (
     }
     const created =
       message.method === "thread/start" && isClaudeModel(params.model);
+    const reopened = threadId !== undefined && known !== undefined;
     pending.set(id, {
       kind: "threadOpen",
       createdModel: created ? String(params.model) : null,
-      history:
-        threadId !== undefined && known !== undefined
-          ? history.load(threadId)
-          : null,
+      history: reopened ? history.load(threadId) : null,
+      picked: reopened && history.takePicked(threadId),
       params,
     });
     if (!isClaudeModel(params.model)) return line;
@@ -319,6 +320,7 @@ export const createRouter = (
           method: "thread/read",
           excludeTurns: false,
           initialPage: false,
+          picked: false,
           turns: loaded.value.length,
         });
         return encode({ ...message, result: withTurns(result, loaded.value) });
@@ -347,7 +349,7 @@ export const createRouter = (
       }),
     };
     if (request.history === null) return encode({ ...message, result: opened });
-    const { params } = request;
+    const { params, picked } = request;
     return request.history.then((loaded) => {
       if (loaded.isErr()) return encode({ ...message, result: opened });
       log({
@@ -355,11 +357,12 @@ export const createRouter = (
         method: "thread/resume",
         excludeTurns: params.excludeTurns === true,
         initialPage: isObject(params.initialTurnsPage),
+        picked,
         turns: loaded.value.length,
       });
       return encode({
         ...message,
-        result: withResumeHistory(opened, loaded.value, params),
+        result: withResumeHistory(opened, loaded.value, params, picked),
       });
     });
   };
@@ -432,6 +435,7 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
         method: entry.method,
         excludeTurns: entry.excludeTurns,
         initialPage: entry.initialPage,
+        picked: entry.picked,
         turns: entry.turns,
       };
     case "claude_history_unreadable":

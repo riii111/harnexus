@@ -85,6 +85,10 @@ describe("a number sent after /resume", () => {
 
     expect(agentTexts(sent)[1]).toContain('continues "fixture ask"');
     expect(bound).toBe("se-a");
+    expect([turns.takePicked(THREAD), turns.takePicked(THREAD)]).toEqual([
+      true,
+      false,
+    ]);
     expect(settings).toHaveLength(1);
     expect(settings[0]).toMatchObject({ resume: "se-a" });
     expect(await promptsUntil(claude, 1)).toEqual(["prompt 12"]);

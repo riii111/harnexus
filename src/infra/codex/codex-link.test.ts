@@ -796,6 +796,7 @@ const CODEX_ONLY_TURNS: Parameters<typeof createRouter>[0] = {
 const NO_HISTORY: Parameters<typeof createRouter>[3] = {
   load: () => expect.unreachable("no Claude thread in this session"),
   answer: () => expect.unreachable("no Claude thread in this session"),
+  takePicked: () => expect.unreachable("no Claude thread in this session"),
 };
 
 const FIXTURE_DIR = join(import.meta.dir, "../../../test/fixtures/app-server");

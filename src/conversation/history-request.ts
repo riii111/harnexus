@@ -23,6 +23,7 @@ export type HistoryMethod = (typeof HISTORY_METHODS)[number];
 type Threads = {
   threadOf: (threadId: string) => Thread | undefined;
   sessionIdOf: (threadId: string) => string | null;
+  takePicked: (threadId: string) => boolean;
 };
 
 type ReadSession = (sessionId: string) => ReturnType<typeof readClaudeSession>;
@@ -88,23 +89,27 @@ export const createHistoryRequests = ({
     );
   };
 
-  return { load, answer };
+  return { load, answer, takePicked: threads.takePicked };
 };
 
 export const isHistoryMethod = (method: string): method is HistoryMethod =>
   (HISTORY_METHODS as readonly string[]).includes(method);
 
 // The app pages back from the cursors whenever the thread's history is paginated and shows nothing when they are null, and asks for the initial page or the full turns otherwise.
+// A thread reopened after a conversation was picked in it holds none of that conversation, so it gets the full turns even when the app excludes them.
 export const withResumeHistory = (
   result: Record<string, unknown>,
   history: readonly HistoryTurn[],
   params: Record<string, unknown>,
+  picked = false,
 ) => {
   const initial = isObject(params.initialTurnsPage)
     ? params.initialTurnsPage
     : null;
   return {
-    ...(params.excludeTurns === true ? result : withTurns(result, history)),
+    ...(params.excludeTurns === true && !picked
+      ? result
+      : withTurns(result, history)),
     ...resumeCursors(history),
     ...(initial !== null && {
       initialTurnsPage: pageTurns(history, {
