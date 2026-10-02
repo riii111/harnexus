@@ -10,6 +10,7 @@ import { createCodexLink } from "../infra/codex/codex-link.ts";
 import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
+import { buildHistory, replayHistory } from "../presentation/history.ts";
 
 type Runtime = Parameters<typeof createClaudeRuntime>[0];
 
@@ -49,6 +50,16 @@ export const connectClaudeThreads = ({
     findSession,
     listConversations,
     lastRecordOf,
+    readHistory: async (threadId, sessionId, cwd) => {
+      const read = await readSession(sessionId);
+      return read.isOk()
+        ? replayHistory(
+            buildHistory(read.value, { threadId, cwd }),
+            threadId,
+            Date.now(),
+          )
+        : [];
+    },
     openLink: (callerThreadId) =>
       createCodexLink({ callerThreadId, store, request, delegations }),
     send,

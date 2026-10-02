@@ -103,7 +103,8 @@ type ClaudeTurnEvent =
         | "idle_closed"
         | "session_missing"
         | "skill_unreadable"
-        | "skill_link_only";
+        | "skill_link_only"
+        | "history_replayed";
     }
   | { event: "claude_turn"; step: "effort_applied"; effort: EffortLevel }
   | ({
@@ -162,6 +163,7 @@ export const createClaudeRuntime = ({
   listConversations,
   lastRecordOf,
   openLink,
+  readHistory = async () => [],
   send,
   log,
   now = Date.now,
@@ -174,6 +176,12 @@ export const createClaudeRuntime = ({
   listConversations: SessionCommandsDeps["listConversations"];
   lastRecordOf: SessionCommandsDeps["lastRecordOf"];
   openLink: (threadId: string) => CodexLink;
+  // The notifications that show a picked conversation's earlier turns in its thread.
+  readHistory?: (
+    threadId: string,
+    sessionId: string,
+    cwd: string,
+  ) => Promise<readonly object[]>;
   send: (message: object) => void;
   log: (event: ClaudeTurnEvent) => void;
   now?: () => number;
@@ -274,6 +282,23 @@ export const createClaudeRuntime = ({
         : { status: "completed" },
       null,
     );
+    if (reply.kind === "selected") await showPicked(turn);
+  };
+
+  // Sent after the command's own turn ends, so the earlier turns follow it rather than interleave with it.
+  const showPicked = async (turn: Turn) => {
+    const sessionId = threads.sessionIdOf(turn.threadId);
+    if (sessionId === null) return;
+    const replayed = await readHistory(
+      turn.threadId,
+      sessionId,
+      turn.record.worktree,
+    );
+    if (replayed.length === 0) return;
+    for (const notification of replayed) send(notification);
+    // The app now holds the turns, so a later reopen need not carry them again.
+    threads.takePicked(turn.threadId);
+    log({ event: "claude_turn", step: "history_replayed" });
   };
 
   const stream = async (turn: Turn, claude: ClaudeTurn) => {
@@ -670,6 +695,7 @@ export const serializeClaudeTurnEvent = (entry: ClaudeTurnEvent) => {
     case "session_missing":
     case "skill_unreadable":
     case "skill_link_only":
+    case "history_replayed":
       return { event: entry.event, step: entry.step };
     case "effort_applied":
       return { event: entry.event, step: entry.step, effort: entry.effort };
@@ -738,6 +764,7 @@ const CLAUDE_STEPS: Record<ClaudeTurnEvent["step"], true> = {
   session_missing: true,
   skill_unreadable: true,
   skill_link_only: true,
+  history_replayed: true,
   effort_applied: true,
   metrics: true,
   interrupt_failed: true,

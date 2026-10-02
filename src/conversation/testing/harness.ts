@@ -178,6 +178,7 @@ export const harness = async (
     sessionLookupFails = false,
     materializeFailures = 0,
     linkRequest,
+    readHistory,
     effortRule = defaultRule,
     now = () => 1_700_000_000_000,
   }: {
@@ -191,6 +192,7 @@ export const harness = async (
     sessionLookupFails?: boolean;
     materializeFailures?: number;
     linkRequest?: ServerRequest;
+    readHistory?: Parameters<typeof createClaudeRuntime>[0]["readHistory"];
     effortRule?: EffortRule;
     now?: () => number;
   } = {},
@@ -245,6 +247,7 @@ export const harness = async (
     },
     send,
     log,
+    ...(readHistory !== undefined && { readHistory }),
     startSession: async (session) => {
       const fake = fakes[settings.length];
       settings.push(session);

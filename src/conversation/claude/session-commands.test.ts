@@ -99,6 +99,32 @@ describe("a number sent after /resume", () => {
     expect(await promptsUntil(claude, 1)).toEqual(["prompt 12"]);
   });
 
+  test("shows the picked conversation's earlier turns in the thread after the reply", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const replay = [{ method: "turn/started", params: { replayed: true } }];
+    const asked: string[][] = [];
+    const { turns, sent } = await harness([claude], {
+      readHistory: async (threadId, sessionId, cwd) => {
+        asked.push([threadId, sessionId, cwd]);
+        return replay;
+      },
+    });
+    await writeClaudeRecord("se-a", conversationRecords("fixture ask"));
+    turns.startTurn(turnStart(10, "/resume"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 1);
+
+    turns.startTurn(turnStart(11, "1"), undefined);
+    await until(() => sent.includes(replay[0]));
+
+    expect(asked).toEqual([[THREAD, "se-a", dir]]);
+    expect(completedTurnStatuses(sent)).toHaveLength(2);
+    const lastCompleted = sent
+      .map((message: Sent) => message.method)
+      .lastIndexOf("turn/completed");
+    expect(sent.indexOf(replay[0])).toBeGreaterThan(lastCompleted);
+    expect(turns.takePicked(THREAD)).toBe(false);
+  });
+
   test("binds a conversation two threads pick at once to only one of them", async () => {
     const { turns, sent, store } = await harness([]);
     turns.adopt(OTHER_THREAD, { model: MODEL, cwd: dir });
