@@ -945,7 +945,19 @@ describe("a saved session Claude no longer has", () => {
 
 describe("Claude's own turns", () => {
   // A background task that reports back after the last turn ended starts a turn of Claude's own, which reaches the next turn ahead of its reply.
-  test("keeps the turn open through a turn Claude ran on its own before taking the prompt", async () => {
+  test.each([
+    { name: "for a background task", fields: {} },
+    {
+      name: "to continue its work",
+      fields: { origin: { kind: "auto-continuation" } },
+    },
+    {
+      name: "for a send of another client",
+      fields: { origin: undefined, user_message_uuids: ["uuid-elsewhere"] },
+    },
+  ])("keeps the turn open through a turn Claude ran $name before taking the prompt", async ({
+    fields,
+  }) => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
 
@@ -953,7 +965,7 @@ describe("Claude's own turns", () => {
     await until(() => claude.started());
     const [prompt] = await readPrompts(claude, 1);
     claude.emit(sdk(answer("msg-1", "the agent finished")));
-    claude.emit(sdk(ownResult()));
+    claude.emit(sdk(ownResult(fields)));
     await until(() => claude.drained());
     expect(completedTurnStatuses(sent)).toEqual([]);
     claude.emit(sdk(answer("msg-2", "hi")));
@@ -1729,7 +1741,7 @@ const ownResult = (fields: object = {}) =>
     subtype: "success",
     is_error: false,
     result: "done",
-    origin: { kind: "task-notification", producer: "session-task" },
+    origin: { kind: "task-notification" },
     ...fields,
   });
 

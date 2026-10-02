@@ -131,7 +131,7 @@ type SessionSlot = {
   attachedSkills: Map<string, string>;
 };
 
-// Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken.
+// Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken; sends holds the uuid of every message the turn sent Claude.
 // command marks a turn the bridge answers itself, such as /session, and completed one Claude ended with a successful result.
 type ClaudeTurn = {
   command: boolean;
@@ -139,6 +139,7 @@ type ClaudeTurn = {
   slot: SessionSlot | null;
   unsentSteers: string[];
   pendingSteers: Set<string>;
+  sends: Set<string>;
   steers: number;
 };
 
@@ -226,6 +227,7 @@ export const createClaudeRuntime = ({
       slot: null,
       unsentSteers: [],
       pendingSteers: new Set(),
+      sends: new Set(),
       steers: 0,
     };
     turns.set(turn, claude);
@@ -346,6 +348,7 @@ export const createClaudeRuntime = ({
       turn.fail(sent.error);
       return;
     }
+    claude.sends.add(sent.value);
     for (const { path, body } of fresh) attached.set(path, body);
     claude.slot = slot.value;
     for (const steer of claude.unsentSteers.splice(0)) {
@@ -394,7 +397,9 @@ export const createClaudeRuntime = ({
       ) {
         attached.clear();
       }
-      if (message.type === "result") {
+      const foreign =
+        message.type === "result" && !answersTurn(message, claude.sends);
+      if (message.type === "result" && !foreign) {
         log({
           event: "claude_turn",
           step: "metrics",
@@ -423,7 +428,7 @@ export const createClaudeRuntime = ({
       plans.set(threadId, plan.plan);
       if (plan.notification !== null) send(plan.notification);
       // Its items stay in this turn, since the app has no turn of Claude's own to show them in.
-      if (message.type === "result" && ranOnItsOwn(message)) {
+      if (message.type === "result" && foreign) {
         turn.apply(renderInterimResult(turn.state(), message, now()));
         continue;
       }
@@ -481,7 +486,10 @@ export const createClaudeRuntime = ({
 
   const sendSteer = (claude: ClaudeTurn, slot: SessionSlot, text: string) => {
     const sent = slot.session.send(text);
-    if (sent.isOk()) claude.pendingSteers.add(sent.value);
+    if (sent.isOk()) {
+      claude.pendingSteers.add(sent.value);
+      claude.sends.add(sent.value);
+    }
     return sent;
   };
 
@@ -728,10 +736,13 @@ const steersAfter = (
   return complete || (result.queued_turn_count ?? 0) > 0 ? "queued" : "unknown";
 };
 
-// Claude runs a turn of its own when a background task it started reports back, and one that ran while nothing read the session reaches the next turn ahead of that turn's reply; it took no send, so it ends neither the turn nor its steers.
-const ranOnItsOwn = (result: SDKResultMessage) =>
-  result.origin?.kind === "task-notification" &&
-  takenUuids(result).length === 0;
+// Claude also runs turns of its own, such as when a background task it started reports back, and one that ran while nothing read the session reaches the next turn ahead of that turn's reply.
+// A result naming sends answers the turn only if one is the turn's; one naming none is Claude's own only when it says where its prompt came from, since a crashed worker's result or an older CLI's names nothing either.
+const answersTurn = (result: SDKResultMessage, sends: Set<string>) => {
+  const taken = takenUuids(result);
+  if (taken.length > 0) return taken.some((uuid) => sends.has(uuid));
+  return result.origin === undefined || result.origin.kind === "human";
+};
 
 const takenUuids = (result: SDKResultMessage) =>
   result.user_message_uuids ??
