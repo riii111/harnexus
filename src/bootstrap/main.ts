@@ -117,7 +117,8 @@ async function withClaude(relay: {
   const { router, closeAll } = connectClaudeThreads({
     store: store.value,
     request: serverCalls.request,
-    startSession: startClaudeSession,
+    startSession: (session, signal) =>
+      startClaudeSession(session, undefined, signal),
     findSession: claudeSessionExists,
     listConversations: (cwd, since) => listClaudeConversations(cwd, { since }),
     lastRecordOf: (sessionId) => readLastRecordUuid(sessionId),

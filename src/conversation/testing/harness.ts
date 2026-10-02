@@ -36,6 +36,14 @@ import { type ClaudeLogEvent, createClaudeRuntime } from "../claude/runtime.ts";
 import { createTurnController } from "../controller.ts";
 import { createThreadValues } from "../thread-values.ts";
 
+type StartSession = Parameters<typeof createClaudeRuntime>[0]["startSession"];
+
+type StartSessionOverride = (
+  settings: ClaudeSessionSettings,
+  signal: AbortSignal,
+  fake: ReturnType<typeof fakeClaude>,
+) => ReturnType<StartSession>;
+
 export let dir: string;
 
 export const useTempDir = () => {
@@ -176,6 +184,9 @@ export const harness = async (
     idleSessionMs,
     missingSessions = [],
     sessionLookupFails = false,
+    lookupSession,
+    lastRecord,
+    startSession: startSessionOverride,
     materializeFailures = 0,
     linkRequest,
     effortRule = defaultRule,
@@ -189,6 +200,9 @@ export const harness = async (
     idleSessionMs?: number;
     missingSessions?: string[];
     sessionLookupFails?: boolean;
+    lookupSession?: Parameters<typeof createClaudeRuntime>[0]["findSession"];
+    lastRecord?: Parameters<typeof createClaudeRuntime>[0]["lastRecordOf"];
+    startSession?: StartSessionOverride;
     materializeFailures?: number;
     linkRequest?: ServerRequest;
     effortRule?: EffortRule;
@@ -215,13 +229,16 @@ export const harness = async (
   const threads = createThreadValues(store, log);
   const runtime = createClaudeRuntime({
     threads,
-    findSession: async (sessionId) =>
-      sessionLookupFails
-        ? claudeSessionExists(sessionId, await unlistableConfigDir())
-        : Result.ok(!missingSessions.includes(sessionId)),
+    findSession:
+      lookupSession ??
+      (async (sessionId) =>
+        sessionLookupFails
+          ? claudeSessionExists(sessionId, await unlistableConfigDir())
+          : Result.ok(!missingSessions.includes(sessionId))),
     listConversations: (cwd, since) =>
       listClaudeConversations(cwd, { since, configDir: claudeDir() }),
-    lastRecordOf: (sessionId) => readLastRecordUuid(sessionId, claudeDir()),
+    lastRecordOf:
+      lastRecord ?? ((sessionId) => readLastRecordUuid(sessionId, claudeDir())),
     openLink: (threadId) => {
       links.push(threadId);
       if (linkRequest !== undefined) {
@@ -245,12 +262,15 @@ export const harness = async (
     },
     send,
     log,
-    startSession: async (session) => {
+    startSession: async (session, signal) => {
       const fake = fakes[settings.length];
       settings.push(session);
       if (fake === undefined) return expect.unreachable("no fake Claude left");
+      if (startSessionOverride !== undefined) {
+        return startSessionOverride(session, signal, fake);
+      }
       await beforeStart;
-      return startClaudeSession(session, fake.runtime);
+      return startClaudeSession(session, fake.runtime, signal);
     },
     now,
     effortRule,
