@@ -66,6 +66,7 @@ describe("createObserver", () => {
         kind: "request",
         method: "thread/start",
         id: 1,
+        threadOpen: { params: ["cwd", "input", "token"], ephemeral: null },
       },
       {
         event: "rpc_message",
@@ -299,6 +300,50 @@ describe("createObserver", () => {
       { event: "rpc_unobserved", direction, reason: expected },
     ]);
     expect(log).not.toContain(SECRET);
+  });
+
+  test("records which fields a thread fork carries and whether it is ephemeral, without their values", () => {
+    const { log, records } = observe([
+      toServer({
+        id: 2,
+        method: "thread/fork",
+        params: {
+          threadId: SECRET,
+          ephemeral: true,
+          developerInstructions: PROMPT,
+          [PROMPT]: 1,
+        },
+      }),
+      toApp({ id: 2, result: { thread: { id: "th-2", ephemeral: true } } }),
+    ]);
+
+    expect(records).toEqual([
+      {
+        event: "rpc_message",
+        direction: "app_to_server",
+        kind: "request",
+        method: "thread/fork",
+        id: 2,
+        threadOpen: {
+          params: [
+            "<redacted>",
+            "developerInstructions",
+            "ephemeral",
+            "threadId",
+          ],
+          ephemeral: true,
+        },
+      },
+      {
+        event: "rpc_message",
+        direction: "server_to_app",
+        kind: "response",
+        method: "thread/fork",
+        id: 2,
+      },
+    ]);
+    expect(log).not.toContain(SECRET);
+    expect(log).not.toContain(PROMPT);
   });
 
   test("records nothing for an empty line", () => {

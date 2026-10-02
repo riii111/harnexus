@@ -76,6 +76,7 @@ describe("createBridgeLogger", () => {
       id: 1,
       tools: [{ name: "t", inputSchema: true, description: "private text" }],
       mcpStartup: null,
+      threadOpen: null,
       params: { token: "secret-token" },
     } as const;
     const widened: LogEvent = entry;

@@ -12,6 +12,7 @@ export type ObservationEvent =
       id: RequestId | null;
       tools: readonly ToolDefinition[];
       mcpStartup: McpStartup | null;
+      threadOpen: ThreadOpen | null;
     }
   | { event: "rpc_unobserved"; direction: Direction; reason: UnobservedReason };
 
@@ -33,6 +34,9 @@ type McpStartup = {
   status: "starting" | "ready" | "failed" | "cancelled" | "<redacted>";
   failure: "pipe_closed" | "pipe_missing" | "other" | null;
 };
+
+// Which fields a thread/start or thread/fork carries, without their values, shows how the app opens a side chat; ephemeral is the one value read.
+type ThreadOpen = { params: readonly string[]; ephemeral: boolean | null };
 
 type SchemaShape =
   | boolean
@@ -78,6 +82,7 @@ export const createObserver = (
     if (kind === "request") requests.remember(direction, id, method);
     const tools = toolDefinitions(kind, method, message);
     const mcpStartup = mcpStartupStatus(kind, method, message);
+    const threadOpen = threadOpenShape(kind, method, message);
     record({
       event: "rpc_message",
       direction,
@@ -86,6 +91,7 @@ export const createObserver = (
       id,
       tools,
       mcpStartup,
+      threadOpen,
     });
   };
 
@@ -126,6 +132,12 @@ export const serializeObservationEvent = (entry: ObservationEvent) => {
             server: entry.mcpStartup.server,
             status: entry.mcpStartup.status,
             failure: entry.mcpStartup.failure,
+          },
+        }),
+        ...(entry.threadOpen !== null && {
+          threadOpen: {
+            params: entry.threadOpen.params,
+            ephemeral: entry.threadOpen.ephemeral,
           },
         }),
         ...(entry.tools.length > 0 && {
@@ -218,6 +230,20 @@ const mcpStartupStatus = (
         ? (status as McpStartup["status"])
         : REDACTED,
     failure: startupFailure(error),
+  };
+};
+
+const threadOpenShape = (
+  kind: MessageKind,
+  method: string | null,
+  message: JsonObject,
+): ThreadOpen | null => {
+  if (kind !== "request") return null;
+  if (method !== "thread/start" && method !== "thread/fork") return null;
+  const params = asObject(message.params) ?? {};
+  return {
+    params: Object.keys(params).map(identifier).sort(),
+    ephemeral: typeof params.ephemeral === "boolean" ? params.ephemeral : null,
   };
 };
 
