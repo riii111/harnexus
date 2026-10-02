@@ -125,15 +125,17 @@ export const createSessionCommands = ({
         error: found.error._tag,
       };
     }
-    const open = found.value
-      .filter((conversation) => !threads.isBound(conversation.sessionId))
-      .slice(0, LIST_LIMIT);
-    if (open.length > 0) listings.set(threadId, open);
+    // A conversation another thread continues stays listed so it is not mistaken for a missing one.
+    const recent = found.value.slice(0, LIST_LIMIT);
+    if (recent.length > 0) listings.set(threadId, recent);
     return answered({
       kind: "listed",
       cwd,
       maxAgeDays: MAX_AGE_DAYS,
-      conversations: open,
+      conversations: recent.map((conversation) => ({
+        ...conversation,
+        continued: threads.isBound(conversation.sessionId),
+      })),
     });
   };
 

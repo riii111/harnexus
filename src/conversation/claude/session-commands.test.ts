@@ -25,7 +25,7 @@ import {
 useTempDir();
 
 describe("/resume", () => {
-  test("lists the directory's conversations other threads do not continue, without starting Claude", async () => {
+  test("lists the directory's conversations, marking those other threads continue, without starting Claude", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, store, events } = await harness([claude]);
     await continuedByOtherThread(store, "se-other");
@@ -41,8 +41,10 @@ describe("/resume", () => {
     expect(responseTo(sent, 10)?.result.turn).toMatchObject({ id: "turn-1" });
     expect(turnCompleted(sent)).toMatchObject({ status: "completed" });
     const reply = agentTexts(sent).at(-1) ?? "";
-    expect(reply).toContain("1. fixture ask");
-    expect(reply).not.toContain("other fixture ask");
+    expect(reply).toMatch(/\d\. fixture ask · [^\n]* · CLI\n/);
+    expect(reply).toMatch(
+      /\d\. other fixture ask · [^\n]* · continued in another thread/,
+    );
     expect(claude.started()).toBe(false);
     expect(events).toContainEqual({
       event: "claude_turn",
@@ -197,6 +199,22 @@ describe("a number sent after /resume", () => {
       error: "ServerRequestRejected",
     });
     expect(JSON.stringify(events)).not.toContain("Fixture title");
+  });
+
+  test("refuses a listed conversation another thread continues", async () => {
+    const { turns, sent, store } = await harness([]);
+    await continuedByOtherThread(store, "se-other");
+    await writeClaudeRecord("se-other", conversationRecords("other ask"));
+    turns.startTurn(turnStart(10, "/resume"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 1);
+
+    turns.startTurn(turnStart(11, "1"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(agentTexts(sent).at(-1)).toContain(
+      "already continued in another thread",
+    );
+    expect(store.get(THREAD)?.sessionId ?? null).toBeNull();
   });
 
   test("binds a conversation two threads pick at once to only one of them", async () => {

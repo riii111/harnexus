@@ -12,13 +12,14 @@ import { isObject } from "../../runtime/object.ts";
 // name is the one Claude or the user gave the conversation, and title falls back to its first prompt; entrypoint is the program that started it, such as cli or claude-desktop.
 export type ClaudeConversation = {
   sessionId: string;
+  worktree: string | null;
   name: string | null;
   title: string;
   updatedAtMs: number;
   entrypoint: string | null;
 };
 
-// Claude keeps a conversation as <session id>.jsonl in a folder named after the directory it ran in, whatever started it; a worktree has a folder of its own, so only conversations that ran in cwd itself are listed.
+// Claude keeps a conversation as <session id>.jsonl in a folder named after the directory it ran in, whatever started it; a Claude Code worktree of cwd has a folder of its own, and its conversations are listed with cwd's since resuming finds a record in any folder.
 export const listClaudeConversations = (
   cwd: string,
   {
@@ -122,9 +123,9 @@ const readConversation = async (
   // A subagent's record is marked from its first line, which is how Claude's own session list leaves it out.
   if (first[0]?.isSidechain === true) return null;
   const ranIn = first.find((record) => typeof record.cwd === "string")?.cwd;
-  if (typeof ranIn !== "string" || resolve(ranIn) !== resolve(cwd)) {
-    return null;
-  }
+  if (typeof ranIn !== "string") return null;
+  const worktree = worktreeOf(resolve(cwd), resolve(ranIn));
+  if (worktree === undefined) return null;
   const name =
     lastString([...first, ...last], "customTitle") ??
     lastString([...first, ...last], "aiTitle");
@@ -135,6 +136,7 @@ const readConversation = async (
   )?.entrypoint;
   return {
     sessionId,
+    worktree,
     name,
     title,
     updatedAtMs: modifiedMs,
@@ -161,13 +163,26 @@ const readHead = async (
 };
 
 // Claude replaces every character other than a letter or digit with a hyphen and cuts a long name, adding a hash this does not reproduce, so a long name matches by its kept prefix and the record's own directory decides.
+// A worktree's folder is cut on its own length, which can pass the limit while cwd's does not.
 const isFolderOf = (cwd: string) => {
   const name = resolve(cwd).replace(/[^a-zA-Z0-9]/g, "-");
+  const worktrees = `${name}${WORKTREES.replace(/[^a-zA-Z0-9]/g, "-")}`;
   return (folder: string) =>
-    name.length <= FOLDER_NAME_LIMIT
+    folder.startsWith(worktrees.slice(0, FOLDER_NAME_LIMIT)) ||
+    (name.length <= FOLDER_NAME_LIMIT
       ? folder === name
-      : folder.startsWith(`${name.slice(0, FOLDER_NAME_LIMIT)}-`);
+      : folder.startsWith(`${name.slice(0, FOLDER_NAME_LIMIT)}-`));
 };
+
+const worktreeOf = (cwd: string, ranIn: string) => {
+  if (ranIn === cwd) return null;
+  const prefix = `${cwd}${WORKTREES}`;
+  if (!ranIn.startsWith(prefix)) return undefined;
+  const name = ranIn.slice(prefix.length);
+  return name === "" || name.includes("/") ? undefined : name;
+};
+
+const WORKTREES = "/.claude/worktrees/";
 
 // Older Claude Code versions wrote a subagent's record beside the conversation as agent-<id>.jsonl.
 const sessionIdOf = (file: string) =>

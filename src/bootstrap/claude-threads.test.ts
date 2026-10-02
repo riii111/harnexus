@@ -272,6 +272,7 @@ const MODELS = {
 };
 const PICKABLE = {
   sessionId: "se-fixture",
+  worktree: null,
   name: "Fixture title",
   title: "Fixture title",
   updatedAtMs: 1_700_000_000_000,
