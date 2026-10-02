@@ -353,55 +353,61 @@ describe("createObserver", () => {
     expect(log).not.toContain("/private/path");
   });
 
-  test("reads a thread open whose params are missing or mistyped as naming nothing", () => {
-    const { records } = observe([
-      toServer({ id: 3, method: "thread/fork" }),
-      toServer({ id: 4, method: "thread/fork", params: [SECRET] }),
-      toServer({
+  test.each([
+    {
+      name: "missing params",
+      message: { id: 3, method: "thread/fork" },
+      expected: { params: [], ephemeral: null, threadSource: null },
+    },
+    {
+      name: "params that are not an object",
+      message: { id: 4, method: "thread/fork", params: [SECRET] },
+      expected: { params: [], ephemeral: null, threadSource: null },
+    },
+    {
+      name: "mistyped values",
+      message: {
         id: 5,
         method: "thread/start",
         params: { ephemeral: "yes", threadSource: PROMPT },
-      }),
-    ]);
-
-    expect(records.map((record) => record.threadOpen)).toEqual([
-      { params: [], ephemeral: null, threadSource: null },
-      { params: [], ephemeral: null, threadSource: null },
-      {
+      },
+      expected: {
         params: ["ephemeral", "threadSource"],
         ephemeral: null,
         threadSource: "<redacted>",
       },
-    ]);
+    },
+  ])("reads a thread open with $name as naming nothing", ({
+    message,
+    expected,
+  }) => {
+    const { log, records } = observe([toServer(message)]);
+
+    expect(records[0].threadOpen).toEqual(expected);
+    expect(log).not.toContain(SECRET);
+    expect(log).not.toContain(PROMPT);
   });
 
-  test("keeps a thread source only as a plain lowercase word", () => {
-    const sources = [
-      "user",
-      "guardian_review",
-      "side_chat",
-      "sk-ant-api03-Key0",
-      "/private/path",
-      "Feature",
-    ];
-    const { records } = observe(
-      sources.map((threadSource, index) =>
-        toServer({
-          id: index,
-          method: "thread/fork",
-          params: { threadSource },
-        }),
-      ),
-    );
-
-    expect(records.map((record) => record.threadOpen.threadSource)).toEqual([
-      "user",
-      "guardian_review",
-      "side_chat",
-      "<redacted>",
-      "<redacted>",
-      "<redacted>",
+  test.each([
+    { source: "user", expected: "user" },
+    { source: "guardian_review", expected: "guardian_review" },
+    { source: "side_chat", expected: "side_chat" },
+    { source: "sk-ant-api03-Key0", expected: "<redacted>" },
+    { source: "/private/path", expected: "<redacted>" },
+    { source: "Feature", expected: "<redacted>" },
+  ])("records the thread source $source as $expected", ({
+    source,
+    expected,
+  }) => {
+    const { records } = observe([
+      toServer({
+        id: 1,
+        method: "thread/fork",
+        params: { threadSource: source },
+      }),
     ]);
+
+    expect(records[0].threadOpen.threadSource).toBe(expected);
   });
 
   test("does not read a thread open sent the other way", () => {

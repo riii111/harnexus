@@ -19,6 +19,7 @@ import {
   appRequest,
   askTool,
   BUILT_IN_EFFORTS,
+  claudeDir,
   completedItems,
   completedTurnStatuses,
   completedTurns,
@@ -1167,6 +1168,22 @@ describe("session ids", () => {
 });
 
 describe("a fork of a Claude thread", () => {
+  // Claude names a project folder after its directory with every other character as a hyphen.
+  const writeSourceRecord = async (uuids: string[]) => {
+    const folder = join(
+      claudeDir(),
+      "projects",
+      dir.replace(/[^a-zA-Z0-9]/g, "-"),
+    );
+    await mkdir(folder, { recursive: true });
+    await writeFile(
+      join(folder, "se-1.jsonl"),
+      uuids
+        .map((uuid) => `${JSON.stringify({ type: "assistant", uuid })}\n`)
+        .join(""),
+    );
+  };
+
   const forkTurn = async (
     started: Awaited<ReturnType<typeof harness>>,
     claude: ReturnType<typeof fakeClaude>,
@@ -1194,6 +1211,25 @@ describe("a fork of a Claude thread", () => {
     });
     await until(() => started.store.get(OTHER_THREAD)?.sessionId === "se-fork");
     expect(started.store.get(THREAD)?.sessionId).toBe("se-1");
+  });
+
+  test("leaves out what the source said after the fork", async () => {
+    const source = fakeClaude(SUBSCRIPTION);
+    const fork = fakeClaude(SUBSCRIPTION);
+    const started = await harness([source, fork]);
+    await completeTurn(started.turns, started.sent, source, 10);
+    await writeSourceRecord(["a-1"]);
+    started.turns.adoptFork(OTHER_THREAD, { model: MODEL, cwd: dir }, THREAD);
+    await settle();
+    await writeSourceRecord(["a-1", "a-2"]);
+
+    await forkTurn(started, fork, 11);
+
+    expect(started.settings[1]).toMatchObject({
+      resume: "se-1",
+      forkSession: true,
+      resumeAt: "a-1",
+    });
   });
 
   test("starts a conversation of its own when the source's is gone", async () => {

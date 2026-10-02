@@ -107,22 +107,8 @@ export const createRouter = (
       case "thread/start":
       case "thread/resume":
         return routeThreadOpen(line, message, request);
-      // The server copies its own record of the thread, which holds none of the Claude conversation, so the fork learns of it here.
       case "thread/fork":
-        if (!turns.isClaudeThread(params.threadId)) return line;
-        // Claude's conversation is forked whole, so a fork from an earlier turn would carry the turns after it.
-        if (params.lastTurnId != null || params.beforeTurnId != null) {
-          refuse("thread/fork", request, "unsupported_request");
-          return null;
-        }
-        pending.set(id, {
-          kind: "threadOpen",
-          createdModel: null,
-          forkOf: String(params.threadId),
-          history: null,
-          params,
-        });
-        return line;
+        return routeFork(line, request);
       case "turn/start":
         noteDelegation(params);
         if (
@@ -234,6 +220,32 @@ export const createRouter = (
     if (!isClaudeModel(params.model)) return line;
     const { model: _model, ...rest } = params;
     return encode({ ...message, params: rest });
+  };
+
+  // The server copies its own record of the thread, which holds none of the Claude conversation, so the fork learns of it here.
+  const routeFork = (line: Buffer, request: AppRequest) => {
+    const { id, params } = request;
+    if (!turns.isClaudeThread(params.threadId)) return line;
+    const sourceId = String(params.threadId);
+    // Claude's conversation is forked whole, so a fork from an earlier turn would carry the turns after it.
+    if (params.lastTurnId != null || params.beforeTurnId != null) {
+      refuse("thread/fork", request, "unsupported_request");
+      return null;
+    }
+    // Claude's conversation stays where the source runs, so a fork into another directory would work on the source's files.
+    const checked = checkThread(params, turns.threadOf(sourceId), undefined);
+    if ("refusal" in checked) {
+      refuse("thread/fork", request, checked.refusal);
+      return null;
+    }
+    pending.set(id, {
+      kind: "threadOpen",
+      createdModel: null,
+      forkOf: sourceId,
+      history: null,
+      params,
+    });
+    return line;
   };
 
   // Settings that do not reach Claude, such as the approval policy, still go to the server; only what Claude would have to follow is checked.

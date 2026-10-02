@@ -531,6 +531,18 @@ export const createClaudeRuntime = ({
     ownTurnWaiters.delete(threadId);
   };
 
+  // Where each fork's source stood when the fork was made; a source whose record cannot be read leaves the fork its whole conversation.
+  const forkPoints = new Map<string, Promise<string | null>>();
+
+  const noteFork = (threadId: string) => {
+    const source = threads.forkSourceOf(threadId);
+    if (source === null) return;
+    forkPoints.set(
+      threadId,
+      lastRecordOf(source).then((read) => (read.isOk() ? read.value : null)),
+    );
+  };
+
   const read = async (
     turn: Turn,
     claude: ClaudeTurn,
@@ -881,9 +893,16 @@ export const createClaudeRuntime = ({
     const forkFound =
       forkFrom === null
         ? false
-        : await waitForAbort(sessionFound(forkFrom), pending.controller.signal);
+        : await waitForAbort(
+            Promise.all([
+              sessionFound(forkFrom),
+              forkPoints.get(record.threadId) ?? null,
+            ]),
+            pending.controller.signal,
+          );
     if (forkFound === ABORTED) return Result.err(sessionStartCancelled());
-    const forked = forkFrom !== null && forkFound;
+    const forked = forkFrom !== null && forkFound !== false && forkFound[0];
+    const forkPoint = forkFound === false ? null : forkFound[1];
     if (!isCurrent()) return Result.err(sessionStartCancelled());
     // Each session gets its own thread tool server, since one server instance serves one Claude process.
     const link = openLink(record.threadId);
@@ -893,7 +912,11 @@ export const createClaudeRuntime = ({
         cwd: record.worktree,
         model,
         ...(forked
-          ? { resume: forkFrom, forkSession: true }
+          ? {
+              resume: forkFrom,
+              forkSession: true,
+              ...(forkPoint !== null && { resumeAt: forkPoint }),
+            }
           : resumeFrom(resume)),
         mcpServers: { [link.server.name]: link.server },
         allowedTools: link.allowedTools,
@@ -1043,6 +1066,7 @@ export const createClaudeRuntime = ({
     steer,
     interrupt,
     dropSession: dropSessionOf,
+    noteFork,
     threadBusy,
     threadIdle,
     listen: (start) => {

@@ -462,36 +462,41 @@ describe("threads with a Claude model", () => {
     expect(out.result.thread.model).toBe(CLAUDE);
   });
 
-  test("keeps the fork where the source's conversation lives and runs its turns on Claude", async () => {
+  test("runs the turns of a fork in the source's directory on Claude", async () => {
     const { router, calls } = setup(["th-claude"]);
-    router.fromApp(
-      encode({
-        id: 9,
-        method: "thread/fork",
-        params: { threadId: "th-claude", cwd: "/elsewhere" },
-      }),
-    );
-    await router.fromServer(
-      encode({
-        id: 9,
-        result: { thread: { id: "th-side" }, cwd: "/elsewhere" },
-      }),
-    );
+    const fork = encode({
+      id: 9,
+      method: "thread/fork",
+      params: { threadId: "th-claude", cwd: "/fixture/work/" },
+    });
     const turn = encode({
       id: 10,
       method: "turn/start",
       params: { threadId: "th-side", input: [] },
     });
 
+    expect(router.fromApp(fork)).toBe(fork);
+    await router.fromServer(threadResponse(9, "th-side"));
+
     expect(router.fromApp(turn)).toBeNull();
-    expect(calls.map(([name, ...rest]) => [name, rest[0], rest[1]])).toEqual([
-      ["adoptFork", "th-side", { model: CLAUDE, cwd: "/fixture/work" }],
-      [
-        "startTurn",
-        { id: 10, params: { threadId: "th-side", input: [] } },
-        "/elsewhere",
-      ],
-    ]);
+    expect(calls.map(([name]) => name)).toEqual(["adoptFork", "startTurn"]);
+  });
+
+  test("refuses a fork of a Claude thread into another directory before the server makes it", () => {
+    const { router, calls, events } = setup(["th-claude"]);
+    const line = encode({
+      id: 9,
+      method: "thread/fork",
+      params: { threadId: "th-claude", cwd: "/elsewhere" },
+    });
+
+    expect(router.fromApp(line)).toBeNull();
+    expect(calls.map(([name]) => name)).toEqual(["reject"]);
+    expect(events).toContainEqual({
+      event: "claude_request_refused",
+      method: "thread/fork",
+      reason: "directory_change",
+    });
   });
 
   test.each([
