@@ -1101,6 +1101,8 @@ describe("clientUserMessageId", () => {
 
     turns.startTurn(withMessageId(turnStart(10, "reply"), "m-1"), undefined);
     await until(() => responseTo(sent, 10) !== undefined);
+    // The refusal is sent inside the guarded write, so the run state clears only after it.
+    await until(() => store.get(THREAD)?.runState === "idle");
     await settle();
 
     expect(sent).toEqual([
@@ -1114,7 +1116,6 @@ describe("clientUserMessageId", () => {
       },
     ]);
     expect(claude.started()).toBe(false);
-    expect(store.get(THREAD)?.runState).toBe("idle");
   });
 
   test("accepts a message again after it was refused before running", async () => {
