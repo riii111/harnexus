@@ -136,7 +136,7 @@ export const renderNotice = (
   return seal(draft);
 };
 
-// Subagent messages stay inside their parent tool item, and anything after the turn ends is dropped.
+// A subagent's text stays inside its parent tool item, while the tools it calls show as items of their own as long as that parent runs in this turn; a result completes whichever item its call has, and anything after the turn ends is dropped.
 export const renderSdkMessage = (
   state: TurnState,
   message: SDKMessage,
@@ -154,12 +154,12 @@ export const renderSdkMessage = (
     case "assistant":
       if (message.parent_tool_use_id === null && !draft.compaction) {
         renderAssistant(draft, message, now);
+      } else if (runsInTurn(draft, message.parent_tool_use_id)) {
+        renderSubagentTools(draft, message, now);
       }
       break;
     case "user":
-      if (message.parent_tool_use_id === null && !("isReplay" in message)) {
-        renderToolResults(draft, message, now);
-      }
+      if (!("isReplay" in message)) renderToolResults(draft, message, now);
       break;
     case "system":
       renderSystem(draft, message, now);
@@ -220,12 +220,22 @@ export const renderToolRequest = (
   state: TurnState,
   block: { id: string; name: string; input: unknown },
   now: number,
+  closesText = true,
 ): Rendered => {
   if (state.finished) return { state, notifications: [] };
   const draft = open(state);
-  startTool(draft, block, now);
+  startTool(draft, block, now, closesText);
   return seal(draft);
 };
+
+// A subagent can ask about a tool only while its Agent call runs in the turn or after that call launched it in the background, so with no Agent call running the asking agent is a background one.
+export const runsAgent = (state: TurnState) =>
+  Object.values(state.tools).some(
+    (tool) =>
+      tool.state === "running" &&
+      tool.item.type === "mcpToolCall" &&
+      AGENT_TOOLS.includes(tool.item.tool),
+  );
 
 export const runningToolItem = (
   state: TurnState,
@@ -450,6 +460,22 @@ const renderAssistant = (
   if (phase !== null) flushPending(draft, phase, now);
 };
 
+// A subagent that runs in the background was launched by a call that already completed, so the tools it calls belong to no running item of this turn.
+const runsInTurn = (draft: Draft, parentToolUseId: string | null) =>
+  parentToolUseId !== null && draft.tools[parentToolUseId]?.state === "running";
+
+// The main conversation's text waiting for its stop reason is left to it, since a subagent's call cannot tell whether that text was commentary.
+const renderSubagentTools = (
+  draft: Draft,
+  message: SDKAssistantMessage,
+  now: number,
+) => {
+  if (message.error !== undefined) return;
+  for (const block of message.message.content) {
+    if (block.type === "tool_use") startTool(draft, block, now, false);
+  }
+};
+
 // Streamed text and thinking blocks arrive again in order as assistant messages, so only those beyond the streamed count are new.
 const consumeStreamedBlock = (draft: Draft, messageId: string) => {
   const counts = draft.blockCounts[messageId] ?? { streamed: 0, seen: 0 };
@@ -480,9 +506,10 @@ const startTool = (
   draft: Draft,
   block: { id: string; name: string; input: unknown },
   now: number,
+  closesText = true,
 ) => {
   if (draft.tools[block.id] !== undefined) return;
-  flushPending(draft, "commentary", now);
+  if (closesText) flushPending(draft, "commentary", now);
   const item = startToolItem(nextItemId(draft), block, draft.cwd);
   draft.tools[block.id] = { state: "running", item, startedAtMs: now };
   itemStarted(draft, item, now);
@@ -697,3 +724,6 @@ const CONTINUING_STOP_REASONS = new Set(["tool_use", "pause_turn"]);
 const COMPACTION_FAILED = "Claude could not compact the conversation";
 
 const NOT_COMPACTED = "Claude did not compact the conversation";
+
+// Claude Code names the tool that starts a subagent Agent, and older versions named it Task.
+const AGENT_TOOLS = ["Agent", "Task"];

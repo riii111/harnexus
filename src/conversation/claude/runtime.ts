@@ -42,6 +42,7 @@ import {
   renderSdkMessage,
   renderToolRequest,
   runningToolItem,
+  runsAgent,
 } from "../../presentation/turn.ts";
 import type { TurnEvent } from "../controller.ts";
 import { type Refusal, refusalMessage } from "../thread-request.ts";
@@ -813,9 +814,11 @@ export const createClaudeRuntime = ({
         return declineTool(turn, options.toolUseID, NO_TURN);
       }
       const block = { id: options.toolUseID, name: toolName, input };
-      // A subagent's call has no item in the thread, so its prompt carries an id of its own.
+      // A subagent's call shows as its own item while its agent runs in the turn; one from a background agent would outlive the turn, which would close its item as failed, so its prompt carries an id of its own.
       if (options.agentID === undefined) {
         turn.apply(renderToolRequest(turn.state(), block, now()));
+      } else if (runsAgent(turn.state())) {
+        turn.apply(renderToolRequest(turn.state(), block, now(), false));
       }
       const item = runningToolItem(turn.state(), options.toolUseID);
       const prompt = promptFor(
