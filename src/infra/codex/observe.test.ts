@@ -375,6 +375,35 @@ describe("createObserver", () => {
     ]);
   });
 
+  test("keeps a thread source only as a plain lowercase word", () => {
+    const sources = [
+      "user",
+      "guardian_review",
+      "side_chat",
+      "sk-ant-api03-Key0",
+      "/private/path",
+      "Feature",
+    ];
+    const { records } = observe(
+      sources.map((threadSource, index) =>
+        toServer({
+          id: index,
+          method: "thread/fork",
+          params: { threadSource },
+        }),
+      ),
+    );
+
+    expect(records.map((record) => record.threadOpen.threadSource)).toEqual([
+      "user",
+      "guardian_review",
+      "side_chat",
+      "<redacted>",
+      "<redacted>",
+      "<redacted>",
+    ]);
+  });
+
   test("does not read a thread open sent the other way", () => {
     const { records } = observe([
       toApp({ id: 6, method: "thread/start", params: { cwd: "/w" } }),

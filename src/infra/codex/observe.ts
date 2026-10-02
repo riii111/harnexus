@@ -253,6 +253,12 @@ const mcpStartupStatus = (
   };
 };
 
+// Besides its fixed values, threadSource carries any feature name the client picks; only a plain lowercase word is kept, since a side chat may be told apart by that name, while a value with digits, case or separators could be a key or a path.
+const threadSource = (value: Json | undefined) => {
+  if (typeof value !== "string") return null;
+  return SOURCE_LABEL.test(value) ? value : REDACTED;
+};
+
 const threadOpenShape = (
   direction: Direction,
   kind: MessageKind,
@@ -269,10 +275,7 @@ const threadOpenShape = (
       side: "request",
       params: [...new Set(names)].sort(),
       ephemeral: asBoolean(params.ephemeral),
-      threadSource:
-        typeof params.threadSource === "string"
-          ? identifier(params.threadSource)
-          : null,
+      threadSource: threadSource(params.threadSource),
     };
   }
   if (kind === "response" && direction === "server_to_app") {
@@ -441,6 +444,7 @@ const REDACTED = "<redacted>";
 const MAX_DEPTH = 32;
 const MAX_PENDING_REQUESTS = 10_000;
 
+const SOURCE_LABEL = /^[a-z][a-z_]{0,39}$/;
 // The fields of ThreadStartParams and ThreadForkParams in the app-server protocol.
 const THREAD_OPEN_PARAMS = new Set([
   "allowProviderModelFallback",
