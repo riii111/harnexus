@@ -645,7 +645,6 @@ export const createTurnController = <Tag extends string>({
     startedAtMs: number,
     state: TurnState,
   ): ActiveTurn<Tag> => {
-    let active: ActiveTurn<Tag>;
     const turn: RunningTurn<Tag> = {
       threadId: record.threadId,
       turnId: request.turnId,
@@ -665,7 +664,12 @@ export const createTurnController = <Tag extends string>({
       ask: (method, params, signal) =>
         appRequests.ask(record.threadId, method, params, signal),
     };
-    active = { threadId: record.threadId, state, turn, link: null };
+    const active: ActiveTurn<Tag> = {
+      threadId: record.threadId,
+      state,
+      turn,
+      link: null,
+    };
     return active;
   };
 
