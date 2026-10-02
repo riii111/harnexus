@@ -131,7 +131,7 @@ type SessionSlot = {
   attachedSkills: Map<string, string>;
 };
 
-// Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken.
+// Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken; sends holds the uuid of every message the turn sent Claude.
 // command marks a turn the bridge answers itself, such as /session, and completed one Claude ended with a successful result.
 type ClaudeTurn = {
   command: boolean;
@@ -139,6 +139,7 @@ type ClaudeTurn = {
   slot: SessionSlot | null;
   unsentSteers: string[];
   pendingSteers: Set<string>;
+  sends: Set<string>;
   steers: number;
 };
 
@@ -226,6 +227,7 @@ export const createClaudeRuntime = ({
       slot: null,
       unsentSteers: [],
       pendingSteers: new Set(),
+      sends: new Set(),
       steers: 0,
     };
     turns.set(turn, claude);
@@ -346,6 +348,7 @@ export const createClaudeRuntime = ({
       turn.fail(sent.error);
       return;
     }
+    claude.sends.add(sent.value);
     for (const { path, body } of fresh) attached.set(path, body);
     claude.slot = slot.value;
     for (const steer of claude.unsentSteers.splice(0)) {
@@ -394,7 +397,9 @@ export const createClaudeRuntime = ({
       ) {
         attached.clear();
       }
-      if (message.type === "result") {
+      const foreign =
+        message.type === "result" && !answersTurn(message, claude.sends);
+      if (message.type === "result" && !foreign) {
         log({
           event: "claude_turn",
           step: "metrics",
@@ -422,6 +427,11 @@ export const createClaudeRuntime = ({
       });
       plans.set(threadId, plan.plan);
       if (plan.notification !== null) send(plan.notification);
+      // Its items stay in this turn, since the app has no turn of Claude's own to show them in.
+      if (message.type === "result" && foreign) {
+        turn.apply(renderInterimResult(turn.state(), message, now()));
+        continue;
+      }
       const steers =
         message.type === "result"
           ? steersAfter(
@@ -476,7 +486,10 @@ export const createClaudeRuntime = ({
 
   const sendSteer = (claude: ClaudeTurn, slot: SessionSlot, text: string) => {
     const sent = slot.session.send(text);
-    if (sent.isOk()) claude.pendingSteers.add(sent.value);
+    if (sent.isOk()) {
+      claude.pendingSteers.add(sent.value);
+      claude.sends.add(sent.value);
+    }
     return sent;
   };
 
@@ -715,16 +728,25 @@ const steersAfter = (
   result: SDKResultMessage,
 ): "none" | "queued" | "unknown" => {
   const listed = result.user_message_uuids;
-  const taken =
-    listed ??
-    (result.user_message_uuid === undefined ? [] : [result.user_message_uuid]);
-  for (const uuid of taken) pendingSteers.delete(uuid);
+  for (const uuid of takenUuids(result)) pendingSteers.delete(uuid);
   if (interrupting) return "none";
   if (result.subtype !== "success" || result.is_error) return "none";
   if (pendingSteers.size === 0) return "none";
   const complete = listed !== undefined && listed.length < TAKEN_UUIDS_LIMIT;
   return complete || (result.queued_turn_count ?? 0) > 0 ? "queued" : "unknown";
 };
+
+// Claude also runs turns of its own, such as when a background task it started reports back, and one that ran while nothing read the session reaches the next turn ahead of that turn's reply.
+// A result naming sends answers the turn only if one is the turn's; one naming none is Claude's own only when it says where its prompt came from, since a crashed worker's result or an older CLI's names nothing either.
+const answersTurn = (result: SDKResultMessage, sends: Set<string>) => {
+  const taken = takenUuids(result);
+  if (taken.length > 0) return taken.some((uuid) => sends.has(uuid));
+  return result.origin === undefined || result.origin.kind === "human";
+};
+
+const takenUuids = (result: SDKResultMessage) =>
+  result.user_message_uuids ??
+  (result.user_message_uuid === undefined ? [] : [result.user_message_uuid]);
 
 // Only what the user typed can be a session command, never another thread's message or a compaction.
 const typedText = (input: RunningTurn<string>["input"]) =>
