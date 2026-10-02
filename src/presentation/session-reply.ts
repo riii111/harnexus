@@ -15,7 +15,6 @@ export type SessionReply =
   | { kind: "selected"; title: string; name: string | null; unsynced: boolean }
   | { kind: "session"; cwd: string; sessionId: string | null };
 
-// continued marks a conversation another thread already continues.
 export type ListedConversation = {
   title: string;
   updatedAtMs: number;

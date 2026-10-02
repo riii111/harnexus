@@ -160,6 +160,27 @@ describe("listClaudeConversations", () => {
     ]);
   });
 
+  test("lists a worktree conversation whose folder name Claude cut though the directory's own fits", async () => {
+    const project = `/work/${"p".repeat(184)}`;
+    const worktree = `${project}/.claude/worktrees/w1`;
+    const full = worktree.replace(/[^a-zA-Z0-9]/g, "-");
+    expect([project.length <= 200, full.length > 200]).toEqual([true, true]);
+    await writeRecord(
+      `${full.slice(0, 200)}-1a2b3c`,
+      "se-tree",
+      conversation("tree ask", "claude-desktop", worktree),
+    );
+
+    const listed = await listClaudeConversations(project, {
+      since: NOW - 14 * DAY,
+      configDir: dir,
+    });
+
+    expect(listed.isOk() && listed.value).toMatchObject([
+      { sessionId: "se-tree", worktree: "w1" },
+    ]);
+  });
+
   test("titles a conversation with its first typed prompt after slash command records", async () => {
     await writeRecord(PROJECT_FOLDER, "se-1", [
       userRecord("u-0", "<command-name>/model</command-name>"),

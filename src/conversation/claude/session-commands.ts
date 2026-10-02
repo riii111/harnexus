@@ -125,7 +125,7 @@ export const createSessionCommands = ({
         error: found.error._tag,
       };
     }
-    // A conversation another thread continues stays listed, marked, so it is not mistaken for a missing one; picking it is refused.
+    // A conversation another thread continues stays listed so it is not mistaken for a missing one.
     const recent = found.value.slice(0, LIST_LIMIT);
     if (recent.length > 0) listings.set(threadId, recent);
     return answered({
