@@ -43,6 +43,10 @@ export type ClaudeSessionSettings = {
   cwd: string;
   model: string;
   resume?: string;
+  // Resumes into a new conversation, leaving the resumed one as it was.
+  forkSession?: boolean;
+  // The last record of the resumed conversation to keep; later records are left out.
+  resumeAt?: string;
   mcpServers?: Record<string, McpServerConfig>;
   // Tools that run without asking, on top of the user's own allow rules.
   allowedTools?: string[];
@@ -238,6 +242,10 @@ const sessionOptions = (
   mcpServers: settings.mcpServers ?? {},
   allowedTools: settings.allowedTools ?? [],
   ...(settings.resume === undefined ? {} : { resume: settings.resume }),
+  ...(settings.forkSession === true && { forkSession: true }),
+  ...(settings.resumeAt !== undefined && {
+    resumeSessionAt: settings.resumeAt,
+  }),
 });
 
 const createSession = (
