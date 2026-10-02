@@ -97,7 +97,7 @@ describe("renderSdkMessage text", () => {
     expect(messageTexts(out)).toEqual(["cut", "retried"]);
   });
 
-  test("ignores subagent messages", () => {
+  test("ignores what a subagent writes", () => {
     const out = run([
       {
         ...streamEvent({ type: "message_start", message: { id: "sub" } }),
@@ -121,6 +121,97 @@ describe("renderSdkMessage text", () => {
     expect(completedItems(out).map((item) => item.type)).toEqual([
       "userMessage",
     ]);
+  });
+});
+
+describe("renderSdkMessage subagent tools", () => {
+  test("shows the tools a subagent calls while its agent runs in the turn", () => {
+    const out = run([
+      assistant("msg-1", [toolUse("agent-1", "Agent", { prompt: "look" })]),
+      underAgent(
+        "agent-1",
+        assistant("sub-1", [
+          { type: "text", text: "inner" },
+          toolUse("tool-2", "Bash", { command: "ls" }),
+        ]),
+      ),
+      underAgent("agent-1", toolResult("tool-2", "a.txt", false)),
+      toolResult("agent-1", "found a.txt", false),
+      success(),
+    ]);
+
+    expect(itemEvents(out)).toEqual([
+      "item/started userMessage",
+      "item/completed userMessage",
+      "item/started mcpToolCall",
+      "item/started commandExecution",
+      "item/completed commandExecution",
+      "item/completed mcpToolCall",
+    ]);
+    expect(completedTool(out)).toMatchObject({
+      command: "ls",
+      aggregatedOutput: "a.txt",
+      status: "completed",
+    });
+  });
+
+  test("shows the tools of a subagent that another subagent started", () => {
+    const out = run([
+      assistant("msg-1", [toolUse("agent-1", "Agent", { prompt: "look" })]),
+      underAgent(
+        "agent-1",
+        assistant("sub-1", [toolUse("agent-2", "Agent", { prompt: "dig" })]),
+      ),
+      underAgent(
+        "agent-2",
+        assistant("sub-2", [toolUse("tool-3", "Bash", { command: "ls" })]),
+      ),
+      underAgent("agent-2", toolResult("tool-3", "a.txt", false)),
+      underAgent("agent-1", toolResult("agent-2", "dug", false)),
+      toolResult("agent-1", "found", false),
+      success(),
+    ]);
+
+    expect(
+      completedItems(out).map((item) =>
+        item.type === "mcpToolCall" ? item.tool : item.type,
+      ),
+    ).toEqual(["userMessage", "commandExecution", "Agent", "Agent"]);
+    expect(unpaired(out)).toEqual([]);
+  });
+
+  test("leaves out the tools of a subagent running in the background", () => {
+    const out = run([
+      assistant("msg-1", [toolUse("agent-1", "Agent", { prompt: "look" })]),
+      toolResult("agent-1", "Async agent launched", false),
+      underAgent(
+        "agent-1",
+        assistant("sub-1", [toolUse("tool-2", "Bash", { command: "ls" })]),
+      ),
+      underAgent("agent-1", toolResult("tool-2", "a.txt", false)),
+      success(),
+    ]);
+
+    expect(
+      completedItems(out).filter((item) => item.type === "commandExecution"),
+    ).toEqual([]);
+    expect(unpaired(out)).toEqual([]);
+  });
+
+  test("closes a subagent's tool left running when the turn ends", () => {
+    const out = run([
+      assistant("msg-1", [toolUse("agent-1", "Agent", { prompt: "look" })]),
+      underAgent(
+        "agent-1",
+        assistant("sub-1", [toolUse("tool-2", "Bash", { command: "ls" })]),
+      ),
+      result({ subtype: "error_during_execution", errors: ["stopped"] }),
+    ]);
+
+    expect(unpaired(out)).toEqual([]);
+    expect(
+      completedItems(out).find((item) => item.type === "commandExecution"),
+    ).toMatchObject({ status: "failed" });
   });
 });
 
@@ -852,6 +943,11 @@ const assistant = (
   type: "assistant",
   message: { id, content, stop_reason: stopReason },
   parent_tool_use_id: null,
+});
+
+const underAgent = (agentToolUseId: string, message: object) => ({
+  ...message,
+  parent_tool_use_id: agentToolUseId,
 });
 
 const toolUse = (id: string, name: string, input: object) => ({

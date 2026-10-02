@@ -136,7 +136,7 @@ export const renderNotice = (
   return seal(draft);
 };
 
-// Subagent messages stay inside their parent tool item, and anything after the turn ends is dropped.
+// A subagent's text stays inside its parent tool item, while the tools it calls show as items of their own as long as that parent runs in this turn; anything after the turn ends is dropped.
 export const renderSdkMessage = (
   state: TurnState,
   message: SDKMessage,
@@ -154,10 +154,16 @@ export const renderSdkMessage = (
     case "assistant":
       if (message.parent_tool_use_id === null && !draft.compaction) {
         renderAssistant(draft, message, now);
+      } else if (runsInTurn(draft, message.parent_tool_use_id)) {
+        renderSubagentTools(draft, message, now);
       }
       break;
     case "user":
-      if (message.parent_tool_use_id === null && !("isReplay" in message)) {
+      if (
+        (message.parent_tool_use_id === null ||
+          runsInTurn(draft, message.parent_tool_use_id)) &&
+        !("isReplay" in message)
+      ) {
         renderToolResults(draft, message, now);
       }
       break;
@@ -448,6 +454,21 @@ const renderAssistant = (
     }
   }
   if (phase !== null) flushPending(draft, phase, now);
+};
+
+// A subagent that runs in the background was launched by a call that already completed, so the tools it calls belong to no running item of this turn.
+const runsInTurn = (draft: Draft, parentToolUseId: string | null) =>
+  parentToolUseId !== null && draft.tools[parentToolUseId]?.state === "running";
+
+const renderSubagentTools = (
+  draft: Draft,
+  message: SDKAssistantMessage,
+  now: number,
+) => {
+  if (message.error !== undefined) return;
+  for (const block of message.message.content) {
+    if (block.type === "tool_use") startTool(draft, block, now);
+  }
 };
 
 // Streamed text and thinking blocks arrive again in order as assistant messages, so only those beyond the streamed count are new.

@@ -813,7 +813,7 @@ export const createClaudeRuntime = ({
         return declineTool(turn, options.toolUseID, NO_TURN);
       }
       const block = { id: options.toolUseID, name: toolName, input };
-      // A subagent's call has no item in the thread, so its prompt carries an id of its own.
+      // Only the message carrying a subagent's call shows whether its agent runs in this turn, so the call gets an item from that message alone, and a prompt finding none carries an id of its own.
       if (options.agentID === undefined) {
         turn.apply(renderToolRequest(turn.state(), block, now()));
       }
