@@ -9,7 +9,7 @@ import type { ToolItem } from "./protocol.ts";
 export type ToolCall = {
   toolName: string;
   input: Record<string, unknown>;
-  // The item the app shows for the call while it runs.
+  // The item the app shows for the call while it runs; a background subagent's call has none.
   item: ToolItem | null;
   title: string | undefined;
   reason: string | undefined;

@@ -228,6 +228,15 @@ export const renderToolRequest = (
   return seal(draft);
 };
 
+// A subagent can ask about a tool only while its Agent call runs in the turn or after that call launched it in the background, so with no Agent call running the asking agent is a background one.
+export const runsAgent = (state: TurnState) =>
+  Object.values(state.tools).some(
+    (tool) =>
+      tool.state === "running" &&
+      tool.item.type === "mcpToolCall" &&
+      AGENT_TOOLS.includes(tool.item.tool),
+  );
+
 export const runningToolItem = (
   state: TurnState,
   toolUseId: string,
@@ -715,3 +724,6 @@ const CONTINUING_STOP_REASONS = new Set(["tool_use", "pause_turn"]);
 const COMPACTION_FAILED = "Claude could not compact the conversation";
 
 const NOT_COMPACTED = "Claude did not compact the conversation";
+
+// Claude Code names the tool that starts a subagent Agent, and older versions named it Task.
+const AGENT_TOOLS = ["Agent", "Task"];

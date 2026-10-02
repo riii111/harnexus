@@ -226,9 +226,23 @@ describe("tool approval", () => {
     });
   });
 
-  test("asks about a subagent's tool on an item of its own", async () => {
+  test("asks about a subagent's tool on an item of its own while its agent runs in the turn", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { sent } = await startedTurn(claude);
+    claude.emit(
+      sdk({
+        type: "assistant",
+        message: {
+          id: "msg-1",
+          content: [
+            { type: "tool_use", id: "agent-1", name: "Agent", input: {} },
+          ],
+          stop_reason: null,
+        },
+        parent_tool_use_id: null,
+      }),
+    );
+    await until(() => claude.drained());
 
     askTool(claude, "Bash", { command: "ls" }, { agentID: "agent-1" });
     const request = await appRequest(sent);
@@ -242,6 +256,23 @@ describe("tool approval", () => {
       method: "item/commandExecution/requestApproval",
       params: { itemId: started?.params.item.id, command: "ls" },
     });
+  });
+
+  test("asks about a background subagent's tool without adding an item the turn would close", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { sent } = await startedTurn(claude);
+
+    askTool(claude, "Bash", { command: "ls" }, { agentID: "agent-1" });
+    const request = await appRequest(sent);
+
+    expect(request.method).toBe("item/tool/requestUserInput");
+    expect(request.params.itemId).toBe("turn-1-tool-1");
+    expect(
+      sent.filter(
+        (m) =>
+          m.method === "item/started" && m.params.item.type !== "userMessage",
+      ),
+    ).toEqual([]);
   });
 
   test("denies a tool asked outside a running turn without asking the app", async () => {
