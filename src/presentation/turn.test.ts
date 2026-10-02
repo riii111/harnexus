@@ -180,6 +180,23 @@ describe("renderSdkMessage subagent tools", () => {
     expect(unpaired(out)).toEqual([]);
   });
 
+  test("completes a subagent's tool whose agent moved to the background first", () => {
+    const out = run([
+      assistant("msg-1", [toolUse("agent-1", "Agent", { prompt: "look" })]),
+      underAgent(
+        "agent-1",
+        assistant("sub-1", [toolUse("tool-2", "Bash", { command: "ls" })]),
+      ),
+      toolResult("agent-1", "Async agent launched", false),
+      underAgent("agent-1", toolResult("tool-2", "a.txt", false)),
+      success(),
+    ]);
+
+    expect(
+      completedItems(out).find((item) => item.type === "commandExecution"),
+    ).toMatchObject({ command: "ls", status: "completed" });
+  });
+
   test("leaves out the tools of a subagent running in the background", () => {
     const out = run([
       assistant("msg-1", [toolUse("agent-1", "Agent", { prompt: "look" })]),

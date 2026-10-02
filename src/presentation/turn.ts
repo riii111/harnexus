@@ -136,7 +136,7 @@ export const renderNotice = (
   return seal(draft);
 };
 
-// A subagent's text stays inside its parent tool item, while the tools it calls show as items of their own as long as that parent runs in this turn; anything after the turn ends is dropped.
+// A subagent's text stays inside its parent tool item, while the tools it calls show as items of their own as long as that parent runs in this turn; a result completes whichever item its call has, and anything after the turn ends is dropped.
 export const renderSdkMessage = (
   state: TurnState,
   message: SDKMessage,
@@ -159,13 +159,7 @@ export const renderSdkMessage = (
       }
       break;
     case "user":
-      if (
-        (message.parent_tool_use_id === null ||
-          runsInTurn(draft, message.parent_tool_use_id)) &&
-        !("isReplay" in message)
-      ) {
-        renderToolResults(draft, message, now);
-      }
+      if (!("isReplay" in message)) renderToolResults(draft, message, now);
       break;
     case "system":
       renderSystem(draft, message, now);
@@ -226,10 +220,11 @@ export const renderToolRequest = (
   state: TurnState,
   block: { id: string; name: string; input: unknown },
   now: number,
+  closesText = true,
 ): Rendered => {
   if (state.finished) return { state, notifications: [] };
   const draft = open(state);
-  startTool(draft, block, now);
+  startTool(draft, block, now, closesText);
   return seal(draft);
 };
 
@@ -460,6 +455,7 @@ const renderAssistant = (
 const runsInTurn = (draft: Draft, parentToolUseId: string | null) =>
   parentToolUseId !== null && draft.tools[parentToolUseId]?.state === "running";
 
+// The main conversation's text waiting for its stop reason is left to it, since a subagent's call cannot tell whether that text was commentary.
 const renderSubagentTools = (
   draft: Draft,
   message: SDKAssistantMessage,
@@ -467,7 +463,7 @@ const renderSubagentTools = (
 ) => {
   if (message.error !== undefined) return;
   for (const block of message.message.content) {
-    if (block.type === "tool_use") startTool(draft, block, now);
+    if (block.type === "tool_use") startTool(draft, block, now, false);
   }
 };
 
@@ -501,9 +497,10 @@ const startTool = (
   draft: Draft,
   block: { id: string; name: string; input: unknown },
   now: number,
+  closesText = true,
 ) => {
   if (draft.tools[block.id] !== undefined) return;
-  flushPending(draft, "commentary", now);
+  if (closesText) flushPending(draft, "commentary", now);
   const item = startToolItem(nextItemId(draft), block, draft.cwd);
   draft.tools[block.id] = { state: "running", item, startedAtMs: now };
   itemStarted(draft, item, now);

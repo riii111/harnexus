@@ -226,21 +226,22 @@ describe("tool approval", () => {
     });
   });
 
-  test("asks a subagent's tool without adding an item to the thread", async () => {
+  test("asks about a subagent's tool on an item of its own", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { sent } = await startedTurn(claude);
 
     askTool(claude, "Bash", { command: "ls" }, { agentID: "agent-1" });
     const request = await appRequest(sent);
 
-    expect(request.method).toBe("item/tool/requestUserInput");
-    expect(request.params.itemId).toBe("turn-1-tool-1");
-    expect(
-      sent.filter(
-        (m) =>
-          m.method === "item/started" && m.params.item.type !== "userMessage",
-      ),
-    ).toEqual([]);
+    const started = sent.find(
+      (m) =>
+        m.method === "item/started" &&
+        m.params.item.type === "commandExecution",
+    );
+    expect(request).toMatchObject({
+      method: "item/commandExecution/requestApproval",
+      params: { itemId: started?.params.item.id, command: "ls" },
+    });
   });
 
   test("denies a tool asked outside a running turn without asking the app", async () => {
