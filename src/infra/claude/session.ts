@@ -55,6 +55,12 @@ class ClaudeSessionClosed extends TaggedError("ClaudeSessionClosed")<{
   message: string;
 }> {}
 
+class ClaudeSessionStartCancelled extends TaggedError(
+  "ClaudeSessionStartCancelled",
+)<{
+  message: string;
+}> {}
+
 class NoClaudeModelsListed extends TaggedError("NoClaudeModelsListed")<{
   message: string;
 }> {}
@@ -65,24 +71,45 @@ type ClaudeRuntime = ClaudeSdk & { env: Env };
 export const startClaudeSession = (
   settings: ClaudeSessionSettings,
   runtime: ClaudeRuntime = PROCESS_RUNTIME,
+  signal?: AbortSignal,
 ) =>
   Result.gen(async function* () {
+    if (signal?.aborted) return Result.err(sessionStartCancelled());
     const resolved = yield* Result.await(
       readSettings(runtime.resolveSettings, settings.cwd, SETTING_SOURCES),
     );
     yield* checkSettingsEnv(resolved.env ?? {});
+    if (signal?.aborted) return Result.err(sessionStartCancelled());
     const prompt = createPromptQueue();
     const claude = yield* openQuery(
       runtime.query,
       prompt.stream,
       sessionOptions(settings, runtime.env),
     );
-    const checked = (await readAccount(claude)).andThen(checkSubscription);
-    if (checked.isErr()) {
+    let startupClosed = false;
+    const closeStartup = () => {
+      if (startupClosed) return;
+      startupClosed = true;
+      signal?.removeEventListener("abort", closeOnAbort);
       prompt.end();
       closeQuery(claude);
+    };
+    const closeOnAbort = () => closeStartup();
+    signal?.addEventListener("abort", closeOnAbort, { once: true });
+    if (signal?.aborted) closeStartup();
+    const checked = (await readAccount(claude, undefined, signal)).andThen(
+      checkSubscription,
+    );
+    if (checked.isErr()) {
+      closeStartup();
+      if (signal?.aborted) return Result.err(sessionStartCancelled());
     }
     yield* checked;
+    if (signal?.aborted) {
+      closeStartup();
+      return Result.err(sessionStartCancelled());
+    }
+    signal?.removeEventListener("abort", closeOnAbort);
     return Result.ok(createSession(claude, prompt));
   });
 
@@ -122,10 +149,10 @@ export const readClaudeLogin = async (
   (
     await askClaude(runtime, cwd, (claude) => readAccount(claude, timeoutMs))
   ).andThen((account) =>
-    Result.gen(function* () {
-      yield* checkSubscription(account);
-      return Result.ok(account.subscriptionType ?? "subscription");
-    }),
+    Result.map(
+      checkSubscription(account),
+      () => account.subscriptionType ?? "subscription",
+    ),
   );
 
 // Asking Claude Code about itself sends no prompt, so the process is closed as soon as it answers.
@@ -286,3 +313,8 @@ const PROCESS_RUNTIME: ClaudeRuntime = {
 
 const sessionClosed = () =>
   new ClaudeSessionClosed({ message: "the Claude session is closed" });
+
+const sessionStartCancelled = () =>
+  new ClaudeSessionStartCancelled({
+    message: "Claude session startup was cancelled",
+  });

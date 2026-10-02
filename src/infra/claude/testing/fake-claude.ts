@@ -48,6 +48,7 @@ export const fakeClaude = (
   let waiting: ((item: Delivery) => void) | null = null;
   let options: Options | null = null;
   let prompt: AsyncIterable<SDKUserMessage> | null = null;
+  let nextCalls = 0;
   let interrupts = 0;
   const modes: PermissionMode[] = [];
   const efforts: (EffortLevel | null | undefined)[] = [];
@@ -60,6 +61,7 @@ export const fakeClaude = (
   };
   const claude: ClaudeQuery = {
     next: async () => {
+      nextCalls += 1;
       const item =
         queued.shift() ??
         (await new Promise<Delivery>((resolve) => {
@@ -139,6 +141,7 @@ export const fakeClaude = (
     modes: () => modes,
     efforts: () => efforts,
     closes: () => closes,
+    nextCalls: () => nextCalls,
   };
 };
 
