@@ -12,7 +12,7 @@ export type SessionReply =
   | { kind: "taken" }
   | { kind: "recordGone" }
   | { kind: "notSaved" }
-  | { kind: "selected"; title: string; unsynced: boolean }
+  | { kind: "selected"; title: string; name: string | null; unsynced: boolean }
   | { kind: "session"; cwd: string; sessionId: string | null };
 
 export type ListedConversation = {

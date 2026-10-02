@@ -167,6 +167,7 @@ export const createSessionCommands = ({
       reply: {
         kind: "selected",
         title: chosen.title,
+        name: chosen.name,
         unsynced: error !== null,
       } as const,
       error,
