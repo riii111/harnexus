@@ -125,6 +125,80 @@ describe("a number sent after /resume", () => {
     expect(turns.takePicked(THREAD)).toBe(false);
   });
 
+  test.each<{ name: string; records: () => object[] }>([
+    {
+      name: "the name Claude gave",
+      records: () => [
+        ...conversationRecords("fixture ask"),
+        { type: "ai-title", aiTitle: "Fixture title", sessionId: "se-a" },
+      ],
+    },
+    {
+      name: "the name the user gave",
+      records: () => [
+        ...conversationRecords("fixture ask"),
+        { type: "ai-title", aiTitle: "Other title", sessionId: "se-a" },
+        {
+          type: "custom-title",
+          customTitle: "Fixture title",
+          sessionId: "se-a",
+        },
+      ],
+    },
+  ])("renames the thread to $name of the picked conversation", async ({
+    records,
+  }) => {
+    const { turns, sent, renames } = await harness([]);
+    await writeClaudeRecord("se-a", records());
+    turns.startTurn(turnStart(10, "/resume"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 1);
+
+    turns.startTurn(turnStart(11, "1"), undefined);
+    await until(() => renames.length === 1);
+
+    expect(renames).toEqual([{ threadId: THREAD, name: "Fixture title" }]);
+  });
+
+  test("leaves the thread's name as it was for a conversation with no name", async () => {
+    const { turns, sent, store, renames } = await harness([]);
+    await writeClaudeRecord("se-a", conversationRecords("fixture ask"));
+    turns.startTurn(turnStart(10, "/resume"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 1);
+
+    turns.startTurn(turnStart(11, "1"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(store.get(THREAD)?.sessionId).toBe("se-a");
+    expect(renames).toEqual([]);
+  });
+
+  test("keeps the pick when the rename fails and logs only the error tag", async () => {
+    const replay = [{ method: "turn/started", params: { replayed: true } }];
+    const { turns, sent, store, events, renames } = await harness([], {
+      renameFails: true,
+      readHistory: async () => replay,
+    });
+    await writeClaudeRecord("se-a", [
+      ...conversationRecords("fixture ask"),
+      { type: "ai-title", aiTitle: "Fixture title", sessionId: "se-a" },
+    ]);
+    turns.startTurn(turnStart(10, "/resume"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 1);
+
+    turns.startTurn(turnStart(11, "1"), undefined);
+    await until(() => sent.includes(replay[0]));
+    await until(() => events.some((e) => e.step === "thread_not_renamed"));
+
+    expect(renames).toHaveLength(1);
+    expect(store.get(THREAD)?.sessionId).toBe("se-a");
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "thread_not_renamed",
+      error: "ServerRequestRejected",
+    });
+    expect(JSON.stringify(events)).not.toContain("Fixture title");
+  });
+
   test("binds a conversation two threads pick at once to only one of them", async () => {
     const { turns, sent, store } = await harness([]);
     turns.adopt(OTHER_THREAD, { model: MODEL, cwd: dir });

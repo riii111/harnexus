@@ -68,6 +68,70 @@ describe("connectClaudeThreads", () => {
       },
     });
   });
+
+  test("asks the server to rename a thread after the conversation picked with /resume", async () => {
+    const requests: { method: string; params: unknown }[] = [];
+    const sent: Sent[] = [];
+    const threads = await connectWith(requests, sent, {
+      listConversations: async () => Result.ok([PICKABLE]),
+    });
+    const fromApp = (message: object) =>
+      threads.router.fromApp(Buffer.from(`${JSON.stringify(message)}\n`));
+
+    fromApp(turnOf(1, "/resume"));
+    await until(() => completions(sent) === 1);
+    fromApp(turnOf(2, "1"));
+    await until(() => requests.some((r) => r.method === "thread/name/set"));
+    threads.closeAll();
+
+    expect(requests).toContainEqual({
+      method: "thread/name/set",
+      params: { threadId: WORKER_A, name: "Fixture title" },
+    });
+  });
+});
+
+const connectWith = async (
+  requests: { method: string; params: unknown }[],
+  sent: Sent[],
+  {
+    listConversations,
+  }: Pick<Parameters<typeof connectClaudeThreads>[0], "listConversations">,
+) => {
+  const opened = await openThreadStore(join(dir, "threads.json"));
+  if (opened.isErr()) return expect.unreachable(opened.error.message);
+  const catalog = createModelCatalog();
+  return connectClaudeThreads({
+    store: opened.value,
+    request: async (method, params) => {
+      requests.push({ method, params });
+      return Result.ok({});
+    },
+    startSession: async () => expect.unreachable("Claude never starts"),
+    findSession: async () => Result.ok(true),
+    listConversations,
+    lastRecordOf: async () => Result.ok(null),
+    readSession: async () => Result.ok([]),
+    effortRule: effortRule({}, catalog.effortsOf),
+    claudeModels: catalog.models,
+    unverifiedCodex: "warn",
+    send: (message) => sent.push(message),
+    log: () => {},
+  });
+};
+
+const completions = (sent: Sent[]) =>
+  sent.filter((message) => message.method === "turn/completed").length;
+
+const turnOf = (id: number, text: string) => ({
+  id,
+  method: "turn/start",
+  params: {
+    threadId: WORKER_A,
+    model: MODEL,
+    cwd: dir,
+    input: [{ type: "text", text, text_elements: [] }],
+  },
 });
 
 const workerA = async () => {
@@ -205,6 +269,13 @@ const SUBSCRIPTION: AccountInfo = {
 const MODELS = {
   data: [{ id: "gpt-fixture", model: "gpt-fixture", isDefault: true }],
   nextCursor: null,
+};
+const PICKABLE = {
+  sessionId: "se-fixture",
+  name: "Fixture title",
+  title: "Fixture title",
+  updatedAtMs: 1_700_000_000_000,
+  entrypoint: "cli",
 };
 const PROVISIONAL = {
   clientThreadId: "client-new-thread:019a0000-0000-7000-8000-0000000000cc",

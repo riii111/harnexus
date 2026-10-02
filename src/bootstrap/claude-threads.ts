@@ -62,6 +62,12 @@ export const connectClaudeThreads = ({
         Date.now(),
       );
     },
+    renameThread: (threadId, name) =>
+      request(
+        "thread/name/set",
+        { threadId, name },
+        { timeoutMs: RENAME_TIMEOUT_MS },
+      ),
     openLink: (callerThreadId) =>
       createCodexLink({ callerThreadId, store, request, delegations }),
     send,
@@ -112,3 +118,5 @@ const THREAD_NOTE = {
 };
 
 const INJECT_TIMEOUT_MS = 30_000;
+
+const RENAME_TIMEOUT_MS = 10_000;

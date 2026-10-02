@@ -188,6 +188,7 @@ export const harness = async (
     lastRecord,
     startSession: startSessionOverride,
     materializeFailures = 0,
+    renameFails = false,
     linkRequest,
     readHistory,
     effortRule = defaultRule,
@@ -205,6 +206,7 @@ export const harness = async (
     lastRecord?: Parameters<typeof createClaudeRuntime>[0]["lastRecordOf"];
     startSession?: StartSessionOverride;
     materializeFailures?: number;
+    renameFails?: boolean;
     linkRequest?: ServerRequest;
     readHistory?: Parameters<typeof createClaudeRuntime>[0]["readHistory"];
     effortRule?: EffortRule;
@@ -220,6 +222,7 @@ export const harness = async (
   const links: string[] = [];
   const gates: string[] = [];
   const materialized: string[] = [];
+  const renames: { threadId: string; name: string }[] = [];
   const toolCalls: unknown[] = [];
   let failuresLeft = materializeFailures;
   let turnCount = 0;
@@ -261,6 +264,12 @@ export const harness = async (
         stopWrites: () => gates.push("stop"),
         acceptWrites: () => gates.push("accept"),
       };
+    },
+    renameThread: async (threadId, name) => {
+      renames.push({ threadId, name });
+      return renameFails
+        ? Result.err({ _tag: "ServerRequestRejected" as const })
+        : Result.ok({});
     },
     send,
     log,
@@ -305,6 +314,7 @@ export const harness = async (
     links,
     gates,
     materialized,
+    renames,
     toolCalls,
   };
 };

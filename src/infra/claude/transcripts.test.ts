@@ -37,12 +37,14 @@ describe("listClaudeConversations", () => {
     expect(listed.isOk() && listed.value).toEqual([
       {
         sessionId: "se-new",
+        name: "Fixture title",
         title: "Fixture title",
         updatedAtMs: NOW - HOUR,
         entrypoint: "claude-desktop",
       },
       {
         sessionId: "se-old",
+        name: null,
         title: "first ask",
         updatedAtMs: NOW - DAY,
         entrypoint: "cli",

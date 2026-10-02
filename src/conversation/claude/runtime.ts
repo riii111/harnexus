@@ -17,6 +17,7 @@ import type {
   startClaudeSession,
 } from "../../infra/claude/session.ts";
 import type { createCodexLink } from "../../infra/codex/codex-link.ts";
+import type { ServerRequest } from "../../infra/codex/server-requests.ts";
 import type { ThreadRecord } from "../../infra/thread-store.ts";
 import { promptFor } from "../../presentation/permission.ts";
 import {
@@ -85,6 +86,11 @@ type CodexLink = Pick<
   | "acceptWrites"
 >;
 
+type RenameThread = (
+  threadId: string,
+  name: string,
+) => Promise<Result<unknown, { _tag: ErrorTag<ReturnType<ServerRequest>> }>>;
+
 type StreamedMessage =
   ClaudeSession["messages"] extends AsyncGenerator<infer R> ? R : never;
 
@@ -135,6 +141,11 @@ type ClaudeTurnEvent =
       turnMs: number;
     } & TokenUsageBreakdown)
   | { event: "claude_turn"; step: "interrupt_failed"; error: InterruptTag }
+  | {
+      event: "claude_turn";
+      step: "thread_not_renamed";
+      error: ErrorTag<ReturnType<ServerRequest>>;
+    }
   | SessionEvent;
 
 export type ClaudeLogEvent = TurnEvent<ClaudeFailureTag> | ClaudeTurnEvent;
@@ -199,6 +210,7 @@ export const createClaudeRuntime = ({
   listConversations,
   lastRecordOf,
   openLink,
+  renameThread,
   readHistory = async () => [],
   send,
   log,
@@ -212,6 +224,7 @@ export const createClaudeRuntime = ({
   listConversations: SessionCommandsDeps["listConversations"];
   lastRecordOf: SessionCommandsDeps["lastRecordOf"];
   openLink: (threadId: string) => CodexLink;
+  renameThread: RenameThread;
   readHistory?: (
     threadId: string,
     sessionId: string,
@@ -356,7 +369,21 @@ export const createClaudeRuntime = ({
         : { status: "completed" },
       null,
     );
-    if (reply.kind === "selected") await showPicked(turn);
+    if (reply.kind !== "selected") return;
+    if (reply.name !== null) void nameThread(turn.threadId, reply.name);
+    await showPicked(turn);
+  };
+
+  // Not awaited, since the thread's next message waits for this turn and the name only changes what the app shows; a failed rename leaves the name as it was and the pick still stands.
+  const nameThread = async (threadId: string, name: string) => {
+    const renamed = await renameThread(threadId, name);
+    if (renamed.isErr()) {
+      log({
+        event: "claude_turn",
+        step: "thread_not_renamed",
+        error: renamed.error._tag,
+      });
+    }
   };
 
   // Sent after the command's own turn ends, so the earlier turns follow it rather than interleave with it.
@@ -1148,6 +1175,7 @@ export const serializeClaudeTurnEvent = (entry: ClaudeTurnEvent) => {
     case "record_advanced":
       return { event: entry.event, step: entry.step };
     case "interrupt_failed":
+    case "thread_not_renamed":
     case "record_unreadable":
       return { event: entry.event, step: entry.step, error: entry.error };
   }
@@ -1256,6 +1284,7 @@ const CLAUDE_STEPS: Record<ClaudeTurnEvent["step"], true> = {
   effort_applied: true,
   metrics: true,
   interrupt_failed: true,
+  thread_not_renamed: true,
   session_command: true,
   record_advanced: true,
   record_unreadable: true,

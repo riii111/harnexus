@@ -9,9 +9,10 @@ import {
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 
-// title is the name Claude or the user gave the conversation, else its first prompt; entrypoint is the program that started it, such as cli or claude-desktop.
+// name is the one Claude or the user gave the conversation, and title falls back to its first prompt; entrypoint is the program that started it, such as cli or claude-desktop.
 export type ClaudeConversation = {
   sessionId: string;
+  name: string | null;
   title: string;
   updatedAtMs: number;
   entrypoint: string | null;
@@ -124,16 +125,17 @@ const readConversation = async (
   if (typeof ranIn !== "string" || resolve(ranIn) !== resolve(cwd)) {
     return null;
   }
-  const title =
+  const name =
     lastString([...first, ...last], "customTitle") ??
-    lastString([...first, ...last], "aiTitle") ??
-    firstPrompt(first);
+    lastString([...first, ...last], "aiTitle");
+  const title = name ?? firstPrompt(first);
   if (title === null) return null;
   const entrypoint = first.find(
     (record) => typeof record.entrypoint === "string",
   )?.entrypoint;
   return {
     sessionId,
+    name,
     title,
     updatedAtMs: modifiedMs,
     entrypoint: typeof entrypoint === "string" ? entrypoint : null,
