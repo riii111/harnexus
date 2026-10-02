@@ -954,6 +954,30 @@ describe("Claude thread history", () => {
     expect(out.result).not.toHaveProperty("initialTurnsPage");
   });
 
+  test("keeps the pick for the next resume when the server fails one", async () => {
+    const { router, picked } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+    picked.add("th-claude");
+    const resume = (id: number) =>
+      router.fromApp(
+        encode({
+          id,
+          method: "thread/resume",
+          params: { threadId: "th-claude", excludeTurns: true },
+        }),
+      );
+
+    resume(4);
+    await router.fromServer(
+      encode({ id: 4, error: { code: -32600, message: "not loaded" } }),
+    );
+    resume(5);
+    const out = parse(await router.fromServer(threadResponse(5, "th-claude")));
+
+    expect(out.result.thread.turns).toHaveLength(2);
+  });
+
   test("fills the turns of the first resume after a conversation was picked, though the app excludes them", async () => {
     const { router, picked } = setup(["th-claude"], {
       "th-claude": conversation(),

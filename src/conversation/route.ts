@@ -72,7 +72,6 @@ type Pending =
       kind: "threadOpen";
       createdModel: string | null;
       history: ReturnType<History["load"]> | null;
-      picked: boolean;
       params: Record<string, unknown>;
     }
   | { kind: "threadRead"; history: ReturnType<History["load"]> };
@@ -216,7 +215,6 @@ export const createRouter = (
       kind: "threadOpen",
       createdModel: created ? String(params.model) : null,
       history: reopened ? history.load(threadId) : null,
-      picked: reopened && history.takePicked(threadId),
       params,
     });
     if (!isClaudeModel(params.model)) return line;
@@ -349,9 +347,11 @@ export const createRouter = (
       }),
     };
     if (request.history === null) return encode({ ...message, result: opened });
-    const { params, picked } = request;
+    const { params } = request;
     return request.history.then((loaded) => {
       if (loaded.isErr()) return encode({ ...message, result: opened });
+      // Taken only once the history goes out, since a resume the server fails would otherwise use up the pick.
+      const picked = history.takePicked(threadId);
       log({
         event: "claude_history_served",
         method: "thread/resume",
