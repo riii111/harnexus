@@ -120,10 +120,10 @@ export const readClaudeLogin = async (
   (
     await askClaude(runtime, cwd, (claude) => readAccount(claude, timeoutMs))
   ).andThen((account) =>
-    Result.gen(function* () {
-      yield* checkSubscription(account);
-      return Result.ok(account.subscriptionType ?? "subscription");
-    }),
+    Result.map(
+      checkSubscription(account),
+      () => account.subscriptionType ?? "subscription",
+    ),
   );
 
 // Asking Claude Code about itself sends no prompt, so the process is closed as soon as it answers.
