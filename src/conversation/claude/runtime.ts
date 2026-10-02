@@ -128,7 +128,7 @@ export type ClaudeLogEvent = TurnEvent<ClaudeFailureTag> | ClaudeTurnEvent;
 
 // A session is not reused until its interrupt reports whether a send is still queued, which can arrive after the interrupted turn has ended.
 // attachedSkills maps each SKILL.md path this session was given to the body it was given.
-// reader is the inbox Claude's messages go to, and unclaimed says whom it waits for while no turn reads it: a turn Claude started on its own, or the turn the thread has accepted. backgroundTasks counts the tasks Claude runs in the background.
+// reader is the inbox Claude's messages go to, and unclaimed says whom it waits for while no turn reads it: a turn Claude started on its own, or the turn the thread has accepted. discarding drops the rest of a turn of Claude's own that the app could not show, and backgroundTasks counts the tasks Claude runs in the background.
 type SessionSlot = {
   session: ClaudeSession;
   model: string;
@@ -137,6 +137,7 @@ type SessionSlot = {
   attachedSkills: Map<string, string>;
   reader: Inbox<StreamedNext> | null;
   unclaimed: "own" | "turn" | null;
+  discarding: boolean;
   backgroundTasks: number;
 };
 
@@ -238,7 +239,11 @@ export const createClaudeRuntime = ({
   };
 
   const run = async (turn: Turn) => {
-    const command = commands.take(turn.threadId, typedText(turn.input));
+    // A turn of Claude's own leaves a /resume listing for the user's pick that follows.
+    const command =
+      turn.input.startedBy === "claude"
+        ? null
+        : commands.take(turn.threadId, typedText(turn.input));
     const claude: ClaudeTurn = {
       command: command !== null,
       own: false,
@@ -611,6 +616,10 @@ export const createClaudeRuntime = ({
         dropSession(threadId, slot);
         return null;
       }
+      if (slot.discarding) {
+        slot.discarding = next.value.value.type !== "result";
+        return null;
+      }
       if (!startsTurn(next.value.value)) return null;
     }
     // A turn the app cannot be shown, as when the bridge is closing, is left to Claude.
@@ -655,7 +664,15 @@ export const createClaudeRuntime = ({
     const waitedFor = slot.unclaimed;
     slot.reader = null;
     slot.unclaimed = null;
-    if (waitedFor === "own") return;
+    if (waitedFor === "own") {
+      slot.discarding = !left.some(
+        (next) =>
+          next.done !== true &&
+          next.value.isOk() &&
+          next.value.value.type === "result",
+      );
+      return;
+    }
     for (const next of left) route(threadId, slot, next);
   };
 
@@ -767,6 +784,7 @@ export const createClaudeRuntime = ({
       attachedSkills: new Map(),
       reader: null,
       unclaimed: null,
+      discarding: false,
       backgroundTasks: 0,
     };
     sessions.set(record.threadId, slot);

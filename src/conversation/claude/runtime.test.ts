@@ -9,7 +9,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { createModelCatalog, effortRule } from "../../infra/claude/models.ts";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
-import { writeFileAtomic } from "../../runtime/fs.boundary.ts";
+import { createEmptyFile, writeFileAtomic } from "../../runtime/fs.boundary.ts";
 import type { createTurnController } from "../controller.ts";
 import {
   ALLOWED_TOOLS,
@@ -1199,6 +1199,38 @@ describe("turns Claude starts between app turns", () => {
     await until(() => turnCompleted(sent) !== undefined);
 
     await until(() => claude.closes() === 1);
+  });
+
+  test("shows the rest of a turn Claude started on its own as no new turn when the app could not be shown it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    let failing = false;
+    const { turns, sent } = await harness([claude], {
+      files: {
+        createMarker: async (path) => {
+          if (!failing) return createEmptyFile(path);
+          failing = false;
+          return diskFull(path);
+        },
+      },
+    });
+    await completeTurn(turns, sent, claude, 10);
+
+    failing = true;
+    claude.emit(sdk(INIT));
+    await until(() => completedTurnStatuses(sent).length === 2);
+    claude.emit(sdk(answer("msg-2", "the agent finished")));
+    claude.emit(sdk(ownResult()));
+    await until(() => claude.drained());
+    await settle();
+    claude.emit(sdk(INIT));
+    claude.emit(sdk(answer("msg-3", "another report")));
+    claude.emit(sdk(ownResult()));
+    await until(() => completedTurnStatuses(sent).length === 3);
+
+    expect(completedTurns(sent).slice(1)).toMatchObject([
+      { id: "turn-2", status: "failed" },
+      { id: "turn-3", items: [{ text: "another report" }] },
+    ]);
   });
 
   test("resumes on a new Claude after the session failed while no turn ran", async () => {
