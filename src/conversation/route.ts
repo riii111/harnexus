@@ -38,6 +38,7 @@ type Turns = {
   isClaudeThread: (threadId: unknown) => boolean;
   threadOf: (threadId: string) => Thread | undefined;
   adopt: (threadId: string, thread: Thread) => void;
+  adoptFork: (threadId: string, thread: Thread, sourceId: string) => void;
   changeModel: (threadId: string, model: string) => void;
   startTurn: (request: AppRequest, fallbackCwd: string | undefined) => void;
   compactThread: (request: AppRequest) => void;
@@ -63,6 +64,8 @@ type Pending =
   | {
       kind: "threadOpen";
       createdModel: string | null;
+      // The Claude thread a thread/fork copies, whose model the fork keeps.
+      forkOf: string | null;
       history: ReturnType<History["load"]> | null;
       params: Record<string, unknown>;
     }
@@ -104,6 +107,17 @@ export const createRouter = (
       case "thread/start":
       case "thread/resume":
         return routeThreadOpen(line, message, request);
+      // The server copies its own record of the thread, which holds none of the Claude conversation, so the fork learns of it here.
+      case "thread/fork":
+        if (!turns.isClaudeThread(params.threadId)) return line;
+        pending.set(id, {
+          kind: "threadOpen",
+          createdModel: null,
+          forkOf: String(params.threadId),
+          history: null,
+          params,
+        });
+        return line;
       case "turn/start":
         noteDelegation(params);
         if (
@@ -205,6 +219,7 @@ export const createRouter = (
     pending.set(id, {
       kind: "threadOpen",
       createdModel: created ? String(params.model) : null,
+      forkOf: null,
       history:
         threadId !== undefined && known !== undefined
           ? history.load(threadId)
@@ -317,6 +332,19 @@ export const createRouter = (
     if (typeof result.cwd === "string") cwds.set(threadId, result.cwd);
     if (request.createdModel !== null && typeof result.cwd === "string") {
       turns.adopt(threadId, { model: request.createdModel, cwd: result.cwd });
+    }
+    const source =
+      request.forkOf === null ? undefined : turns.threadOf(request.forkOf);
+    if (
+      request.forkOf !== null &&
+      source !== undefined &&
+      typeof result.cwd === "string"
+    ) {
+      turns.adoptFork(
+        threadId,
+        { model: source.model, cwd: result.cwd },
+        request.forkOf,
+      );
     }
     const model = turns.threadOf(threadId)?.model;
     if (model === undefined) return line;

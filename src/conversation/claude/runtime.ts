@@ -759,12 +759,18 @@ export const createClaudeRuntime = ({
         }),
       );
     }
+    const forkFrom =
+      resume === null ? threads.forkSourceOf(record.threadId) : null;
+    // A fork whose source conversation is gone starts a conversation of its own.
+    const forked = forkFrom !== null && (await sessionFound(forkFrom));
     // Each session gets its own thread tool server, since one server instance serves one Claude process.
     const link = openLink(record.threadId);
     const started = await startSession({
       cwd: record.worktree,
       model,
-      ...resumeFrom(resume),
+      ...(forked
+        ? { resume: forkFrom, forkSession: true }
+        : resumeFrom(resume)),
       mcpServers: { [link.server.name]: link.server },
       allowedTools: link.allowedTools,
       canUseTool: approveTool(record.threadId),

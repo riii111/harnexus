@@ -35,6 +35,8 @@ export const createThreadValues = (
 ) => {
   // Threads created with a Claude model are saved to the store only on their first turn, so a thread never used leaves nothing behind.
   const adopted = new Map<string, Thread>();
+  // A thread forked from a Claude thread, such as a side chat, starts its own conversation from the source's as it stands at its first turn.
+  const forkSources = new Map<string, string>();
   const models = new Map<string, string>();
   const efforts = new Map<string, EffortLevel>();
   const sessionIds = new Map<string, string | null>();
@@ -64,6 +66,19 @@ export const createThreadValues = (
 
   const adopt = (threadId: string, thread: Thread) => {
     if (store.get(threadId) === undefined) adopted.set(threadId, thread);
+  };
+
+  const adoptFork = (threadId: string, thread: Thread, sourceId: string) => {
+    if (store.get(threadId) !== undefined) return;
+    adopted.set(threadId, thread);
+    forkSources.set(threadId, sourceId);
+  };
+
+  // Once the fork has a conversation of its own, it resumes that one.
+  const forkSourceOf = (threadId: string) => {
+    const sourceId = forkSources.get(threadId);
+    if (sourceId === undefined || sessionIdOf(threadId) !== null) return null;
+    return sessionIdOf(sourceId);
   };
 
   // An id set here but not saved wins over the store's, as in sessionIdOf.
@@ -155,6 +170,8 @@ export const createThreadValues = (
     pickedEffortOf,
     sessionIdOf,
     adopt,
+    adoptFork,
+    forkSourceOf,
     isBound,
     bindSession,
     markRegistered,

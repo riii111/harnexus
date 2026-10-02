@@ -909,6 +909,52 @@ describe("session ids", () => {
   });
 });
 
+describe("a fork of a Claude thread", () => {
+  const forkTurn = async (
+    started: Awaited<ReturnType<typeof harness>>,
+    claude: ReturnType<typeof fakeClaude>,
+    id: number,
+  ) => {
+    started.turns.startTurn(turnStart(id, "aside", OTHER_THREAD), undefined);
+    await until(() => responseTo(started.sent, id) !== undefined);
+    claude.emit(sdk({ ...answer(`msg-${id}`, "ok"), session_id: "se-fork" }));
+    claude.emit(sdk({ ...success(), session_id: "se-fork" }));
+    await until(() => completedTurnStatuses(started.sent).length === 2);
+  };
+
+  test("starts its own conversation from the source's and leaves the source's alone", async () => {
+    const source = fakeClaude(SUBSCRIPTION);
+    const fork = fakeClaude(SUBSCRIPTION);
+    const started = await harness([source, fork]);
+    await completeTurn(started.turns, started.sent, source, 10);
+    started.turns.adoptFork(OTHER_THREAD, { model: MODEL, cwd: dir }, THREAD);
+
+    await forkTurn(started, fork, 11);
+
+    expect(started.settings[1]).toMatchObject({
+      resume: "se-1",
+      forkSession: true,
+    });
+    await until(() => started.store.get(OTHER_THREAD)?.sessionId === "se-fork");
+    expect(started.store.get(THREAD)?.sessionId).toBe("se-1");
+  });
+
+  test("starts a conversation of its own when the source's is gone", async () => {
+    const source = fakeClaude(SUBSCRIPTION);
+    const fork = fakeClaude(SUBSCRIPTION);
+    const started = await harness([source, fork], {
+      missingSessions: ["se-1"],
+    });
+    await completeTurn(started.turns, started.sent, source, 10);
+    started.turns.adoptFork(OTHER_THREAD, { model: MODEL, cwd: dir }, THREAD);
+
+    await forkTurn(started, fork, 11);
+
+    expect(started.settings[1]?.resume).toBeUndefined();
+    expect(started.settings[1]?.forkSession).toBeUndefined();
+  });
+});
+
 describe("a saved session Claude no longer has", () => {
   test("fails the turn without starting Claude and starts a new conversation on the next turn", async () => {
     const first = fakeClaude(SUBSCRIPTION);

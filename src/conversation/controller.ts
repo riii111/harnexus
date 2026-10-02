@@ -803,6 +803,7 @@ export const createTurnController = <Tag extends string>({
     threadOf: threads.threadOf,
     sessionIdOf: threads.sessionIdOf,
     adopt: threads.adopt,
+    adoptFork: threads.adoptFork,
   };
 };
 

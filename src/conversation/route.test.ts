@@ -439,6 +439,43 @@ describe("threads with a Claude model", () => {
     expect(calls.map(([name]) => name)).toEqual([expected]);
   });
 
+  test("makes a fork of a Claude thread, such as a side chat, a Claude thread on the source's model", async () => {
+    const { router, calls } = setup(["th-claude"]);
+    const line = encode({
+      id: 9,
+      method: "thread/fork",
+      params: { threadId: "th-claude", ephemeral: true },
+    });
+
+    expect(router.fromApp(line)).toBe(line);
+    const out = parse(await router.fromServer(threadResponse(9, "th-side")));
+
+    expect(calls).toEqual([
+      [
+        "adoptFork",
+        "th-side",
+        { model: CLAUDE, cwd: "/fixture/work" },
+        "th-claude",
+      ],
+    ]);
+    expect(out.result.model).toBe(CLAUDE);
+    expect(out.result.thread.model).toBe(CLAUDE);
+  });
+
+  test("leaves the fork of a Codex thread as the same bytes", async () => {
+    const { router, calls } = setup();
+    const line = encode({
+      id: 9,
+      method: "thread/fork",
+      params: { threadId: "th-codex" },
+    });
+    const response = threadResponse(9, "th-side");
+
+    expect(router.fromApp(line)).toBe(line);
+    expect(await router.fromServer(response)).toBe(response);
+    expect(calls).toEqual([]);
+  });
+
   test("refuses a resume of a Claude thread in another working directory", () => {
     const { router, calls, events } = setup(["th-claude"]);
     const line = encode({
@@ -1223,6 +1260,10 @@ const setup = (
       threadOf: (threadId) => threads.get(threadId),
       adopt: (threadId, thread) => {
         calls.push(["adopt", threadId, thread]);
+        threads.set(threadId, thread);
+      },
+      adoptFork: (threadId, thread, sourceId) => {
+        calls.push(["adoptFork", threadId, thread, sourceId]);
         threads.set(threadId, thread);
       },
       changeModel: (threadId, model) => {
