@@ -7,7 +7,9 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { Result } from "better-result";
 import { createModelCatalog, effortRule } from "../../infra/claude/models.ts";
+import { startClaudeSession } from "../../infra/claude/session.ts";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
 import { createEmptyFile, writeFileAtomic } from "../../runtime/fs.boundary.ts";
 import type { createTurnController } from "../controller.ts";
@@ -878,6 +880,261 @@ describe("turn metrics", () => {
       beforeSteer,
       after: events.filter((event) => event.step === "metrics").length,
     }).toEqual({ beforeSteer: 1, after: 2 });
+  });
+});
+
+describe("canceling Claude session startup", () => {
+  test("cancels a stuck account lookup while preserving a slow valid startup and its next turn", async () => {
+    const accountGate = createGate();
+    const normalAccountGate = createGate();
+    const first = fakeClaude(new Error("account lookup failed"), {
+      accountAnswered: accountGate.promise,
+    });
+    const second = fakeClaude(SUBSCRIPTION, {
+      accountAnswered: normalAccountGate.promise,
+    });
+    const { turns, sent, settings } = await harness([first, second]);
+
+    turns.startTurn(turnStart(10, "first"), undefined);
+    await until(() => first.started());
+    turns.interruptTurn(interrupt(20, "turn-1"));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnCompleted(sent)?.status).toBe("interrupted");
+    expect(first.closes()).toBe(1);
+    expect(first.interrupts()).toBe(0);
+    expect(await first.prompts()).toEqual([]);
+
+    turns.startTurn(turnStart(11, "second"), undefined);
+    await until(() => second.started());
+    expect(second.closes()).toBe(0);
+    normalAccountGate.open();
+    await normalAccountGate.promise;
+    expect(await firstPrompt(second.prompt())).toBe("second");
+    second.emit(sdk(answer("msg-2", "reply")));
+    await until(() => second.drained());
+    second.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    accountGate.open();
+    await accountGate.promise;
+    turns.startTurn(turnStart(12, "third"), undefined);
+    await until(() => responseTo(sent, 12) !== undefined);
+    expect(await firstPrompt(second.prompt())).toBe("third");
+    second.emit(sdk(answer("msg-3", "reply")));
+    await until(() => second.drained());
+    second.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 3);
+
+    expect(settings).toHaveLength(2);
+    expect(first.closes()).toBe(1);
+  });
+
+  test("closes a late successful start without starting its pump or replacing the current session", async () => {
+    const lateStartGate = createGate();
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings } = await harness([first, second], {
+      startSession: async (session, signal, fake) => {
+        if (fake === first) {
+          await lateStartGate.promise;
+          const started = await startClaudeSession(session, fake.runtime);
+          if (started.isOk()) {
+            fake.emit(sdk(answer("msg-late", "stale startup output")));
+          }
+          return started;
+        }
+        return startClaudeSession(session, fake.runtime, signal);
+      },
+    });
+
+    turns.startTurn(turnStart(10, "first"), undefined);
+    await until(() => settings.length === 1);
+    turns.interruptTurn(interrupt(20, "turn-1"));
+    await until(() => completedTurnStatuses(sent).length === 1);
+
+    turns.startTurn(turnStart(11, "second"), undefined);
+    await until(() => second.started());
+    expect(await firstPrompt(second.prompt())).toBe("second");
+    second.emit(sdk(answer("msg-2", "reply")));
+    await until(() => second.drained());
+    second.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    lateStartGate.open();
+    await until(() => first.closes() === 1);
+    expect(first.nextCalls()).toBe(0);
+    expect(await first.prompts()).toEqual([]);
+    expect(JSON.stringify(sent)).not.toContain("stale startup output");
+
+    turns.startTurn(turnStart(12, "reuse second"), undefined);
+    await until(() => responseTo(sent, 12) !== undefined);
+    expect(await firstPrompt(second.prompt())).toBe("reuse second");
+    second.emit(sdk(answer("msg-3", "reply")));
+    await until(() => second.drained());
+    second.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 3);
+
+    expect(settings).toHaveLength(2);
+    turns.closeAll();
+  });
+
+  test("interrupts a prior-record lookup and reuses the existing session", async () => {
+    const advancedGate = createGate();
+    const advancedFinished = createGate();
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    let recordReads = 0;
+    const { turns, sent, settings, store, gates } = await harness(
+      [first, second],
+      {
+        lastRecord: async () => {
+          recordReads += 1;
+          if (recordReads === 2) {
+            await advancedGate.promise;
+            advancedFinished.open();
+            return Result.ok("record-after");
+          }
+          return Result.ok("record-before");
+        },
+        lookupSession: async () => Result.ok(true),
+      },
+    );
+
+    await completeTurn(turns, sent, first, 10);
+    expect(await firstPrompt(first.prompt())).toBe("prompt 10");
+    await until(() => recordReads === 1);
+    turns.startTurn(turnStart(11, "stop during lookup"), undefined);
+    await until(() => recordReads === 2);
+    turns.interruptTurn(interrupt(20, "turn-2"));
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(first.interrupts()).toBe(0);
+    expect(first.closes()).toBe(0);
+    expect(gates.slice(0, 2)).toEqual(["accept", "stop"]);
+
+    turns.startTurn(turnStart(12, "continue after interrupt"), undefined);
+    await until(() => responseTo(sent, 12) !== undefined);
+    expect(await firstPrompt(first.prompt())).toBe("continue after interrupt");
+    expect(gates).toEqual(["accept", "stop", "stop", "accept"]);
+    first.emit(sdk(answer("msg-3", "reply")));
+    await until(() => first.drained());
+    first.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 3);
+
+    advancedGate.open();
+    await advancedFinished.promise;
+    await until(() => store.get(THREAD)?.runState === "idle");
+    expect(second.started()).toBe(false);
+    expect(settings).toHaveLength(1);
+    expect(first.closes()).toBe(0);
+  });
+
+  test("closeAll completes a turn waiting on a prior-record lookup", async () => {
+    const advancedGate = createGate();
+    const advancedFinished = createGate();
+    const first = fakeClaude(SUBSCRIPTION);
+    let recordReads = 0;
+    const { turns, sent, settings } = await harness([first], {
+      lastRecord: async () => {
+        recordReads += 1;
+        if (recordReads === 2) {
+          await advancedGate.promise;
+          advancedFinished.open();
+          return Result.ok("record-after");
+        }
+        return Result.ok("record-before");
+      },
+      lookupSession: async () => Result.ok(true),
+    });
+
+    await completeTurn(turns, sent, first, 10);
+    turns.startTurn(turnStart(11, "close during lookup"), undefined);
+    await until(() => recordReads === 2);
+    turns.closeAll();
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(completedTurnStatuses(sent).at(-1)).toBe("failed");
+    expect(first.closes()).toBe(1);
+
+    advancedGate.open();
+    await advancedFinished.promise;
+    expect(settings).toHaveLength(1);
+    expect(first.closes()).toBe(1);
+  });
+
+  test("does not let a cancelled resume lookup replace a later session", async () => {
+    const resumeGate = createGate();
+    const staleLookupFinished = createGate();
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    let lookups = 0;
+    const { turns, sent, settings } = await harness([first, second], {
+      lookupSession: async () => {
+        lookups += 1;
+        if (lookups === 1) {
+          await resumeGate.promise;
+          staleLookupFinished.open();
+        }
+        return Result.ok(true);
+      },
+    });
+
+    turns.startTurn(turnStart(10, "first"), undefined);
+    await until(() => first.started());
+    expect(await firstPrompt(first.prompt())).toBe("first");
+    first.emit(sdk(answer("msg-1", "partial")));
+    await until(() => first.drained());
+    first.fail(new Error("socket closed"));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    turns.startTurn(turnStart(11, "cancelled resume"), undefined);
+    await until(() => lookups === 1);
+    turns.interruptTurn(interrupt(20, "turn-2"));
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    turns.startTurn(turnStart(12, "new session"), undefined);
+    await until(() => second.started());
+    expect(await firstPrompt(second.prompt())).toBe("new session");
+    second.emit(sdk(answer("msg-2", "reply")));
+    await until(() => second.drained());
+    second.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 3);
+
+    resumeGate.open();
+    await staleLookupFinished.promise;
+    turns.startTurn(turnStart(13, "reuse new session"), undefined);
+    await until(() => responseTo(sent, 13) !== undefined);
+    expect(await firstPrompt(second.prompt())).toBe("reuse new session");
+    second.emit(sdk(answer("msg-3", "reply")));
+    await until(() => second.drained());
+    second.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 4);
+
+    expect(lookups).toBe(2);
+    expect(settings).toHaveLength(2);
+    expect(settings[1]).toMatchObject({ resume: "se-1" });
+    turns.closeAll();
+  });
+
+  test("closeAll releases an account lookup and closes the query once", async () => {
+    const accountGate = createGate();
+    const claude = fakeClaude(SUBSCRIPTION, {
+      accountAnswered: accountGate.promise,
+    });
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    turns.closeAll();
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnCompleted(sent)?.status).toBe("failed");
+    expect(claude.closes()).toBe(1);
+    expect(await claude.prompts()).toEqual([]);
+    accountGate.open();
+    await accountGate.promise;
+    expect(claude.closes()).toBe(1);
   });
 });
 

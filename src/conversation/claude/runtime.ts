@@ -67,7 +67,10 @@ type SessionStart = Awaited<ReturnType<typeof startClaudeSession>>;
 
 type ClaudeSession = InferOk<SessionStart>;
 
-type StartSession = (settings: ClaudeSessionSettings) => Promise<SessionStart>;
+type StartSession = (
+  settings: ClaudeSessionSettings,
+  signal: AbortSignal,
+) => Promise<SessionStart>;
 
 type FindSession = (
   sessionId: string,
@@ -100,6 +103,12 @@ type ClaudeFailureTag =
   | StreamEnded["_tag"]
   | SessionMissing["_tag"]
   | "SteerUnconfirmed";
+
+type SessionStartup = {
+  turn: RunningTurn<ClaudeFailureTag>;
+  controller: AbortController;
+  link: CodexLink | null;
+};
 
 type ClaudeTurnEvent =
   | {
@@ -159,6 +168,10 @@ class BridgeClosing extends TaggedError("BridgeClosing")<{
   message: string;
 }> {}
 
+class SessionStartCancelled extends TaggedError("SessionStartCancelled")<{
+  message: string;
+}> {}
+
 class StreamEnded extends TaggedError("StreamEnded")<{
   message: string;
 }> {}
@@ -201,6 +214,7 @@ export const createClaudeRuntime = ({
   const plans = new Map<string, ThreadPlan>();
   const turns = new WeakMap<Turn, ClaudeTurn>();
   const runningTurns = new Map<string, Turn>();
+  const startingSessions = new Map<string, SessionStartup>();
   const busyThreads = new Set<string>();
   const commands = createSessionCommands({
     threads,
@@ -213,6 +227,29 @@ export const createClaudeRuntime = ({
   let closed = false;
   let startOwnTurn = (_threadId: string) => false;
   const ownTurnWaiters = new Map<string, (() => void)[]>();
+
+  const beginSessionStart = (turn: Turn): SessionStartup => {
+    const startup: SessionStartup = {
+      turn,
+      controller: new AbortController(),
+      link: null,
+    };
+    startingSessions.set(turn.threadId, startup);
+    return startup;
+  };
+
+  const clearSessionStart = (threadId: string, startup: SessionStartup) => {
+    if (startingSessions.get(threadId) === startup) {
+      startingSessions.delete(threadId);
+    }
+  };
+
+  const cancelSessionStart = (threadId: string, startup: SessionStartup) => {
+    if (startingSessions.get(threadId) !== startup) return;
+    startingSessions.delete(threadId);
+    startup.controller.abort();
+    startup.link?.stopWrites();
+  };
 
   // Each worker keeps its own Claude process, so an idle one is closed; without a session id its next turn could not resume the conversation, so it stays.
   // Closing would end the tasks Claude runs in the background, so the close waits until none is left.
@@ -315,8 +352,29 @@ export const createClaudeRuntime = ({
       turn.finish({ status: "interrupted" }, null);
       return;
     }
+    let startup: SessionStartup | null = beginSessionStart(turn);
     // A running Claude holds the conversation as it was, so it restarts to resume from the records written elsewhere.
-    if (await commands.advanced(threadId, threads.sessionIdOf(threadId))) {
+    const result = await waitForAbort(
+      commands.advanced(threadId, threads.sessionIdOf(threadId)),
+      startup.controller.signal,
+    );
+    if (result === ABORTED) {
+      if (closed) turn.fail(bridgeClosingError());
+      else turn.finish({ status: "interrupted" }, null);
+      return;
+    }
+    const advanced = result;
+    if (turn.state().interrupting) {
+      cancelSessionStart(threadId, startup);
+      turn.finish({ status: "interrupted" }, null);
+      return;
+    }
+    if (closed) {
+      cancelSessionStart(threadId, startup);
+      turn.fail(bridgeClosingError());
+      return;
+    }
+    if (advanced) {
       turn.apply(
         renderNotice(turn.state(), RECORD_ADVANCED, "commentary", now()),
       );
@@ -324,10 +382,20 @@ export const createClaudeRuntime = ({
       if (stale !== undefined) dropSession(threadId, stale);
     }
     const reused = sessions.get(threadId)?.model === model;
+    if (reused) {
+      clearSessionStart(threadId, startup);
+      startup = null;
+    }
     const sessionAskedAt = now();
-    const slot = await sessionFor(record, model);
+    const slot = await sessionFor(record, model, turn, startup);
+    if (startup !== null) clearSessionStart(threadId, startup);
     if (slot.isErr()) {
-      turn.fail(slot.error);
+      if (slot.error._tag === "SessionStartCancelled") {
+        if (closed) turn.fail(bridgeClosingError());
+        else turn.finish({ status: "interrupted" }, null);
+      } else {
+        turn.fail(slot.error);
+      }
       return;
     }
     const sessionStartMs = reused ? null : now() - sessionAskedAt;
@@ -707,9 +775,22 @@ export const createClaudeRuntime = ({
 
   const interrupt = (turn: Turn, repeated: boolean) => {
     const threadId = turn.threadId;
+    const startup = startingSessions.get(threadId);
+    const stoppingStartup = startup?.turn === turn;
+    if (stoppingStartup) {
+      cancelSessionStart(threadId, startup);
+      if (turns.get(turn)?.slot === null) {
+        sessions.get(threadId)?.link.stopWrites();
+        turn.finish({ status: "interrupted" }, null);
+        return;
+      }
+    }
     const slot = sessions.get(threadId);
     slot?.link.stopWrites();
     if (slot === undefined || repeated || slot.pendingInterrupt !== null) {
+      if (stoppingStartup && slot === undefined) {
+        turn.finish({ status: "interrupted" }, null);
+      }
       return;
     }
     // A send still queued in Claude would run after the interrupt, and an old CLI cannot say whether one is, so either way the session is closed and the next turn resumes it.
@@ -737,46 +818,84 @@ export const createClaudeRuntime = ({
   const sessionFor = async (
     record: ThreadRecord,
     model: string,
+    turn: Turn,
+    startup: SessionStartup | null,
   ): Promise<
-    Result<SessionSlot, InferErr<SessionStart> | BridgeClosing | SessionMissing>
+    Result<
+      SessionSlot,
+      | InferErr<SessionStart>
+      | BridgeClosing
+      | SessionMissing
+      | SessionStartCancelled
+    >
   > => {
     const existing = sessions.get(record.threadId);
     if (existing?.model === model) return Result.ok(existing);
     if (existing !== undefined) dropSession(record.threadId, existing);
-    if (closed) {
-      return Result.err(
-        new BridgeClosing({ message: refusalMessage("bridge_closing") }),
-      );
-    }
+    if (closed) return Result.err(bridgeClosingError());
+    const pending = startup ?? beginSessionStart(turn);
+    const isCurrent = () =>
+      startingSessions.get(record.threadId) === pending &&
+      !pending.controller.signal.aborted;
     const resume = threads.sessionIdOf(record.threadId);
-    if (resume !== null && !(await sessionFound(resume))) {
-      log({ event: "claude_turn", step: "session_missing" });
-      void threads.setSessionId(record.threadId, null);
-      return Result.err(
-        new SessionMissing({
-          message:
-            "Claude's record of this conversation is gone, so it cannot continue; send again to start a new Claude conversation in this thread",
-        }),
+    if (resume !== null) {
+      const found = await waitForAbort(
+        sessionFound(resume),
+        pending.controller.signal,
       );
+      if (found === ABORTED || !isCurrent()) {
+        return Result.err(sessionStartCancelled());
+      }
+      if (!found) {
+        clearSessionStart(record.threadId, pending);
+        log({ event: "claude_turn", step: "session_missing" });
+        void threads.setSessionId(record.threadId, null);
+        return Result.err(
+          new SessionMissing({
+            message:
+              "Claude's record of this conversation is gone, so it cannot continue; send again to start a new Claude conversation in this thread",
+          }),
+        );
+      }
     }
+    if (!isCurrent()) return Result.err(sessionStartCancelled());
     // Each session gets its own thread tool server, since one server instance serves one Claude process.
     const link = openLink(record.threadId);
-    const started = await startSession({
-      cwd: record.worktree,
-      model,
-      ...resumeFrom(resume),
-      mcpServers: { [link.server.name]: link.server },
-      allowedTools: link.allowedTools,
-      canUseTool: approveTool(record.threadId),
-    });
-    if (started.isErr()) return Result.err(started.error);
-    // Shutdown may have happened while Claude was starting.
-    if (closed) {
-      started.value.close();
+    pending.link = link;
+    const starting = startSession(
+      {
+        cwd: record.worktree,
+        model,
+        ...resumeFrom(resume),
+        mcpServers: { [link.server.name]: link.server },
+        allowedTools: link.allowedTools,
+        canUseTool: approveTool(record.threadId),
+      },
+      pending.controller.signal,
+    );
+    const result = await waitForAbort(starting, pending.controller.signal);
+    if (result === ABORTED) {
+      void starting.then(
+        (late) => {
+          if (late.isOk()) late.value.close();
+        },
+        () => {},
+      );
+      return Result.err(sessionStartCancelled());
+    }
+    const started = result;
+    if (!isCurrent() || closed) {
+      if (started.isOk()) started.value.close();
       return Result.err(
-        new BridgeClosing({ message: refusalMessage("bridge_closing") }),
+        closed ? bridgeClosingError() : sessionStartCancelled(),
       );
     }
+    if (started.isErr()) {
+      clearSessionStart(record.threadId, pending);
+      link.stopWrites();
+      return Result.err(started.error);
+    }
+    clearSessionStart(record.threadId, pending);
     const slot: SessionSlot = {
       session: started.value,
       model,
@@ -884,6 +1003,9 @@ export const createClaudeRuntime = ({
     closed = true;
     for (const threadId of [...idleTimers.keys()]) cancelIdleClose(threadId);
     for (const threadId of [...ownTurnWaiters.keys()]) showOwnTurn(threadId);
+    for (const [threadId, startup] of [...startingSessions]) {
+      cancelSessionStart(threadId, startup);
+    }
     for (const [threadId, slot] of sessions) dropSession(threadId, slot);
   };
 
@@ -1008,6 +1130,39 @@ const typedText = (input: RunningTurn<string>["input"]) =>
 
 const resumeFrom = (sessionId: string | null) =>
   sessionId === null ? {} : { resume: sessionId };
+
+const ABORTED = Symbol("aborted");
+
+const waitForAbort = <T>(pending: Promise<T>, signal: AbortSignal) =>
+  new Promise<T | typeof ABORTED>((resolve, reject) => {
+    if (signal.aborted) {
+      resolve(ABORTED);
+      return;
+    }
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      resolve(ABORTED);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    pending.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (cause: unknown) => {
+        signal.removeEventListener("abort", abort);
+        reject(cause);
+      },
+    );
+  });
+
+const bridgeClosingError = () =>
+  new BridgeClosing({ message: refusalMessage("bridge_closing") });
+
+const sessionStartCancelled = () =>
+  new SessionStartCancelled({
+    message: "Claude session startup was cancelled",
+  });
 
 const CLAUDE_STEPS: Record<ClaudeTurnEvent["step"], true> = {
   idle_closed: true,
