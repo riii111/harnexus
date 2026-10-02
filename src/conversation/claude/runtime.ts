@@ -99,6 +99,7 @@ type ClaudeFailureTag =
   | BridgeClosing["_tag"]
   | StreamEnded["_tag"]
   | SessionMissing["_tag"]
+  | ForkNotSeparate["_tag"]
   | "SteerUnconfirmed";
 
 type ClaudeTurnEvent =
@@ -164,6 +165,10 @@ class StreamEnded extends TaggedError("StreamEnded")<{
 }> {}
 
 class SessionMissing extends TaggedError("SessionMissing")<{
+  message: string;
+}> {}
+
+class ForkNotSeparate extends TaggedError("ForkNotSeparate")<{
   message: string;
 }> {}
 
@@ -476,6 +481,7 @@ export const createClaudeRuntime = ({
     const { threadId, model } = turn;
     let firstMessageMs: number | null = null;
     let sessionId = threads.sessionIdOf(threadId);
+    const forkedFrom = threads.forkSourceOf(threadId);
     while (!turn.state().finished) {
       const next = await inbox.take();
       const received =
@@ -492,6 +498,17 @@ export const createClaudeRuntime = ({
         return;
       }
       const current = received.value.session_id;
+      // A fork that Claude kept in its source's conversation would write into it, so it stops before taking that conversation's id.
+      if (current !== undefined && current === forkedFrom) {
+        dropSession(threadId, slot);
+        turn.fail(
+          new ForkNotSeparate({
+            message:
+              "Claude continued the original conversation instead of a copy, so this side chat stopped",
+          }),
+        );
+        return;
+      }
       if (current !== undefined && current !== sessionId) {
         sessionId = current;
         await threads.setSessionId(threadId, current);

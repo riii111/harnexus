@@ -462,6 +462,60 @@ describe("threads with a Claude model", () => {
     expect(out.result.thread.model).toBe(CLAUDE);
   });
 
+  test("keeps the fork where the source's conversation lives and runs its turns on Claude", async () => {
+    const { router, calls } = setup(["th-claude"]);
+    router.fromApp(
+      encode({
+        id: 9,
+        method: "thread/fork",
+        params: { threadId: "th-claude", cwd: "/elsewhere" },
+      }),
+    );
+    await router.fromServer(
+      encode({
+        id: 9,
+        result: { thread: { id: "th-side" }, cwd: "/elsewhere" },
+      }),
+    );
+    const turn = encode({
+      id: 10,
+      method: "turn/start",
+      params: { threadId: "th-side", input: [] },
+    });
+
+    expect(router.fromApp(turn)).toBeNull();
+    expect(calls.map(([name, ...rest]) => [name, rest[0], rest[1]])).toEqual([
+      ["adoptFork", "th-side", { model: CLAUDE, cwd: "/fixture/work" }],
+      [
+        "startTurn",
+        { id: 10, params: { threadId: "th-side", input: [] } },
+        "/elsewhere",
+      ],
+    ]);
+  });
+
+  test.each([
+    { field: "lastTurnId" },
+    { field: "beforeTurnId" },
+  ])("refuses a fork of a Claude thread from an earlier turn named by $field", ({
+    field,
+  }) => {
+    const { router, calls, events } = setup(["th-claude"]);
+    const line = encode({
+      id: 9,
+      method: "thread/fork",
+      params: { threadId: "th-claude", [field]: "turn-1" },
+    });
+
+    expect(router.fromApp(line)).toBeNull();
+    expect(calls.map(([name]) => name)).toEqual(["reject"]);
+    expect(events).toContainEqual({
+      event: "claude_request_refused",
+      method: "thread/fork",
+      reason: "unsupported_request",
+    });
+  });
+
   test("leaves the fork of a Codex thread as the same bytes", async () => {
     const { router, calls } = setup();
     const line = encode({

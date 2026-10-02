@@ -953,6 +953,38 @@ describe("a fork of a Claude thread", () => {
     expect(started.settings[1]?.resume).toBeUndefined();
     expect(started.settings[1]?.forkSession).toBeUndefined();
   });
+
+  test("starts a conversation of its own when the source had none when forked", async () => {
+    const source = fakeClaude(SUBSCRIPTION);
+    const fork = fakeClaude(SUBSCRIPTION);
+    const started = await harness([source, fork]);
+    started.turns.adoptFork(OTHER_THREAD, { model: MODEL, cwd: dir }, THREAD);
+    await completeTurn(started.turns, started.sent, source, 10);
+
+    await forkTurn(started, fork, 11);
+
+    expect(started.settings[1]?.resume).toBeUndefined();
+  });
+
+  test("fails the turn and keeps the source's id off the fork when Claude stays in the source's conversation", async () => {
+    const source = fakeClaude(SUBSCRIPTION);
+    const fork = fakeClaude(SUBSCRIPTION);
+    const started = await harness([source, fork]);
+    await completeTurn(started.turns, started.sent, source, 10);
+    started.turns.adoptFork(OTHER_THREAD, { model: MODEL, cwd: dir }, THREAD);
+
+    started.turns.startTurn(turnStart(11, "aside", OTHER_THREAD), undefined);
+    await until(() => responseTo(started.sent, 11) !== undefined);
+    fork.emit(sdk(answer("msg-11", "ok")));
+    await until(() => completedTurnStatuses(started.sent).length === 2);
+
+    expect(completedTurnStatuses(started.sent)).toEqual([
+      "completed",
+      "failed",
+    ]);
+    expect(started.store.get(OTHER_THREAD)?.sessionId ?? null).toBeNull();
+    expect(started.store.get(THREAD)?.sessionId).toBe("se-1");
+  });
 });
 
 describe("a saved session Claude no longer has", () => {

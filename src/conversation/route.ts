@@ -110,6 +110,11 @@ export const createRouter = (
       // The server copies its own record of the thread, which holds none of the Claude conversation, so the fork learns of it here.
       case "thread/fork":
         if (!turns.isClaudeThread(params.threadId)) return line;
+        // Claude's conversation is forked whole, so a fork from an earlier turn would carry the turns after it.
+        if (params.lastTurnId != null || params.beforeTurnId != null) {
+          refuse("thread/fork", request, "unsupported_request");
+          return null;
+        }
         pending.set(id, {
           kind: "threadOpen",
           createdModel: null,
@@ -335,16 +340,9 @@ export const createRouter = (
     }
     const source =
       request.forkOf === null ? undefined : turns.threadOf(request.forkOf);
-    if (
-      request.forkOf !== null &&
-      source !== undefined &&
-      typeof result.cwd === "string"
-    ) {
-      turns.adoptFork(
-        threadId,
-        { model: source.model, cwd: result.cwd },
-        request.forkOf,
-      );
+    // Claude keeps the fork where the source's conversation lives, whatever directory the fork names.
+    if (request.forkOf !== null && source !== undefined) {
+      turns.adoptFork(threadId, source, request.forkOf);
     }
     const model = turns.threadOf(threadId)?.model;
     if (model === undefined) return line;
@@ -444,6 +442,7 @@ const SETTINGS_UPDATED = "thread/settings/updated";
 
 const REFUSED_METHODS = [
   "thread/start",
+  "thread/fork",
   "turn/start",
   "turn/steer",
   "thread/resume",
