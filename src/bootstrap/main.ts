@@ -1,5 +1,6 @@
 import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
+import { Result } from "better-result";
 import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import {
   claudeSessionExists,
@@ -82,12 +83,10 @@ async function withClaude(relay: {
     streams: { appInput: process.stdin, appOutput: process.stdout, ...relay },
     closeAll: () => {},
   };
-  const path = loadStatePath(process.env);
-  if (path.isErr()) {
-    logger.log({ event: "claude_unavailable", reason: path.error._tag });
-    return plain;
-  }
-  const store = await openThreadStore(path.value);
+  const store = await Result.andThenAsync(
+    loadStatePath(process.env),
+    openThreadStore,
+  );
   if (store.isErr()) {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
     return plain;
