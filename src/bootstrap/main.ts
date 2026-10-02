@@ -1,5 +1,6 @@
 import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
+import { Result } from "better-result";
 import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import {
   claudeSessionExists,
@@ -82,12 +83,10 @@ async function withClaude(relay: {
     streams: { appInput: process.stdin, appOutput: process.stdout, ...relay },
     closeAll: () => {},
   };
-  const path = loadStatePath(process.env);
-  if (path.isErr()) {
-    logger.log({ event: "claude_unavailable", reason: path.error._tag });
-    return plain;
-  }
-  const store = await openThreadStore(path.value);
+  const store = await Result.andThenAsync(
+    loadStatePath(process.env),
+    openThreadStore,
+  );
   if (store.isErr()) {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
     return plain;
@@ -118,7 +117,8 @@ async function withClaude(relay: {
   const { router, closeAll } = connectClaudeThreads({
     store: store.value,
     request: serverCalls.request,
-    startSession: startClaudeSession,
+    startSession: (session, signal) =>
+      startClaudeSession(session, undefined, signal),
     findSession: claudeSessionExists,
     listConversations: (cwd, since) => listClaudeConversations(cwd, { since }),
     lastRecordOf: (sessionId) => readLastRecordUuid(sessionId),
