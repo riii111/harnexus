@@ -66,7 +66,11 @@ describe("createObserver", () => {
         kind: "request",
         method: "thread/start",
         id: 1,
-        threadOpen: { params: ["cwd", "input", "token"], ephemeral: null },
+        threadOpen: {
+          params: ["<redacted>", "cwd"],
+          ephemeral: null,
+          threadSource: null,
+        },
       },
       {
         event: "rpc_message",
@@ -81,6 +85,7 @@ describe("createObserver", () => {
         kind: "response",
         method: "thread/start",
         id: 1,
+        threadOpen: { ephemeral: null, forked: false, hasParent: false },
       },
       {
         event: "rpc_message",
@@ -302,7 +307,7 @@ describe("createObserver", () => {
     expect(log).not.toContain(SECRET);
   });
 
-  test("records which fields a thread fork carries and whether it is ephemeral, without their values", () => {
+  test("records the protocol fields a thread fork names and what the server opened, without ids or text", () => {
     const { log, records } = observe([
       toServer({
         id: 2,
@@ -310,40 +315,76 @@ describe("createObserver", () => {
         params: {
           threadId: SECRET,
           ephemeral: true,
+          threadSource: "user",
           developerInstructions: PROMPT,
-          [PROMPT]: 1,
+          [SECRET]: 1,
+          "/private/path": 2,
         },
       }),
-      toApp({ id: 2, result: { thread: { id: "th-2", ephemeral: true } } }),
+      toApp({
+        id: 2,
+        result: {
+          thread: {
+            id: SECRET,
+            ephemeral: true,
+            forkedFromId: SECRET,
+            parentThreadId: null,
+          },
+        },
+      }),
     ]);
 
-    expect(records).toEqual([
+    expect(records.map((record) => record.threadOpen)).toEqual([
       {
-        event: "rpc_message",
-        direction: "app_to_server",
-        kind: "request",
-        method: "thread/fork",
-        id: 2,
-        threadOpen: {
-          params: [
-            "<redacted>",
-            "developerInstructions",
-            "ephemeral",
-            "threadId",
-          ],
-          ephemeral: true,
-        },
+        params: [
+          "<redacted>",
+          "developerInstructions",
+          "ephemeral",
+          "threadId",
+          "threadSource",
+        ],
+        ephemeral: true,
+        threadSource: "user",
       },
-      {
-        event: "rpc_message",
-        direction: "server_to_app",
-        kind: "response",
-        method: "thread/fork",
-        id: 2,
-      },
+      { ephemeral: true, forked: true, hasParent: false },
     ]);
     expect(log).not.toContain(SECRET);
     expect(log).not.toContain(PROMPT);
+    expect(log).not.toContain("/private/path");
+  });
+
+  test("reads a thread open whose params are missing or mistyped as naming nothing", () => {
+    const { records } = observe([
+      toServer({ id: 3, method: "thread/fork" }),
+      toServer({ id: 4, method: "thread/fork", params: [SECRET] }),
+      toServer({
+        id: 5,
+        method: "thread/start",
+        params: { ephemeral: "yes", threadSource: PROMPT },
+      }),
+    ]);
+
+    expect(records.map((record) => record.threadOpen)).toEqual([
+      { params: [], ephemeral: null, threadSource: null },
+      { params: [], ephemeral: null, threadSource: null },
+      {
+        params: ["ephemeral", "threadSource"],
+        ephemeral: null,
+        threadSource: "<redacted>",
+      },
+    ]);
+  });
+
+  test("does not read a thread open sent the other way", () => {
+    const { records } = observe([
+      toApp({ id: 6, method: "thread/start", params: { cwd: "/w" } }),
+      toServer({ id: 6, result: { thread: { ephemeral: true } } }),
+    ]);
+
+    expect(records.map((record) => record.threadOpen)).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 
   test("records nothing for an empty line", () => {
