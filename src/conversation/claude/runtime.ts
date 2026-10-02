@@ -1,6 +1,7 @@
 import type {
   CanUseTool,
   EffortLevel,
+  SDKMessage,
   SDKResultMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
@@ -51,6 +52,7 @@ import type {
   TurnLink,
   TurnRuntime,
 } from "../turn-runtime.ts";
+import { createInbox, type Inbox } from "./inbox.ts";
 import {
   createSessionCommands,
   type SessionCommand,
@@ -82,6 +84,8 @@ type CodexLink = Pick<
 type StreamedMessage =
   ClaudeSession["messages"] extends AsyncGenerator<infer R> ? R : never;
 
+type StreamedNext = IteratorResult<StreamedMessage, void>;
+
 type InterruptTag = ErrorTag<ReturnType<ClaudeSession["interrupt"]>>;
 
 type ClaudeFailureTag =
@@ -101,6 +105,7 @@ type ClaudeTurnEvent =
       event: "claude_turn";
       step:
         | "idle_closed"
+        | "own_turn"
         | "session_missing"
         | "skill_unreadable"
         | "skill_link_only";
@@ -123,18 +128,24 @@ export type ClaudeLogEvent = TurnEvent<ClaudeFailureTag> | ClaudeTurnEvent;
 
 // A session is not reused until its interrupt reports whether a send is still queued, which can arrive after the interrupted turn has ended.
 // attachedSkills maps each SKILL.md path this session was given to the body it was given.
+// reader is the inbox Claude's messages go to, and unclaimed says whom it waits for while no turn reads it: a turn Claude started on its own, or the turn the thread has accepted. discarding drops the rest of a turn of Claude's own that the app could not show, and backgroundTasks counts the tasks Claude runs in the background.
 type SessionSlot = {
   session: ClaudeSession;
   model: string;
   pendingInterrupt: Promise<void> | null;
   link: CodexLink;
   attachedSkills: Map<string, string>;
+  reader: Inbox<StreamedNext> | null;
+  unclaimed: "own" | "turn" | null;
+  discarding: boolean;
+  backgroundTasks: number;
 };
 
 // Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken; sends holds the uuid of every message the turn sent Claude.
-// command marks a turn the bridge answers itself, such as /session, and completed one Claude ended with a successful result.
+// command marks a turn the bridge answers itself, such as /session, own one Claude started on its own, and completed one Claude ended with a successful result.
 type ClaudeTurn = {
   command: boolean;
+  own: boolean;
   completed: boolean;
   slot: SessionSlot | null;
   unsentSteers: string[];
@@ -189,6 +200,7 @@ export const createClaudeRuntime = ({
   const plans = new Map<string, ThreadPlan>();
   const turns = new WeakMap<Turn, ClaudeTurn>();
   const runningTurns = new Map<string, Turn>();
+  const busyThreads = new Set<string>();
   const commands = createSessionCommands({
     threads,
     listConversations,
@@ -198,8 +210,11 @@ export const createClaudeRuntime = ({
     now,
   });
   let closed = false;
+  let startOwnTurn = (_threadId: string) => false;
+  const ownTurnWaiters = new Map<string, (() => void)[]>();
 
   // Each worker keeps its own Claude process, so an idle one is closed; without a session id its next turn could not resume the conversation, so it stays.
+  // Closing would end the tasks Claude runs in the background, so the close waits until none is left.
   const scheduleIdleClose = (threadId: string) => {
     cancelIdleClose(threadId);
     const timer = setTimeout(() => {
@@ -207,6 +222,10 @@ export const createClaudeRuntime = ({
       const slot = sessions.get(threadId);
       if (slot === undefined) return;
       if (threads.sessionIdOf(threadId) == null) return;
+      if (slot.backgroundTasks > 0) {
+        scheduleIdleClose(threadId);
+        return;
+      }
       dropSession(threadId, slot);
       log({ event: "claude_turn", step: "idle_closed" });
     }, idleSessionMs);
@@ -220,9 +239,14 @@ export const createClaudeRuntime = ({
   };
 
   const run = async (turn: Turn) => {
-    const command = commands.take(turn.threadId, typedText(turn.input));
+    // A turn of Claude's own leaves a /resume listing for the user's pick that follows.
+    const command =
+      turn.input.startedBy === "claude"
+        ? null
+        : commands.take(turn.threadId, typedText(turn.input));
     const claude: ClaudeTurn = {
       command: command !== null,
+      own: false,
       completed: false,
       slot: null,
       unsentSteers: [],
@@ -236,7 +260,8 @@ export const createClaudeRuntime = ({
       return;
     }
     runningTurns.set(turn.threadId, turn);
-    await stream(turn, claude);
+    if (turn.input.startedBy === "claude") await streamOwn(turn, claude);
+    else await stream(turn, claude);
     if (runningTurns.get(turn.threadId) === turn) {
       runningTurns.delete(turn.threadId);
     }
@@ -339,31 +364,119 @@ export const createClaudeRuntime = ({
     if (fresh.length < skills.skills.length) {
       log({ event: "claude_turn", step: "skill_link_only" });
     }
-    const sent = slot.value.session.send(
-      input.text,
+    const inbox = claimReader(slot.value);
+    try {
+      if (sendPrompt(turn, claude, slot.value, fresh)) {
+        await read(turn, claude, slot.value, inbox, {
+          effort,
+          sessionStartMs,
+          sentAt: now(),
+        });
+      }
+    } finally {
+      releaseReader(threadId, slot.value, inbox);
+    }
+  };
+
+  // The prompt goes only once the turn reads the session, so its reply cannot be taken for a turn of Claude's own.
+  const sendPrompt = (
+    turn: Turn,
+    claude: ClaudeTurn,
+    slot: SessionSlot,
+    fresh: Awaited<ReturnType<typeof readSkills>>["skills"],
+  ) => {
+    const sent = slot.session.send(
+      turn.input.text,
       fresh.map(({ block }) => block),
     );
     if (sent.isErr()) {
-      dropSession(threadId, slot.value);
+      dropSession(turn.threadId, slot);
       turn.fail(sent.error);
-      return;
+      return false;
     }
     claude.sends.add(sent.value);
-    for (const { path, body } of fresh) attached.set(path, body);
-    claude.slot = slot.value;
+    for (const { path, body } of fresh) slot.attachedSkills.set(path, body);
+    claude.slot = slot;
     for (const steer of claude.unsentSteers.splice(0)) {
-      const steered = sendSteer(claude, slot.value, steer);
+      const steered = sendSteer(claude, slot, steer);
       if (steered.isErr()) {
-        dropSession(threadId, slot.value);
+        dropSession(turn.threadId, slot);
         turn.fail(steered.error);
-        return;
+        return false;
       }
     }
-    const sentAt = now();
+    return true;
+  };
+
+  // A turn Claude started on its own has no prompt to send; its messages wait in the inbox the session gave it until the app shows the turn.
+  // A turn the app started took them first if it came ahead of this one, which then has nothing to show.
+  const streamOwn = async (turn: Turn, claude: ClaudeTurn) => {
+    const threadId = turn.threadId;
+    await waitForPendingInterrupt(threadId);
+    const slot = sessions.get(threadId);
+    const inbox = slot?.unclaimed === "own" ? slot.reader : null;
+    if (slot === undefined || inbox == null) {
+      turn.finish(
+        turn.state().interrupting
+          ? { status: "interrupted" }
+          : { status: "completed" },
+        null,
+      );
+      return;
+    }
+    slot.unclaimed = null;
+    claude.own = true;
+    claude.slot = slot;
+    turn.useLink(slot.link);
+    slot.link.acceptWrites();
+    showOwnTurn(threadId);
+    // A stop that came while the turn waited to be shown reaches Claude now.
+    if (turn.state().interrupting) interrupt(turn, false);
+    try {
+      await read(turn, claude, slot, inbox, {
+        effort: effortRule(turn.model, turn.input.effort),
+        sessionStartMs: null,
+        sentAt: now(),
+      });
+    } finally {
+      releaseReader(threadId, slot, inbox);
+    }
+  };
+
+  // Claude may ask for a tool in a turn of its own before the app has been shown that turn.
+  const ownTurnShown = (threadId: string) =>
+    new Promise<void>((resolve) => {
+      ownTurnWaiters.set(threadId, [
+        ...(ownTurnWaiters.get(threadId) ?? []),
+        resolve,
+      ]);
+    });
+
+  const showOwnTurn = (threadId: string) => {
+    for (const resolve of ownTurnWaiters.get(threadId) ?? []) resolve();
+    ownTurnWaiters.delete(threadId);
+  };
+
+  const read = async (
+    turn: Turn,
+    claude: ClaudeTurn,
+    slot: SessionSlot,
+    inbox: Inbox<StreamedNext>,
+    {
+      effort,
+      sessionStartMs,
+      sentAt,
+    }: {
+      effort: EffortLevel | null;
+      sessionStartMs: number | null;
+      sentAt: number;
+    },
+  ) => {
+    const { threadId, model } = turn;
     let firstMessageMs: number | null = null;
     let sessionId = threads.sessionIdOf(threadId);
     while (!turn.state().finished) {
-      const next = await slot.value.session.messages.next();
+      const next = await inbox.take();
       const received =
         next.done === true
           ? Result.err(
@@ -373,7 +486,7 @@ export const createClaudeRuntime = ({
             )
           : next.value;
       if (received.isErr()) {
-        dropSession(threadId, slot.value);
+        dropSession(threadId, slot);
         turn.fail(received.error);
         return;
       }
@@ -395,10 +508,12 @@ export const createClaudeRuntime = ({
         (message.type === "system" && message.subtype === "compact_boundary") ||
         message.type === "conversation_reset"
       ) {
-        attached.clear();
+        slot.attachedSkills.clear();
       }
       const foreign =
-        message.type === "result" && !answersTurn(message, claude.sends);
+        message.type === "result" &&
+        !claude.own &&
+        !answersTurn(message, claude.sends);
       if (message.type === "result" && !foreign) {
         log({
           event: "claude_turn",
@@ -427,7 +542,7 @@ export const createClaudeRuntime = ({
       });
       plans.set(threadId, plan.plan);
       if (plan.notification !== null) send(plan.notification);
-      // Its items stay in this turn, since the app has no turn of Claude's own to show them in.
+      // A turn Claude started on its own just as this one sent its prompt reaches it ahead of its reply, and its items stay in this turn.
       if (message.type === "result" && foreign) {
         turn.apply(renderInterimResult(turn.state(), message, now()));
         continue;
@@ -444,7 +559,7 @@ export const createClaudeRuntime = ({
         turn.apply(renderInterimResult(turn.state(), message, now()));
         if (steers === "queued") continue;
         // The steer may never run, so the user is told to send it again, and the session goes so a late run cannot leak into the next turn.
-        dropSession(threadId, slot.value);
+        dropSession(threadId, slot);
         turn.finish(
           { status: "failed", message: STEER_UNCONFIRMED },
           "SteerUnconfirmed",
@@ -465,9 +580,105 @@ export const createClaudeRuntime = ({
         !state.interrupting &&
         claude.pendingSteers.size > 0
       ) {
-        dropSession(threadId, slot.value);
+        dropSession(threadId, slot);
       }
     }
+  };
+
+  // One loop reads each session for its whole life, so what Claude does while no turn reads, such as starting a turn of its own when a background task reports back, is seen as it happens.
+  const pump = async (threadId: string, slot: SessionSlot) => {
+    while (true) {
+      const next = await slot.session.messages.next();
+      // The next message waits until the reader has handled this one, as a turn reading the session itself would.
+      await route(threadId, slot, next)?.settled();
+      if (next.done === true || next.value.isErr()) return;
+    }
+  };
+
+  // Messages that come while the thread has a turn accepted wait for it, as they did before the turn read the session; with none, a failure or an end leaves the session unusable, so it goes and the next turn resumes the conversation.
+  const route = (
+    threadId: string,
+    slot: SessionSlot,
+    next: StreamedNext,
+  ): Inbox<StreamedNext> | null => {
+    if (next.done !== true && next.value.isOk()) {
+      trackTasks(slot, next.value.value);
+    }
+    if (slot.reader !== null) {
+      slot.reader.push(next);
+      return slot.reader;
+    }
+    // A session already dropped has nothing left for a turn to read.
+    if (sessions.get(threadId) !== slot) return null;
+    const own = !busyThreads.has(threadId);
+    if (own) {
+      if (next.done === true || next.value.isErr()) {
+        dropSession(threadId, slot);
+        return null;
+      }
+      if (slot.discarding) {
+        slot.discarding = next.value.value.type !== "result";
+        return null;
+      }
+      if (!startsTurn(next.value.value)) return null;
+    }
+    // A turn the app cannot be shown, as when the bridge is closing, is left to Claude.
+    if (own && !startOwnTurn(threadId)) return null;
+    if (own) log({ event: "claude_turn", step: "own_turn" });
+    const inbox = createInbox<StreamedNext>();
+    inbox.push(next);
+    slot.reader = inbox;
+    slot.unclaimed = own ? "own" : "turn";
+    return inbox;
+  };
+
+  // Messages that came while the thread had a turn accepted, such as a turn Claude started on its own while that turn was being set up, reach the turn ahead of its reply.
+  const claimReader = (slot: SessionSlot) => {
+    const inbox = createInbox<StreamedNext>();
+    for (const next of slot.reader?.drain() ?? []) inbox.push(next);
+    slot.reader = inbox;
+    slot.unclaimed = null;
+    return inbox;
+  };
+
+  // What came after the turn's end, such as a turn Claude started right after it, is read as if no turn had been reading.
+  const releaseReader = (
+    threadId: string,
+    slot: SessionSlot,
+    inbox: Inbox<StreamedNext>,
+  ) => {
+    if (slot.reader !== inbox) return;
+    slot.reader = null;
+    for (const next of inbox.drain()) route(threadId, slot, next);
+  };
+
+  // What waited for turns that took none of it, such as a turn Claude started right as the last one ended, is read again once the thread has no turn left.
+  // A turn of Claude's own that could not run was shown as failed, so what it held is not shown again.
+  const threadIdle = (threadId: string) => {
+    busyThreads.delete(threadId);
+    scheduleIdleClose(threadId);
+    showOwnTurn(threadId);
+    const slot = sessions.get(threadId);
+    if (slot?.reader == null || slot.unclaimed === null) return;
+    const left = slot.reader.drain();
+    const waitedFor = slot.unclaimed;
+    slot.reader = null;
+    slot.unclaimed = null;
+    if (waitedFor === "own") {
+      slot.discarding = !left.some(
+        (next) =>
+          next.done !== true &&
+          next.value.isOk() &&
+          next.value.value.type === "result",
+      );
+      return;
+    }
+    for (const next of left) route(threadId, slot, next);
+  };
+
+  const threadBusy = (threadId: string) => {
+    busyThreads.add(threadId);
+    cancelIdleClose(threadId);
   };
 
   const steer = (turn: Turn, text: string): Refusal | null => {
@@ -571,8 +782,13 @@ export const createClaudeRuntime = ({
       pendingInterrupt: null,
       link,
       attachedSkills: new Map(),
+      reader: null,
+      unclaimed: null,
+      discarding: false,
+      backgroundTasks: 0,
     };
     sessions.set(record.threadId, slot);
+    void pump(record.threadId, slot);
     return Result.ok(slot);
   };
 
@@ -586,6 +802,12 @@ export const createClaudeRuntime = ({
   const approveTool =
     (threadId: string): CanUseTool =>
     async (toolName, input, options) => {
+      if (
+        openTurn(threadId) === undefined &&
+        sessions.get(threadId)?.unclaimed === "own"
+      ) {
+        await ownTurnShown(threadId);
+      }
       const turn = openTurn(threadId);
       if (turn === undefined || turn.state().interrupting) {
         return declineTool(turn, options.toolUseID, NO_TURN);
@@ -658,6 +880,7 @@ export const createClaudeRuntime = ({
   const closeAll = () => {
     closed = true;
     for (const threadId of [...idleTimers.keys()]) cancelIdleClose(threadId);
+    for (const threadId of [...ownTurnWaiters.keys()]) showOwnTurn(threadId);
     for (const [threadId, slot] of sessions) dropSession(threadId, slot);
   };
 
@@ -667,8 +890,11 @@ export const createClaudeRuntime = ({
     steer,
     interrupt,
     dropSession: dropSessionOf,
-    threadBusy: cancelIdleClose,
-    threadIdle: scheduleIdleClose,
+    threadBusy,
+    threadIdle,
+    listen: (start) => {
+      startOwnTurn = start;
+    },
     closeAll,
   };
 };
@@ -680,6 +906,7 @@ export const isClaudeTurnEvent = (
 export const serializeClaudeTurnEvent = (entry: ClaudeTurnEvent) => {
   switch (entry.step) {
     case "idle_closed":
+    case "own_turn":
     case "session_missing":
     case "skill_unreadable":
     case "skill_link_only":
@@ -748,6 +975,30 @@ const takenUuids = (result: SDKResultMessage) =>
   result.user_message_uuids ??
   (result.user_message_uuid === undefined ? [] : [result.user_message_uuid]);
 
+// Claude starts every turn with its init message, then streams its reply; a subagent's messages or a background task's report alone start none.
+const startsTurn = (message: SDKMessage) => {
+  switch (message.type) {
+    case "system":
+      return message.subtype === "init";
+    case "stream_event":
+    case "assistant":
+      return message.parent_tool_use_id === null;
+    case "result":
+      return true;
+    default:
+      return false;
+  }
+};
+
+// Tasks Claude marks as ambient, such as a watcher, are no activity a user waits on.
+const trackTasks = (slot: SessionSlot, message: SDKMessage) => {
+  if (message.type !== "system") return;
+  if (message.subtype !== "background_tasks_changed") return;
+  slot.backgroundTasks = message.tasks.filter(
+    (task) => task.ambient !== true,
+  ).length;
+};
+
 // Only what the user typed can be a session command, never another thread's message or a compaction.
 const typedText = (input: RunningTurn<string>["input"]) =>
   input.toolOutput === null && input.items.length > 0 ? input.text : null;
@@ -757,6 +1008,7 @@ const resumeFrom = (sessionId: string | null) =>
 
 const CLAUDE_STEPS: Record<ClaudeTurnEvent["step"], true> = {
   idle_closed: true,
+  own_turn: true,
   session_missing: true,
   skill_unreadable: true,
   skill_link_only: true,

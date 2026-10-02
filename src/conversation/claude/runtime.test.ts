@@ -9,7 +9,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { createModelCatalog, effortRule } from "../../infra/claude/models.ts";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
-import { writeFileAtomic } from "../../runtime/fs.boundary.ts";
+import { createEmptyFile, writeFileAtomic } from "../../runtime/fs.boundary.ts";
 import type { createTurnController } from "../controller.ts";
 import {
   ALLOWED_TOOLS,
@@ -19,6 +19,7 @@ import {
   BUILT_IN_EFFORTS,
   completedItems,
   completedTurnStatuses,
+  completedTurns,
   completeTurn,
   createGate,
   dir,
@@ -1016,6 +1017,237 @@ describe("Claude's own turns", () => {
   });
 });
 
+describe("turns Claude starts between app turns", () => {
+  test("shows a turn Claude started on its own as a turn nobody typed", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, events } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+
+    claude.emit(sdk(INIT));
+    claude.emit(sdk(answer("msg-2", "the agent finished")));
+    claude.emit(sdk(ownResult()));
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    const own = sent.slice(sent.findIndex(isTurnStarted("turn-2")) - 1);
+    expect(own.map((message) => message.method)).toEqual([
+      "thread/status/changed",
+      "turn/started",
+      "item/started",
+      "item/completed",
+      "thread/tokenUsage/updated",
+      "thread/status/changed",
+      "turn/completed",
+    ]);
+    expect(completedTurns(sent)[1]).toMatchObject({
+      id: "turn-2",
+      status: "completed",
+      items: [{ type: "agentMessage", text: "the agent finished" }],
+    });
+    expect(
+      completedItems(own).filter((item) => item.type === "userMessage"),
+    ).toEqual([]);
+    expect(events).toContainEqual({ event: "claude_turn", step: "own_turn" });
+    expect(claude.closes()).toBe(0);
+  });
+
+  test("asks the app about a tool Claude wants before its own turn is shown", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const decisions: ReturnType<typeof askTool>[] = [];
+    const { turns, sent } = await harness([claude], {
+      onSend: (message) => {
+        if (isTurnStarted("turn-2")(message)) {
+          decisions.push(askTool(claude, "Bash", { command: "ls" }));
+        }
+      },
+    });
+    await completeTurn(turns, sent, claude, 10);
+
+    claude.emit(sdk(INIT));
+    await until(() => decisions.length === 1);
+    const request = await appRequest(sent);
+    turns.answerRequest({ id: request.id, result: { decision: "accept" } });
+
+    expect(await decisions[0]).toEqual({ behavior: "allow" });
+    expect(request.params).toMatchObject({ turnId: "turn-2", command: "ls" });
+  });
+
+  test("starts a turn of Claude's own that begins right as the last turn ends", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    const [prompt] = await readPrompts(claude, 1);
+    claude.emit(sdk(answer("msg-1", "started")));
+    claude.emit(sdk(success([prompt?.uuid])));
+    claude.emit(sdk(INIT));
+    claude.emit(sdk(answer("msg-2", "the agent finished")));
+    claude.emit(sdk(ownResult()));
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(completedTurns(sent)).toMatchObject([
+      { id: "turn-1", items: [{ text: "started" }] },
+      { id: "turn-2", items: [{ text: "the agent finished" }] },
+    ]);
+  });
+
+  test("runs what the user sends during Claude's own turn after it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+    const prompts = claude.prompt()?.[Symbol.asyncIterator]();
+    await prompts?.next();
+
+    claude.emit(sdk(INIT));
+    await until(() => startedTurns(sent).length === 2);
+    turns.startTurn(turnStart(11, "next"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    claude.emit(sdk(answer("msg-2", "the agent finished")));
+    claude.emit(sdk(ownResult()));
+    const next = await prompts?.next();
+    claude.emit(sdk(answer("msg-3", "hi")));
+    claude.emit(sdk(success([next?.value?.uuid])));
+    await until(() => completedTurnStatuses(sent).length === 3);
+
+    expect(responseTo(sent, 11)?.result.turn).toMatchObject({ id: "turn-3" });
+    expect(next?.value?.message.content).toBe("next");
+    expect(completedTurns(sent).slice(1)).toMatchObject([
+      { id: "turn-2", items: [{ text: "the agent finished" }] },
+      { id: "turn-3", items: [{ text: "hi" }] },
+    ]);
+  });
+
+  test("stops Claude's own turn when the app interrupts it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
+    const { turns, sent } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+
+    claude.emit(sdk(INIT));
+    await until(() => startedTurns(sent).length === 2);
+    turns.interruptTurn(interrupt(20, "turn-2"));
+    await until(() => claude.interrupts() === 1);
+    claude.emit(
+      sdk(ownResult({ subtype: "error_during_execution", is_error: true })),
+    );
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(responseTo(sent, 20)).toEqual({ id: 20, result: {} });
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "interrupted"]);
+    expect(claude.closes()).toBe(0);
+  });
+
+  test("leaves a background task's report alone until Claude starts a turn for it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+
+    claude.emit(sdk(TASKS_RUNNING));
+    claude.emit(
+      sdk({ ...answer("msg-sub", "working"), parent_tool_use_id: "toolu-1" }),
+    );
+    claude.emit(
+      sdk({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-1",
+        status: "completed",
+        output_file: "/tmp/task-1.output",
+        summary: "done",
+      }),
+    );
+    await until(() => claude.drained());
+    await settle();
+
+    expect(startedTurns(sent)).toHaveLength(1);
+  });
+
+  test("keeps Claude running past the idle time until its background tasks end", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, events } = await harness([claude], {
+      idleSessionMs: 5,
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    claude.emit(sdk(TASKS_RUNNING));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+    await Bun.sleep(30);
+    expect(claude.closes()).toBe(0);
+    claude.emit(sdk({ ...TASKS_RUNNING, tasks: [] }));
+    await until(() => claude.closes() === 1);
+
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "idle_closed",
+    });
+  });
+
+  test("closes Claude at the idle time when only ambient tasks run", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude], { idleSessionMs: 5 });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    claude.emit(
+      sdk({
+        ...TASKS_RUNNING,
+        tasks: [{ ...TASKS_RUNNING.tasks[0], ambient: true }],
+      }),
+    );
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    await until(() => claude.closes() === 1);
+  });
+
+  test("shows the rest of a turn Claude started on its own as no new turn when the app could not be shown it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    let failing = false;
+    const { turns, sent } = await harness([claude], {
+      files: {
+        createMarker: async (path) => {
+          if (!failing) return createEmptyFile(path);
+          failing = false;
+          return diskFull(path);
+        },
+      },
+    });
+    await completeTurn(turns, sent, claude, 10);
+
+    failing = true;
+    claude.emit(sdk(INIT));
+    await until(() => completedTurnStatuses(sent).length === 2);
+    claude.emit(sdk(answer("msg-2", "the agent finished")));
+    claude.emit(sdk(ownResult()));
+    await until(() => claude.drained());
+    await settle();
+    claude.emit(sdk(INIT));
+    claude.emit(sdk(answer("msg-3", "another report")));
+    claude.emit(sdk(ownResult()));
+    await until(() => completedTurnStatuses(sent).length === 3);
+
+    expect(completedTurns(sent).slice(1)).toMatchObject([
+      { id: "turn-2", status: "failed" },
+      { id: "turn-3", items: [{ text: "another report" }] },
+    ]);
+  });
+
+  test("resumes on a new Claude after the session failed while no turn ran", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const next = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings } = await harness([claude, next]);
+    await completeTurn(turns, sent, claude, 10);
+
+    claude.fail(new Error("Claude Code process exited with code 1"));
+    await until(() => claude.closes() === 1);
+    await completeTurn(turns, sent, next, 11);
+
+    expect(settings[1]).toMatchObject({ resume: "se-1" });
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
+  });
+});
+
 describe("turn/steer", () => {
   test("answers with the turn id, passes the steer to Claude and shows it in the turn", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -1734,6 +1966,17 @@ const steer = (id: number, turnId: string, text: string) => ({
     input: [{ type: "text", text, text_elements: [] }],
   } as Record<string, unknown>,
 });
+
+const INIT = { type: "system", subtype: "init" };
+
+const TASKS_RUNNING = {
+  type: "system",
+  subtype: "background_tasks_changed",
+  tasks: [{ task_id: "task-1", task_type: "local_agent", description: "x" }],
+};
+
+const isTurnStarted = (turnId: string) => (message: Sent) =>
+  message.method === "turn/started" && message.params.turn.id === turnId;
 
 // The result of a turn Claude started when a background task reported back, which names no send unless one joined it.
 const ownResult = (fields: object = {}) =>
