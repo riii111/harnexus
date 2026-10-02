@@ -1075,6 +1075,98 @@ describe("Claude thread history", () => {
     expect(out.result).not.toHaveProperty("initialTurnsPage");
   });
 
+  test("keeps the pick for the next resume when the server fails one", async () => {
+    const { router, picked } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+    picked.add("th-claude");
+    const resume = (id: number) =>
+      router.fromApp(
+        encode({
+          id,
+          method: "thread/resume",
+          params: { threadId: "th-claude", excludeTurns: true },
+        }),
+      );
+
+    resume(4);
+    await router.fromServer(
+      encode({ id: 4, error: { code: -32600, message: "not loaded" } }),
+    );
+    resume(5);
+    const out = parse(await router.fromServer(threadResponse(5, "th-claude")));
+
+    expect(out.result.thread.turns).toHaveLength(2);
+  });
+
+  test("fills the turns of the first resume after a conversation was picked, though the app excludes them", async () => {
+    const { router, picked } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+    picked.add("th-claude");
+    const resume = (id: number) => {
+      router.fromApp(
+        encode({
+          id,
+          method: "thread/resume",
+          params: { threadId: "th-claude", excludeTurns: true },
+        }),
+      );
+      return router.fromServer(threadResponse(id, "th-claude"));
+    };
+
+    const first = parse(await resume(4));
+    const second = parse(await resume(5));
+
+    expect(first.result.thread.turns).toHaveLength(2);
+    expect(typeof first.result.turnsBackwardsCursor).toBe("string");
+    expect(second.result.thread).not.toHaveProperty("turns");
+  });
+
+  test("logs the shape of the resume request and how many turns answered it, without the conversation", async () => {
+    const { router, events } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+
+    router.fromApp(
+      encode({
+        id: 4,
+        method: "thread/resume",
+        params: { threadId: "th-claude", excludeTurns: true },
+      }),
+    );
+    await router.fromServer(threadResponse(4, "th-claude"));
+    router.fromApp(
+      encode({
+        id: 5,
+        method: "thread/read",
+        params: { threadId: "th-claude", includeTurns: true },
+      }),
+    );
+    await router.fromServer(threadResponse(5, "th-claude"));
+
+    expect(events).toEqual([
+      {
+        event: "claude_history_served",
+        method: "thread/resume",
+        thread: "th-claud",
+        excludeTurns: true,
+        initialPage: false,
+        picked: false,
+        turns: 2,
+      },
+      {
+        event: "claude_history_served",
+        method: "thread/read",
+        thread: "th-claud",
+        excludeTurns: false,
+        initialPage: false,
+        picked: false,
+        turns: 2,
+      },
+    ]);
+  });
+
   test("fills the turns of thread/read for a Claude thread", async () => {
     const { router } = setup(["th-claude"], { "th-claude": conversation() });
 
@@ -1316,6 +1408,7 @@ const setup = (
   if (!holdForks) pinFork();
   const sent: object[] = [];
   const reads: string[] = [];
+  const picked = new Set<string>();
   const threads = new Map(
     claudeThreads.map((id) => [id, { model: CLAUDE, cwd: "/fixture/work" }]),
   );
@@ -1324,6 +1417,7 @@ const setup = (
       threadOf: (threadId) => threads.get(threadId),
       sessionIdOf: (threadId) =>
         threadId in records ? `session-${threadId}` : null,
+      takePicked: (threadId) => picked.delete(threadId),
     },
     readSession: (sessionId) => {
       reads.push(sessionId);
@@ -1395,7 +1489,7 @@ const setup = (
     catalog.models,
     unverifiedCodex,
   );
-  return { router, calls, events, sent, reads, catalog, pinFork };
+  return { router, calls, events, sent, reads, picked, catalog, pinFork };
 };
 
 const fixtureLines = (file: string) =>

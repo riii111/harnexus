@@ -73,7 +73,7 @@ describe("/resume", () => {
 describe("a number sent after /resume", () => {
   test("continues the picked conversation from the next turn without reaching Claude", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, store, settings } = await harness([claude]);
+    const { turns, sent, store, settings, events } = await harness([claude]);
     await writeClaudeRecord("se-a", conversationRecords("fixture ask"));
     turns.startTurn(turnStart(10, "/resume"), undefined);
     await until(() => completedTurnStatuses(sent).length === 1);
@@ -85,9 +85,44 @@ describe("a number sent after /resume", () => {
 
     expect(agentTexts(sent)[1]).toContain('continues "fixture ask"');
     expect(bound).toBe("se-a");
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "session_picked",
+      thread: THREAD.slice(0, 8),
+    });
+    expect([turns.takePicked(THREAD), turns.takePicked(THREAD)]).toEqual([
+      true,
+      false,
+    ]);
     expect(settings).toHaveLength(1);
     expect(settings[0]).toMatchObject({ resume: "se-a" });
     expect(await promptsUntil(claude, 1)).toEqual(["prompt 12"]);
+  });
+
+  test("shows the picked conversation's earlier turns in the thread after the reply", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const replay = [{ method: "turn/started", params: { replayed: true } }];
+    const asked: string[][] = [];
+    const { turns, sent } = await harness([claude], {
+      readHistory: async (threadId, sessionId, cwd) => {
+        asked.push([threadId, sessionId, cwd]);
+        return replay;
+      },
+    });
+    await writeClaudeRecord("se-a", conversationRecords("fixture ask"));
+    turns.startTurn(turnStart(10, "/resume"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 1);
+
+    turns.startTurn(turnStart(11, "1"), undefined);
+    await until(() => sent.includes(replay[0]));
+
+    expect(asked).toEqual([[THREAD, "se-a", dir]]);
+    expect(completedTurnStatuses(sent)).toHaveLength(2);
+    const lastCompleted = sent
+      .map((message: Sent) => message.method)
+      .lastIndexOf("turn/completed");
+    expect(sent.indexOf(replay[0])).toBeGreaterThan(lastCompleted);
+    expect(turns.takePicked(THREAD)).toBe(false);
   });
 
   test("binds a conversation two threads pick at once to only one of them", async () => {

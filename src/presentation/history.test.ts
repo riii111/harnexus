@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { buildHistory } from "./history.ts";
+import { buildHistory, replayHistory } from "./history.ts";
 import type { ThreadItem } from "./protocol.ts";
 import {
   conversation,
@@ -191,6 +191,32 @@ describe("buildHistory", () => {
 
   test("returns no turns for an empty record", () => {
     expect(build([])).toEqual([]);
+  });
+});
+
+describe("replayHistory", () => {
+  test("streams each turn as a finished live turn under the ids a later read rebuilds", () => {
+    const history = build(conversation());
+    const replayed = replayHistory(history, "th-fixture", 0);
+    const first = history[0];
+
+    expect(replayed.map((notification): string => notification.method)).toEqual(
+      history.flatMap(({ items }) => [
+        "turn/started",
+        ...items.flatMap(() => ["item/started", "item/completed"]),
+        "turn/completed",
+      ]),
+    );
+    expect(replayed[0]).toMatchObject({
+      params: {
+        threadId: "th-fixture",
+        turn: { id: first?.turn.id, status: "inProgress", items: [] },
+      },
+    });
+    expect(replayed.at(-1)).toMatchObject({
+      method: "turn/completed",
+      params: { threadId: "th-fixture", turn: history.at(-1)?.turn },
+    });
   });
 });
 

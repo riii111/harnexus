@@ -32,6 +32,15 @@ export type RouteEvent =
   | { event: "model_id_collision"; model: string }
   | { event: "codex_version"; version: string | null; verified: boolean }
   | { event: "claude_request_refused"; method: RefusedMethod; reason: Refusal }
+  | {
+      event: "claude_history_served";
+      method: "thread/resume" | "thread/read";
+      thread: string;
+      excludeTurns: boolean;
+      initialPage: boolean;
+      picked: boolean;
+      turns: number;
+    }
   | HistoryEvent;
 
 type Turns = {
@@ -211,14 +220,12 @@ export const createRouter = (
     }
     const created =
       message.method === "thread/start" && isClaudeModel(params.model);
+    const reopened = threadId !== undefined && known !== undefined;
     pending.set(id, {
       kind: "threadOpen",
       createdModel: created ? String(params.model) : null,
       forkOf: null,
-      history:
-        threadId !== undefined && known !== undefined
-          ? history.load(threadId)
-          : null,
+      history: reopened ? history.load(threadId) : null,
       params,
     });
     if (!isClaudeModel(params.model)) return line;
@@ -341,11 +348,19 @@ export const createRouter = (
     }
     const result = message.result;
     if (request.kind === "threadRead") {
-      return request.history.then((loaded) =>
-        loaded.isErr()
-          ? line
-          : encode({ ...message, result: withTurns(result, loaded.value) }),
-      );
+      return request.history.then((loaded) => {
+        if (loaded.isErr()) return line;
+        log({
+          event: "claude_history_served",
+          method: "thread/read",
+          thread: threadIdOf(result),
+          excludeTurns: false,
+          initialPage: false,
+          picked: false,
+          turns: loaded.value.length,
+        });
+        return encode({ ...message, result: withTurns(result, loaded.value) });
+      });
     }
     const thread = isObject(result.thread) ? result.thread : {};
     const threadId = thread.id;
@@ -390,14 +405,24 @@ export const createRouter = (
     };
     if (request.history === null) return encode({ ...message, result: opened });
     const { params } = request;
-    return request.history.then((loaded) =>
-      encode({
+    return request.history.then((loaded) => {
+      if (loaded.isErr()) return encode({ ...message, result: opened });
+      // Taken only once the history goes out, since a resume the server fails would otherwise use up the pick.
+      const picked = history.takePicked(threadId);
+      log({
+        event: "claude_history_served",
+        method: "thread/resume",
+        thread: threadId.slice(0, 8),
+        excludeTurns: params.excludeTurns === true,
+        initialPage: isObject(params.initialTurnsPage),
+        picked,
+        turns: loaded.value.length,
+      });
+      return encode({
         ...message,
-        result: loaded.isErr()
-          ? opened
-          : withResumeHistory(opened, loaded.value, params),
-      }),
-    );
+        result: withResumeHistory(opened, loaded.value, params, picked),
+      });
+    });
   };
 
   // The server keeps its own model, effort and mode for a Claude thread, and the app shows what this notice reports after any settings change.
@@ -462,6 +487,16 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
         version: entry.version,
         verified: entry.verified,
       };
+    case "claude_history_served":
+      return {
+        event: entry.event,
+        method: entry.method,
+        thread: entry.thread,
+        excludeTurns: entry.excludeTurns,
+        initialPage: entry.initialPage,
+        picked: entry.picked,
+        turns: entry.turns,
+      };
     case "claude_history_unreadable":
       return { event: entry.event, error: entry.error };
   }
@@ -479,6 +514,12 @@ const REFUSED_METHODS = [
   "review/start",
   "thread/compact/start",
 ] as const;
+
+// The id's head is enough to tell threads apart in a log without carrying the whole id.
+const threadIdOf = (result: Record<string, unknown>) =>
+  isObject(result.thread) && typeof result.thread.id === "string"
+    ? result.thread.id.slice(0, 8)
+    : "";
 
 const parseMessage = (line: Buffer) => {
   const parsed = parseJson(line.toString("utf8"));

@@ -796,6 +796,7 @@ export const createTurnController = <Tag extends string>({
       typeof threadId === "string" && threads.threadOf(threadId) !== undefined,
     threadOf: threads.threadOf,
     sessionIdOf: threads.sessionIdOf,
+    takePicked: threads.takePicked,
     adopt: threads.adopt,
     adoptFork: (threadId: string, thread: Thread, sourceId: string) => {
       threads.adoptFork(threadId, thread, sourceId);
@@ -830,6 +831,8 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
         reason: entry.reason,
         error: entry.error,
       };
+    case "session_picked":
+      return { event: entry.event, step: entry.step, thread: entry.thread };
     case "thread_not_materialized":
     case "session_not_saved":
     case "model_not_saved":
