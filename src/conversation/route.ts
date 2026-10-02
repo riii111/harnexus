@@ -32,6 +32,13 @@ export type RouteEvent =
   | { event: "model_id_collision"; model: string }
   | { event: "codex_version"; version: string | null; verified: boolean }
   | { event: "claude_request_refused"; method: RefusedMethod; reason: Refusal }
+  | {
+      event: "claude_history_served";
+      method: "thread/resume" | "thread/read";
+      excludeTurns: boolean;
+      initialPage: boolean;
+      turns: number;
+    }
   | HistoryEvent;
 
 type Turns = {
@@ -305,11 +312,17 @@ export const createRouter = (
     }
     const result = message.result;
     if (request.kind === "threadRead") {
-      return request.history.then((loaded) =>
-        loaded.isErr()
-          ? line
-          : encode({ ...message, result: withTurns(result, loaded.value) }),
-      );
+      return request.history.then((loaded) => {
+        if (loaded.isErr()) return line;
+        log({
+          event: "claude_history_served",
+          method: "thread/read",
+          excludeTurns: false,
+          initialPage: false,
+          turns: loaded.value.length,
+        });
+        return encode({ ...message, result: withTurns(result, loaded.value) });
+      });
     }
     const thread = isObject(result.thread) ? result.thread : {};
     const threadId = thread.id;
@@ -335,14 +348,20 @@ export const createRouter = (
     };
     if (request.history === null) return encode({ ...message, result: opened });
     const { params } = request;
-    return request.history.then((loaded) =>
-      encode({
+    return request.history.then((loaded) => {
+      if (loaded.isErr()) return encode({ ...message, result: opened });
+      log({
+        event: "claude_history_served",
+        method: "thread/resume",
+        excludeTurns: params.excludeTurns === true,
+        initialPage: isObject(params.initialTurnsPage),
+        turns: loaded.value.length,
+      });
+      return encode({
         ...message,
-        result: loaded.isErr()
-          ? opened
-          : withResumeHistory(opened, loaded.value, params),
-      }),
-    );
+        result: withResumeHistory(opened, loaded.value, params),
+      });
+    });
   };
 
   // The server keeps its own model, effort and mode for a Claude thread, and the app shows what this notice reports after any settings change.
@@ -406,6 +425,14 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
         event: entry.event,
         version: entry.version,
         verified: entry.verified,
+      };
+    case "claude_history_served":
+      return {
+        event: entry.event,
+        method: entry.method,
+        excludeTurns: entry.excludeTurns,
+        initialPage: entry.initialPage,
+        turns: entry.turns,
       };
     case "claude_history_unreadable":
       return { event: entry.event, error: entry.error };

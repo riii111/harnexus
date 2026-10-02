@@ -954,6 +954,46 @@ describe("Claude thread history", () => {
     expect(out.result).not.toHaveProperty("initialTurnsPage");
   });
 
+  test("logs the shape of the resume request and how many turns answered it, without the conversation", async () => {
+    const { router, events } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+
+    router.fromApp(
+      encode({
+        id: 4,
+        method: "thread/resume",
+        params: { threadId: "th-claude", excludeTurns: true },
+      }),
+    );
+    await router.fromServer(threadResponse(4, "th-claude"));
+    router.fromApp(
+      encode({
+        id: 5,
+        method: "thread/read",
+        params: { threadId: "th-claude", includeTurns: true },
+      }),
+    );
+    await router.fromServer(threadResponse(5, "th-claude"));
+
+    expect(events).toEqual([
+      {
+        event: "claude_history_served",
+        method: "thread/resume",
+        excludeTurns: true,
+        initialPage: false,
+        turns: 2,
+      },
+      {
+        event: "claude_history_served",
+        method: "thread/read",
+        excludeTurns: false,
+        initialPage: false,
+        turns: 2,
+      },
+    ]);
+  });
+
   test("fills the turns of thread/read for a Claude thread", async () => {
     const { router } = setup(["th-claude"], { "th-claude": conversation() });
 
