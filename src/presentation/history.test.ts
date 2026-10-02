@@ -194,9 +194,6 @@ describe("buildHistory", () => {
   });
 });
 
-const build = (messages: SessionMessage[]) =>
-  buildHistory(messages, { threadId: "th-claude", cwd: "/fixture/work" });
-
 describe("replayHistory", () => {
   test("streams each turn as a finished live turn under the ids a later read rebuilds", () => {
     const history = build(conversation());
@@ -222,3 +219,6 @@ describe("replayHistory", () => {
     });
   });
 });
+
+const build = (messages: SessionMessage[]) =>
+  buildHistory(messages, { threadId: "th-claude", cwd: "/fixture/work" });

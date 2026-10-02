@@ -52,13 +52,15 @@ export const connectClaudeThreads = ({
     lastRecordOf,
     readHistory: async (threadId, sessionId, cwd) => {
       const read = await readSession(sessionId);
-      return read.isOk()
-        ? replayHistory(
-            buildHistory(read.value, { threadId, cwd }),
-            threadId,
-            Date.now(),
-          )
-        : [];
+      if (read.isErr()) {
+        log({ event: "claude_history_unreadable", error: read.error._tag });
+        return [];
+      }
+      return replayHistory(
+        buildHistory(read.value, { threadId, cwd }),
+        threadId,
+        Date.now(),
+      );
     },
     openLink: (callerThreadId) =>
       createCodexLink({ callerThreadId, store, request, delegations }),

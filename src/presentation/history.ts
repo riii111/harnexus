@@ -57,6 +57,68 @@ export const buildHistory = (
   return turns;
 };
 
+// A thread the app already holds never asks for history it was given while open, so a picked conversation is streamed in as finished turns; the ids match what a later read rebuilds.
+export const replayHistory = (
+  history: readonly HistoryTurn[],
+  threadId: string,
+  now: number,
+): AppNotification[] =>
+  history.flatMap(({ turn, items }): AppNotification[] => {
+    const startedAtMs = turn.startedAt === null ? now : turn.startedAt * 1000;
+    const completedAtMs =
+      turn.completedAt === null ? now : turn.completedAt * 1000;
+    return [
+      {
+        method: "turn/started",
+        params: {
+          threadId,
+          turn: {
+            ...turn,
+            items: [],
+            itemsView: "full",
+            status: "inProgress",
+            completedAt: null,
+            durationMs: null,
+          },
+        },
+        emittedAtMs: startedAtMs,
+      },
+      ...items.flatMap(
+        ({
+          item,
+          startedAtMs: itemStarted,
+          completedAtMs: itemCompleted,
+        }): AppNotification[] => [
+          {
+            method: "item/started",
+            params: {
+              item,
+              threadId,
+              turnId: turn.id,
+              startedAtMs: itemStarted ?? startedAtMs,
+            },
+            emittedAtMs: itemStarted ?? startedAtMs,
+          },
+          {
+            method: "item/completed",
+            params: {
+              item,
+              threadId,
+              turnId: turn.id,
+              completedAtMs: itemCompleted ?? completedAtMs,
+            },
+            emittedAtMs: itemCompleted ?? completedAtMs,
+          },
+        ],
+      ),
+      {
+        method: "turn/completed",
+        params: { threadId, turn },
+        emittedAtMs: completedAtMs,
+      },
+    ];
+  });
+
 type Replay = {
   state: TurnState;
   items: Map<string, HistoryItem>;
@@ -226,65 +288,3 @@ const INTERRUPTED = /^\[Request interrupted by user/;
 // A slash command such as /compact is recorded as its command, caveat and output rather than as a prompt Claude answered.
 const LOCAL_COMMAND =
   /^<(command-name|local-command-stdout|local-command-caveat)>/;
-
-// A thread the app already holds never asks for history it was given while open, so a picked conversation is streamed in as finished turns; the ids match what a later read rebuilds.
-export const replayHistory = (
-  history: readonly HistoryTurn[],
-  threadId: string,
-  now: number,
-): AppNotification[] =>
-  history.flatMap(({ turn, items }): AppNotification[] => {
-    const startedAtMs = turn.startedAt === null ? now : turn.startedAt * 1000;
-    const completedAtMs =
-      turn.completedAt === null ? now : turn.completedAt * 1000;
-    return [
-      {
-        method: "turn/started",
-        params: {
-          threadId,
-          turn: {
-            ...turn,
-            items: [],
-            itemsView: "full",
-            status: "inProgress",
-            completedAt: null,
-            durationMs: null,
-          },
-        },
-        emittedAtMs: startedAtMs,
-      },
-      ...items.flatMap(
-        ({
-          item,
-          startedAtMs: itemStarted,
-          completedAtMs: itemCompleted,
-        }): AppNotification[] => [
-          {
-            method: "item/started",
-            params: {
-              item,
-              threadId,
-              turnId: turn.id,
-              startedAtMs: itemStarted ?? startedAtMs,
-            },
-            emittedAtMs: itemStarted ?? startedAtMs,
-          },
-          {
-            method: "item/completed",
-            params: {
-              item,
-              threadId,
-              turnId: turn.id,
-              completedAtMs: itemCompleted ?? completedAtMs,
-            },
-            emittedAtMs: itemCompleted ?? completedAtMs,
-          },
-        ],
-      ),
-      {
-        method: "turn/completed",
-        params: { threadId, turn },
-        emittedAtMs: completedAtMs,
-      },
-    ];
-  });

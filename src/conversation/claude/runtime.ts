@@ -212,7 +212,6 @@ export const createClaudeRuntime = ({
   listConversations: SessionCommandsDeps["listConversations"];
   lastRecordOf: SessionCommandsDeps["lastRecordOf"];
   openLink: (threadId: string) => CodexLink;
-  // The notifications that show a picked conversation's earlier turns in its thread.
   readHistory?: (
     threadId: string,
     sessionId: string,
