@@ -134,7 +134,7 @@ const close = (replay: Replay): HistoryTurn => {
 
 // A completion replaces the item it closes, since the renderer may complete one item twice to correct a denial.
 const collect = (replay: Replay, rendered: Rendered): Replay => {
-  const items = new Map(replay.items);
+  const items = replay.items;
   for (const notification of rendered.notifications) {
     noteItem(items, notification);
   }
