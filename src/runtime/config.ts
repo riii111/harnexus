@@ -2,6 +2,10 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { Result, TaggedError } from "better-result";
 
+class PermissionModeInvalid extends TaggedError("PermissionModeInvalid")<{
+  message: string;
+}> {}
+
 class LogPathNotAbsolute extends TaggedError("LogPathNotAbsolute")<{
   path: string;
   message: string;
@@ -11,6 +15,20 @@ class StatePathNotAbsolute extends TaggedError("StatePathNotAbsolute")<{
   path: string;
   message: string;
 }> {}
+
+export const loadPermissionMode = (
+  env: Record<string, string | undefined>,
+): Result<"default" | "auto", PermissionModeInvalid> => {
+  const mode = env.HARNEXUS_PERMISSION_MODE;
+  if (mode === undefined || mode === "" || mode === "auto")
+    return Result.ok("auto");
+  if (mode === "default") return Result.ok("default");
+  return Result.err(
+    new PermissionModeInvalid({
+      message: "HARNEXUS_PERMISSION_MODE must be default or auto",
+    }),
+  );
+};
 
 const LOG_PATH_ENV = "HARNEXUS_LOG_PATH";
 

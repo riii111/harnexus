@@ -44,7 +44,7 @@ describe("startClaudeSession options", () => {
       model: "claude-sonnet-5",
       settingSources: ["user", "project", "local"],
       systemPrompt: { type: "preset", preset: "claude_code" },
-      permissionMode: "default",
+      permissionMode: "auto",
       includePartialMessages: true,
       forwardSubagentText: true,
       mcpServers: {},

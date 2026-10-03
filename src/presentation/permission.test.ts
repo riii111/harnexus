@@ -259,7 +259,23 @@ describe("promptFor decisions", () => {
     ).toBe("deny");
   });
 
-  test("leaves plan mode when the plan is approved", () => {
+  test("returns to manual approvals after a plan when explicitly configured", () => {
+    const prompt = promptFor(call("ExitPlanMode", { plan: "1. edit" }, null), {
+      ...TARGET,
+      implementationMode: "default",
+    });
+
+    expect(
+      prompt.decide({ answers: { plan: { answers: ["Approve"] } } }),
+    ).toEqual({
+      behavior: "allow",
+      updatedPermissions: [
+        { type: "setMode", mode: "default", destination: "session" },
+      ],
+    });
+  });
+
+  test("returns to auto mode by default when the plan is approved", () => {
     const prompt = promptFor(
       call("ExitPlanMode", { plan: "1. edit" }, null),
       TARGET,
@@ -270,7 +286,7 @@ describe("promptFor decisions", () => {
     ).toEqual({
       behavior: "allow",
       updatedPermissions: [
-        { type: "setMode", mode: "default", destination: "session" },
+        { type: "setMode", mode: "auto", destination: "session" },
       ],
     });
   });

@@ -2,6 +2,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import {
   loadConnectionsPath,
   loadLogPath,
+  loadPermissionMode,
   loadStatePath,
 } from "../runtime/config.ts";
 import { checkAccess } from "../runtime/fs.boundary.ts";
@@ -60,6 +61,8 @@ async function findProblem() {
   }
   if (mode === "standard") return null;
   // The bridge and the launcher refuse a relative path where nobody sees it, so it is refused here first.
+  const permissionMode = loadPermissionMode(process.env);
+  if (permissionMode.isErr()) return permissionMode.error.message;
   const log = loadLogPath(process.env);
   if (log.isErr()) return log.error.message;
   const state = loadStatePath(process.env);

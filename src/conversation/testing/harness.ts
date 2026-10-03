@@ -70,6 +70,7 @@ export const askTool = (
     toolUseID?: string;
     agentID?: string;
     signal?: AbortSignal;
+    decisionReason?: string;
     defaultToNo?: boolean;
     suggestions?: PermissionUpdate[];
     suppressAlwaysAllowRule?: boolean;
@@ -80,6 +81,9 @@ export const askTool = (
     signal: options.signal ?? new AbortController().signal,
     toolUseID: options.toolUseID ?? "tool-1",
     requestId: "request-1",
+    ...(options.decisionReason === undefined
+      ? {}
+      : { decisionReason: options.decisionReason }),
     ...(options.agentID === undefined ? {} : { agentID: options.agentID }),
     ...(options.defaultToNo === undefined
       ? {}
@@ -203,6 +207,7 @@ export const harness = async (
     onSend = () => {},
     unsettledWrite = () => false,
     idleSessionMs,
+    permissionMode,
     missingSessions = [],
     sessionLookupFails = false,
     lookupSession,
@@ -223,6 +228,7 @@ export const harness = async (
     onSend?: (message: Sent) => void;
     unsettledWrite?: () => boolean;
     idleSessionMs?: number;
+    permissionMode?: "default" | "auto";
     missingSessions?: string[];
     sessionLookupFails?: boolean;
     lookupSession?: Parameters<typeof createClaudeRuntime>[0]["findSession"];
@@ -320,13 +326,22 @@ export const harness = async (
     effortRule,
     subagents,
     ...(idleSessionMs !== undefined && { idleSessionMs }),
+    ...(permissionMode !== undefined && { permissionMode }),
   });
+  const runs = new Map<string, Promise<void>>();
   const turns = createTurnController({
     store,
     threads,
-    runtime: ownTurnsShown
-      ? runtime
-      : { ...runtime, listen: () => runtime.listen(() => false) },
+    runtime: {
+      ...(ownTurnsShown
+        ? runtime
+        : { ...runtime, listen: () => runtime.listen(() => false) }),
+      run: (turn) => {
+        const ran = runtime.run(turn);
+        runs.set(turn.turnId, ran);
+        return ran;
+      },
+    },
     materializeThread: async (threadId) => {
       materialized.push(threadId);
       if (failuresLeft === 0) return Result.ok({});
@@ -340,6 +355,7 @@ export const harness = async (
     effortRule,
   });
   if (adopt) turns.adopt(THREAD, { model: MODEL, cwd: dir });
+  turnRuns.set(turns, runs);
   return {
     turns,
     sent,
@@ -387,7 +403,16 @@ export const completeTurn = async (
   claude.emit(sdk(answer(`msg-${id}`, "ok")));
   claude.emit(sdk(success()));
   await until(() => completedTurnStatuses(sent).length > before);
+  // The turn reads Claude's record after turn/completed, so a record the test writes next would otherwise be taken as the turn's own.
+  const run = turnRuns.get(turns)?.get(responseTo(sent, id).result.turn.id);
+  if (run === undefined) return expect.unreachable("turn never ran");
+  await run;
 };
+
+const turnRuns = new WeakMap<
+  ReturnType<typeof createTurnController>,
+  Map<string, Promise<void>>
+>();
 
 export const turnStart = (id: number, text: string, threadId = THREAD) => ({
   id,
@@ -440,12 +465,18 @@ export const REFUSED = (id: number) => ({
   error: { code: -32600, message: expect.any(String) },
 });
 
+// The test's own timeout ends a wait that never holds; this only stops one left running after it.
 export const until = async (condition: () => boolean) => {
-  for (let waited = 0; !condition(); waited += 2) {
-    if (waited > 2000) return expect.unreachable("condition never held");
+  const deadline = performance.now() + UNTIL_BACKSTOP_MS;
+  while (!condition()) {
+    if (performance.now() > deadline) {
+      return expect.unreachable("condition never held");
+    }
     await Bun.sleep(2);
   }
 };
+
+const UNTIL_BACKSTOP_MS = 30_000;
 
 export const firstPrompt = async (
   prompt: AsyncIterable<SDKUserMessage> | null,

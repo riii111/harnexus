@@ -18,6 +18,7 @@ import type { openThreadStore } from "../infra/thread-store.ts";
 import {
   type loadConnectionsPath,
   loadLogPath,
+  type loadPermissionMode,
   type loadStatePath,
 } from "../runtime/config.ts";
 import { openLogSink } from "../runtime/fs.boundary.ts";
@@ -48,6 +49,7 @@ type StartupFailure = "ServerPipesUnavailable";
 type LogFileFailure = "LogPathNotAbsolute" | "LogFileOpenFailed";
 
 type ClaudeUnavailable =
+  | InferErr<ReturnType<typeof loadPermissionMode>>["_tag"]
   | InferErr<ReturnType<typeof loadStatePath>>["_tag"]
   | InferErr<ReturnType<typeof loadConnectionsPath>>["_tag"]
   | InferErr<Awaited<ReturnType<typeof openThreadStore>>>["_tag"];

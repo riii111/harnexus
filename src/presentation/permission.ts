@@ -26,6 +26,7 @@ export type PromptTarget = {
   turnId: string;
   itemId: string;
   now: number;
+  implementationMode?: "default" | "auto";
 };
 
 export type AppPrompt = {
@@ -155,7 +156,11 @@ const planPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
       return {
         behavior: "allow",
         updatedPermissions: [
-          { type: "setMode", mode: "default", destination: "session" },
+          {
+            type: "setMode",
+            mode: target.implementationMode ?? "auto",
+            destination: "session",
+          },
         ],
       };
     }

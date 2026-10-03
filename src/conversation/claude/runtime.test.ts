@@ -407,9 +407,103 @@ describe("tool approval that must default to no", () => {
 });
 
 describe("permission mode", () => {
+  test("uses manual approvals when explicitly configured", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude], { permissionMode: "default" });
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.modes().length === 1);
+
+    expect(claude.options().permissionMode).toBe("default");
+    expect(claude.modes()).toEqual(["default"]);
+  });
+
+  test("keeps auto mode when a plan is approved and the next turn reuses Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    turns.selectMode(THREAD, "plan");
+    turns.startTurn(turnStart(10, "plan this"), undefined);
+    await until(() => claude.modes().length === 1);
+    expect(claude.options().permissionMode).toBe("plan");
+    expect(claude.modes()).toEqual(["plan"]);
+
+    const decision = askTool(claude, "ExitPlanMode", { plan: "Run tests" });
+    const request = await appRequest(sent);
+    turns.answerRequest({
+      id: request.id,
+      result: { answers: { plan: { answers: ["Approve"] } } },
+    });
+    expect(await decision).toEqual({
+      behavior: "allow",
+      updatedPermissions: [
+        { type: "setMode", mode: "auto", destination: "session" },
+      ],
+    });
+    const [prompt] = await readPrompts(claude, 1);
+    claude.emit(sdk(success([prompt?.uuid])));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    turns.selectMode(THREAD, "default");
+    await completeTurn(turns, sent, claude, 11);
+    expect(claude.modes()).toEqual(["plan", "auto"]);
+  });
+
+  test("resumes auto mode after Claude is closed between turns", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([first, second], {
+      idleSessionMs: 1,
+    });
+    await completeTurn(turns, sent, first, 10);
+    await until(() => first.closes() === 1);
+
+    await completeTurn(turns, sent, second, 11);
+
+    expect(first.options().permissionMode).toBe("auto");
+    expect(second.options()).toMatchObject({
+      permissionMode: "auto",
+      resume: "se-1",
+    });
+    expect(second.modes()).toEqual(["auto"]);
+  });
+
+  test("fails without sending a prompt when Claude rejects auto mode", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      permissionModeError: new Error("auto mode unavailable"),
+    });
+    const { turns, sent } = await harness([claude], { permissionMode: "auto" });
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnCompleted(sent)).toMatchObject({
+      status: "failed",
+      error: { message: "cannot switch Claude to the auto permission mode" },
+    });
+    expect(claude.closes()).toBe(1);
+    expect(await firstPrompt(claude.prompt())).toBeNull();
+  });
+
+  test("still relays explicit approval requests in auto mode", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude], { permissionMode: "auto" });
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.modes().length === 1);
+
+    const decision = askTool(
+      claude,
+      "Bash",
+      { command: "deploy" },
+      { decisionReason: "An ask rule requires approval" },
+    );
+    const request = await appRequest(sent);
+    turns.answerRequest({ id: request.id, result: { decision: "decline" } });
+
+    expect(request.params.reason).toBe("An ask rule requires approval");
+    expect((await decision)?.behavior).toBe("deny");
+  });
+
   test.each([
     { name: "plan", mode: "plan", expected: "plan" },
-    { name: "default", mode: "default", expected: "default" },
+    { name: "default", mode: "default", expected: "auto" },
   ])("runs a turn in the app's $name mode as Claude's $expected mode", async ({
     mode,
     expected,

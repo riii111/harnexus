@@ -262,6 +262,7 @@ export const createClaudeRuntime = ({
   log,
   now = Date.now,
   idleSessionMs = IDLE_SESSION_MS,
+  permissionMode = "auto",
   effortRule,
   subagents,
 }: {
@@ -282,6 +283,7 @@ export const createClaudeRuntime = ({
   log: (event: ClaudeTurnEvent) => void;
   now?: () => number;
   idleSessionMs?: number;
+  permissionMode?: "default" | "auto";
   effortRule: EffortRule;
   subagents: Pick<
     Subagents,
@@ -577,7 +579,7 @@ export const createClaudeRuntime = ({
     turn.useLink(slot.value.link);
     // Claude leaves plan mode when a plan is approved, so the mode the app asks for is set again on every turn.
     const mode = await slot.value.session.setPermissionMode(
-      input.permissionMode,
+      input.permissionMode === "plan" ? "plan" : permissionMode,
     );
     if (mode.isErr()) {
       dropSession(threadId, slot.value);
@@ -1219,6 +1221,8 @@ export const createClaudeRuntime = ({
         cwd: record.worktree,
         model,
         connection,
+        permissionMode:
+          turn.input.permissionMode === "plan" ? "plan" : permissionMode,
         ...(forkFound && forkFrom !== null && forkAt !== null
           ? { resume: forkFrom, forkSession: true, resumeAt: forkAt }
           : resumeFrom(resume)),
@@ -1319,6 +1323,7 @@ export const createClaudeRuntime = ({
         turnId: turn.turnId,
         itemId: item?.id ?? `${turn.turnId}-${options.toolUseID}`,
         now: now(),
+        implementationMode: permissionMode,
       },
     );
     const answer = await turn.ask(
