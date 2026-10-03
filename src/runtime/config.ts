@@ -7,11 +7,6 @@ class LogPathNotAbsolute extends TaggedError("LogPathNotAbsolute")<{
   message: string;
 }> {}
 
-class TracePathNotAbsolute extends TaggedError("TracePathNotAbsolute")<{
-  path: string;
-  message: string;
-}> {}
-
 class StatePathNotAbsolute extends TaggedError("StatePathNotAbsolute")<{
   path: string;
   message: string;
@@ -27,23 +22,6 @@ export const loadLogPath = (env: Record<string, string | undefined>) => {
       new LogPathNotAbsolute({
         path,
         message: `${LOG_PATH_ENV} must be an absolute path`,
-      }),
-    );
-  }
-  return Result.ok(path);
-};
-
-const TRACE_PATH_ENV = "HARNEXUS_TRACE_PATH";
-
-// Unset leaves the app's traffic unrecorded.
-export const loadTracePath = (env: Record<string, string | undefined>) => {
-  const path = env[TRACE_PATH_ENV];
-  if (path === undefined || path === "") return Result.ok(null);
-  if (!isAbsolute(path)) {
-    return Result.err(
-      new TracePathNotAbsolute({
-        path,
-        message: `${TRACE_PATH_ENV} must be an absolute path`,
       }),
     );
   }

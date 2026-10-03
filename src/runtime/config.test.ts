@@ -3,7 +3,6 @@ import {
   loadLogPath,
   loadShutdownGraceMs,
   loadStatePath,
-  loadTracePath,
   loadUnverifiedCodexPolicy,
 } from "./config.ts";
 
@@ -27,26 +26,6 @@ describe("loadLogPath", () => {
     const path = loadLogPath({ HARNEXUS_LOG_PATH: "x.log" });
 
     expect(path.isErr() && path.error._tag).toBe("LogPathNotAbsolute");
-  });
-});
-
-describe("loadTracePath", () => {
-  test("records nothing when the variable is unset", () => {
-    const path = loadTracePath({});
-
-    expect(path.isOk() && path.value).toBeNull();
-  });
-
-  test("returns an absolute path", () => {
-    const path = loadTracePath({ HARNEXUS_TRACE_PATH: "/tmp/trace.jsonl" });
-
-    expect(path.isOk() && path.value).toBe("/tmp/trace.jsonl");
-  });
-
-  test("rejects a relative path", () => {
-    const path = loadTracePath({ HARNEXUS_TRACE_PATH: "trace.jsonl" });
-
-    expect(path.isErr() && path.error._tag).toBe("TracePathNotAbsolute");
   });
 });
 

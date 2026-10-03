@@ -7,7 +7,7 @@ export type OpenAppPaths = {
   bun: string;
 };
 
-// An app opened with harnexus takes the launcher as its Codex CLI; the log, state and trace paths of this shell pass through so a setup can keep its own files.
+// An app opened with harnexus takes the launcher as its Codex CLI; the log and state paths of this shell pass through so a setup can keep its own files.
 export const openArguments = (
   paths: OpenAppPaths,
   mode: "harnexus" | "standard",
@@ -42,6 +42,5 @@ export const isAppRunning = (
 const PASSED_ENV = [
   "HARNEXUS_LOG_PATH",
   "HARNEXUS_STATE_PATH",
-  "HARNEXUS_TRACE_PATH",
   "HARNEXUS_UNVERIFIED_CODEX",
 ];

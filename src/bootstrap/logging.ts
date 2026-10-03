@@ -28,8 +28,6 @@ type LogEvent =
   | { event: "bridge_started" }
   | { event: "bridge_startup_failed"; reason: StartupFailure }
   | { event: "log_file_unavailable"; reason: LogFileFailure }
-  | { event: "trace_file_unavailable"; reason: TraceFileFailure }
-  | { event: "trace_started" }
   | { event: "server_closed" }
   | ServerSignalEvent
   | { event: "claude_unavailable"; reason: ClaudeUnavailable }
@@ -44,8 +42,6 @@ type LogEvent =
 type StartupFailure = "ServerPipesUnavailable";
 
 type LogFileFailure = "LogPathNotAbsolute" | "LogFileOpenFailed";
-
-type TraceFileFailure = "TracePathNotAbsolute" | "LogFileOpenFailed";
 
 type ClaudeUnavailable =
   | InferErr<ReturnType<typeof loadStatePath>>["_tag"]
@@ -80,11 +76,9 @@ const serializeLogEvent = (entry: LogEvent) => {
   switch (entry.event) {
     case "bridge_started":
     case "server_closed":
-    case "trace_started":
       return { event: entry.event };
     case "bridge_startup_failed":
     case "log_file_unavailable":
-    case "trace_file_unavailable":
       return { event: entry.event, reason: entry.reason };
     case "bridge_signaled":
       return { event: entry.event, signal: entry.signal };

@@ -18,15 +18,12 @@ import { createLineRewriter } from "../infra/codex/line-rewriter.ts";
 import { createObserver } from "../infra/codex/observe.ts";
 import { type RelayObserver, relayStreams } from "../infra/codex/relay.ts";
 import { attachServerRequests } from "../infra/codex/server-requests.ts";
-import { createTraceObserver } from "../infra/codex/trace.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import {
   loadShutdownGraceMs,
   loadStatePath,
-  loadTracePath,
   loadUnverifiedCodexPolicy,
 } from "../runtime/config.ts";
-import { openLogSink } from "../runtime/fs.boundary.ts";
 import { openServerPipes } from "../runtime/process.boundary.ts";
 import { connectClaudeThreads } from "./claude-threads.ts";
 import { createBridgeLogger } from "./logging.ts";
@@ -60,7 +57,7 @@ const stopServer = {
 };
 const claude = await withClaude({
   ...pipes.value,
-  observer: withTrace(createObserver(logger.log)),
+  observer: createObserver(logger.log),
 });
 for (const signal of BRIDGE_SIGNALS) {
   process.once(signal, () => {
@@ -75,30 +72,6 @@ claude.closeAll();
 pipes.value.serverInput.destroy();
 await stopLingeringServer({ isRunning: server.isRunning, ...stopServer });
 process.exit(0);
-
-// HARNEXUS_TRACE_PATH records the shape of the app's traffic beside the log, for a feature the bridge has yet to learn.
-function withTrace(observer: RelayObserver): RelayObserver {
-  const sink = loadTracePath(process.env).andThen((path) =>
-    path === null ? Result.ok(null) : openLogSink(path),
-  );
-  if (sink.isErr()) {
-    logger.log({ event: "trace_file_unavailable", reason: sink.error._tag });
-    return observer;
-  }
-  if (sink.value === null) return observer;
-  logger.log({ event: "trace_started" });
-  const trace = createTraceObserver(sink.value);
-  return {
-    chunk: (direction, chunk) => {
-      observer.chunk(direction, chunk);
-      trace.chunk(direction, chunk);
-    },
-    end: (direction) => {
-      observer.end(direction);
-      trace.end(direction);
-    },
-  };
-}
 
 // Without its thread store the bridge offers no Claude model and relays everything, so Codex threads keep working.
 async function withClaude(relay: {
