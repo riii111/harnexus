@@ -68,7 +68,7 @@ export const createSubagents = ({
             rootThreadId: threadId,
             parentThreadId: parent?.id ?? threadId,
             depth: parent === null ? 1 : parent.depth + 1,
-            spawnToolUseId: toolUseId,
+            calls: [toolUseId],
             toolUseId,
             taskId,
             nickname: agentNickname(description, agentType),
@@ -86,6 +86,7 @@ export const createSubagents = ({
           }
         : {
             ...known,
+            calls: [...known.calls, toolUseId],
             toolUseId,
             turnId: startedIn,
             runs: known.runs + 1,
@@ -202,21 +203,26 @@ export const createSubagents = ({
       ...descendantsOf(child.id),
     ]);
 
-  // Agents read back from Claude's records after a restart join as ended, keeping any the bridge already knows; one whose path an agent already holds takes the next free one.
+  // Agents read back from Claude's records after a restart join as ended, keeping any the bridge already knows; one whose path an agent already holds takes the next free one, and the agents under it follow.
+  // A parent comes before the agents it started, so each agent is placed under its parent's path as the parent ended up.
   const restore = (
     agents: readonly { thread: SubagentThread; history: HistoryTurn[] }[],
   ) => {
     for (const { thread, history } of agents) {
       if (children.has(thread.id)) continue;
+      const parent = children.get(thread.parentThreadId);
       const siblings = childrenOf(thread.parentThreadId);
-      const taken = siblings.some((sibling) => sibling.path === thread.path);
-      const parentPath = children.get(thread.parentThreadId)?.path ?? null;
-      children.set(
-        thread.id,
-        taken
-          ? { ...thread, path: freePath(parentPath, thread.role, siblings) }
-          : thread,
-      );
+      const placed =
+        parent === undefined
+          ? thread.path
+          : `${parent.path}${thread.path.slice(thread.path.lastIndexOf("/"))}`;
+      const taken = siblings.some((sibling) => sibling.path === placed);
+      children.set(thread.id, {
+        ...thread,
+        path: taken
+          ? freePath(parent?.path ?? null, thread.role, siblings)
+          : placed,
+      });
       histories.set(thread.id, history);
     }
   };
@@ -225,14 +231,16 @@ export const createSubagents = ({
   const agentRefOf =
     (threadId: string) =>
     (toolUseId: string): AgentRef | undefined => {
-      const child = sessionAgents(threadId).find(
-        (candidate) =>
-          candidate.spawnToolUseId === toolUseId ||
-          candidate.toolUseId === toolUseId,
+      const child = sessionAgents(threadId).find((candidate) =>
+        candidate.calls.includes(toolUseId),
       );
       return child === undefined
         ? undefined
-        : { threadId: child.id, path: child.path, active: child.active };
+        : {
+            threadId: child.id,
+            path: child.path,
+            active: child.active && child.toolUseId === toolUseId,
+          };
     };
 
   // Undefined for a thread that is no agent's.

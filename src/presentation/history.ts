@@ -134,7 +134,7 @@ export const buildSubagentHistory = (
     agentThreadOf,
   );
 
-// active marks an agent still running, which has not completed where its call was made.
+// active marks an agent still running under this call, which has not completed where the call was made.
 export type AgentRef = { threadId: string; path: string; active: boolean };
 
 const noteAgents = (
@@ -155,7 +155,7 @@ const noteAgents = (
     for (const kind of kinds) {
       const item: ThreadItem = {
         type: "subAgentActivity",
-        id: `${agent.threadId}-${kind}-1`,
+        id: `${agent.threadId}-${kind}-${block.id}`,
         kind,
         agentThreadId: agent.threadId,
         agentPath: agent.path,

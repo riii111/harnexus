@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { SubagentThread } from "../presentation/subagent.ts";
 import { createSubagents } from "./subagents.ts";
 
 describe("subagents", () => {
@@ -220,6 +221,60 @@ test("closes a call refused for an agent as declined in its thread", () => {
   expect(subagents.historyOf(child?.id ?? "")?.[0]?.items).toMatchObject([
     { item: { type: "userMessage" } },
     { item: { type: "commandExecution", status: "declined" } },
+  ]);
+});
+
+test("names a resumed agent's calls apart, with only the running one still open", () => {
+  const subagents = createSubagents({ send: () => {} });
+
+  subagents.start(agent("th-1", "toolu-1"));
+  subagents.complete("th-1", "task-toolu-1", DONE);
+  subagents.start({ ...agent("th-1", "toolu-2"), taskId: "task-toolu-1" });
+  const refOf = subagents.agentRefOf("th-1");
+
+  expect([refOf("toolu-1")?.active, refOf("toolu-2")?.active]).toEqual([
+    false,
+    true,
+  ]);
+});
+
+test("places a read-back agent under its parent's path as the parent ended up", () => {
+  const subagents = createSubagents({ send: () => {} });
+  subagents.start(agent("th-1", "toolu-live"));
+  const restored = (
+    id: string,
+    parentThreadId: string,
+    path: string,
+  ): SubagentThread => ({
+    id,
+    rootThreadId: "th-1",
+    parentThreadId,
+    depth: parentThreadId === "th-1" ? 1 : 2,
+    calls: [`toolu-${id}`],
+    toolUseId: `toolu-${id}`,
+    taskId: id,
+    nickname: id,
+    role: "Explore",
+    path,
+    turnId: null,
+    runs: 1,
+    active: false,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+  });
+
+  subagents.restore([
+    { thread: restored("old", "th-1", "/root/explore_1"), history: [] },
+    {
+      thread: restored("old-child", "old", "/root/explore_1/explore_1"),
+      history: [],
+    },
+  ]);
+
+  expect(subagents.descendantsOf("th-1").map((child) => child.path)).toEqual([
+    "/root/explore_1",
+    "/root/explore_2",
+    "/root/explore_2/explore_1",
   ]);
 });
 

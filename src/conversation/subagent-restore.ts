@@ -108,7 +108,7 @@ const rebuild = (
       rootThreadId: threadId,
       parentThreadId,
       depth: parent === undefined ? 1 : parent.depth + 1,
-      spawnToolUseId: record.toolUseId,
+      calls: [record.toolUseId],
       toolUseId: record.toolUseId,
       taskId: record.agentId,
       nickname: agentNickname(record.description, record.agentType),
