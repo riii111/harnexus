@@ -45,6 +45,25 @@ describe("trace", () => {
     expect(JSON.stringify(lines)).not.toContain("sk-fixture-secret");
   });
 
+  test("keeps nothing a tool or a user supplied, even under a kind's key", () => {
+    const [line] = traced("server_to_app", {
+      method: "item/started",
+      params: {
+        item: {
+          type: "mcpToolCall",
+          status: "my private note",
+          arguments: { mode: "secret", source: "/Users/me/notes.txt" },
+        },
+      },
+    });
+
+    expect(line.message.params.item).toEqual({
+      type: "mcpToolCall",
+      status: "<text 15>",
+      arguments: { mode: "<text 6>", source: "<text 19>" },
+    });
+  });
+
   test("gives the same id the same token across messages", () => {
     const written: string[] = [];
     const trace = createTraceObserver(

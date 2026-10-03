@@ -19,18 +19,25 @@ export const createTraceObserver = (
     return token;
   };
 
-  const shapeOf = (value: unknown, key: string | null): unknown => {
+  // Inside what a tool or a user supplied, a key that looks like a kind may hold anything, so nothing there is kept.
+  const shapeOf = (
+    value: unknown,
+    key: string | null,
+    opaque: boolean,
+  ): unknown => {
     if (typeof value === "string") {
-      if (key !== null && KEPT_KEYS.has(key)) return value.slice(0, MAX_KEPT);
-      if (key !== null && isIdKey(key)) return tokenOf(value);
+      if (!opaque && key !== null && keepsValue(key, value)) return value;
+      if (!opaque && key !== null && isIdKey(key)) return tokenOf(value);
       return `<text ${value.length}>`;
     }
-    if (Array.isArray(value)) return value.map((item) => shapeOf(item, key));
+    if (Array.isArray(value)) {
+      return value.map((item) => shapeOf(item, key, opaque));
+    }
     if (isObject(value)) {
       return Object.fromEntries(
         Object.entries(value).map(([name, item]) => [
           isFieldName(name) ? name : tokenOf(name),
-          shapeOf(item, name),
+          shapeOf(item, name, opaque || OPAQUE_KEYS.has(name)),
         ]),
       );
     }
@@ -53,7 +60,7 @@ export const createTraceObserver = (
         record(direction, { unparsed: true });
         return;
       }
-      record(direction, { message: shapeOf(parsed.value, null) });
+      record(direction, { message: shapeOf(parsed.value, null, false) });
     });
   const splitters = {
     app_to_server: splitterFor("app_to_server"),
@@ -65,6 +72,13 @@ export const createTraceObserver = (
     end: (direction) => splitters[direction].end(),
   };
 };
+
+// A kind is a single word such as collabAgentToolCall or in_progress; only a method may hold a slash, as in item/started.
+const keepsValue = (key: string, value: string) =>
+  KEPT_KEYS.has(key) &&
+  /^[A-Za-z][\w.:-]{0,63}$/.test(
+    key === "method" ? value.replaceAll("/", "") : value,
+  );
 
 // Ids are named id, or end in Id or Ids, as in threadId or receiverThreadIds.
 const isIdKey = (key: string) => key === "id" || /[a-z](Id|Ids)$/.test(key);
@@ -96,7 +110,17 @@ const KEPT_KEYS = new Set([
   "jsonrpc",
 ]);
 
-const MAX_KEPT = 80;
+// Tool arguments and results, and what a user typed or attached.
+const OPAQUE_KEYS = new Set([
+  "arguments",
+  "input",
+  "content",
+  "structuredContent",
+  "_meta",
+  "contentItems",
+  "output",
+  "changes",
+]);
 
 const DEFAULT_MAX_LINE_BYTES = 8 * 1024 * 1024;
 
