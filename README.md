@@ -103,14 +103,3 @@ Write the agent's instructions in the file body: this replaces the built-in Expl
 ### Custom paths
 
 Set `HARNEXUS_APP_PATH` if the app is installed somewhere else. `HARNEXUS_LOG_PATH` and `HARNEXUS_STATE_PATH` set in your shell are passed to the app by `bun run open-app`; both must be absolute paths.
-
-## Recording the app's traffic
-
-To teach the bridge a feature it does not cover yet, such as the subagents panel Codex threads show, record how the app and the Codex CLI talk while you use that feature in a Codex thread. Set `HARNEXUS_TRACE_PATH` to an absolute path in the shell, then quit the app and open it again with `bun run open-app`:
-
-```sh
-export HARNEXUS_TRACE_PATH="$HOME/harnexus-trace.jsonl"
-bun run open-app
-```
-
-Each line of the file is one message in either direction. Text is replaced by its length and each id by a token such as `<id 3>`, which stays the same across the file, so the trace shows which messages name the same thread without what anyone wrote; only kinds such as `type`, `status` and `method` stay as they are. Unset the variable and open the app again to stop recording.
