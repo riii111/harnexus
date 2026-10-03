@@ -1561,6 +1561,16 @@ describe("subagent threads", () => {
       turn: { status: "interrupted" },
     },
     {
+      name: "is reported done by its task",
+      ending: {
+        type: "system",
+        subtype: "task_updated",
+        task_id: "task-toolu-agent",
+        patch: { status: "completed" },
+      },
+      turn: { status: "completed" },
+    },
+    {
       name: "fails",
       ending: {
         ...taskNotification("toolu-agent"),

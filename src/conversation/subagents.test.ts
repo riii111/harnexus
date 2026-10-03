@@ -153,6 +153,24 @@ test("places an agent another agent started under that agent's thread", () => {
   ]);
 });
 
+test("keeps a nested agent's activity in its parent agent's turn, even once that turn ended", () => {
+  const subagents = createSubagents({ send: () => {} });
+
+  subagents.start(agent("th-1", "toolu-1"));
+  const [outer] = subagents.childrenOf("th-1");
+  subagents.message("th-1", agentCall("toolu-1", "toolu-inner"));
+  subagents.start({ ...agent("th-1", "toolu-inner"), depth: 2 });
+  subagents.complete("th-1", "task-toolu-1", DONE);
+  subagents.complete("th-1", "task-toolu-inner", DONE);
+
+  expect(
+    subagents
+      .historyOf(outer?.id ?? "")?.[0]
+      ?.items.filter((entry) => entry.item.type === "subAgentActivity")
+      .map((entry) => entry.item),
+  ).toMatchObject([{ kind: "started" }, { kind: "completed" }]);
+});
+
 test("leaves out an agent whose caller is unknown", () => {
   const subagents = createSubagents({ send: () => {} });
 

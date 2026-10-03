@@ -822,7 +822,10 @@ export const createClaudeRuntime = ({
       );
     } else if (
       message.subtype === "task_updated" &&
-      message.patch.status === "killed"
+      (message.patch.status === "killed" ||
+        message.patch.status === "completed" ||
+        (message.patch.status === "failed" &&
+          message.patch.error !== undefined))
     ) {
       subagents.complete(
         threadId,

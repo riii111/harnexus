@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { HistoryTurn } from "../presentation/history.ts";
+import { type HistoryTurn, noteItem } from "../presentation/history.ts";
 import {
   closeSubagentTurn,
   declineSubagentTool,
@@ -86,7 +86,7 @@ export const createSubagents = ({
     children.set(id, child);
     const opened = openSubagentTurn(child, { cwd, prompt }, at);
     running.set(id, opened.turn);
-    sendAll(renderSubagentActivity(child, "started", at));
+    sendActivity(child, "started", at);
     sendAll(opened.notifications);
   };
 
@@ -143,7 +143,31 @@ export const createSubagents = ({
       ]);
       sendAll(closed.notifications);
     }
-    sendAll(renderSubagentActivity(done, "completed", at));
+    sendActivity(done, "completed", at);
+  };
+
+  // An agent's activity under another agent belongs to that agent's turn, which keeps it for a later read whether it still runs or has ended.
+  const sendActivity = (
+    child: SubagentThread,
+    kind: "started" | "completed",
+    at: number,
+  ) => {
+    const notifications = renderSubagentActivity(child, kind, at);
+    sendAll(notifications);
+    const parentTurn = running.get(child.parentThreadId);
+    if (parentTurn?.turn.id === child.turnId) {
+      for (const notification of notifications) {
+        noteItem(parentTurn.items, notification);
+      }
+      return;
+    }
+    const kept = histories
+      .get(child.parentThreadId)
+      ?.find((entry) => entry.turn.id === child.turnId);
+    if (kept === undefined) return;
+    const items = new Map(kept.items.map((entry) => [entry.item.id, entry]));
+    for (const notification of notifications) noteItem(items, notification);
+    kept.items = [...items.values()];
   };
 
   // A session that closes stops the agents running in it, the deepest first so each closes before the thread it is listed under.
