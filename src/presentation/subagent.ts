@@ -8,6 +8,7 @@ import type {
 } from "./protocol.ts";
 import {
   closeTurn,
+  markToolDeclined,
   renderSdkMessage,
   renderTurnStarted,
   renderUserInput,
@@ -15,11 +16,14 @@ import {
   type TurnState,
 } from "./turn.ts";
 
-// A Claude subagent is shown as a Codex subagent is: a thread of its own under the thread whose Claude started it, which the app lists in its subagents panel.
+// A Claude subagent is shown as a Codex subagent is: a thread of its own under the thread whose agent started it, which the app lists in its subagents panel.
+// rootThreadId is the Claude thread whose session runs the agent, and parentThreadId that thread or the agent's thread whose agent started this one, depth levels below the root.
 // turnId is the parent's turn the agent last started in, which also carries its completion, as Codex does even once that turn has ended; runs counts its starts, since Claude can resume an agent that finished.
 export type SubagentThread = {
   id: string;
+  rootThreadId: string;
   parentThreadId: string;
+  depth: number;
   toolUseId: string;
   taskId: string;
   nickname: string;
@@ -66,7 +70,7 @@ export const childThreadView = (
     subAgent: {
       thread_spawn: {
         parent_thread_id: child.parentThreadId,
-        depth: 1,
+        depth: child.depth,
         agent_path: child.path,
         agent_nickname: child.nickname,
         agent_role: child.role,
@@ -173,6 +177,15 @@ export const renderSubagentMessage = (
   };
 };
 
+// A call the user refused for the agent closes as declined in the agent's thread, as it does in the turn that asked.
+export const declineSubagentTool = (
+  turn: SubagentTurn,
+  toolUseId: string,
+): SubagentTurn => ({
+  ...turn,
+  state: markToolDeclined(turn.state, toolUseId),
+});
+
 export const closeSubagentTurn = (
   turn: SubagentTurn,
   outcome: TurnOutcome,
@@ -186,17 +199,21 @@ export const closeSubagentTurn = (
   };
 };
 
+// The calls an agent made in its turn, so an agent one of them started is placed under this one.
+export const subagentCalls = (turn: SubagentTurn) =>
+  Object.keys(turn.state.tools);
+
 // A turn still running reads as one in progress with the items it has so far, which the app reads apart from its summary.
 export const runningSubagentTurn = (turn: SubagentTurn): HistoryTurn => ({
   turn: { ...turn.turn, itemsView: "notLoaded" },
   items: [...turn.items.values()],
 });
 
+// The turn's items are kept in one map for the turn's life, since an agent's turn can stream many messages.
 const collect = (
   turn: SubagentTurn,
   notifications: readonly AppNotification[],
 ): SubagentTurn => {
-  const items = new Map(turn.items);
-  for (const notification of notifications) noteItem(items, notification);
-  return { ...turn, items };
+  for (const notification of notifications) noteItem(turn.items, notification);
+  return turn;
 };

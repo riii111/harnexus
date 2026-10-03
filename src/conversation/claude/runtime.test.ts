@@ -1550,27 +1550,42 @@ describe("subagent threads", () => {
   });
 
   test.each([
-    { name: "is killed", status: "killed" },
-    { name: "fails", status: "failed" },
-  ])("ends an agent's thread when the agent $name", async ({ status }) => {
+    {
+      name: "is killed",
+      ending: {
+        type: "system",
+        subtype: "task_updated",
+        task_id: "task-toolu-agent",
+        patch: { status: "killed" },
+      },
+      turn: { status: "interrupted" },
+    },
+    {
+      name: "fails",
+      ending: {
+        ...taskNotification("toolu-agent"),
+        status: "failed",
+        summary: "API error: overloaded",
+      },
+      turn: { status: "failed", error: { message: "API error: overloaded" } },
+    },
+  ])("ends an agent's thread when the agent $name", async ({
+    ending,
+    turn,
+  }) => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, subagents } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => claude.started());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
-    claude.emit(
-      sdk({
-        type: "system",
-        subtype: "task_updated",
-        task_id: "task-toolu-agent",
-        patch: { status },
-      }),
-    );
+    claude.emit(sdk(ending));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
 
-    expect(subagents.childrenOf(THREAD)).toMatchObject([{ active: false }]);
+    const [child] = subagents.childrenOf(THREAD);
+    expect(child).toMatchObject({ active: false });
+    expect(subagents.historyOf(child?.id ?? "")).toMatchObject([{ turn }]);
   });
 
   test("ends the agents of a session that closed", async () => {

@@ -3,16 +3,18 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { HistoryTurn } from "../presentation/history.ts";
 import {
   closeSubagentTurn,
+  declineSubagentTool,
   openSubagentTurn,
   renderSubagentActivity,
   renderSubagentMessage,
   runningSubagentTurn,
   type SubagentThread,
   type SubagentTurn,
+  subagentCalls,
 } from "../presentation/subagent.ts";
 import type { TurnOutcome } from "../presentation/turn.ts";
 
-// The subagents each thread's agent started, kept while the bridge runs; a child's id is made from its parent and the agent's task, so the same agent, resumed or seen again, always gets the same thread.
+// The subagents each thread's agent started, kept while the bridge runs; a child's id is made from the Claude thread running it and the agent's task, so the same agent, resumed or seen again, always gets the same thread.
 // Each child keeps the turns it ran, so the app can read its thread while the bridge runs.
 export const createSubagents = ({
   send,
@@ -25,6 +27,7 @@ export const createSubagents = ({
   const running = new Map<string, SubagentTurn>();
   const histories = new Map<string, HistoryTurn[]>();
 
+  // threadId is the Claude thread whose session runs the agent; an agent another agent started goes under the thread of the agent whose call started it.
   const start = ({
     threadId,
     turnId,
@@ -34,6 +37,7 @@ export const createSubagents = ({
     agentType,
     cwd,
     prompt,
+    depth,
   }: {
     threadId: string;
     turnId: string | null;
@@ -43,22 +47,29 @@ export const createSubagents = ({
     agentType: string | null;
     cwd: string;
     prompt: string | null;
+    depth: number;
   }) => {
     const id = childThreadId(threadId, taskId);
     const at = now();
     const known = children.get(id);
     if (known?.active === true) return;
+    const parent = depth <= 1 ? null : callerOf(threadId, toolUseId);
+    if (depth > 1 && parent === null) return;
+    const parentTurn = parent === null ? undefined : running.get(parent.id);
+    const startedIn = parent === null ? turnId : (parentTurn?.turn.id ?? null);
     const child: SubagentThread =
       known === undefined
         ? {
             id,
-            parentThreadId: threadId,
+            rootThreadId: threadId,
+            parentThreadId: parent?.id ?? threadId,
+            depth: parent === null ? 1 : parent.depth + 1,
             toolUseId,
             taskId,
             nickname: description ?? agentType ?? DEFAULT_NAME,
             role: agentType,
-            path: `/root/${agentName(agentType)}_${childrenOf(threadId).length + 1}`,
-            turnId,
+            path: `${parent?.path ?? ROOT_PATH}/${agentName(agentType)}_${childrenOf(parent?.id ?? threadId).length + 1}`,
+            turnId: startedIn,
             runs: 1,
             active: true,
             createdAtMs: at,
@@ -67,7 +78,7 @@ export const createSubagents = ({
         : {
             ...known,
             toolUseId,
-            turnId,
+            turnId: startedIn,
             runs: known.runs + 1,
             active: true,
             updatedAtMs: at,
@@ -79,7 +90,13 @@ export const createSubagents = ({
     sendAll(opened.notifications);
   };
 
-  // Only what an agent itself says reaches its thread; an agent it starts in turn stays inside its call.
+  // The running agent of this session whose turn made the call.
+  const callerOf = (threadId: string, toolUseId: string) =>
+    sessionAgents(threadId).find((child) => {
+      const turn = running.get(child.id);
+      return turn !== undefined && subagentCalls(turn).includes(toolUseId);
+    }) ?? null;
+
   const message = (threadId: string, sdkMessage: SDKMessage) => {
     if (
       sdkMessage.type !== "assistant" &&
@@ -90,7 +107,7 @@ export const createSubagents = ({
     }
     const parent = sdkMessage.parent_tool_use_id;
     if (parent === null) return;
-    const child = childrenOf(threadId).find(
+    const child = sessionAgents(threadId).find(
       (candidate) => candidate.active && candidate.toolUseId === parent,
     );
     const turn = child === undefined ? undefined : running.get(child.id);
@@ -98,6 +115,16 @@ export const createSubagents = ({
     const rendered = renderSubagentMessage(turn, sdkMessage, now());
     running.set(child.id, rendered.turn);
     sendAll(rendered.notifications);
+  };
+
+  // The prompt asking about an agent's call does not say which agent made it, and only the agent that did holds the call.
+  const decline = (threadId: string, toolUseId: string) => {
+    for (const child of sessionAgents(threadId)) {
+      const turn = running.get(child.id);
+      if (turn !== undefined) {
+        running.set(child.id, declineSubagentTool(turn, toolUseId));
+      }
+    }
   };
 
   const complete = (threadId: string, taskId: string, outcome: TurnOutcome) => {
@@ -119,17 +146,28 @@ export const createSubagents = ({
     sendAll(renderSubagentActivity(done, "completed", at));
   };
 
-  // A session that closes stops the agents running in it.
+  // A session that closes stops the agents running in it, the deepest first so each closes before the thread it is listed under.
   const settle = (threadId: string) => {
-    for (const child of childrenOf(threadId)) {
-      if (child.active) {
-        complete(threadId, child.taskId, { status: "interrupted" });
-      }
+    const active = sessionAgents(threadId)
+      .filter((child) => child.active)
+      .sort((a, b) => b.depth - a.depth);
+    for (const child of active) {
+      complete(threadId, child.taskId, { status: "interrupted" });
     }
   };
 
+  const sessionAgents = (threadId: string) =>
+    [...children.values()].filter((child) => child.rootThreadId === threadId);
+
   const childrenOf = (threadId: string) =>
     [...children.values()].filter((child) => child.parentThreadId === threadId);
+
+  // Every agent below a thread, at any depth, as the app lists them under the thread they descend from.
+  const descendantsOf = (threadId: string): SubagentThread[] =>
+    childrenOf(threadId).flatMap((child) => [
+      child,
+      ...descendantsOf(child.id),
+    ]);
 
   // Undefined for a thread that is no agent's.
   const historyOf = (threadId: string): HistoryTurn[] | undefined => {
@@ -148,9 +186,11 @@ export const createSubagents = ({
   return {
     start,
     message,
+    decline,
     complete,
     settle,
     childrenOf,
+    descendantsOf,
     historyOf,
     get: (threadId: unknown) =>
       typeof threadId === "string" ? children.get(threadId) : undefined,
@@ -183,3 +223,5 @@ const agentName = (agentType: string | null) => {
 };
 
 const DEFAULT_NAME = "agent";
+
+const ROOT_PATH = "/root";

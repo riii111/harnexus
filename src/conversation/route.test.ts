@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
   EffortLevel,
+  SDKMessage,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
@@ -902,6 +903,54 @@ describe("Claude subagent threads", () => {
     expect(parse(router.fromServer(response) as Buffer).result.data).toEqual(
       [],
     );
+  });
+
+  test("lists the agents an agent started under that agent's thread", async () => {
+    const { router, subagents } = setup(["th-claude"]);
+    startAgent(subagents, "th-claude", "toolu-1");
+    const [outer] = subagents.childrenOf("th-claude");
+    subagents.message("th-claude", {
+      type: "assistant",
+      message: {
+        id: "msg-1",
+        content: [
+          { type: "tool_use", id: "toolu-2", name: "Agent", input: {} },
+        ],
+        stop_reason: null,
+      },
+      parent_tool_use_id: "toolu-1",
+    } as unknown as SDKMessage);
+    subagents.start({
+      threadId: "th-claude",
+      turnId: null,
+      toolUseId: "toolu-2",
+      taskId: "task-2",
+      description: "dig deeper",
+      agentType: null,
+      cwd: "/fixture/work",
+      prompt: null,
+      depth: 2,
+    });
+
+    router.fromApp(
+      encode({
+        id: 44,
+        method: "thread/list",
+        params: { ancestorThreadId: outer?.id },
+      }),
+    );
+    const listed = parse(
+      router.fromServer(encode({ id: 44, result: { data: [] } })) as Buffer,
+    );
+
+    expect(listed.result.data).toMatchObject([
+      {
+        parentThreadId: outer?.id,
+        agentNickname: "dig deeper",
+        model: CLAUDE,
+        source: { subAgent: { thread_spawn: { depth: 2 } } },
+      },
+    ]);
   });
 
   test("answers an agent's turn pages and goal itself", async () => {
@@ -1866,6 +1915,7 @@ const startAgent = (
     agentType: "Explore",
     cwd: "/fixture/work",
     prompt: "read the README",
+    depth: 1,
   });
 
 const until = async (condition: () => boolean) => {

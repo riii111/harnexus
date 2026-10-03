@@ -238,7 +238,10 @@ export const createClaudeRuntime = ({
   now?: () => number;
   idleSessionMs?: number;
   effortRule: EffortRule;
-  subagents: Pick<Subagents, "start" | "message" | "complete" | "settle">;
+  subagents: Pick<
+    Subagents,
+    "start" | "message" | "decline" | "complete" | "settle"
+  >;
 }): TurnRuntime<ClaudeFailureTag> => {
   type Turn = RunningTurn<ClaudeFailureTag>;
 
@@ -789,7 +792,7 @@ export const createClaudeRuntime = ({
     return inbox;
   };
 
-  // An agent Claude starts, in the turn or in the background, shows as a thread of its own under this one, which also gets what the agent says; one a subagent starts is left inside its parent agent.
+  // An agent Claude starts, in the turn or in the background, shows as a thread of its own under this one, which also gets what the agent says; one an agent starts goes under that agent's thread.
   const trackSubagents = (threadId: string, message: SDKMessage) => {
     if (message.type !== "system") {
       subagents.message(threadId, message);
@@ -798,8 +801,7 @@ export const createClaudeRuntime = ({
     if (
       message.subtype === "task_started" &&
       message.task_type === "local_agent" &&
-      message.tool_use_id !== undefined &&
-      (message.spawn_depth ?? 1) === 1
+      message.tool_use_id !== undefined
     ) {
       subagents.start({
         threadId,
@@ -810,6 +812,7 @@ export const createClaudeRuntime = ({
         agentType: message.subagent_type ?? null,
         cwd: threads.threadOf(threadId)?.cwd ?? "",
         prompt: message.prompt ?? null,
+        depth: message.spawn_depth ?? 1,
       });
     } else if (message.subtype === "task_notification") {
       subagents.complete(
@@ -819,8 +822,7 @@ export const createClaudeRuntime = ({
       );
     } else if (
       message.subtype === "task_updated" &&
-      message.patch.status !== undefined &&
-      ENDED_TASK_STATUSES.has(message.patch.status)
+      message.patch.status === "killed"
     ) {
       subagents.complete(
         threadId,
@@ -1086,7 +1088,7 @@ export const createClaudeRuntime = ({
       }
       const turn = openTurn(threadId);
       if (turn === undefined || turn.state().interrupting) {
-        return declineTool(turn, options.toolUseID, NO_TURN);
+        return declineTool(threadId, turn, options.toolUseID, NO_TURN);
       }
       const block = { id: options.toolUseID, name: toolName, input };
       // A subagent's call shows as its own item while its agent runs in the turn; one from a background agent would outlive the turn, which would close its item as failed, so its prompt carries an id of its own.
@@ -1121,7 +1123,7 @@ export const createClaudeRuntime = ({
       );
       const decision = prompt.decide(answer);
       return decision.behavior === "deny"
-        ? declineTool(turn, options.toolUseID, decision.message)
+        ? declineTool(threadId, turn, options.toolUseID, decision.message)
         : decision;
     };
 
@@ -1130,11 +1132,14 @@ export const createClaudeRuntime = ({
     return turn?.isOpen() ? turn : undefined;
   };
 
+  // A refused call of an agent's closes as declined in the agent's thread too.
   const declineTool = (
+    threadId: string,
     turn: Turn | undefined,
     toolUseId: string,
     message: string,
   ) => {
+    subagents.decline(threadId, toolUseId);
     if (turn !== undefined) {
       turn.apply({
         state: markToolDeclined(turn.state(), toolUseId),
@@ -1357,13 +1362,6 @@ const agentOutcome = (status: string, summary: string): TurnOutcome => {
 };
 
 const AGENT_FAILED = "The agent failed";
-
-// A task that ends in any of these runs no more, whichever way Claude reports it.
-const ENDED_TASK_STATUSES: ReadonlySet<string> = new Set([
-  "completed",
-  "failed",
-  "killed",
-]);
 
 const IDLE_SESSION_MS = 10 * 60_000;
 
