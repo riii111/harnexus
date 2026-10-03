@@ -12,6 +12,7 @@ import {
   type Rendered,
   renderInterimResult,
   renderSdkMessage,
+  renderToolRequest,
   renderTurnStarted,
   renderUserInput,
 } from "./turn.ts";
@@ -125,7 +126,7 @@ describe("renderSdkMessage text", () => {
 });
 
 describe("renderSdkMessage subagent tools", () => {
-  test("shows the tools a subagent calls while its agent runs in the turn", () => {
+  test("leaves the tools a subagent calls to the subagent's own thread", () => {
     const out = run([
       assistant("msg-1", [toolUse("agent-1", "Agent", { prompt: "look" })]),
       underAgent(
@@ -144,91 +145,30 @@ describe("renderSdkMessage subagent tools", () => {
       "item/started userMessage",
       "item/completed userMessage",
       "item/started mcpToolCall",
-      "item/started commandExecution",
-      "item/completed commandExecution",
       "item/completed mcpToolCall",
     ]);
-    expect(completedTool(out)).toMatchObject({
-      command: "ls",
-      aggregatedOutput: "a.txt",
-      status: "completed",
-    });
   });
 
-  test("shows the tools of a subagent that another subagent started", () => {
-    const out = run([
-      assistant("msg-1", [toolUse("agent-1", "Agent", { prompt: "look" })]),
-      underAgent(
-        "agent-1",
-        assistant("sub-1", [toolUse("agent-2", "Agent", { prompt: "dig" })]),
-      ),
-      underAgent(
-        "agent-2",
-        assistant("sub-2", [toolUse("tool-3", "Bash", { command: "ls" })]),
-      ),
-      underAgent("agent-2", toolResult("tool-3", "a.txt", false)),
-      underAgent("agent-1", toolResult("agent-2", "dug", false)),
-      toolResult("agent-1", "found", false),
-      success(),
+  test("completes a subagent's call that was asked about in the turn", () => {
+    const asked = renderToolRequest(
+      begin().state,
+      toolUse("tool-2", "Bash", { command: "ls" }) as {
+        id: string;
+        name: string;
+        input: unknown;
+      },
+      NOW,
+      false,
+    );
+    const out = renderSdkMessage(
+      asked.state,
+      sdk(underAgent("agent-1", toolResult("tool-2", "a.txt", false))),
+      NOW + 1,
+    );
+
+    expect(completedItems(out)).toMatchObject([
+      { type: "commandExecution", command: "ls", status: "completed" },
     ]);
-
-    expect(
-      completedItems(out).map((item) =>
-        item.type === "mcpToolCall" ? item.tool : item.type,
-      ),
-    ).toEqual(["userMessage", "commandExecution", "Agent", "Agent"]);
-    expect(unpaired(out)).toEqual([]);
-  });
-
-  test("completes a subagent's tool whose agent moved to the background first", () => {
-    const out = run([
-      assistant("msg-1", [toolUse("agent-1", "Agent", { prompt: "look" })]),
-      underAgent(
-        "agent-1",
-        assistant("sub-1", [toolUse("tool-2", "Bash", { command: "ls" })]),
-      ),
-      toolResult("agent-1", "Async agent launched", false),
-      underAgent("agent-1", toolResult("tool-2", "a.txt", false)),
-      success(),
-    ]);
-
-    expect(
-      completedItems(out).find((item) => item.type === "commandExecution"),
-    ).toMatchObject({ command: "ls", status: "completed" });
-  });
-
-  test("leaves out the tools of a subagent running in the background", () => {
-    const out = run([
-      assistant("msg-1", [toolUse("agent-1", "Agent", { prompt: "look" })]),
-      toolResult("agent-1", "Async agent launched", false),
-      underAgent(
-        "agent-1",
-        assistant("sub-1", [toolUse("tool-2", "Bash", { command: "ls" })]),
-      ),
-      underAgent("agent-1", toolResult("tool-2", "a.txt", false)),
-      success(),
-    ]);
-
-    expect(
-      completedItems(out).filter((item) => item.type === "commandExecution"),
-    ).toEqual([]);
-    expect(unpaired(out)).toEqual([]);
-  });
-
-  test("closes a subagent's tool left running when the turn ends", () => {
-    const out = run([
-      assistant("msg-1", [toolUse("agent-1", "Agent", { prompt: "look" })]),
-      underAgent(
-        "agent-1",
-        assistant("sub-1", [toolUse("tool-2", "Bash", { command: "ls" })]),
-      ),
-      result({ subtype: "error_during_execution", errors: ["stopped"] }),
-    ]);
-
-    expect(unpaired(out)).toEqual([]);
-    expect(
-      completedItems(out).find((item) => item.type === "commandExecution"),
-    ).toMatchObject({ status: "failed" });
   });
 });
 

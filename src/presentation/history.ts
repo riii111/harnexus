@@ -203,7 +203,8 @@ const collect = (replay: Replay, rendered: Rendered): Replay => {
   return { ...replay, state: rendered.state, items };
 };
 
-const noteItem = (
+// Shared with a subagent's thread, whose turns the bridge keeps as they run.
+export const noteItem = (
   items: Map<string, HistoryItem>,
   notification: AppNotification,
 ) => {

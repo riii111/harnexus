@@ -139,7 +139,10 @@ export const createRouter = (
         return routeFork(line, request);
       case "thread/list": {
         const parent = subagents.listedParentOf(params);
-        if (parent !== null && turns.isClaudeThread(parent)) {
+        if (
+          parent !== null &&
+          (turns.isClaudeThread(parent) || subagents.isChild(parent))
+        ) {
           pending.set(id, { kind: "childList", params });
         }
         return line;

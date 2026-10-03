@@ -97,6 +97,7 @@ export const connectClaudeThreads = ({
     readSession,
     send,
     log,
+    subagentHistory: subagents.historyOf,
   });
   const subagentRequests = createSubagentRequests({
     subagents,

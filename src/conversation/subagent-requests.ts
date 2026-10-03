@@ -26,7 +26,7 @@ type ChildHistory = (
   threadId: string,
 ) => Promise<Result<HistoryTurn[], unknown>>;
 
-// The server knows nothing of a Claude subagent's thread, so the bridge answers every request that names one, building it from its parent's thread as the server reports it.
+// The server knows nothing of a Claude subagent's thread, so the bridge answers every request that names one, building it from the thread of the Claude session running it, as the server reports it.
 // The app opens the parent before it shows the agents under it, so the answer that opened the parent is kept and the agents' threads are made from it without asking the server again.
 export const createSubagentRequests = ({
   subagents,
@@ -35,7 +35,7 @@ export const createSubagentRequests = ({
   history,
   send,
 }: {
-  subagents: Pick<Subagents, "get" | "childrenOf">;
+  subagents: Pick<Subagents, "get" | "childrenOf" | "descendantsOf">;
   threads: Threads;
   call: ServerCall;
   history: ChildHistory;
@@ -54,10 +54,10 @@ export const createSubagentRequests = ({
     child: SubagentThread,
     parentThread: Record<string, unknown>,
   ) => {
-    const model = threads.threadOf(child.parentThreadId)?.model;
+    const model = threads.threadOf(child.rootThreadId)?.model;
     return childThreadView(parentThread, child, {
       model: model ?? String(parentThread.model ?? ""),
-      reasoningEffort: shownEffort(threads.effortOf(child.parentThreadId)),
+      reasoningEffort: shownEffort(threads.effortOf(child.rootThreadId)),
     });
   };
 
@@ -105,7 +105,7 @@ export const createSubagentRequests = ({
   };
 
   const answerRead = async (child: SubagentThread, request: AppRequest) => {
-    const parentThread = await parentThreadOf(child.parentThreadId);
+    const parentThread = await parentThreadOf(child.rootThreadId);
     if (parentThread === null) return unreadable(request);
     const result = { thread: viewOf(child, parentThread) };
     if (request.params.includeTurns !== true) {
@@ -118,7 +118,7 @@ export const createSubagentRequests = ({
 
   // The agent runs with its parent's settings, so the answer that opened the parent carries them, and the settings the app sends with the agent's resume change nothing.
   const answerResume = async (child: SubagentThread, request: AppRequest) => {
-    const resumed = await parentResumeOf(child.parentThreadId);
+    const resumed = await parentResumeOf(child.rootThreadId);
     const parentThread = resumed === null ? null : threadOfAnswer(resumed);
     if (resumed === null || parentThread === null) return unreadable(request);
     const turns = await history(child.id);
@@ -145,11 +145,15 @@ export const createSubagentRequests = ({
     const parentThreadId = listedParentOf(params);
     if (parentThreadId === null || !listsSubagents(params)) return result;
     if (params.cursor != null || params.archived === true) return result;
-    const children = subagents.childrenOf(parentThreadId);
+    const children =
+      typeof params.ancestorThreadId === "string"
+        ? subagents.descendantsOf(parentThreadId)
+        : subagents.childrenOf(parentThreadId);
     if (children.length === 0 || !Array.isArray(result.data)) return result;
-    const parentThread = openedThreadOf(parentThreadId) ?? {
-      id: parentThreadId,
-      cwd: threads.threadOf(parentThreadId)?.cwd ?? null,
+    const rootThreadId = children[0]?.rootThreadId ?? parentThreadId;
+    const parentThread = openedThreadOf(rootThreadId) ?? {
+      id: rootThreadId,
+      cwd: threads.threadOf(rootThreadId)?.cwd ?? null,
     };
     const listed = new Set(
       result.data.flatMap((thread) =>

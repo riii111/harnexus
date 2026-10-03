@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type {
   EffortLevel,
+  SDKMessage,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
@@ -801,7 +802,7 @@ describe("Claude subagent threads", () => {
       parentThreadId: "th-claude",
       model: CLAUDE,
       path: "/fixture/rollout.jsonl",
-      turns: [],
+      turns: [{ status: "inProgress", items: [{ type: "userMessage" }] }],
     });
   });
 
@@ -832,7 +833,7 @@ describe("Claude subagent threads", () => {
       cwd: "/fixture/work",
       approvalPolicy: "on-request",
       thread: { id: child?.id, parentThreadId: "th-claude" },
-      turnsBackwardsCursor: null,
+      turnsBackwardsCursor: `at:${child?.id}-turn-1`,
     });
   });
 
@@ -904,6 +905,54 @@ describe("Claude subagent threads", () => {
     );
   });
 
+  test("lists the agents an agent started under that agent's thread", async () => {
+    const { router, subagents } = setup(["th-claude"]);
+    startAgent(subagents, "th-claude", "toolu-1");
+    const [outer] = subagents.childrenOf("th-claude");
+    subagents.message("th-claude", {
+      type: "assistant",
+      message: {
+        id: "msg-1",
+        content: [
+          { type: "tool_use", id: "toolu-2", name: "Agent", input: {} },
+        ],
+        stop_reason: null,
+      },
+      parent_tool_use_id: "toolu-1",
+    } as unknown as SDKMessage);
+    subagents.start({
+      threadId: "th-claude",
+      turnId: null,
+      toolUseId: "toolu-2",
+      taskId: "task-2",
+      description: "dig deeper",
+      agentType: null,
+      cwd: "/fixture/work",
+      prompt: null,
+      depth: 2,
+    });
+
+    router.fromApp(
+      encode({
+        id: 44,
+        method: "thread/list",
+        params: { ancestorThreadId: outer?.id },
+      }),
+    );
+    const listed = parse(
+      router.fromServer(encode({ id: 44, result: { data: [] } })) as Buffer,
+    );
+
+    expect(listed.result.data).toMatchObject([
+      {
+        parentThreadId: outer?.id,
+        agentNickname: "dig deeper",
+        model: CLAUDE,
+        source: { subAgent: { thread_spawn: { depth: 2 } } },
+      },
+    ]);
+  });
+
   test("answers an agent's turn pages and goal itself", async () => {
     const { router, subagents, sent, serverCalls } = setup(["th-claude"]);
     startAgent(subagents, "th-claude", "toolu-1");
@@ -925,9 +974,130 @@ describe("Claude subagent threads", () => {
     );
     await until(() => responseTo(sent, 34) !== null);
 
-    expect(responseTo(sent, 34).result.data).toEqual([]);
+    expect(responseTo(sent, 34).result.data).toMatchObject([
+      {
+        id: `${child?.id}-turn-1`,
+        status: "inProgress",
+        itemsView: "notLoaded",
+      },
+    ]);
     expect(responseTo(sent, 35)).toEqual({ id: 35, result: { goal: null } });
     expect(serverCalls).toEqual([]);
+  });
+
+  test("completes an agent's turn in its timeline only once the agent completes", async () => {
+    const { router, subagents, sent } = setup(["th-claude"]);
+    startAgent(subagents, "th-claude", "toolu-1");
+    const [child] = subagents.childrenOf("th-claude");
+    const timeline = async (id: number) => {
+      router.fromApp(
+        encode({
+          id,
+          method: "thread/timeline/list",
+          params: { threadId: child?.id },
+        }),
+      );
+      await until(() => responseTo(sent, id) !== null);
+      return responseTo(sent, id).result.data;
+    };
+
+    const running = await timeline(37);
+    subagents.complete("th-claude", "task-1", { status: "completed" });
+    const completed = await timeline(38);
+
+    expect(running).toMatchObject([
+      { type: "turnStarted", position: 0, turnId: `${child?.id}-turn-1` },
+      { type: "item", position: 1, item: { type: "userMessage" } },
+    ]);
+    expect(running).toHaveLength(2);
+    expect(completed).toMatchObject([
+      ...running,
+      {
+        type: "turnCompleted",
+        position: 2,
+        turnId: `${child?.id}-turn-1`,
+        status: "completed",
+        completedAt: expect.any(Number),
+      },
+    ]);
+  });
+
+  test("adds a nested agent's completion to its parent agent's newest turn, so a timeline cursor the app holds still pages back over every entry once", async () => {
+    const { router, subagents, sent } = setup(["th-claude"]);
+    const start = (toolUseId: string, taskId: string, depth: number) =>
+      subagents.start({
+        threadId: "th-claude",
+        turnId: "turn-1",
+        toolUseId,
+        taskId,
+        description: "read the README",
+        agentType: "Explore",
+        cwd: "/fixture/work",
+        prompt: "read the README",
+        depth,
+      });
+    start("toolu-1", "task-outer", 1);
+    const [outer] = subagents.childrenOf("th-claude");
+    subagents.message("th-claude", {
+      type: "assistant",
+      message: {
+        id: "msg-outer",
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu-inner",
+            name: "Agent",
+            input: { prompt: "dig" },
+          },
+        ],
+        stop_reason: null,
+      },
+      parent_tool_use_id: "toolu-1",
+    } as unknown as SDKMessage);
+    start("toolu-inner", "task-inner", 2);
+    subagents.complete("th-claude", "task-outer", { status: "completed" });
+    start("toolu-2", "task-outer", 1);
+    let id = 40;
+    const timeline = async (params: object) => {
+      id += 1;
+      router.fromApp(
+        encode({
+          id,
+          method: "thread/timeline/list",
+          params: { threadId: outer?.id, ...params },
+        }),
+      );
+      await until(() => responseTo(sent, id) !== null);
+      return responseTo(sent, id).result;
+    };
+
+    const whole = (await timeline({})).data;
+    const newest = await timeline({ limit: 3 });
+    subagents.complete("th-claude", "task-inner", { status: "completed" });
+    const older = await timeline({ cursor: newest.nextCursor });
+    const after = (await timeline({})).data;
+
+    expect(newest.nextCursor).toBe(`before:${whole.length - 3}`);
+    expect([...older.data, ...newest.data]).toEqual(whole);
+    const completion = {
+      type: "item",
+      turnId: `${outer?.id}-turn-2`,
+      item: { type: "subAgentActivity", kind: "completed" },
+    };
+    expect(after).toMatchObject([...whole, completion]);
+    expect(after).toHaveLength(whole.length + 1);
+    expect(
+      (sent as { method?: string; params?: { item?: { kind?: string } } }[])
+        .filter(
+          (m) =>
+            m.method === "item/completed" &&
+            m.params?.item?.kind === "completed",
+        )
+        .map((m) => m.params),
+    ).toMatchObject([
+      { threadId: "th-claude" },
+      { threadId: outer?.id, turnId: `${outer?.id}-turn-2` },
+    ]);
   });
 
   test("refuses a turn sent to an agent's thread", async () => {
@@ -1656,7 +1826,12 @@ const setup = (
   const threads = new Map(
     claudeThreads.map((id) => [id, { model: CLAUDE, cwd: "/fixture/work" }]),
   );
+  const subagents = createSubagents({
+    send: (message) => sent.push(message),
+    now: () => SUBAGENT_STARTED_MS,
+  });
   const history = createHistoryRequests({
+    subagentHistory: subagents.historyOf,
     threads: {
       threadOf: (threadId) => threads.get(threadId),
       sessionIdOf: (threadId) =>
@@ -1687,10 +1862,6 @@ const setup = (
       ? null
       : rule(model, efforts.get(threadId) ?? null);
   };
-  const subagents = createSubagents({
-    send: (message) => sent.push(message),
-    now: () => SUBAGENT_STARTED_MS,
-  });
   const serverCalls: [string, unknown][] = [];
   const subagentRequests = createSubagentRequests({
     subagents,
@@ -1857,6 +2028,9 @@ const startAgent = (
     taskId: "task-1",
     description: "read the README",
     agentType: "Explore",
+    cwd: "/fixture/work",
+    prompt: "read the README",
+    depth: 1,
   });
 
 const until = async (condition: () => boolean) => {

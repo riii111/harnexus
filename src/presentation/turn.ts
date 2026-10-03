@@ -136,7 +136,7 @@ export const renderNotice = (
   return seal(draft);
 };
 
-// A subagent's text stays inside its parent tool item, while the tools it calls show as items of their own as long as that parent runs in this turn; a result completes whichever item its call has, and anything after the turn ends is dropped.
+// A subagent's messages belong to its own thread, so only a result completing an item of this turn, such as a subagent's call asked about here, is taken from them; anything after the turn ends is dropped.
 export const renderSdkMessage = (
   state: TurnState,
   message: SDKMessage,
@@ -154,8 +154,6 @@ export const renderSdkMessage = (
     case "assistant":
       if (message.parent_tool_use_id === null && !draft.compaction) {
         renderAssistant(draft, message, now);
-      } else if (runsInTurn(draft, message.parent_tool_use_id)) {
-        renderSubagentTools(draft, message, now);
       }
       break;
     case "user":
@@ -458,22 +456,6 @@ const renderAssistant = (
     }
   }
   if (phase !== null) flushPending(draft, phase, now);
-};
-
-// A subagent that runs in the background was launched by a call that already completed, so the tools it calls belong to no running item of this turn.
-const runsInTurn = (draft: Draft, parentToolUseId: string | null) =>
-  parentToolUseId !== null && draft.tools[parentToolUseId]?.state === "running";
-
-// The main conversation's text waiting for its stop reason is left to it, since a subagent's call cannot tell whether that text was commentary.
-const renderSubagentTools = (
-  draft: Draft,
-  message: SDKAssistantMessage,
-  now: number,
-) => {
-  if (message.error !== undefined) return;
-  for (const block of message.message.content) {
-    if (block.type === "tool_use") startTool(draft, block, now, false);
-  }
 };
 
 // Streamed text and thinking blocks arrive again in order as assistant messages, so only those beyond the streamed count are new.
