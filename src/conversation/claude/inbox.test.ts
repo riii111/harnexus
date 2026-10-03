@@ -13,6 +13,16 @@ describe("inbox", () => {
     expect(await inbox.take()).toBe(2);
   });
 
+  test("shows what waits for the reader without taking it", async () => {
+    const inbox = createInbox<number>();
+
+    inbox.push(1);
+    inbox.push(2);
+
+    expect(inbox.queued()).toEqual([1, 2]);
+    expect(await inbox.take()).toBe(1);
+  });
+
   test("settles once the reader comes back for more", async () => {
     const inbox = createInbox<number>();
     let settled = false;

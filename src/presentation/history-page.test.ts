@@ -156,6 +156,38 @@ describe("pageTimeline", () => {
     expect(oldest?.nextCursor).toBeNull();
   });
 
+  test("leaves a running turn without its completion, keeping every earlier position", () => {
+    const finished = threeTurns();
+    const running = finished.map((entry, index) =>
+      index === finished.length - 1
+        ? {
+            ...entry,
+            turn: {
+              ...entry.turn,
+              status: "inProgress" as const,
+              completedAt: null,
+              durationMs: null,
+            },
+          }
+        : entry,
+    );
+
+    const whole = pageTimeline(running, { cursor: null, limit: null });
+    const older = pageTimeline(running, { cursor: "before:8", limit: null });
+
+    expect(
+      whole?.data.map((entry) => `${entry.position} ${entry.type}`),
+    ).toEqual(
+      pageTimeline(finished, { cursor: null, limit: null })
+        ?.data.slice(0, -1)
+        .map((entry) => `${entry.position} ${entry.type}`),
+    );
+    expect(whole?.data.at(-1)).toMatchObject({ type: "item", turnId: T3 });
+    expect(older?.data).toEqual(
+      pageTimeline(finished, { cursor: "before:8", limit: null })?.data,
+    );
+  });
+
   test("refuses a cursor past the end of the timeline", () => {
     expect(
       pageTimeline(threeTurns(), { cursor: "before:99", limit: null }),

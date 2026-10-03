@@ -1,7 +1,9 @@
+import { basename, dirname, join } from "node:path";
 import {
   type CanUseTool,
   type EffortLevel,
   getSessionMessages,
+  getSubagentMessages,
   type McpServerConfig,
   type Options,
   type PermissionMode,
@@ -12,7 +14,12 @@ import {
   type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result, TaggedError } from "better-result";
-import { readTextFileIfExists } from "../../runtime/fs.boundary.ts";
+import {
+  listFilesDeepIfExists,
+  readTextFileIfExists,
+} from "../../runtime/fs.boundary.ts";
+import { parseJson } from "../../runtime/json.boundary.ts";
+import { isObject } from "../../runtime/object.ts";
 import {
   checkSettingsEnv,
   checkSubscription,
@@ -27,12 +34,14 @@ import {
   type ClaudeSdk,
   type ClaudeStreamFailed,
   closeQuery,
+  type GetSubagentMessages,
   interruptQuery,
   nextMessage,
   openQuery,
   readAccount,
   readSessionMessages,
   readSettings,
+  readSubagentMessages,
   readSupportedModels,
   setQueryEffort,
   setQueryPermissionMode,
@@ -209,6 +218,89 @@ export const readClaudeSession = (
     return Result.ok(messages);
   });
 
+// An agent Claude started in a conversation, with the note Claude kept of the call that started it and the agent's own messages; name is what the call named the agent, which a SendMessage call may address it by.
+export type SubagentRecord = {
+  agentId: string;
+  toolUseId: string;
+  description: string | null;
+  agentType: string | null;
+  name: string | null;
+  depth: number;
+  messages: SessionMessage[];
+};
+
+// Claude keeps each subagent's messages in a folder beside the conversation's record, at any depth below it, each with a note of how it was started beside them; the agents are found as Claude's own reader finds them, and one whose note or messages cannot be read is left out.
+export const readClaudeSubagents = (
+  sessionId: string,
+  {
+    read = getSubagentMessages,
+    configDir = claudeConfigDir(process.env),
+  }: { read?: GetSubagentMessages; configDir?: string } = {},
+) =>
+  Result.gen(async function* () {
+    const path = yield* Result.await(findSessionFile(sessionId, configDir));
+    if (path === null) return Result.ok<SubagentRecord[]>([]);
+    const folder = join(path.slice(0, -RECORD_SUFFIX.length), "subagents");
+    const files = yield* Result.await(listFilesDeepIfExists(folder));
+    const found = new Map<string, string>();
+    for (const file of files ?? []) {
+      const agentId = AGENT_RECORD.exec(basename(file))?.[1];
+      if (agentId !== undefined && !found.has(agentId)) {
+        found.set(agentId, join(folder, dirname(file)));
+      }
+    }
+    const agents = await Promise.all(
+      [...found].map(([agentId, at]) =>
+        readAgent(at, sessionId, agentId, read),
+      ),
+    );
+    return Result.ok(
+      agents
+        .filter((record): record is SubagentRecord => record !== null)
+        .sort((a, b) => a.agentId.localeCompare(b.agentId)),
+    );
+  });
+
+const readAgent = async (
+  folder: string,
+  sessionId: string,
+  agentId: string,
+  read: GetSubagentMessages,
+): Promise<SubagentRecord | null> => {
+  const text = await readTextFileIfExists(
+    join(folder, `agent-${agentId}.meta.json`),
+  );
+  const note =
+    text.isOk() && text.value !== null ? agentNote(text.value) : null;
+  if (note === null) return null;
+  const messages = await readSubagentMessages(read, sessionId, agentId);
+  return messages.isOk()
+    ? { agentId, ...note, messages: messages.value }
+    : null;
+};
+
+const agentNote = (text: string) => {
+  const parsed = parseJson(text);
+  if (parsed.isErr() || !isObject(parsed.value)) return null;
+  const note = parsed.value;
+  if (typeof note.toolUseId !== "string") return null;
+  return {
+    toolUseId: note.toolUseId,
+    description: nonEmpty(note.description),
+    agentType: typeof note.agentType === "string" ? note.agentType : null,
+    name: nonEmpty(note.name),
+    depth: typeof note.spawnDepth === "number" ? note.spawnDepth : 1,
+  };
+};
+
+const nonEmpty = (value: unknown) =>
+  typeof value === "string" && value !== "" ? value : null;
+
+const RECORD_SUFFIX = ".jsonl";
+
+// Claude's reader lists an agent by its messages' file, and reads the note kept beside it.
+const AGENT_RECORD = /^agent-(.+)\.jsonl$/;
+
 // A record that is absent is an empty conversation, but one that exists or may exist without being readable is a failure.
 const checkRecordReadable = async (sessionId: string, configDir: string) =>
   (
@@ -239,6 +331,8 @@ const sessionOptions = (
   permissionMode: "default",
   canUseTool: settings.canUseTool,
   includePartialMessages: true,
+  // A subagent's thread shows what the agent wrote, not only the tools it called.
+  forwardSubagentText: true,
   mcpServers: settings.mcpServers ?? {},
   allowedTools: settings.allowedTools ?? [],
   ...(settings.resume === undefined ? {} : { resume: settings.resume }),

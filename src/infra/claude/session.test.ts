@@ -24,6 +24,7 @@ import {
   loadEffortSettings,
   readClaudeLogin,
   readClaudeSession,
+  readClaudeSubagents,
   startClaudeSession,
 } from "./session.ts";
 import { failingQuery, fakeClaude } from "./testing/fake-claude.ts";
@@ -41,6 +42,7 @@ describe("startClaudeSession options", () => {
       systemPrompt: { type: "preset", preset: "claude_code" },
       permissionMode: "default",
       includePartialMessages: true,
+      forwardSubagentText: true,
       mcpServers: {},
       allowedTools: [],
       canUseTool: SETTINGS.canUseTool,
@@ -661,6 +663,128 @@ describe("claudeSessionExists", () => {
   });
 });
 
+describe("readClaudeSubagents", () => {
+  let configDir: string;
+
+  beforeEach(() => {
+    configDir = mkdtempSync(join(tmpdir(), "harnexus-claude-config-"));
+  });
+
+  afterEach(() => {
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  test("reads each agent's note and messages from beside the conversation's record", async () => {
+    const folder = subagentFolder(configDir);
+    writeAgent(folder, "a1", {
+      agentType: "Explore",
+      description: "read the README",
+      name: "reader",
+      toolUseId: "toolu-1",
+      spawnDepth: 1,
+    });
+    writeAgent(folder, "a2", "not json");
+    writeFileSync(join(folder, "agent-a3.meta.json"), "{}");
+    const asked: string[] = [];
+
+    const read = await readClaudeSubagents(SESSION_ID, {
+      read: async (sessionId, agentId) => {
+        asked.push(`${sessionId}/${agentId}`);
+        return [];
+      },
+      configDir,
+    });
+
+    expect(read.isOk() && read.value).toEqual([
+      {
+        agentId: "a1",
+        toolUseId: "toolu-1",
+        description: "read the README",
+        agentType: "Explore",
+        name: "reader",
+        depth: 1,
+        messages: [],
+      },
+    ]);
+    expect(asked).toEqual([`${SESSION_ID}/a1`]);
+  });
+
+  // Claude can keep an agent's record in a folder of its own below the conversation's agents, where the SDK's reader finds it by its id.
+  test("reads an agent Claude recorded in a folder below the others through the SDK's reader", async () => {
+    const nested = join(subagentFolder(configDir), "workflows", "run-1");
+    writeAgent(
+      nested,
+      "a7",
+      { agentType: "Explore", toolUseId: "toolu-7", spawnDepth: 1 },
+      [
+        JSON.stringify({
+          type: "user",
+          uuid: "00000000-0000-4000-8000-000000000007",
+          parentUuid: null,
+          sessionId: SESSION_ID,
+          agentId: "a7",
+          isSidechain: true,
+          cwd: "/work/tree",
+          timestamp: "2026-09-27T00:00:01.000Z",
+          message: { role: "user", content: "look around" },
+        }),
+      ],
+    );
+
+    const read = await withConfigDir(configDir, () =>
+      readClaudeSubagents(SESSION_ID, { configDir }),
+    );
+
+    expect(read.isOk() && read.value).toMatchObject([
+      {
+        agentId: "a7",
+        toolUseId: "toolu-7",
+        messages: [
+          {
+            type: "user",
+            parent_tool_use_id: "toolu-7",
+            message: { content: "look around" },
+          },
+        ],
+      },
+    ]);
+  });
+
+  test("leaves out an agent whose messages cannot be read and keeps the others", async () => {
+    const folder = subagentFolder(configDir);
+    for (const agentId of ["a1", "a2"]) {
+      writeAgent(folder, agentId, {
+        toolUseId: `toolu-${agentId}`,
+        spawnDepth: 1,
+      });
+    }
+
+    const read = await readClaudeSubagents(SESSION_ID, {
+      read: async (_sessionId, agentId) => {
+        // biome-ignore lint/plugin/no-throw-try-catch: getSubagentMessages rejects when the record cannot be read.
+        if (agentId === "a1") throw new Error("unreadable");
+        return [];
+      },
+      configDir,
+    });
+
+    expect(read.isOk() && read.value.map((agent) => agent.agentId)).toEqual([
+      "a2",
+    ]);
+  });
+
+  test("reads no agent for a conversation without a record", async () => {
+    mkdirSync(join(configDir, "projects", "-work-tree"), { recursive: true });
+
+    const read = await readClaudeSubagents("se-1", {
+      read: async () => [],
+      configDir,
+    });
+
+    expect(read.isOk() && read.value).toEqual([]);
+  });
+});
+
 describe("readClaudeSession", () => {
   let configDir: string;
 
@@ -785,6 +909,29 @@ const writeRecord = (configDir: string, sessionId: string, line: string) => {
   const record = join(project, `${sessionId}.jsonl`);
   writeFileSync(record, `${line}\n`);
   return record;
+};
+
+const subagentFolder = (configDir: string) => {
+  const record = writeRecord(configDir, SESSION_ID, RECORD_LINE);
+  return join(record.slice(0, -".jsonl".length), "subagents");
+};
+
+// Claude writes an agent's messages and, beside them, the note of the call that started it.
+const writeAgent = (
+  folder: string,
+  agentId: string,
+  note: object | string,
+  lines: readonly string[] = [],
+) => {
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(
+    join(folder, `agent-${agentId}.meta.json`),
+    typeof note === "string" ? note : JSON.stringify(note),
+  );
+  writeFileSync(
+    join(folder, `agent-${agentId}.jsonl`),
+    lines.map((line) => `${line}\n`).join(""),
+  );
 };
 
 // A link to itself cannot be followed, as a folder or file without permission cannot, and unlike chmod it fails for root too and leaves the test directory removable.

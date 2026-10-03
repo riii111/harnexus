@@ -3,6 +3,7 @@ import type {
   SDKUserMessage,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import type { AppNotification, ThreadItem, Turn } from "./protocol.ts";
 import {
@@ -26,9 +27,11 @@ export type HistoryItem = {
 
 // The record is replayed through the live turn renderer, so a reopened thread shows the same items the turn showed while it ran, except the tools a subagent called, which Claude records apart from the conversation.
 // Each prompt opens a turn, so a steer taken mid-turn appears as a turn of its own, and a record keeps no bridge turn ids, so turn ids are made from the prompt's record uuid.
+// An agent the conversation started or resumed shows where each of its calls was made, as the activity a live turn gave it; agentThreadOf names the agent's thread for a call, if the bridge knows it.
 export const buildHistory = (
   messages: readonly SessionMessage[],
   thread: { threadId: string; cwd: string },
+  agentThreadOf: (toolUseId: string) => AgentRef | undefined = () => undefined,
 ): HistoryTurn[] => {
   const turns: HistoryTurn[] = [];
   let replay: Replay | null = null;
@@ -51,6 +54,7 @@ export const buildHistory = (
     } else if (message.type === "assistant" && isAssistantBody(body)) {
       replay ??= start(thread, message.uuid, null, at);
       replay = feed(replay, assistantOf(message, body), at);
+      replay = noteAgents(replay, body, agentThreadOf, at);
     }
   }
   if (replay !== null) turns.push(close(replay));
@@ -118,6 +122,148 @@ export const replayHistory = (
       },
     ];
   });
+
+// A subagent's record is its own conversation, whose messages name the call that started the agent as their parent.
+export const buildSubagentHistory = (
+  messages: readonly SessionMessage[],
+  thread: { threadId: string; cwd: string },
+  agentThreadOf: (toolUseId: string) => AgentRef | undefined,
+): HistoryTurn[] =>
+  buildHistory(
+    messages.map((message) => ({ ...message, parent_tool_use_id: null })),
+    thread,
+    agentThreadOf,
+  );
+
+// active marks an agent still running under this call, which has not completed where the call was made.
+export type AgentRef = { threadId: string; path: string; active: boolean };
+
+const noteAgents = (
+  replay: Replay,
+  body: SDKAssistantMessage["message"],
+  agentThreadOf: (toolUseId: string) => AgentRef | undefined,
+  at: number | null,
+): Replay => {
+  for (const block of body.content) {
+    if (
+      block.type !== "tool_use" ||
+      !(AGENT_TOOLS.includes(block.name) || block.name === RESUME_TOOL)
+    ) {
+      continue;
+    }
+    const agent = agentThreadOf(block.id);
+    if (agent === undefined) continue;
+    const kinds = agent.active
+      ? (["started"] as const)
+      : (["started", "completed"] as const);
+    for (const kind of kinds) {
+      const item: ThreadItem = {
+        type: "subAgentActivity",
+        id: `${agent.threadId}-${kind}-${block.id}`,
+        kind,
+        agentThreadId: agent.threadId,
+        agentPath: agent.path,
+      };
+      replay.items.set(item.id, {
+        turnId: replay.state.turnId,
+        item,
+        startedAtMs: at,
+        completedAtMs: at,
+      });
+    }
+  }
+  return replay;
+};
+
+// Claude Code names the tool that starts a subagent Agent, and older versions named it Task.
+const AGENT_TOOLS = ["Agent", "Task"];
+
+// Claude resumes an agent that has ended when a SendMessage call addresses it, and the agent runs under that call.
+const RESUME_TOOL = "SendMessage";
+
+// A SendMessage call that resumed an agent, naming it as the call did and, when Claude's answer says so, by its id.
+export type AgentResume = {
+  toolUseId: string;
+  recipient: string;
+  resumedAgentId: string | null;
+  at: number | null;
+};
+
+// The calls in a record that resumed an agent: a SendMessage call addresses its recipient as to, or as recipient in the older shape Claude still takes, and only Claude's answer tells a resume from a message queued for an agent still running.
+// Claude answers a resume with JSON naming the agent as resumedAgentId, or, when the agent's report comes back in the answer or the agent answers to another agent, with a message that it is resuming or resumed the agent.
+export const findAgentResumes = (
+  messages: readonly SessionMessage[],
+): AgentResume[] => {
+  const calls: Omit<AgentResume, "resumedAgentId">[] = [];
+  const answers = new Map<string, unknown>();
+  for (const message of messages) {
+    if (isMetaMessage(message)) continue;
+    const body = message.message;
+    if (!isObject(body) || !Array.isArray(body.content)) continue;
+    for (const block of body.content) {
+      if (!isObject(block)) continue;
+      if (
+        message.type === "assistant" &&
+        block.type === "tool_use" &&
+        block.name === RESUME_TOOL &&
+        typeof block.id === "string"
+      ) {
+        const recipient = recipientOf(block.input);
+        if (recipient !== null) {
+          calls.push({ toolUseId: block.id, recipient, at: timeOf(message) });
+        }
+      } else if (
+        message.type === "user" &&
+        block.type === "tool_result" &&
+        typeof block.tool_use_id === "string" &&
+        block.is_error !== true
+      ) {
+        answers.set(block.tool_use_id, resumeAnswer(block.content));
+      }
+    }
+  }
+  return calls.flatMap((call) => {
+    const answer = answers.get(call.toolUseId);
+    if (!isObject(answer)) return [];
+    return [
+      {
+        ...call,
+        resumedAgentId:
+          typeof answer.resumedAgentId === "string"
+            ? answer.resumedAgentId
+            : null,
+      },
+    ];
+  });
+};
+
+const recipientOf = (input: unknown) => {
+  if (!isObject(input)) return null;
+  const to = typeof input.to === "string" ? input.to : input.recipient;
+  return typeof to === "string" && to !== "" ? to : null;
+};
+
+// Claude's answer opens with one line of JSON, which a report handed back with it follows.
+const resumeAnswer = (content: unknown) => {
+  const first = Array.isArray(content)
+    ? content.find((block) => isObject(block) && block.type === "text")
+    : { text: content };
+  const text =
+    isObject(first) && typeof first.text === "string" ? first.text : "";
+  const answer = parseLine(text.split("\n", 1)[0] ?? "");
+  if (!isObject(answer) || answer.success !== true) return null;
+  return typeof answer.resumedAgentId === "string" ||
+    (typeof answer.message === "string" && RESUMED.test(answer.message))
+    ? answer
+    : null;
+};
+
+const parseLine = (line: string): unknown => {
+  const parsed = parseJson(line);
+  return parsed.isOk() ? parsed.value : null;
+};
+
+const RESUMED = /^Resum(?:ed|ing) agent\b/;
 
 type Replay = {
   state: TurnState;
@@ -203,7 +349,8 @@ const collect = (replay: Replay, rendered: Rendered): Replay => {
   return { ...replay, state: rendered.state, items };
 };
 
-const noteItem = (
+// Shared with a subagent's thread, whose turns the bridge keeps as they run.
+export const noteItem = (
   items: Map<string, HistoryItem>,
   notification: AppNotification,
 ) => {
@@ -273,6 +420,15 @@ const toolResultsOf = (
 // The SDK returns these fields without typing them; a compact summary and other hidden records carry is_meta.
 const isMetaMessage = (message: SessionMessage) =>
   (message as { is_meta?: unknown }).is_meta === true;
+
+// When a record began, as its first timed message says.
+export const startOfRecord = (messages: readonly SessionMessage[]) => {
+  for (const message of messages) {
+    const at = timeOf(message);
+    if (at !== null) return at;
+  }
+  return null;
+};
 
 const timeOf = (message: SessionMessage) => {
   const stamp = (message as { timestamp?: unknown }).timestamp;

@@ -117,6 +117,7 @@ export const viewTurn = (entry: HistoryTurn, view: TurnsView): Turn => {
   }
 };
 
+// A running agent's turn has not completed yet, so it gets its completion entry only once it ends; it is always the last turn, so no earlier position moves.
 const timeline = (history: readonly HistoryTurn[]): TimelineEntry[] => {
   const entries: TimelineEntry[] = [];
   for (const { turn, items } of history) {
@@ -134,6 +135,7 @@ const timeline = (history: readonly HistoryTurn[]): TimelineEntry[] => {
         item,
       });
     }
+    if (turn.status === "inProgress") continue;
     entries.push({
       type: "turnCompleted",
       position: entries.length,
