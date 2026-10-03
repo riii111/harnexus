@@ -2128,6 +2128,107 @@ describe("approvals no turn could show", () => {
     expect(settings[1]).toMatchObject({ resume: "se-1" });
   });
 
+  test.each([
+    { name: "with no turn queued", queued: false },
+    { name: "with a turn the user sent queued", queued: true },
+  ])("keeps an agent's thread live after Claude starts a turn during the wait $name, and shows that turn after", async ({
+    queued,
+  }) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, subagents } = await harness([claude]);
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    const prompts = claude.prompt()?.[Symbol.asyncIterator]();
+    await prompts?.next();
+    claude.emit(sdk(taskStarted("toolu-agent", 1)));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+    const [child] = subagents.childrenOf(THREAD);
+    const childItems = (method: string, type: string) =>
+      sent.filter(
+        (m) =>
+          m.method === method &&
+          m.params.threadId === child?.id &&
+          m.params.item.type === type,
+      );
+
+    const decision = agentAsks(claude, "tool-1");
+    const request = await appRequest(sent);
+    if (queued) {
+      turns.startTurn(turnStart(11, "next"), undefined);
+      await until(() => responseTo(sent, 11) !== undefined);
+    }
+    claude.emit(sdk(INIT));
+    claude.emit(sdk(answer("msg-2", "the agent finished")));
+    claude.emit(
+      sdk({ ...bashCall("toolu-ls"), parent_tool_use_id: "toolu-agent" }),
+    );
+    claude.emit(
+      sdk({ ...toolError("toolu-ls"), parent_tool_use_id: "toolu-agent" }),
+    );
+    claude.emit(sdk(AGENT_SPOKE));
+    await until(
+      () =>
+        childItems("item/completed", "commandExecution").length === 1 &&
+        childItems("item/started", "agentMessage").length === 1,
+    );
+    claude.emit(sdk(ownResult()));
+    await until(() => claude.drained());
+    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
+    turns.answerRequest({ id: request.id, result: ALLOWED });
+    if (queued) {
+      const next = await prompts?.next();
+      claude.emit(sdk(answer("msg-3", "hi")));
+      claude.emit(sdk(success([next?.value?.uuid])));
+    }
+    await until(() => completedTurnStatuses(sent).length === 3);
+    await settle();
+
+    expect(await decision).toEqual({ behavior: "allow" });
+    expect(completedTurns(sent).slice(1)).toMatchObject([
+      { id: "turn-2", status: "completed" },
+      {
+        id: "turn-3",
+        status: "completed",
+        items: [{ text: queued ? "hi" : "the agent finished" }],
+      },
+    ]);
+    expect(childItems("item/started", "commandExecution")).toHaveLength(1);
+    expect(childItems("item/completed", "commandExecution")).toHaveLength(1);
+    expect(childItems("item/started", "agentMessage")).toHaveLength(1);
+  });
+
+  test.each<{
+    name: string;
+    stop: (claude: ReturnType<typeof fakeClaude>) => void;
+  }>([
+    { name: "ends", stop: (claude) => claude.end() },
+    {
+      name: "fails",
+      stop: (claude) => claude.fail(new Error("socket closed")),
+    },
+  ])("declines the approvals and fails both turns when Claude's stream $name after it started a turn during the wait", async ({
+    stop,
+  }) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+
+    const decision = agentAsks(claude, "tool-1");
+    await appRequest(sent);
+    claude.emit(sdk(INIT));
+    claude.emit(sdk(answer("msg-2", "the agent finished")));
+    stop(claude);
+    expect((await decision)?.behavior).toBe("deny");
+    await until(() => completedTurnStatuses(sent).length === 3);
+
+    expect(completedTurns(sent).slice(1)).toMatchObject([
+      { id: "turn-2", status: "failed" },
+      { id: "turn-3", status: "failed" },
+    ]);
+    expect(claude.closes()).toBeGreaterThan(0);
+  });
+
   test("shows a main agent's approval that comes while a turn Claude started waits behind the approval turn in that turn without an item", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);

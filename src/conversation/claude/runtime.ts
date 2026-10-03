@@ -349,7 +349,7 @@ export const createClaudeRuntime = ({
       await answerCommand(turn, command);
       return;
     }
-    // A turn of Claude's own that starts while approvals wait for a turn to hold them is the one they opened, since they open it only on a thread with no other turn accepted.
+    // Approvals open their turn only on a thread with no other turn accepted, so a turn of Claude's own starting while they wait for it is that one.
     const held =
       turn.input.startedBy === "claude"
         ? heldApprovals.get(turn.threadId)
@@ -360,7 +360,7 @@ export const createClaudeRuntime = ({
       return;
     }
     runningTurns.set(turn.threadId, turn);
-    // An approval that waited for this turn is shown in it; a turn of Claude's own is shown once it holds what Claude sent.
+    // A turn of Claude's own is shown only once it holds what Claude sent.
     if (turn.input.startedBy === "app") showTurn(turn.threadId);
     if (turn.input.startedBy === "claude") await streamOwn(turn, claude);
     else await stream(turn, claude);
@@ -621,8 +621,7 @@ export const createClaudeRuntime = ({
     turnWaiters.delete(threadId);
   };
 
-  // The turn shows only the prompts it holds, so it neither sends Claude anything nor reads the session; a turn Claude starts meanwhile waits for the turn after it, as for any turn the thread has accepted.
-  // Approvals that all settled before the turn was shown leave it empty and completed.
+  // Claude sent nothing for this turn, so it reads nothing; approvals that all settled before it was shown leave it empty and completed.
   const holdApprovals = async (turn: Turn, held: HeldApprovals) => {
     held.turn = turn;
     showTurn(turn.threadId);
@@ -637,7 +636,7 @@ export const createClaudeRuntime = ({
     turn.finish(heldOutcome(turn, held), null);
   };
 
-  // A session that ended, as when Claude stops or the bridge closes, took no answer, so the turn says so rather than end as if each had been answered.
+  // Ending as completed would read as if each approval had been answered.
   const heldOutcome = (turn: Turn, held: HeldApprovals): TurnOutcome => {
     if (turn.state().interrupting) return { status: "interrupted" };
     if (held.ended.signal.aborted) {
@@ -800,8 +799,10 @@ export const createClaudeRuntime = ({
   const pump = async (threadId: string, slot: SessionSlot) => {
     while (true) {
       const next = await slot.session.messages.next();
-      // The next message waits until the reader has handled this one, as a turn reading the session itself would.
-      await route(threadId, slot, next)?.settled();
+      track(threadId, slot, next);
+      const inbox = route(threadId, slot, next);
+      // The next message waits until the reader has handled this one, as a turn reading the session itself would; a turn holding approvals reads none, so agents stay live and Claude stopping is seen while it waits.
+      if (!heldApprovals.has(threadId)) await inbox?.settled();
       if (next.done === true || next.value.isErr()) return;
     }
   };
@@ -812,13 +813,6 @@ export const createClaudeRuntime = ({
     slot: SessionSlot,
     next: StreamedNext,
   ): Inbox<StreamedNext> | null => {
-    if (next.done !== true && next.value.isOk()) {
-      trackTasks(slot, next.value.value);
-      trackSubagents(threadId, next.value.value);
-    } else if (sessions.get(threadId) === slot) {
-      // A Claude that stopped acts on no answer, so the approvals held for it end with it.
-      endHeldApprovals(threadId);
-    }
     if (slot.reader !== null) {
       slot.reader.push(next);
       return slot.reader;
@@ -826,7 +820,7 @@ export const createClaudeRuntime = ({
     // A session already dropped has nothing left for a turn to read.
     if (sessions.get(threadId) !== slot) return null;
     const own = !busyThreads.has(threadId);
-    // A turn holding approvals reads nothing, so while one is open or pending Claude is read as on an idle thread, even with a turn queued behind it, and only a turn Claude starts waits for the turn that reads next.
+    // A turn holding approvals reads nothing, so while one is open or pending only a turn Claude starts waits for the next turn, even with one queued.
     if (own || heldApprovals.has(threadId)) {
       if (next.done === true || next.value.isErr()) {
         dropSession(threadId, slot);
@@ -846,6 +840,17 @@ export const createClaudeRuntime = ({
     slot.reader = inbox;
     slot.unclaimed = own ? "own" : "turn";
     return inbox;
+  };
+
+  // Tracked as each message arrives rather than as it is routed, since what waited for a turn that took none of it is routed again.
+  // A Claude that stopped acts on no answer, so the approvals held for it end even while what it said waits for a later turn.
+  const track = (threadId: string, slot: SessionSlot, next: StreamedNext) => {
+    if (next.done !== true && next.value.isOk()) {
+      trackTasks(slot, next.value.value);
+      trackSubagents(threadId, next.value.value);
+    } else if (sessions.get(threadId) === slot) {
+      endHeldApprovals(threadId);
+    }
   };
 
   // An agent Claude starts, in the turn or in the background, shows as a thread of its own under this one, which also gets what the agent says; one an agent starts goes under that agent's thread.
@@ -913,7 +918,7 @@ export const createClaudeRuntime = ({
 
   // What waited for turns that took none of it, such as a turn Claude started right as the last one ended, is read again once the thread has no turn left.
   // A turn of Claude's own that could not run was shown as failed, so what it held is not shown again.
-  // A turn opened to hold approvals that never ran leaves them to be declined.
+  // Approvals whose turn never ran are declined, not held again.
   const threadIdle = (threadId: string) => {
     busyThreads.delete(threadId);
     heldApprovals.delete(threadId);
@@ -966,7 +971,7 @@ export const createClaudeRuntime = ({
     return sent;
   };
 
-  // A turn holding approvals has nothing of Claude's to stop; the stop closed its prompts, so it ends once each is declined.
+  // A turn holding approvals has nothing of Claude's to stop, and an interrupt could close the session its agents run in; the stop closed its prompts, so it ends once each is declined.
   const interrupt = (turn: Turn, repeated: boolean) => {
     if (turns.get(turn)?.holding === true) return;
     const threadId = turn.threadId;
@@ -1198,9 +1203,8 @@ export const createClaudeRuntime = ({
       : decision;
   };
 
-  // An approval goes to the turn the app is shown, and waits while the thread has a turn accepted that is not shown yet or is ending; with none, a turn of Claude's own opens to hold it.
   // An approval whose holding turn could not be shown is declined rather than held again, so a thread whose turns cannot run does not keep opening them.
-  // A turn the user stopped before the approval waiting for it was shown is waited past like an ending one, while an approval that comes as the user stops the running turn, or stops the turn holding it, is declined with that turn.
+  // A turn the user stopped before the approval was shown cannot show it, while one asked as the user stops a turn showing it is declined with that turn.
   const turnToAsk = async (threadId: string, approval: Approval) => {
     let waited = false;
     while (!closed && !approval.signal.aborted) {
@@ -1257,7 +1261,7 @@ export const createClaudeRuntime = ({
     if (held.waiting === 0) held.answered();
   };
 
-  // What the app answers can no longer reach a Claude that is gone, so the approvals held for it are declined.
+  // What the app answers can no longer reach a Claude that is gone.
   const endHeldApprovals = (threadId: string) => {
     heldApprovals.get(threadId)?.ended.abort();
   };
