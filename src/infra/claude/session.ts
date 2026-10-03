@@ -261,6 +261,7 @@ const createSession = (
   };
   return {
     messages: readMessages(claude, () => closed, close),
+    isClosed: () => closed,
     send: (text: string, attachments: readonly string[] = []) => {
       const uuid = closed ? null : prompt.push(text, attachments);
       return uuid === null ? Result.err(sessionClosed()) : Result.ok(uuid);
