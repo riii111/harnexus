@@ -176,7 +176,7 @@ describe("turn/start on a Claude thread", () => {
     const { turns, sent, settings } = await harness([first, second]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => first.started());
+    await until(() => first.prompted());
     first.emit(sdk(answer("msg-1", "partial")));
     first.fail(new Error("socket closed"));
     await until(() => turnCompleted(sent) !== undefined);
@@ -480,10 +480,10 @@ describe("keeping the thread on the server's disk", () => {
 describe("turn/interrupt", () => {
   test("replies before the turn completes as interrupted", async () => {
     const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
-    const { turns, sent, gates } = await harness([claude]);
+    const { turns, sent } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => gates.length > 0);
+    await until(() => claude.prompted());
     turns.interruptTurn(interrupt(20, "turn-1"));
     await until(() => claude.interrupts() === 1);
     claude.emit(
@@ -510,10 +510,10 @@ describe("turn/interrupt", () => {
     options,
   }) => {
     const claude = fakeClaude(SUBSCRIPTION, options);
-    const { turns, sent, gates } = await harness([claude]);
+    const { turns, sent } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => gates.length > 0);
+    await until(() => claude.prompted());
     turns.interruptTurn(interrupt(20, "turn-1"));
     await until(() => turnCompleted(sent) !== undefined);
 
@@ -528,10 +528,10 @@ describe("turn/interrupt", () => {
       interruptAnswered: gate.promise,
     });
     const second = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, settings, gates } = await harness([first, second]);
+    const { turns, sent, settings } = await harness([first, second]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => gates.length > 0);
+    await until(() => first.prompted());
     first.emit(sdk(answer("msg-1", "partial")));
     turns.interruptTurn(interrupt(20, "turn-1"));
     first.emit(
@@ -556,8 +556,8 @@ describe("turn/interrupt", () => {
       interruptAnswered: gate.promise,
     });
     const second = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, settings, gates } = await harness([first, second]);
-    await interruptBeforeReceipt(turns, sent, first, gates);
+    const { turns, sent, settings } = await harness([first, second]);
+    await interruptBeforeReceipt(turns, sent, first);
 
     turns.startTurn(turnStart(11, "again"), undefined);
     await until(() => responseTo(sent, 11) !== undefined);
@@ -582,8 +582,8 @@ describe("turn/interrupt", () => {
       stillQueued: ["uuid-queued"],
       interruptAnswered: gate.promise,
     });
-    const { turns, sent, settings, gates } = await harness([first]);
-    await interruptBeforeReceipt(turns, sent, first, gates);
+    const { turns, sent, settings } = await harness([first]);
+    await interruptBeforeReceipt(turns, sent, first);
 
     turns.startTurn(turnStart(11, "again"), undefined);
     await until(() => responseTo(sent, 11) !== undefined);
@@ -630,10 +630,10 @@ describe("turn/interrupt", () => {
 
   test("asks Claude once when the stop is sent twice", async () => {
     const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
-    const { turns, sent, gates } = await harness([claude]);
+    const { turns, sent } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => gates.length > 0);
+    await until(() => claude.prompted());
     turns.interruptTurn(interrupt(20, "turn-1"));
     await until(() => claude.interrupts() === 1);
     await Bun.sleep(0);
@@ -699,18 +699,14 @@ describe("model changes", () => {
     });
     const second = fakeClaude(SUBSCRIPTION);
     const third = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, settings, gates } = await harness([
-      first,
-      second,
-      third,
-    ]);
-    await interruptBeforeReceipt(turns, sent, first, gates);
+    const { turns, sent, settings } = await harness([first, second, third]);
+    await interruptBeforeReceipt(turns, sent, first);
 
     turns.startTurn(turnStart(11, "again"), undefined);
     await until(() => responseTo(sent, 11) !== undefined);
     turns.changeModel(THREAD, OTHER_MODEL);
     gate.open();
-    await until(() => second.started());
+    await until(() => second.prompted());
     second.emit(sdk(success()));
     await until(() => completedTurnStatuses(sent).length === 2);
     await completeTurn(turns, sent, third, 12);
@@ -759,7 +755,7 @@ describe("model changes", () => {
 
     turns.startTurn(withModel(10, MODEL), undefined);
     turns.startTurn(withModel(11, OTHER_MODEL), undefined);
-    await until(() => first.started());
+    await until(() => first.prompted());
     first.emit(sdk(success()));
     await until(() => second.started());
 
@@ -1454,7 +1450,7 @@ describe("turn/start carrying another thread's message", () => {
         failWrites ? diskFull(target) : writeFileAtomic(target, content),
     });
     turns.startTurn(reply(10, THREAD, CODEX_WORKER), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(success()));
     await until(() => completedTurnStatuses(sent).length === 1);
     turns.startTurn(reply(11, THREAD, "th-lead"), undefined);
@@ -1513,11 +1509,9 @@ const interruptBeforeReceipt = async (
   turns: ReturnType<typeof createTurnController>,
   sent: Sent[],
   claude: ReturnType<typeof fakeClaude>,
-  gates: string[],
 ) => {
   turns.startTurn(turnStart(10, "hello"), undefined);
-  // The prompt goes right after writes are accepted, so the interrupt reaches a turn Claude is running.
-  await until(() => gates.length > 0);
+  await until(() => claude.prompted());
   turns.interruptTurn(interrupt(20, "turn-1"));
   claude.emit(
     sdk(result({ subtype: "error_during_execution", is_error: true })),

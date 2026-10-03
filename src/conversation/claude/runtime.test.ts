@@ -852,7 +852,7 @@ describe("turn metrics", () => {
     const { turns, sent, events } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk({ type: "system", subtype: "status", status: null }));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -1154,7 +1154,7 @@ describe("session ids", () => {
     });
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => first.started());
+    await until(() => first.prompted());
     first.emit(sdk(answer("msg-1", "partial")));
     first.fail(new Error("socket closed"));
     await until(() => turnCompleted(sent) !== undefined);
@@ -1677,7 +1677,7 @@ describe("subagent threads", () => {
     const { turns, sent, subagents } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
     claude.emit(sdk(taskNotification("toolu-agent")));
     claude.emit(sdk(success()));
@@ -1698,7 +1698,7 @@ describe("subagent threads", () => {
     const { turns, sent, subagents } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
     claude.emit(
       sdk({
@@ -1744,7 +1744,7 @@ describe("subagent threads", () => {
     const { turns, sent, subagents } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -1794,7 +1794,7 @@ describe("subagent threads", () => {
     const { turns, sent, subagents } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
     claude.emit(sdk(ending));
     claude.emit(sdk(success()));
@@ -1810,7 +1810,7 @@ describe("subagent threads", () => {
     const { turns, sent, subagents } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -1825,7 +1825,7 @@ describe("subagent threads", () => {
     const { turns, sent, subagents } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-inner", 2)));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -1986,7 +1986,7 @@ describe("turns Claude starts between app turns", () => {
     });
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(TASKS_RUNNING));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -2006,7 +2006,7 @@ describe("turns Claude starts between app turns", () => {
     const { turns, sent } = await harness([claude], { idleSessionMs: 5 });
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(
       sdk({
         ...TASKS_RUNNING,
@@ -2227,7 +2227,7 @@ describe("approvals no turn could show", () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, subagents } = await harness([claude]);
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -2329,7 +2329,7 @@ describe("approvals no turn could show", () => {
     claude.emit(sdk(BACKGROUND_AGENT_SPOKE));
     claude.end();
     expect((await decision)?.behavior).toBe("deny");
-    await until(() => next.started());
+    await until(() => next.prompted());
     next.emit(sdk(answer("msg-3", "hi")));
     next.emit(sdk(success()));
     await until(() => completedTurnStatuses(sent).length === 3);
@@ -2802,7 +2802,7 @@ describe("approvals no turn could show", () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, subagents } = await harness([claude]);
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -2866,7 +2866,7 @@ describe("a Claude that stops while a turn waits to read it", () => {
     stop(claude);
     await until(() => claude.closes() > 0);
     gate.open();
-    await until(() => next.started());
+    await until(() => next.prompted());
     next.emit(sdk(answer("msg-2", "hi")));
     next.emit(sdk(success()));
     await until(() => completedTurnStatuses(sent).length === 2);
@@ -3388,7 +3388,7 @@ describe("thread tools", () => {
     const { turns, sent, settings, links } = await harness([first, second]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => first.started());
+    await until(() => first.prompted());
     first.fail(new Error("socket closed"));
     await until(() => turnCompleted(sent) !== undefined);
     await completeTurn(turns, sent, second, 11);
@@ -3405,7 +3405,7 @@ describe("thread tools", () => {
     const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
     const { turns, gates } = await harness([claude]);
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => gates.length > 0);
+    await until(() => claude.prompted());
     expect(gates).toEqual(["accept"]);
 
     turns.interruptTurn(interrupt(20, "turn-1"));
@@ -3504,7 +3504,7 @@ describe("idle Claude sessions", () => {
 const startedTurn = async (claude: ReturnType<typeof fakeClaude>) => {
   const started = await harness([claude]);
   started.turns.startTurn(turnStart(10, "hello"), undefined);
-  await until(() => claude.started());
+  await until(() => claude.prompted());
   return started;
 };
 

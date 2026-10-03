@@ -48,6 +48,7 @@ export const fakeClaude = (
   let waiting: ((item: Delivery) => void) | null = null;
   let options: Options | null = null;
   let prompt: AsyncIterable<SDKUserMessage> | null = null;
+  const received: SDKUserMessage[] = [];
   let nextCalls = 0;
   let interrupts = 0;
   const modes: PermissionMode[] = [];
@@ -114,7 +115,7 @@ export const fakeClaude = (
   };
   const run: ClaudeSdk["query"] = (params) => {
     options = params.options;
-    prompt = params.prompt;
+    prompt = readAhead(params.prompt, received);
     return claude;
   };
   return {
@@ -126,6 +127,8 @@ export const fakeClaude = (
     // True once the consumer has handled every message emitted so far and waits for the next one.
     drained: () => waiting !== null && queued.length === 0,
     started: () => options !== null,
+    // True once the runtime has sent Claude a prompt, which it does only after the session is started and confirmed.
+    prompted: () => received.length > 0,
     options: () => options ?? {},
     prompt: () => prompt,
     prompts: async () => {
@@ -151,3 +154,42 @@ export const failingQuery =
     // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
     throw error;
   };
+
+// Reads the prompt as the SDK does, as soon as each message is sent, and replays it to the test from a shared position as the original stream would.
+const readAhead = (
+  source: AsyncIterable<SDKUserMessage>,
+  received: SDKUserMessage[],
+): AsyncIterable<SDKUserMessage> => {
+  let ended = false;
+  let wake: (() => void) | null = null;
+  const notify = () => {
+    const resolve = wake;
+    wake = null;
+    resolve?.();
+  };
+  void (async () => {
+    for await (const message of source) {
+      received.push(message);
+      notify();
+    }
+    ended = true;
+    notify();
+  })();
+  let next = 0;
+  return {
+    async *[Symbol.asyncIterator]() {
+      while (true) {
+        const message = received[next];
+        if (message !== undefined) {
+          next += 1;
+          yield message;
+          continue;
+        }
+        if (ended) return;
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+      }
+    },
+  };
+};
