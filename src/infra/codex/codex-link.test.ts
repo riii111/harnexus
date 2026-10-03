@@ -274,6 +274,7 @@ describe("createCodexLink over the app's turn for the created thread", () => {
       NO_HISTORY,
       createModelCatalog().models,
       "warn",
+      NO_SUBAGENTS,
     );
     const forwarded: (Buffer | null)[] = [];
     const { client, store } = await connect({
@@ -792,6 +793,13 @@ const CODEX_ONLY_TURNS: Parameters<typeof createRouter>[0] = {
   selectEffort: () => expect.unreachable("no Claude thread in this session"),
   effortOf: () => null,
   effortRule: () => null,
+};
+
+const NO_SUBAGENTS: Parameters<typeof createRouter>[6] = {
+  isChild: () => false,
+  answer: async () => {},
+  withChildren: async (result) => result,
+  listedParentOf: () => null,
 };
 
 const NO_HISTORY: Parameters<typeof createRouter>[3] = {

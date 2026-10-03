@@ -16,6 +16,7 @@ import {
   withTurns,
 } from "./history-request.ts";
 import { shownEffort, withClaudeModels } from "./model-list.ts";
+import type { SubagentRequests } from "./subagent-requests.ts";
 import {
   type AppRequest,
   checkThread,
@@ -82,7 +83,8 @@ type Pending =
       history: ReturnType<History["load"]> | null;
       params: Record<string, unknown>;
     }
-  | { kind: "threadRead"; history: ReturnType<History["load"]> };
+  | { kind: "threadRead"; history: ReturnType<History["load"]> }
+  | { kind: "childList"; params: Record<string, unknown> };
 
 // Lines that are not Claude requests pass as the same bytes; server requests and app responses share ids with the other direction, so only lines with a method are read as app requests and only lines without one as server responses.
 export const createRouter = (
@@ -92,6 +94,10 @@ export const createRouter = (
   history: History,
   claudeModels: ModelCatalog["models"],
   unverifiedCodex: "warn" | "pause",
+  subagents: Pick<
+    SubagentRequests,
+    "isChild" | "answer" | "withChildren" | "listedParentOf"
+  >,
 ) => {
   const pending = new Map<AppRequest["id"], Pending>();
   // Set from the server's initialize answer; while paused the app lists no Claude model and a Claude turn is refused rather than handed to Codex, which would run it without the Claude conversation.
@@ -110,6 +116,15 @@ export const createRouter = (
     if (typeof id !== "string" && typeof id !== "number") return line;
     const params = isObject(message.params) ? message.params : {};
     const request = { id, params };
+    // A Claude subagent's thread exists only in the bridge.
+    if (subagents.isChild(params.threadId)) {
+      if (isHistoryMethod(message.method)) {
+        void history.answer(message.method, request);
+      } else {
+        void subagents.answer(message.method, request);
+      }
+      return null;
+    }
     switch (message.method) {
       case "initialize":
         pending.set(id, { kind: "initialize" });
@@ -122,6 +137,13 @@ export const createRouter = (
         return routeThreadOpen(line, message, request);
       case "thread/fork":
         return routeFork(line, request);
+      case "thread/list": {
+        const parent = subagents.listedParentOf(params);
+        if (parent !== null && turns.isClaudeThread(parent)) {
+          pending.set(id, { kind: "childList", params });
+        }
+        return line;
+      }
       case "turn/start":
         noteDelegation(params);
         if (
@@ -347,6 +369,11 @@ export const createRouter = (
       return encode({ ...message, result: listed.result });
     }
     const result = message.result;
+    if (request.kind === "childList") {
+      return subagents
+        .withChildren(result, request.params)
+        .then((listed) => encode({ ...message, result: listed }));
+    }
     if (request.kind === "threadRead") {
       return request.history.then((loaded) => {
         if (loaded.isErr()) return line;

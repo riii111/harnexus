@@ -1464,6 +1464,60 @@ describe("Claude's own turns", () => {
   });
 });
 
+describe("subagent threads", () => {
+  test("shows an agent Claude starts as a thread under the turn's thread until it completes", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, subagents } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    claude.emit(sdk(taskStarted("toolu-agent", 1)));
+    claude.emit(sdk(taskNotification("toolu-agent")));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    const [child] = subagents.childrenOf(THREAD);
+    expect(child).toMatchObject({ active: false, turnId: "turn-1" });
+    expect(subagentEvents(sent)).toEqual([
+      `${THREAD} turn-1 started ${child?.id}`,
+      `${child?.id} active`,
+      `${child?.id} idle`,
+      `${THREAD} turn-1 completed ${child?.id}`,
+    ]);
+  });
+
+  test("reports an agent that finishes after its turn ended under that turn", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, subagents } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    claude.emit(sdk(taskStarted("toolu-agent", 1)));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+    claude.emit(sdk(taskNotification("toolu-agent")));
+    await until(() => subagents.childrenOf(THREAD)[0]?.active === false);
+
+    expect(subagentEvents(sent).at(-1)).toBe(
+      `${THREAD} turn-1 completed ${subagents.childrenOf(THREAD)[0]?.id}`,
+    );
+  });
+
+  test("leaves an agent a subagent starts inside its parent agent", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, subagents } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    claude.emit(sdk(taskStarted("toolu-inner", 2)));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(subagents.childrenOf(THREAD)).toEqual([]);
+    expect(subagentEvents(sent)).toEqual([]);
+  });
+});
+
 describe("turns Claude starts between app turns", () => {
   test("shows a turn Claude started on its own as a turn nobody typed", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -2501,3 +2555,45 @@ const compactBoundary = (trigger: "manual" | "auto") => ({
 // The CLI ends /compact with an empty successful result.
 const compacted = () =>
   result({ subtype: "success", is_error: false, result: "" });
+
+const taskStarted = (toolUseId: string, depth: number) => ({
+  type: "system",
+  subtype: "task_started",
+  task_id: `task-${toolUseId}`,
+  tool_use_id: toolUseId,
+  description: "read the README",
+  subagent_type: "Explore",
+  task_type: "local_agent",
+  spawn_depth: depth,
+});
+
+const taskNotification = (toolUseId: string) => ({
+  type: "system",
+  subtype: "task_notification",
+  task_id: `task-${toolUseId}`,
+  tool_use_id: toolUseId,
+  status: "completed",
+  output_file: "/fixture/task.output",
+  summary: "done",
+});
+
+// Each subagent activity item the app got, once at its completion, and each status change of a subagent's thread.
+const subagentEvents = (sent: Sent[]) =>
+  sent.flatMap((message) => {
+    if (
+      message.method === "item/completed" &&
+      message.params.item.type === "subAgentActivity"
+    ) {
+      const { params } = message;
+      return [
+        `${params.threadId} ${params.turnId} ${params.item.kind} ${params.item.agentThreadId}`,
+      ];
+    }
+    if (
+      message.method === "thread/status/changed" &&
+      message.params.threadId !== THREAD
+    ) {
+      return [`${message.params.threadId} ${message.params.status.type}`];
+    }
+    return [];
+  });

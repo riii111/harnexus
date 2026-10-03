@@ -5,6 +5,7 @@ import type {
   EffortLevel,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { Result } from "better-result";
 import {
   createModelCatalog,
   effortRule,
@@ -19,6 +20,8 @@ import {
 } from "../presentation/testing/session-record.ts";
 import { createHistoryRequests } from "./history-request.ts";
 import { createRouter, type RouteEvent } from "./route.ts";
+import { createSubagentRequests } from "./subagent-requests.ts";
+import { createSubagents } from "./subagents.ts";
 import type { AppRequest, Mode } from "./thread-request.ts";
 
 describe("Codex threads", () => {
@@ -702,6 +705,186 @@ describe("threads with a Claude model", () => {
         "/fixture/work",
       ],
     ]);
+  });
+});
+
+describe("Claude subagent threads", () => {
+  test("lists the agents a Claude thread started under it with the server's own", async () => {
+    const { router, subagents } = setup(["th-claude"]);
+    startAgent(subagents, "th-claude", "toolu-1");
+
+    const routed = router.fromApp(
+      encode({
+        id: 30,
+        method: "thread/list",
+        params: {
+          ancestorThreadId: "th-claude",
+          sourceKinds: ["subAgentThreadSpawn"],
+        },
+      }),
+    );
+    const out = parse(
+      await router.fromServer(
+        encode({ id: 30, result: { data: [], nextCursor: null } }),
+      ),
+    );
+
+    expect(routed).not.toBeNull();
+    const [child] = subagents.childrenOf("th-claude");
+    expect(out.result.data).toEqual([
+      expect.objectContaining({
+        id: child?.id,
+        parentThreadId: "th-claude",
+        model: CLAUDE,
+        cwd: "/fixture/work",
+        threadSource: "subagent",
+        agentNickname: "read the README",
+        canAcceptDirectInput: false,
+        status: { type: "active", activeFlags: [] },
+        source: {
+          subAgent: {
+            thread_spawn: {
+              parent_thread_id: "th-claude",
+              depth: 1,
+              agent_path: "/root/explore_1",
+              agent_nickname: "read the README",
+              agent_role: "Explore",
+            },
+          },
+        },
+      }),
+    ]);
+  });
+
+  test.each([
+    { name: "kinds other than subagents", params: { sourceKinds: ["vscode"] } },
+    { name: "no parent", params: {} },
+  ])("leaves a thread list of $name to the server", async ({ params }) => {
+    const { router, subagents } = setup(["th-claude"]);
+    startAgent(subagents, "th-claude", "toolu-1");
+    const response = encode({ id: 31, result: { data: [], nextCursor: null } });
+
+    router.fromApp(
+      encode({
+        id: 31,
+        method: "thread/list",
+        params: {
+          ...("sourceKinds" in params ? { ancestorThreadId: "th-claude" } : {}),
+          ...params,
+        },
+      }),
+    );
+
+    expect(await router.fromServer(response)).toEqual(response);
+  });
+
+  test("answers thread/read of an agent's thread from its parent's", async () => {
+    const { router, subagents, sent, serverCalls } = setup(["th-claude"]);
+    startAgent(subagents, "th-claude", "toolu-1");
+    const [child] = subagents.childrenOf("th-claude");
+
+    const routed = router.fromApp(
+      encode({
+        id: 32,
+        method: "thread/read",
+        params: { threadId: child?.id, includeTurns: true },
+      }),
+    );
+    await until(() => responseTo(sent, 32) !== null);
+
+    expect(routed).toBeNull();
+    expect(serverCalls).toEqual([
+      ["thread/read", { threadId: "th-claude", includeTurns: false }],
+    ]);
+    expect(responseTo(sent, 32).result.thread).toMatchObject({
+      id: child?.id,
+      parentThreadId: "th-claude",
+      model: CLAUDE,
+      path: "/fixture/rollout.jsonl",
+      turns: [],
+    });
+  });
+
+  test("resumes an agent's thread through its parent and answers with the agent's thread", async () => {
+    const { router, subagents, sent, serverCalls } = setup(["th-claude"]);
+    startAgent(subagents, "th-claude", "toolu-1");
+    const [child] = subagents.childrenOf("th-claude");
+
+    router.fromApp(
+      encode({
+        id: 33,
+        method: "thread/resume",
+        params: {
+          threadId: child?.id,
+          path: "/fixture/rollout.jsonl",
+          excludeTurns: true,
+          approvalPolicy: "on-request",
+        },
+      }),
+    );
+    await until(() => responseTo(sent, 33) !== null);
+
+    expect(serverCalls).toEqual([
+      [
+        "thread/resume",
+        {
+          threadId: "th-claude",
+          excludeTurns: true,
+          approvalPolicy: "on-request",
+        },
+      ],
+    ]);
+    expect(responseTo(sent, 33).result).toMatchObject({
+      model: CLAUDE,
+      cwd: "/fixture/work",
+      approvalPolicy: "on-request",
+      thread: { id: child?.id, parentThreadId: "th-claude" },
+      turnsBackwardsCursor: null,
+    });
+  });
+
+  test("answers an agent's turn pages and goal itself", async () => {
+    const { router, subagents, sent, serverCalls } = setup(["th-claude"]);
+    startAgent(subagents, "th-claude", "toolu-1");
+    const [child] = subagents.childrenOf("th-claude");
+
+    router.fromApp(
+      encode({
+        id: 34,
+        method: "thread/turns/list",
+        params: { threadId: child?.id, limit: 5 },
+      }),
+    );
+    router.fromApp(
+      encode({
+        id: 35,
+        method: "thread/goal/get",
+        params: { threadId: child?.id },
+      }),
+    );
+    await until(() => responseTo(sent, 34) !== null);
+
+    expect(responseTo(sent, 34).result.data).toEqual([]);
+    expect(responseTo(sent, 35)).toEqual({ id: 35, result: { goal: null } });
+    expect(serverCalls).toEqual([]);
+  });
+
+  test("refuses a turn sent to an agent's thread", async () => {
+    const { router, subagents, sent, calls } = setup(["th-claude"]);
+    startAgent(subagents, "th-claude", "toolu-1");
+    const [child] = subagents.childrenOf("th-claude");
+
+    const routed = router.fromApp(
+      encode({
+        id: 36,
+        method: "turn/start",
+        params: { threadId: child?.id, input: [] },
+      }),
+    );
+
+    expect(routed).toBeNull();
+    expect(responseTo(sent, 36).error.message).toContain("turn/start");
+    expect(calls).toEqual([]);
   });
 });
 
@@ -1437,6 +1620,32 @@ const setup = (
   const efforts = new Map<string, EffortLevel>();
   const catalog = createModelCatalog();
   const rule = effortRule({}, catalog.effortsOf);
+  const effortOf = (threadId: string) => {
+    const model = threads.get(threadId)?.model;
+    return model === undefined
+      ? null
+      : rule(model, efforts.get(threadId) ?? null);
+  };
+  const subagents = createSubagents({
+    send: (message) => sent.push(message),
+    now: () => SUBAGENT_STARTED_MS,
+  });
+  const serverCalls: [string, unknown][] = [];
+  const subagentRequests = createSubagentRequests({
+    subagents,
+    threads: { threadOf: (threadId) => threads.get(threadId), effortOf },
+    call: async (method, params) => {
+      serverCalls.push([method, params]);
+      const threadId = String((params as { threadId: unknown }).threadId);
+      return Result.ok(
+        method === "thread/resume"
+          ? { ...PARENT_RESUMED, thread: parentThread(threadId) }
+          : { thread: parentThread(threadId) },
+      );
+    },
+    history: history.load,
+    send: (message) => sent.push(message),
+  });
   const router = createRouter(
     {
       isClaudeThread: (threadId) =>
@@ -1475,12 +1684,7 @@ const setup = (
         calls.push(["selectEffort", threadId, effort]);
         if (isClaudeEffort(effort)) efforts.set(threadId, effort);
       },
-      effortOf: (threadId) => {
-        const model = threads.get(threadId)?.model;
-        return model === undefined
-          ? null
-          : rule(model, efforts.get(threadId) ?? null);
-      },
+      effortOf,
       effortRule: rule,
     },
     (event) => events.push(event),
@@ -1488,8 +1692,20 @@ const setup = (
     history,
     catalog.models,
     unverifiedCodex,
+    subagentRequests,
   );
-  return { router, calls, events, sent, reads, picked, catalog, pinFork };
+  return {
+    router,
+    calls,
+    events,
+    sent,
+    reads,
+    picked,
+    catalog,
+    pinFork,
+    subagents,
+    serverCalls,
+  };
 };
 
 const fixtureLines = (file: string) =>
@@ -1547,3 +1763,44 @@ const responseTo = (sent: object[], id: number) =>
 const parse = (line: Buffer | null) => JSON.parse(line?.toString() ?? "null");
 
 const FIXTURE_DIR = join(import.meta.dir, "../../test/fixtures/app-server");
+
+const SUBAGENT_STARTED_MS = 1_700_000_000_000;
+
+// The parent's thread as the server reports it; the server keeps its own Codex model for a Claude thread.
+const parentThread = (threadId: string) => ({
+  id: threadId,
+  model: "gpt-fixture",
+  cwd: "/fixture/work",
+  path: "/fixture/rollout.jsonl",
+  historyMode: "paginated",
+  status: { type: "idle" },
+  turns: [],
+});
+
+const PARENT_RESUMED = {
+  model: "gpt-fixture",
+  reasoningEffort: "low",
+  cwd: "/fixture/work",
+  approvalPolicy: "on-request",
+};
+
+const startAgent = (
+  subagents: ReturnType<typeof setup>["subagents"],
+  threadId: string,
+  toolUseId: string,
+) =>
+  subagents.start({
+    threadId,
+    turnId: "turn-1",
+    toolUseId,
+    taskId: "task-1",
+    description: "read the README",
+    agentType: "Explore",
+  });
+
+const until = async (condition: () => boolean) => {
+  for (let waited = 0; !condition(); waited += 2) {
+    if (waited > 2000) return expect.unreachable("condition never held");
+    await Bun.sleep(2);
+  }
+};

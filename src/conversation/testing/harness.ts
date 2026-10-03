@@ -34,6 +34,7 @@ import { FileWriteFailed } from "../../runtime/fs.boundary.ts";
 
 import { type ClaudeLogEvent, createClaudeRuntime } from "../claude/runtime.ts";
 import { createTurnController } from "../controller.ts";
+import { createSubagents } from "../subagents.ts";
 import { createThreadValues } from "../thread-values.ts";
 
 type StartSession = Parameters<typeof createClaudeRuntime>[0]["startSession"];
@@ -232,6 +233,7 @@ export const harness = async (
   };
   const log = (event: ClaudeLogEvent) => events.push(event);
   const threads = createThreadValues(store, log);
+  const subagents = createSubagents({ send, now });
   const runtime = createClaudeRuntime({
     threads,
     findSession:
@@ -286,6 +288,7 @@ export const harness = async (
     },
     now,
     effortRule,
+    subagents,
     ...(idleSessionMs !== undefined && { idleSessionMs }),
   });
   const turns = createTurnController({
@@ -316,6 +319,7 @@ export const harness = async (
     materialized,
     renames,
     toolCalls,
+    subagents,
   };
 };
 
