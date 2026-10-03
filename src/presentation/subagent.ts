@@ -20,7 +20,7 @@ import {
 // A Claude subagent is shown as a Codex subagent is: a thread of its own under the thread whose agent started it, which the app lists in its subagents panel.
 // rootThreadId is the Claude thread whose session runs the agent, and parentThreadId that thread or the agent's thread whose agent started this one, depth levels below the root.
 // calls holds every call that started the agent, the last being toolUseId, as a resumed agent runs under a call of its own; each run's activity is named after its call, so a history rebuilt from the record names it as the live turn did.
-// turnId is the parent's turn the agent last started in, which also carries its completion, as Codex does even once that turn has ended; runs counts its starts, since Claude can resume an agent that finished.
+// turnId is the parent's turn the agent last started in, which also carries its completion, as Codex does even once that turn has ended, unless the parent is an agent whose newest turn is a later one; runs counts its starts, since Claude can resume an agent that finished.
 export type SubagentThread = {
   id: string;
   rootThreadId: string;
@@ -39,12 +39,13 @@ export type SubagentThread = {
   updatedAtMs: number;
 };
 
-// The agent's own turn carries its thread's status, as a Codex subagent's does.
+// The agent's own turn carries its thread's status, as a Codex subagent's does; turnId is the parent's turn that shows it, the one the agent started in unless named.
 export const renderSubagentActivity = (
   child: SubagentThread,
   kind: SubAgentActivityItem["kind"],
   now: number,
-): AppNotification[] => activity(child, kind, now);
+  turnId: string | null = child.turnId,
+): AppNotification[] => activity(child, kind, now, turnId);
 
 // The parent's own thread, as the server reports it, gives the fields only the server knows, such as its directory and environment, which the agent shares.
 export const childThreadView = (
@@ -94,8 +95,9 @@ const activity = (
   child: SubagentThread,
   kind: SubAgentActivityItem["kind"],
   now: number,
+  turnId: string | null,
 ): AppNotification[] => {
-  if (child.turnId === null) return [];
+  if (turnId === null) return [];
   const item: SubAgentActivityItem = {
     type: "subAgentActivity",
     id: subagentActivityId(child.id, kind, child.toolUseId),
@@ -103,7 +105,7 @@ const activity = (
     agentThreadId: child.id,
     agentPath: child.path,
   };
-  const ref = { threadId: child.parentThreadId, turnId: child.turnId };
+  const ref = { threadId: child.parentThreadId, turnId };
   return [
     {
       method: "item/started",

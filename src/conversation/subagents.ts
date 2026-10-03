@@ -155,24 +155,34 @@ export const createSubagents = ({
     sendActivity(done, "completed", at);
   };
 
-  // An agent's activity under another agent belongs to that agent's turn, which keeps it for a later read whether it still runs or has ended.
+  // An agent's activity under another agent goes to that agent's newest turn, running or ended, and is kept there for a later read; the app pages a timeline back by position, so an item added to an earlier turn would move entries a cursor it already holds has passed.
   const sendActivity = (
     child: SubagentThread,
     kind: "started" | "completed",
     at: number,
   ) => {
-    const notifications = renderSubagentActivity(child, kind, at);
-    sendAll(notifications);
     const parentTurn = running.get(child.parentThreadId);
-    if (parentTurn?.turn.id === child.turnId) {
+    if (parentTurn !== undefined) {
+      const notifications = renderSubagentActivity(
+        child,
+        kind,
+        at,
+        parentTurn.turn.id,
+      );
+      sendAll(notifications);
       for (const notification of notifications) {
         noteItem(parentTurn.items, notification);
       }
       return;
     }
-    const kept = histories
-      .get(child.parentThreadId)
-      ?.find((entry) => entry.turn.id === child.turnId);
+    const kept = histories.get(child.parentThreadId)?.at(-1);
+    const notifications = renderSubagentActivity(
+      child,
+      kind,
+      at,
+      kept?.turn.id ?? child.turnId,
+    );
+    sendAll(notifications);
     if (kept === undefined) return;
     const items = new Map(kept.items.map((entry) => [entry.item.id, entry]));
     for (const notification of notifications) noteItem(items, notification);
