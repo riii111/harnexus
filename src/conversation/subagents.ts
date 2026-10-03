@@ -244,13 +244,29 @@ export const createSubagents = ({
     };
 
   // Undefined for a thread that is no agent's.
+  // An agent's activity names the path its agent holds now, which a read-back agent may have changed for one a live agent held.
   const historyOf = (threadId: string): HistoryTurn[] | undefined => {
     if (!children.has(threadId)) return undefined;
     const turn = running.get(threadId);
     return [
       ...(histories.get(threadId) ?? []),
       ...(turn === undefined ? [] : [runningSubagentTurn(turn)]),
-    ];
+    ].map((entry) => ({
+      ...entry,
+      items: entry.items.map((kept) =>
+        kept.item.type === "subAgentActivity"
+          ? {
+              ...kept,
+              item: {
+                ...kept.item,
+                agentPath:
+                  children.get(kept.item.agentThreadId)?.path ??
+                  kept.item.agentPath,
+              },
+            }
+          : kept,
+      ),
+    }));
   };
 
   const sendAll = (notifications: readonly object[]) => {

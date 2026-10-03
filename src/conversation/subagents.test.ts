@@ -278,6 +278,22 @@ test("places a read-back agent under its parent's path as the parent ended up", 
   ]);
 });
 
+test("names in an agent's history the path its nested agent holds now", () => {
+  const subagents = createSubagents({ send: () => {} });
+  subagents.start(agent("th-1", "toolu-1"));
+  const [outer] = subagents.childrenOf("th-1");
+  subagents.message("th-1", agentCall("toolu-1", "toolu-inner"));
+  subagents.start({ ...agent("th-1", "toolu-inner"), depth: 2 });
+  const [inner] = subagents.childrenOf(outer?.id ?? "");
+
+  const activity = subagents
+    .historyOf(outer?.id ?? "")
+    ?.flatMap((entry) => entry.items)
+    .find((entry) => entry.item.type === "subAgentActivity")?.item;
+
+  expect(activity).toMatchObject({ agentPath: inner?.path });
+});
+
 test("ends every running agent of a thread whose session closed", () => {
   const subagents = createSubagents({ send: () => {} });
 
