@@ -1329,7 +1329,6 @@ const CLAUDE_STEPS: Record<ClaudeTurnEvent["step"], true> = {
 
 const COMPACT_PROMPT = "/compact";
 
-// A task that ends in any of these runs no more, whichever way Claude reports it.
 const ENDED_TASK_STATUSES: ReadonlySet<string> = new Set([
   "completed",
   "failed",
