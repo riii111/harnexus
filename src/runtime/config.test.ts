@@ -1,10 +1,33 @@
 import { describe, expect, test } from "bun:test";
 import {
   loadLogPath,
+  loadPermissionMode,
   loadShutdownGraceMs,
   loadStatePath,
   loadUnverifiedCodexPolicy,
 } from "./config.ts";
+
+describe("loadPermissionMode", () => {
+  test.each([
+    { name: "unset", value: undefined, expected: "default" },
+    { name: "empty", value: "", expected: "default" },
+    { name: "manual", value: "default", expected: "default" },
+    { name: "automatic", value: "auto", expected: "auto" },
+  ])("uses $expected approvals when $name", ({ value, expected }) => {
+    const loaded = loadPermissionMode({ HARNEXUS_PERMISSION_MODE: value });
+
+    expect(loaded.isOk() && loaded.value).toBe(expected);
+  });
+
+  test.each([
+    { name: "bypass permissions", value: "bypassPermissions" },
+    { name: "a misspelling", value: "atuo" },
+  ])("rejects $name instead of changing approval behavior", ({ value }) => {
+    const loaded = loadPermissionMode({ HARNEXUS_PERMISSION_MODE: value });
+
+    expect(loaded.isErr() && loaded.error._tag).toBe("PermissionModeInvalid");
+  });
+});
 
 describe("loadLogPath", () => {
   test.each([

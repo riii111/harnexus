@@ -31,6 +31,7 @@ export const connectClaudeThreads = ({
   effortRule,
   claudeModels,
   unverifiedCodex,
+  permissionMode = "default",
   send,
   log,
 }: {
@@ -44,6 +45,7 @@ export const connectClaudeThreads = ({
   readSubagents: (sessionId: string) => ReturnType<typeof readClaudeSubagents>;
   effortRule: Runtime["effortRule"];
   claudeModels: Parameters<typeof createRouter>[4];
+  permissionMode?: Runtime["permissionMode"];
   unverifiedCodex: Parameters<typeof createRouter>[5];
   send: (message: object) => void;
   log: (event: ClaudeLogEvent | RouteEvent) => void;
@@ -58,6 +60,7 @@ export const connectClaudeThreads = ({
   });
   const runtime = createClaudeRuntime({
     threads,
+    permissionMode,
     startSession,
     findSession,
     listConversations,

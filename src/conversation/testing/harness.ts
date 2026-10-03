@@ -66,6 +66,7 @@ export const askTool = (
     toolUseID?: string;
     agentID?: string;
     signal?: AbortSignal;
+    decisionReason?: string;
     defaultToNo?: boolean;
     suggestions?: PermissionUpdate[];
     suppressAlwaysAllowRule?: boolean;
@@ -76,6 +77,9 @@ export const askTool = (
     signal: options.signal ?? new AbortController().signal,
     toolUseID: options.toolUseID ?? "tool-1",
     requestId: "request-1",
+    ...(options.decisionReason === undefined
+      ? {}
+      : { decisionReason: options.decisionReason }),
     ...(options.agentID === undefined ? {} : { agentID: options.agentID }),
     ...(options.defaultToNo === undefined
       ? {}
@@ -185,6 +189,7 @@ export const harness = async (
     onSend = () => {},
     unsettledWrite = () => false,
     idleSessionMs,
+    permissionMode,
     missingSessions = [],
     sessionLookupFails = false,
     lookupSession,
@@ -204,6 +209,7 @@ export const harness = async (
     onSend?: (message: Sent) => void;
     unsettledWrite?: () => boolean;
     idleSessionMs?: number;
+    permissionMode?: "default" | "auto";
     missingSessions?: string[];
     sessionLookupFails?: boolean;
     lookupSession?: Parameters<typeof createClaudeRuntime>[0]["findSession"];
@@ -297,6 +303,7 @@ export const harness = async (
     effortRule,
     subagents,
     ...(idleSessionMs !== undefined && { idleSessionMs }),
+    ...(permissionMode !== undefined && { permissionMode }),
   });
   const turns = createTurnController({
     store,

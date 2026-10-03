@@ -90,6 +90,20 @@ HARNEXUS_UNVERIFIED_CODEX=pause bun run open-app
 
 ## Optional Settings
 
+### Automatic approvals
+
+Quit the app, then open it with Claude's auto mode to reduce routine permission prompts:
+
+```sh
+HARNEXUS_PERMISSION_MODE=auto bun run open-app
+```
+
+Claude's classifier allows or blocks actions before they run. Your explicit `ask` rules still require approval, and `deny` rules still block actions. Plan mode stays available; approving a plan returns Claude to auto mode.
+
+Auto mode requires a supported Claude model and an account where it is enabled. If Claude cannot enable it, the chat reports an error. Some classifier denials do not offer an approval prompt. The app's **Approve for me** setting does not control Claude approvals.
+
+To use manual approvals, open with `HARNEXUS_PERMISSION_MODE=default` or leave the variable unset. The choice applies to all Claude chats opened with that app launch, including resumed conversations.
+
 ### Claude effort
 
 Choose the effort level in the app. A `maxEffortLevel` in your project's `.claude/settings.json` takes precedence: choosing `max` with `"maxEffortLevel": "low"` still runs Claude at `low`.
