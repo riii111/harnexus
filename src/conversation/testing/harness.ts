@@ -36,6 +36,7 @@ import { type ClaudeLogEvent, createClaudeRuntime } from "../claude/runtime.ts";
 import { createTurnController } from "../controller.ts";
 import { createSubagents } from "../subagents.ts";
 import { createThreadValues } from "../thread-values.ts";
+import type { TurnLink } from "../turn-runtime.ts";
 
 type StartSession = Parameters<typeof createClaudeRuntime>[0]["startSession"];
 
@@ -62,6 +63,7 @@ export const askTool = (
   toolName: string,
   input: Record<string, unknown>,
   options: {
+    toolUseID?: string;
     agentID?: string;
     signal?: AbortSignal;
     defaultToNo?: boolean;
@@ -72,7 +74,7 @@ export const askTool = (
   const canUseTool = claude.options().canUseTool as CanUseTool;
   return canUseTool(toolName, input, {
     signal: options.signal ?? new AbortController().signal,
-    toolUseID: "tool-1",
+    toolUseID: options.toolUseID ?? "tool-1",
     requestId: "request-1",
     ...(options.agentID === undefined ? {} : { agentID: options.agentID }),
     ...(options.defaultToNo === undefined
@@ -193,6 +195,7 @@ export const harness = async (
     linkRequest,
     readHistory,
     effortRule = defaultRule,
+    ownTurnsShown = true,
     now = () => 1_700_000_000_000,
   }: {
     adopt?: boolean;
@@ -211,6 +214,7 @@ export const harness = async (
     linkRequest?: ServerRequest;
     readHistory?: Parameters<typeof createClaudeRuntime>[0]["readHistory"];
     effortRule?: EffortRule;
+    ownTurnsShown?: boolean;
     now?: () => number;
   } = {},
 ) => {
@@ -225,6 +229,7 @@ export const harness = async (
   const materialized: string[] = [];
   const renames: { threadId: string; name: string }[] = [];
   const toolCalls: unknown[] = [];
+  const sessionLinks: TurnLink[] = [];
   let failuresLeft = materializeFailures;
   let turnCount = 0;
   const send = (message: Sent) => {
@@ -248,24 +253,26 @@ export const harness = async (
       lastRecord ?? ((sessionId) => readLastRecordUuid(sessionId, claudeDir())),
     openLink: (threadId) => {
       links.push(threadId);
-      if (linkRequest !== undefined) {
-        return createCodexLink({
-          callerThreadId: threadId,
-          store,
-          request: (method, params, options) => {
-            toolCalls.push(params);
-            return linkRequest(method, params, options);
-          },
-          delegations: createDelegationWatch(store.claimReviewer),
-        });
-      }
-      return {
-        server: createSdkMcpServer({ name: "codex_link", tools: [] }),
-        allowedTools: ALLOWED_TOOLS,
-        hasUnsettledWrite: unsettledWrite,
-        stopWrites: () => gates.push("stop"),
-        acceptWrites: () => gates.push("accept"),
-      };
+      const link =
+        linkRequest === undefined
+          ? {
+              server: createSdkMcpServer({ name: "codex_link", tools: [] }),
+              allowedTools: ALLOWED_TOOLS,
+              hasUnsettledWrite: unsettledWrite,
+              stopWrites: () => gates.push("stop"),
+              acceptWrites: () => gates.push("accept"),
+            }
+          : createCodexLink({
+              callerThreadId: threadId,
+              store,
+              request: (method, params, options) => {
+                toolCalls.push(params);
+                return linkRequest(method, params, options);
+              },
+              delegations: createDelegationWatch(store.claimReviewer),
+            });
+      sessionLinks.push(link);
+      return link;
     },
     renameThread: async (threadId, name) => {
       renames.push({ threadId, name });
@@ -294,7 +301,9 @@ export const harness = async (
   const turns = createTurnController({
     store,
     threads,
-    runtime,
+    runtime: ownTurnsShown
+      ? runtime
+      : { ...runtime, listen: () => runtime.listen(() => false) },
     materializeThread: async (threadId) => {
       materialized.push(threadId);
       if (failuresLeft === 0) return Result.ok({});
@@ -320,6 +329,8 @@ export const harness = async (
     renames,
     toolCalls,
     subagents,
+    runtime,
+    sessionLinks,
   };
 };
 

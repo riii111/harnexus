@@ -30,6 +30,7 @@ export const createInbox = <T>() => {
         : new Promise<void>((resolve) => {
             settlers.push(resolve);
           }),
+    queued: (): readonly T[] => queued,
     drain: () => {
       const left = queued.splice(0);
       settle();

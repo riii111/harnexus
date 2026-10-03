@@ -126,6 +126,7 @@ type ClaudeTurnEvent =
       step:
         | "idle_closed"
         | "own_turn"
+        | "approval_turn"
         | "session_missing"
         | "skill_unreadable"
         | "skill_link_only"
@@ -168,10 +169,11 @@ type SessionSlot = {
 };
 
 // Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken; sends holds the uuid of every message the turn sent Claude.
-// command marks a turn the bridge answers itself, such as /session, own one Claude started on its own, and completed one Claude ended with a successful result.
+// command marks a turn the bridge answers itself, such as /session, own one Claude started on its own, holdsApprovals one opened only to show approvals no other turn could, and completed one Claude ended with a successful result.
 type ClaudeTurn = {
   command: boolean;
   own: boolean;
+  holdsApprovals: boolean;
   completed: boolean;
   slot: SessionSlot | null;
   unsentSteers: string[];
@@ -179,6 +181,17 @@ type ClaudeTurn = {
   sends: Set<string>;
   steers: number;
 };
+
+// turn stays null until the app is shown the holding turn, and ended declines every approval in it once its Claude is gone.
+type HeldApprovals = {
+  turn: RunningTurn<ClaudeFailureTag> | null;
+  waiting: number;
+  answered: () => void;
+  ended: AbortController;
+};
+
+// signal also ends once the held turn's Claude is gone.
+type Approval = { held: HeldApprovals | null; signal: AbortSignal };
 
 class BridgeClosing extends TaggedError("BridgeClosing")<{
   message: string;
@@ -263,7 +276,8 @@ export const createClaudeRuntime = ({
   });
   let closed = false;
   let startOwnTurn = (_threadId: string) => false;
-  const ownTurnWaiters = new Map<string, (() => void)[]>();
+  const turnWaiters = new Map<string, (() => void)[]>();
+  const heldApprovals = new Map<string, HeldApprovals>();
 
   const beginSessionStart = (turn: Turn): SessionStartup => {
     const startup: SessionStartup = {
@@ -322,6 +336,7 @@ export const createClaudeRuntime = ({
     const claude: ClaudeTurn = {
       command: command !== null,
       own: false,
+      holdsApprovals: false,
       completed: false,
       slot: null,
       unsentSteers: [],
@@ -334,7 +349,19 @@ export const createClaudeRuntime = ({
       await answerCommand(turn, command);
       return;
     }
+    // Approvals open their turn only on a thread with no other turn accepted, so a turn of Claude's own starting while they wait for it is that one.
+    const held =
+      turn.input.startedBy === "claude"
+        ? heldApprovals.get(turn.threadId)
+        : undefined;
+    if (held?.turn === null) {
+      claude.holdsApprovals = true;
+      await holdApprovals(turn, held);
+      return;
+    }
     runningTurns.set(turn.threadId, turn);
+    // A turn of Claude's own is shown only once it holds what Claude sent.
+    if (turn.input.startedBy === "app") showTurn(turn.threadId);
     if (turn.input.startedBy === "claude") await streamOwn(turn, claude);
     else await stream(turn, claude);
     if (runningTurns.get(turn.threadId) === turn) {
@@ -418,6 +445,25 @@ export const createClaudeRuntime = ({
     await waitForPendingInterrupt(threadId);
     if (turn.state().interrupting) {
       turn.finish({ status: "interrupted" }, null);
+      return;
+    }
+    // A session closes itself on its stream's end, and replacing it would drop what Claude said before the end while waiting for this turn; an end alone leaves nothing to show, so the turn runs on a new session.
+    const stopped = sessions.get(threadId);
+    if (
+      stopped?.session.isClosed() &&
+      stopped.unclaimed === "turn" &&
+      stopped.reader?.queued().some(saidSomething) === true
+    ) {
+      const inbox = claimReader(stopped);
+      try {
+        await read(turn, claude, stopped, inbox, {
+          effort: effortRule(model, input.effort),
+          sessionStartMs: null,
+          sentAt: now(),
+        });
+      } finally {
+        releaseReader(threadId, stopped, inbox);
+      }
       return;
     }
     let startup: SessionStartup | null = beginSessionStart(turn);
@@ -566,7 +612,7 @@ export const createClaudeRuntime = ({
     claude.slot = slot;
     turn.useLink(slot.link);
     slot.link.acceptWrites();
-    showOwnTurn(threadId);
+    showTurn(threadId);
     // A stop that came while the turn waited to be shown reaches Claude now.
     if (turn.state().interrupting) interrupt(turn, false);
     try {
@@ -580,18 +626,42 @@ export const createClaudeRuntime = ({
     }
   };
 
-  // Claude may ask for a tool in a turn of its own before the app has been shown that turn.
-  const ownTurnShown = (threadId: string) =>
+  // Claude may ask for a tool before the app has been shown the turn the thread accepted, such as a turn of its own, so the approval waits until a turn is shown or the thread has none left.
+  const turnShown = (threadId: string) =>
     new Promise<void>((resolve) => {
-      ownTurnWaiters.set(threadId, [
-        ...(ownTurnWaiters.get(threadId) ?? []),
+      turnWaiters.set(threadId, [
+        ...(turnWaiters.get(threadId) ?? []),
         resolve,
       ]);
     });
 
-  const showOwnTurn = (threadId: string) => {
-    for (const resolve of ownTurnWaiters.get(threadId) ?? []) resolve();
-    ownTurnWaiters.delete(threadId);
+  const showTurn = (threadId: string) => {
+    for (const resolve of turnWaiters.get(threadId) ?? []) resolve();
+    turnWaiters.delete(threadId);
+  };
+
+  // Claude sent nothing for this turn, so it reads nothing.
+  const holdApprovals = async (turn: Turn, held: HeldApprovals) => {
+    held.turn = turn;
+    showTurn(turn.threadId);
+    while (held.waiting > 0) {
+      await new Promise<void>((resolve) => {
+        held.answered = resolve;
+      });
+    }
+    if (heldApprovals.get(turn.threadId) === held) {
+      heldApprovals.delete(turn.threadId);
+    }
+    turn.finish(heldOutcome(turn, held), null);
+  };
+
+  // Ending as completed would read as if each approval had been answered.
+  const heldOutcome = (turn: Turn, held: HeldApprovals): TurnOutcome => {
+    if (turn.state().interrupting) return { status: "interrupted" };
+    if (held.ended.signal.aborted) {
+      return { status: "failed", message: APPROVALS_UNANSWERED };
+    }
+    return { status: "completed" };
   };
 
   // The last record of each fork's source when the fork was made, null when the source had said nothing yet; a fork whose source could not be read has none.
@@ -748,8 +818,11 @@ export const createClaudeRuntime = ({
   const pump = async (threadId: string, slot: SessionSlot) => {
     while (true) {
       const next = await slot.session.messages.next();
+      track(threadId, slot, next);
+      const inbox = route(threadId, slot, next);
       // The next message waits until the reader has handled this one, as a turn reading the session itself would.
-      await route(threadId, slot, next)?.settled();
+      // An approval turn never reads, so waiting would freeze agents' threads and hide Claude stopping.
+      if (!heldApprovals.has(threadId)) await inbox?.settled();
       if (next.done === true || next.value.isErr()) return;
     }
   };
@@ -760,10 +833,6 @@ export const createClaudeRuntime = ({
     slot: SessionSlot,
     next: StreamedNext,
   ): Inbox<StreamedNext> | null => {
-    if (next.done !== true && next.value.isOk()) {
-      trackTasks(slot, next.value.value);
-      trackSubagents(threadId, next.value.value);
-    }
     if (slot.reader !== null) {
       slot.reader.push(next);
       return slot.reader;
@@ -771,7 +840,8 @@ export const createClaudeRuntime = ({
     // A session already dropped has nothing left for a turn to read.
     if (sessions.get(threadId) !== slot) return null;
     const own = !busyThreads.has(threadId);
-    if (own) {
+    // A turn holding approvals reads nothing, so while one is open or pending only a turn Claude starts waits for the next turn, even with one queued.
+    if (own || heldApprovals.has(threadId)) {
       if (next.done === true || next.value.isErr()) {
         dropSession(threadId, slot);
         return null;
@@ -790,6 +860,17 @@ export const createClaudeRuntime = ({
     slot.reader = inbox;
     slot.unclaimed = own ? "own" : "turn";
     return inbox;
+  };
+
+  // Tracked as each message arrives rather than as it is routed, since what waited for a turn that took none of it is routed again.
+  // A Claude that stopped acts on no answer, so the approvals held for it end even while what it said waits for a later turn.
+  const track = (threadId: string, slot: SessionSlot, next: StreamedNext) => {
+    if (next.done !== true && next.value.isOk()) {
+      trackTasks(slot, next.value.value);
+      trackSubagents(threadId, next.value.value);
+    } else if (sessions.get(threadId) === slot) {
+      endHeldApprovals(threadId);
+    }
   };
 
   // An agent Claude starts, in the turn or in the background, shows as a thread of its own under this one, which also gets what the agent says; one an agent starts goes under that agent's thread.
@@ -859,8 +940,9 @@ export const createClaudeRuntime = ({
   // A turn of Claude's own that could not run was shown as failed, so what it held is not shown again.
   const threadIdle = (threadId: string) => {
     busyThreads.delete(threadId);
+    heldApprovals.delete(threadId);
     scheduleIdleClose(threadId);
-    showOwnTurn(threadId);
+    showTurn(threadId);
     const slot = sessions.get(threadId);
     if (slot?.reader == null || slot.unclaimed === null) return;
     const left = slot.reader.drain();
@@ -888,6 +970,7 @@ export const createClaudeRuntime = ({
     const claude = turns.get(turn);
     if (claude === undefined) return "no_running_turn";
     if (claude.command) return "command_not_steerable";
+    if (claude.holdsApprovals) return "approvals_not_steerable";
     if (claude.steers >= MAX_STEERS_PER_TURN) return "too_many_steers";
     if (claude.slot === null) {
       claude.unsentSteers.push(text);
@@ -907,7 +990,9 @@ export const createClaudeRuntime = ({
     return sent;
   };
 
+  // A turn holding approvals has nothing of Claude's to stop, and an interrupt could close the session its agents run in; the stop closed its prompts, so it ends once each is declined.
   const interrupt = (turn: Turn, repeated: boolean) => {
+    if (turns.get(turn)?.holdsApprovals === true) return;
     const threadId = turn.threadId;
     const startup = startingSessions.get(threadId);
     const stoppingStartup = startup?.turn === turn;
@@ -1083,55 +1168,125 @@ export const createClaudeRuntime = ({
   const approveTool =
     (threadId: string): CanUseTool =>
     async (toolName, input, options) => {
-      if (
-        openTurn(threadId) === undefined &&
-        sessions.get(threadId)?.unclaimed === "own"
-      ) {
-        await ownTurnShown(threadId);
+      const approval: Approval = { held: null, signal: options.signal };
+      try {
+        return await decideTool(threadId, approval, toolName, input, options);
+      } finally {
+        if (approval.held !== null) leaveHeld(approval.held);
       }
-      const turn = openTurn(threadId);
-      if (turn === undefined || turn.state().interrupting) {
-        return declineTool(threadId, turn, options.toolUseID, NO_TURN);
-      }
-      const block = { id: options.toolUseID, name: toolName, input };
-      // A subagent's call shows as its own item while its agent runs in the turn; one from a background agent would outlive the turn, which would close its item as failed, so its prompt carries an id of its own.
-      if (options.agentID === undefined) {
-        turn.apply(renderToolRequest(turn.state(), block, now()));
-      } else if (runsAgent(turn.state())) {
-        turn.apply(renderToolRequest(turn.state(), block, now(), false));
-      }
-      const item = runningToolItem(turn.state(), options.toolUseID);
-      const prompt = promptFor(
-        {
-          toolName,
-          input,
-          item,
-          title: options.title,
-          reason: options.decisionReason,
-          defaultToNo: options.defaultToNo === true,
-          suggestions: options.suggestions ?? [],
-          suppressAlwaysAllow: options.suppressAlwaysAllowRule === true,
-        },
-        {
-          threadId,
-          turnId: turn.turnId,
-          itemId: item?.id ?? `${turn.turnId}-${options.toolUseID}`,
-          now: now(),
-        },
-      );
-      const answer = await turn.ask(
-        prompt.method,
-        prompt.params,
-        options.signal,
-      );
-      const decision = prompt.decide(answer);
-      return decision.behavior === "deny"
-        ? declineTool(threadId, turn, options.toolUseID, decision.message)
-        : decision;
     };
 
+  const decideTool = async (
+    threadId: string,
+    approval: Approval,
+    ...[toolName, input, options]: Parameters<CanUseTool>
+  ) => {
+    const turn = await turnToAsk(threadId, approval);
+    if (turn === undefined || turn.state().interrupting) {
+      return declineTool(threadId, turn, options.toolUseID, NO_TURN);
+    }
+    const block = { id: options.toolUseID, name: toolName, input };
+    // A subagent's call shows as its own item while its agent runs in the turn; one from a background agent would outlive the turn, which would close its item as failed, so its prompt carries an id of its own, as does every call a turn holding approvals shows.
+    if (options.agentID === undefined && approval.held?.turn !== turn) {
+      turn.apply(renderToolRequest(turn.state(), block, now()));
+    } else if (runsAgent(turn.state())) {
+      turn.apply(renderToolRequest(turn.state(), block, now(), false));
+    }
+    const item = runningToolItem(turn.state(), options.toolUseID);
+    const prompt = promptFor(
+      {
+        toolName,
+        input,
+        item,
+        title: options.title,
+        reason: options.decisionReason,
+        defaultToNo: options.defaultToNo === true,
+        suggestions: options.suggestions ?? [],
+        suppressAlwaysAllow: options.suppressAlwaysAllowRule === true,
+      },
+      {
+        threadId,
+        turnId: turn.turnId,
+        itemId: item?.id ?? `${turn.turnId}-${options.toolUseID}`,
+        now: now(),
+      },
+    );
+    const answer = await turn.ask(
+      prompt.method,
+      prompt.params,
+      approval.signal,
+    );
+    const decision = prompt.decide(answer);
+    return decision.behavior === "deny"
+      ? declineTool(threadId, turn, options.toolUseID, decision.message)
+      : decision;
+  };
+
+  // An approval whose holding turn could not be shown is declined rather than held again, so a thread whose turns cannot run does not keep opening them.
+  // A turn the user stopped before the approval was shown cannot show it, while one asked as the user stops a turn showing it is declined with that turn.
+  const turnToAsk = async (threadId: string, approval: Approval) => {
+    let waited = false;
+    while (!closed && !approval.signal.aborted) {
+      const turn = openTurn(threadId);
+      const held = heldApprovals.get(threadId);
+      if (held !== undefined && (held.turn === null || held.turn === turn)) {
+        joinHeld(approval, held);
+      }
+      const stoppedAhead =
+        waited &&
+        turn?.state().interrupting === true &&
+        approval.held?.turn !== turn;
+      if (turn !== undefined && !stoppedAhead) return turn;
+      if (held === undefined && !busyThreads.has(threadId)) {
+        if (approval.held !== null || !openHeld(threadId, approval)) {
+          return undefined;
+        }
+      }
+      const shown = await waitForAbort(turnShown(threadId), approval.signal);
+      if (shown === ABORTED) return undefined;
+      waited = true;
+    }
+    return undefined;
+  };
+
+  const openHeld = (threadId: string, approval: Approval) => {
+    const held: HeldApprovals = {
+      turn: null,
+      waiting: 0,
+      answered: () => {},
+      ended: new AbortController(),
+    };
+    heldApprovals.set(threadId, held);
+    joinHeld(approval, held);
+    if (startOwnTurn(threadId)) {
+      log({ event: "claude_turn", step: "approval_turn" });
+      return true;
+    }
+    heldApprovals.delete(threadId);
+    approval.held = null;
+    return false;
+  };
+
+  const joinHeld = (approval: Approval, held: HeldApprovals) => {
+    if (approval.held !== null) return;
+    held.waiting += 1;
+    approval.held = held;
+    approval.signal = AbortSignal.any([approval.signal, held.ended.signal]);
+  };
+
+  const leaveHeld = (held: HeldApprovals) => {
+    held.waiting -= 1;
+    if (held.waiting === 0) held.answered();
+  };
+
+  // What the app answers can no longer reach a Claude that is gone.
+  const endHeldApprovals = (threadId: string) => {
+    heldApprovals.get(threadId)?.ended.abort();
+  };
+
   const openTurn = (threadId: string) => {
-    const turn = runningTurns.get(threadId);
+    const turn =
+      runningTurns.get(threadId) ?? heldApprovals.get(threadId)?.turn;
     return turn?.isOpen() ? turn : undefined;
   };
 
@@ -1155,6 +1310,7 @@ export const createClaudeRuntime = ({
     if (sessions.get(threadId) === slot) {
       sessions.delete(threadId);
       subagents.settle(threadId);
+      endHeldApprovals(threadId);
     }
     slot.session.close();
   };
@@ -1168,7 +1324,7 @@ export const createClaudeRuntime = ({
   const closeAll = () => {
     closed = true;
     for (const threadId of [...idleTimers.keys()]) cancelIdleClose(threadId);
-    for (const threadId of [...ownTurnWaiters.keys()]) showOwnTurn(threadId);
+    for (const threadId of [...turnWaiters.keys()]) showTurn(threadId);
     for (const [threadId, startup] of [...startingSessions]) {
       cancelSessionStart(threadId, startup);
     }
@@ -1199,6 +1355,7 @@ export const serializeClaudeTurnEvent = (entry: ClaudeTurnEvent) => {
   switch (entry.step) {
     case "idle_closed":
     case "own_turn":
+    case "approval_turn":
     case "session_missing":
     case "skill_unreadable":
     case "skill_link_only":
@@ -1269,6 +1426,9 @@ const takenUuids = (result: SDKResultMessage) =>
   result.user_message_uuids ??
   (result.user_message_uuid === undefined ? [] : [result.user_message_uuid]);
 
+const saidSomething = (next: StreamedNext) =>
+  next.done !== true && next.value.isOk();
+
 // Claude starts every turn with its init message, then streams its reply; a subagent's messages or a background task's report alone start none.
 const startsTurn = (message: SDKMessage) => {
   switch (message.type) {
@@ -1336,6 +1496,7 @@ const sessionStartCancelled = () =>
 const CLAUDE_STEPS: Record<ClaudeTurnEvent["step"], true> = {
   idle_closed: true,
   own_turn: true,
+  approval_turn: true,
   session_missing: true,
   skill_unreadable: true,
   skill_link_only: true,
@@ -1368,6 +1529,9 @@ const AGENT_FAILED = "The agent failed";
 const IDLE_SESSION_MS = 10 * 60_000;
 
 const NO_TURN = "no Claude turn is running to ask the app for approval";
+
+const APPROVALS_UNANSWERED =
+  "Claude's session ended before the approval was answered";
 
 // The SDK documents user_message_uuids as holding at most this many entries.
 const TAKEN_UUIDS_LIMIT = 64;
