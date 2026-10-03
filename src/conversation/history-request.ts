@@ -1,3 +1,4 @@
+import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { type InferErr, Result } from "better-result";
 import type { readClaudeSession } from "../infra/claude/session.ts";
 import {
@@ -68,7 +69,7 @@ export const createHistoryRequests = ({
     const loaded = readSession(sessionId).then(async (read) => {
       reading.delete(threadId);
       if (read.isOk()) {
-        await subagents.restore(threadId, sessionId, thread.cwd);
+        await subagents.restore(threadId, sessionId, thread.cwd, read.value);
       }
       return read
         .tapError((error) =>
@@ -111,7 +112,12 @@ export const createHistoryRequests = ({
 };
 
 type SubagentsOfThread = {
-  restore: (threadId: string, sessionId: string, cwd: string) => Promise<void>;
+  restore: (
+    threadId: string,
+    sessionId: string,
+    cwd: string,
+    messages: readonly SessionMessage[],
+  ) => Promise<void>;
   agentRefOf: (threadId: string) => (toolUseId: string) => AgentRef | undefined;
 };
 

@@ -69,7 +69,7 @@ export const connectClaudeThreads = ({
         return [];
       }
       // A picked conversation's agents are read back first, so its replay names them as a later read does.
-      await subagentRestore.restore(threadId, sessionId, cwd);
+      await subagentRestore.restore(threadId, sessionId, cwd, read.value);
       return replayHistory(
         buildHistory(
           read.value,

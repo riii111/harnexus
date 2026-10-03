@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { buildHistory } from "../presentation/history.ts";
 import type { SubagentThread } from "../presentation/subagent.ts";
+import {
+  prompt,
+  reply,
+  toolResult,
+  toolUse,
+} from "../presentation/testing/session-record.ts";
 import { createSubagents } from "./subagents.ts";
 
 describe("subagents", () => {
@@ -310,35 +317,58 @@ test("names a resumed agent's calls apart, with only the running one still open"
   ]);
 });
 
+test("shows in the parent's history an agent started, completed and resumed by SendMessage, with only the running call left open", () => {
+  const subagents = createSubagents({ send: () => {} });
+  subagents.start(agent("th-1", "toolu-1"));
+  subagents.complete("th-1", "task-toolu-1", DONE);
+  subagents.start({ ...agent("th-1", "toolu-send"), taskId: "task-toolu-1" });
+  const [child] = subagents.childrenOf("th-1");
+
+  const history = buildHistory(
+    [
+      prompt("p1", "look around"),
+      reply(
+        "p2",
+        "m1",
+        toolUse("toolu-1", "Agent", { prompt: "look" }),
+        "tool_use",
+      ),
+      toolResult("p3", "toolu-1", "found it"),
+      prompt("p4", "look again"),
+      reply(
+        "p5",
+        "m2",
+        toolUse("toolu-send", "SendMessage", {
+          to: "task-toolu-1",
+          message: "look again",
+        }),
+        "tool_use",
+      ),
+    ],
+    { threadId: "th-1", cwd: "/fixture/work" },
+    subagents.agentRefOf("th-1"),
+  );
+
+  expect(
+    history.map((turn) =>
+      turn.items
+        .map(({ item }) => item)
+        .filter((item) => item.type === "subAgentActivity")
+        .map((item) => item.id),
+    ),
+  ).toEqual([
+    [`${child?.id}-started-toolu-1`, `${child?.id}-completed-toolu-1`],
+    [`${child?.id}-started-toolu-send`],
+  ]);
+});
+
 test("places a read-back agent under its parent's path as the parent ended up", () => {
   const subagents = createSubagents({ send: () => {} });
   subagents.start(agent("th-1", "toolu-live"));
-  const restored = (
-    id: string,
-    parentThreadId: string,
-    path: string,
-  ): SubagentThread => ({
-    id,
-    rootThreadId: "th-1",
-    parentThreadId,
-    depth: parentThreadId === "th-1" ? 1 : 2,
-    calls: [`toolu-${id}`],
-    toolUseId: `toolu-${id}`,
-    taskId: id,
-    nickname: id,
-    role: "Explore",
-    path,
-    turnId: null,
-    runs: 1,
-    active: false,
-    createdAtMs: 0,
-    updatedAtMs: 0,
-  });
-
   subagents.restore([
-    { thread: restored("old", "th-1", "/root/explore_1"), history: [] },
+    { thread: restoredAgent("old", "th-1", "/root/explore_1"), history: [] },
     {
-      thread: restored("old-child", "old", "/root/explore_1/explore_1"),
+      thread: restoredAgent("old-child", "old", "/root/explore_1/explore_1"),
       history: [],
     },
   ]);
@@ -350,20 +380,38 @@ test("places a read-back agent under its parent's path as the parent ended up", 
   ]);
 });
 
-test("names in an agent's history the path its nested agent holds now", () => {
+// The read-back agent's history was built with the paths its agents had in the records, before a live agent's path moved them.
+test("names in a read-back agent's history the path its nested agent holds after a live agent moved it", () => {
   const subagents = createSubagents({ send: () => {} });
-  subagents.start(agent("th-1", "toolu-1"));
-  const [outer] = subagents.childrenOf("th-1");
-  subagents.message("th-1", agentCall("toolu-1", "toolu-inner"));
-  subagents.start({ ...agent("th-1", "toolu-inner"), depth: 2 });
-  const [inner] = subagents.childrenOf(outer?.id ?? "");
+  subagents.start(agent("th-1", "toolu-live"));
+  const nested = restoredAgent("old-child", "old", "/root/explore_1/explore_1");
+
+  subagents.restore([
+    {
+      thread: restoredAgent("old", "th-1", "/root/explore_1"),
+      history: buildHistory(
+        [
+          prompt("o1", "look around"),
+          reply(
+            "o2",
+            "m1",
+            toolUse(nested.toolUseId, "Agent", { prompt: "dig" }),
+            "tool_use",
+          ),
+        ],
+        { threadId: "old", cwd: "/fixture/work" },
+        () => ({ threadId: nested.id, path: nested.path, active: false }),
+      ),
+    },
+    { thread: nested, history: [] },
+  ]);
 
   const activity = subagents
-    .historyOf(outer?.id ?? "")
+    .historyOf("old")
     ?.flatMap((entry) => entry.items)
     .find((entry) => entry.item.type === "subAgentActivity")?.item;
-
-  expect(activity).toMatchObject({ agentPath: inner?.path });
+  expect(subagents.get("old-child")?.path).toBe("/root/explore_2/explore_1");
+  expect(activity).toMatchObject({ agentPath: "/root/explore_2/explore_1" });
 });
 
 test("ends every running agent of a thread whose session closed", () => {
@@ -382,6 +430,29 @@ test("ends every running agent of a thread whose session closed", () => {
 });
 
 const DONE = { status: "completed" } as const;
+
+// An agent read back from Claude's records, which joins as ended.
+const restoredAgent = (
+  id: string,
+  parentThreadId: string,
+  path: string,
+): SubagentThread => ({
+  id,
+  rootThreadId: "th-1",
+  parentThreadId,
+  depth: parentThreadId === "th-1" ? 1 : 2,
+  calls: [`toolu-${id}`],
+  toolUseId: `toolu-${id}`,
+  taskId: id,
+  nickname: id,
+  role: "Explore",
+  path,
+  turnId: null,
+  runs: 1,
+  active: false,
+  createdAtMs: 0,
+  updatedAtMs: 0,
+});
 
 const agent = (
   threadId: string,

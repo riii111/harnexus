@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, constants, fchmodSync, openSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  type Dirent,
+  fchmodSync,
+  openSync,
+  writeSync,
+} from "node:fs";
 import {
   access,
   mkdir,
@@ -221,6 +228,45 @@ export const listDirectoryIfExists = (path: string) =>
     catch: (cause) =>
       new FileReadFailed({ path, cause, message: `cannot list ${path}` }),
   });
+
+// The regular files at any depth under a folder, as paths relative to it; a folder below it that cannot be listed is passed over, as Claude's own reader passes it over.
+export const listFilesDeepIfExists = (path: string) =>
+  Result.tryPromise({
+    try: async () => {
+      const top = await readEntries(path);
+      if (top === null) return null;
+      const files: string[] = [];
+      const walk = async (
+        entries: readonly Dirent[],
+        prefix: readonly string[],
+      ): Promise<void> => {
+        for (const entry of entries) {
+          if (entry.isFile()) {
+            files.push(join(...prefix, entry.name));
+          } else if (entry.isDirectory()) {
+            const below = [...prefix, entry.name];
+            const nested = await readEntries(join(path, ...below)).catch(
+              () => null,
+            );
+            if (nested !== null) await walk(nested, below);
+          }
+        }
+      };
+      await walk(top, []);
+      return files;
+    },
+    catch: (cause) =>
+      new FileReadFailed({ path, cause, message: `cannot list ${path}` }),
+  });
+
+const readEntries = async (path: string) => {
+  try {
+    return await readdir(path, { withFileTypes: true });
+  } catch (cause) {
+    if (isMissingFile(cause) || isNotDirectory(cause)) return null;
+    throw cause;
+  }
+};
 
 // Only a failed open means nothing was created; any later failure is FileSyncFailed, because the file already exists and must be cleaned up by the caller.
 export const createEmptyFile = (path: string) =>
