@@ -1135,7 +1135,6 @@ export const createClaudeRuntime = ({
     return turn?.isOpen() ? turn : undefined;
   };
 
-  // A refused call of an agent's closes as declined in the agent's thread too.
   const declineTool = (
     threadId: string,
     turn: Turn | undefined,

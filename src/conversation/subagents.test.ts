@@ -93,6 +93,78 @@ describe("subagents", () => {
     ]);
     expect(subagents.historyOf("th-1")).toBeUndefined();
   });
+
+  test("shows the text a running agent has streamed so far, and its whole text once it completes", () => {
+    const subagents = createSubagents({ send: () => {} });
+
+    subagents.start(agent("th-1", "toolu-1"));
+    const [child] = subagents.childrenOf("th-1");
+    const stream = (event: object) =>
+      subagents.message("th-1", streamEvent("toolu-1", event));
+    const items = () => subagents.historyOf(child?.id ?? "")?.[0]?.items;
+    stream({ type: "message_start", message: { id: "msg-1" } });
+    stream({
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "thinking" },
+    });
+    stream({
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "thinking_delta", thinking: "Where " },
+    });
+    stream({
+      type: "content_block_start",
+      index: 1,
+      content_block: { type: "text" },
+    });
+    stream({
+      type: "content_block_delta",
+      index: 1,
+      delta: { type: "text_delta", text: "Found " },
+    });
+
+    expect(items()).toMatchObject([
+      { item: { type: "userMessage" } },
+      {
+        item: { type: "reasoning", content: ["Where "] },
+        completedAtMs: null,
+      },
+      { item: { type: "agentMessage", text: "Found " }, completedAtMs: null },
+    ]);
+
+    stream({
+      type: "content_block_delta",
+      index: 1,
+      delta: { type: "text_delta", text: "it." },
+    });
+    stream({ type: "content_block_stop", index: 1 });
+    subagents.message("th-1", {
+      type: "assistant",
+      message: {
+        id: "msg-1",
+        content: [
+          { type: "thinking", thinking: "Where ", signature: "" },
+          { type: "text", text: "Found it." },
+        ],
+        stop_reason: null,
+      },
+      parent_tool_use_id: "toolu-1",
+    } as unknown as SDKMessage);
+    stream({ type: "message_delta", delta: { stop_reason: "end_turn" } });
+    stream({ type: "message_stop" });
+
+    expect(items()).toMatchObject([
+      { item: { type: "userMessage" } },
+      { item: { type: "reasoning", content: ["Where "] } },
+      { item: { type: "agentMessage", text: "Found it." } },
+    ]);
+    expect(items()?.map(({ item }) => item.type)).toEqual([
+      "userMessage",
+      "reasoning",
+      "agentMessage",
+    ]);
+  });
 });
 
 test("starts a resumed agent again on the thread it had", () => {
@@ -343,6 +415,13 @@ const summary = (m: Notification) => {
   if (status !== undefined) return `${threadId} ${m.method} ${status.type}`;
   return `${threadId} ${m.method}`;
 };
+
+const streamEvent = (parentToolUseId: string, event: object) =>
+  ({
+    type: "stream_event",
+    event,
+    parent_tool_use_id: parentToolUseId,
+  }) as unknown as SDKMessage;
 
 // A message of the agent whose call started this one, carrying the Agent call that starts another.
 const agentCall = (parentToolUseId: string, toolUseId: string) =>
