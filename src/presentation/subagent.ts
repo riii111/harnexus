@@ -1,5 +1,19 @@
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { isObject } from "../runtime/object.ts";
-import type { AppNotification, SubAgentActivityItem } from "./protocol.ts";
+import { type HistoryItem, type HistoryTurn, noteItem } from "./history.ts";
+import type {
+  AppNotification,
+  SubAgentActivityItem,
+  Turn,
+} from "./protocol.ts";
+import {
+  closeTurn,
+  renderSdkMessage,
+  renderTurnStarted,
+  renderUserInput,
+  type TurnOutcome,
+  type TurnState,
+} from "./turn.ts";
 
 // A Claude subagent is shown as a Codex subagent is: a thread of its own under the thread whose Claude started it, which the app lists in its subagents panel.
 // turnId is the parent's turn the agent last started in, which also carries its completion, as Codex does even once that turn has ended; runs counts its starts, since Claude can resume an agent that finished.
@@ -18,21 +32,12 @@ export type SubagentThread = {
   updatedAtMs: number;
 };
 
-export const renderSubagentStarted = (
+// The agent's own turn carries its thread's status, as a Codex subagent's does.
+export const renderSubagentActivity = (
   child: SubagentThread,
+  kind: SubAgentActivityItem["kind"],
   now: number,
-): AppNotification[] => [
-  ...activity(child, "started", now),
-  statusChanged(child, now),
-];
-
-export const renderSubagentCompleted = (
-  child: SubagentThread,
-  now: number,
-): AppNotification[] => [
-  statusChanged(child, now),
-  ...activity(child, "completed", now),
-];
+): AppNotification[] => activity(child, kind, now);
 
 // The parent's own thread, as the server reports it, gives the fields only the server knows, such as its directory and environment, which the agent shares.
 export const childThreadView = (
@@ -107,18 +112,91 @@ const activity = (
   ];
 };
 
-const statusChanged = (
-  child: SubagentThread,
-  now: number,
-): AppNotification => ({
-  method: "thread/status/changed",
-  params: { threadId: child.id, status: statusOf(child) },
-  emittedAtMs: now,
-});
-
 const statusOf = (child: SubagentThread) =>
   child.active
     ? { type: "active" as const, activeFlags: [] as never[] }
     : { type: "idle" as const };
 
 const toSeconds = (ms: number) => Math.floor(ms / 1000);
+
+// A subagent's thread runs one turn for each time the agent runs, holding what the agent did; Claude sends no prompt of the agent's, so the task's own prompt opens the turn.
+export type SubagentTurn = {
+  state: TurnState;
+  turn: Turn;
+  items: Map<string, HistoryItem>;
+};
+
+export const openSubagentTurn = (
+  child: SubagentThread,
+  { cwd, prompt }: { cwd: string; prompt: string | null },
+  now: number,
+): { turn: SubagentTurn; notifications: AppNotification[] } => {
+  const opened = renderTurnStarted({
+    threadId: child.id,
+    turnId: `${child.id}-turn-${child.runs}`,
+    cwd,
+    now,
+  });
+  const typed =
+    prompt === null
+      ? { state: opened.state, notifications: [] }
+      : renderUserInput(
+          opened.state,
+          [{ type: "text", text: prompt, text_elements: [] }],
+          null,
+          now,
+        );
+  const notifications = [...opened.notifications, ...typed.notifications];
+  return {
+    turn: collect(
+      { state: typed.state, turn: opened.turn, items: new Map() },
+      notifications,
+    ),
+    notifications,
+  };
+};
+
+// The agent's messages name the call that started it as their parent; in its own thread they are the conversation itself.
+export const renderSubagentMessage = (
+  turn: SubagentTurn,
+  message: SDKMessage,
+  now: number,
+): { turn: SubagentTurn; notifications: AppNotification[] } => {
+  const rendered = renderSdkMessage(
+    turn.state,
+    { ...message, parent_tool_use_id: null } as SDKMessage,
+    now,
+  );
+  return {
+    turn: collect({ ...turn, state: rendered.state }, rendered.notifications),
+    notifications: rendered.notifications,
+  };
+};
+
+export const closeSubagentTurn = (
+  turn: SubagentTurn,
+  outcome: TurnOutcome,
+  now: number,
+): { history: HistoryTurn; notifications: AppNotification[] } => {
+  const closed = closeTurn(turn.state, outcome, now);
+  const { items } = collect(turn, closed.notifications);
+  return {
+    history: { turn: closed.turn, items: [...items.values()] },
+    notifications: closed.notifications,
+  };
+};
+
+// A turn still running reads as one in progress with the items it has so far, which the app reads apart from its summary.
+export const runningSubagentTurn = (turn: SubagentTurn): HistoryTurn => ({
+  turn: { ...turn.turn, itemsView: "notLoaded" },
+  items: [...turn.items.values()],
+});
+
+const collect = (
+  turn: SubagentTurn,
+  notifications: readonly AppNotification[],
+): SubagentTurn => {
+  const items = new Map(turn.items);
+  for (const notification of notifications) noteItem(items, notification);
+  return { ...turn, items };
+};

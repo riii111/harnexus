@@ -31,22 +31,27 @@ type ReadSession = (sessionId: string) => ReturnType<typeof readClaudeSession>;
 type Loaded = Result<HistoryTurn[], InferErr<Awaited<ReturnType<ReadSession>>>>;
 
 // The server never sees a Claude turn, so a Claude thread's history comes from Claude's own record and is rebuilt on each request rather than stored by the bridge.
+// A subagent's thread has no record of its own, so its history comes from what the bridge kept of it.
 export const createHistoryRequests = ({
   threads,
   readSession,
   send,
   log,
+  subagentHistory = () => undefined,
 }: {
   threads: Threads;
   readSession: ReadSession;
   send: (message: object) => void;
   log: (event: HistoryEvent) => void;
+  subagentHistory?: (threadId: string) => HistoryTurn[] | undefined;
 }) => {
   // The app asks for a turn page and then each turn's items at once, so requests arriving while a read runs share it.
   const reading = new Map<string, Promise<Loaded>>();
 
   // A thread with no session yet has an empty history.
   const load = (threadId: string): Promise<Loaded> => {
+    const kept = subagentHistory(threadId);
+    if (kept !== undefined) return Promise.resolve(Result.ok(kept));
     const running = reading.get(threadId);
     if (running !== undefined) return running;
     const thread = threads.threadOf(threadId);

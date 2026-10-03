@@ -1,11 +1,19 @@
 import { createHash } from "node:crypto";
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { HistoryTurn } from "../presentation/history.ts";
 import {
-  renderSubagentCompleted,
-  renderSubagentStarted,
+  closeSubagentTurn,
+  openSubagentTurn,
+  renderSubagentActivity,
+  renderSubagentMessage,
+  runningSubagentTurn,
   type SubagentThread,
+  type SubagentTurn,
 } from "../presentation/subagent.ts";
+import type { TurnOutcome } from "../presentation/turn.ts";
 
 // The subagents each thread's agent started, kept while the bridge runs; a child's id is made from its parent and the agent's task, so the same agent, resumed or seen again, always gets the same thread.
+// Each child keeps the turns it ran, so the app can read its thread while the bridge runs.
 export const createSubagents = ({
   send,
   now = Date.now,
@@ -14,6 +22,8 @@ export const createSubagents = ({
   now?: () => number;
 }) => {
   const children = new Map<string, SubagentThread>();
+  const running = new Map<string, SubagentTurn>();
+  const histories = new Map<string, HistoryTurn[]>();
 
   const start = ({
     threadId,
@@ -22,6 +32,8 @@ export const createSubagents = ({
     taskId,
     description,
     agentType,
+    cwd,
+    prompt,
   }: {
     threadId: string;
     turnId: string | null;
@@ -29,6 +41,8 @@ export const createSubagents = ({
     taskId: string;
     description: string | null;
     agentType: string | null;
+    cwd: string;
+    prompt: string | null;
   }) => {
     const id = childThreadId(threadId, taskId);
     const at = now();
@@ -52,43 +66,92 @@ export const createSubagents = ({
           }
         : {
             ...known,
+            toolUseId,
             turnId,
             runs: known.runs + 1,
             active: true,
             updatedAtMs: at,
           };
     children.set(id, child);
-    for (const notification of renderSubagentStarted(child, at)) {
-      send(notification);
-    }
+    const opened = openSubagentTurn(child, { cwd, prompt }, at);
+    running.set(id, opened.turn);
+    sendAll(renderSubagentActivity(child, "started", at));
+    sendAll(opened.notifications);
   };
 
-  const complete = (threadId: string, taskId: string) => {
+  // Only what an agent itself says reaches its thread; an agent it starts in turn stays inside its call.
+  const message = (threadId: string, sdkMessage: SDKMessage) => {
+    if (
+      sdkMessage.type !== "assistant" &&
+      sdkMessage.type !== "user" &&
+      sdkMessage.type !== "stream_event"
+    ) {
+      return;
+    }
+    const parent = sdkMessage.parent_tool_use_id;
+    if (parent === null) return;
+    const child = childrenOf(threadId).find(
+      (candidate) => candidate.active && candidate.toolUseId === parent,
+    );
+    const turn = child === undefined ? undefined : running.get(child.id);
+    if (child === undefined || turn === undefined) return;
+    const rendered = renderSubagentMessage(turn, sdkMessage, now());
+    running.set(child.id, rendered.turn);
+    sendAll(rendered.notifications);
+  };
+
+  const complete = (threadId: string, taskId: string, outcome: TurnOutcome) => {
     const child = children.get(childThreadId(threadId, taskId));
     if (child === undefined || !child.active) return;
     const at = now();
     const done = { ...child, active: false, updatedAtMs: at };
     children.set(child.id, done);
-    for (const notification of renderSubagentCompleted(done, at)) {
-      send(notification);
+    const turn = running.get(child.id);
+    running.delete(child.id);
+    if (turn !== undefined) {
+      const closed = closeSubagentTurn(turn, outcome, at);
+      histories.set(child.id, [
+        ...(histories.get(child.id) ?? []),
+        closed.history,
+      ]);
+      sendAll(closed.notifications);
     }
+    sendAll(renderSubagentActivity(done, "completed", at));
   };
 
-  // A session that closes ends the agents running in it.
+  // A session that closes stops the agents running in it.
   const settle = (threadId: string) => {
     for (const child of childrenOf(threadId)) {
-      if (child.active) complete(threadId, child.taskId);
+      if (child.active) {
+        complete(threadId, child.taskId, { status: "interrupted" });
+      }
     }
   };
 
   const childrenOf = (threadId: string) =>
     [...children.values()].filter((child) => child.parentThreadId === threadId);
 
+  // Undefined for a thread that is no agent's.
+  const historyOf = (threadId: string): HistoryTurn[] | undefined => {
+    if (!children.has(threadId)) return undefined;
+    const turn = running.get(threadId);
+    return [
+      ...(histories.get(threadId) ?? []),
+      ...(turn === undefined ? [] : [runningSubagentTurn(turn)]),
+    ];
+  };
+
+  const sendAll = (notifications: readonly object[]) => {
+    for (const notification of notifications) send(notification);
+  };
+
   return {
     start,
+    message,
     complete,
     settle,
     childrenOf,
+    historyOf,
     get: (threadId: unknown) =>
       typeof threadId === "string" ? children.get(threadId) : undefined,
   };

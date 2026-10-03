@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createSubagents } from "./subagents.ts";
 
 describe("subagents", () => {
@@ -32,24 +33,64 @@ describe("subagents", () => {
     ).toEqual(["/root/general_purpose_1", "/root/agent_2", "/root/agent_1"]);
   });
 
-  test("tells the app of an agent once when it starts and once when it completes", () => {
-    const sent: object[] = [];
-    const subagents = createSubagents({ send: (m) => sent.push(m) });
+  test("runs one turn in the agent's thread from its start to its completion", () => {
+    const sent: Notification[] = [];
+    const subagents = createSubagents({
+      send: (m) => sent.push(m as Notification),
+    });
 
     subagents.start(agent("th-1", "toolu-1"));
     subagents.start(agent("th-1", "toolu-1"));
-    subagents.complete("th-1", "task-toolu-1");
-    subagents.complete("th-1", "task-toolu-1");
-    subagents.complete("th-1", "task-unknown");
+    const [child] = subagents.childrenOf("th-1");
+    subagents.message("th-1", {
+      type: "assistant",
+      message: {
+        id: "msg-1",
+        content: [{ type: "text", text: "found it" }],
+        stop_reason: "end_turn",
+      },
+      parent_tool_use_id: "toolu-1",
+    } as unknown as SDKMessage);
+    subagents.complete("th-1", "task-toolu-1", DONE);
+    subagents.complete("th-1", "task-toolu-1", DONE);
+    subagents.complete("th-1", "task-unknown", DONE);
 
-    expect(sent.map((m) => (m as { method: string }).method)).toEqual([
-      "item/started",
-      "item/completed",
-      "thread/status/changed",
-      "thread/status/changed",
-      "item/started",
-      "item/completed",
+    expect(
+      sent.filter((m) => m.method !== "item/started").map(summary),
+    ).toEqual([
+      "th-1 item/completed subAgentActivity",
+      `${child?.id} thread/status/changed active`,
+      `${child?.id} turn/started`,
+      `${child?.id} item/completed userMessage`,
+      `${child?.id} item/completed agentMessage`,
+      `${child?.id} thread/status/changed idle`,
+      `${child?.id} turn/completed`,
+      "th-1 item/completed subAgentActivity",
     ]);
+    expect(subagents.historyOf(child?.id ?? "")).toMatchObject([
+      {
+        turn: { status: "completed" },
+        items: [
+          { item: { type: "userMessage" } },
+          { item: { type: "agentMessage", text: "found it" } },
+        ],
+      },
+    ]);
+  });
+
+  test("shows a running agent's turn as in progress with what it has done so far", () => {
+    const subagents = createSubagents({ send: () => {} });
+
+    subagents.start(agent("th-1", "toolu-1"));
+    const [child] = subagents.childrenOf("th-1");
+
+    expect(subagents.historyOf(child?.id ?? "")).toMatchObject([
+      {
+        turn: { status: "inProgress" },
+        items: [{ item: { type: "userMessage" } }],
+      },
+    ]);
+    expect(subagents.historyOf("th-1")).toBeUndefined();
   });
 });
 
@@ -60,7 +101,7 @@ test("starts a resumed agent again on the thread it had", () => {
   });
 
   subagents.start(agent("th-1", "toolu-1"));
-  subagents.complete("th-1", "task-toolu-1");
+  subagents.complete("th-1", "task-toolu-1", DONE);
   subagents.start({ ...agent("th-1", "toolu-2"), taskId: "task-toolu-1" });
 
   expect(subagents.childrenOf("th-1")).toMatchObject([
@@ -87,6 +128,8 @@ test("ends every running agent of a thread whose session closed", () => {
   ).toEqual([false, false, true]);
 });
 
+const DONE = { status: "completed" } as const;
+
 const agent = (
   threadId: string,
   toolUseId: string,
@@ -98,4 +141,23 @@ const agent = (
   taskId: `task-${toolUseId}`,
   description: "look around",
   agentType,
+  cwd: "/fixture/work",
+  prompt: "look around the repository",
 });
+
+type Notification = {
+  method: string;
+  params: {
+    threadId?: string;
+    item?: { id: string; type: string };
+    status?: { type: string };
+    turn?: unknown;
+  };
+};
+
+const summary = (m: Notification) => {
+  const { threadId, item, status } = m.params;
+  if (item !== undefined) return `${threadId} ${m.method} ${item.type}`;
+  if (status !== undefined) return `${threadId} ${m.method} ${status.type}`;
+  return `${threadId} ${m.method}`;
+};

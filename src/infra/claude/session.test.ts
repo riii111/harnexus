@@ -41,6 +41,7 @@ describe("startClaudeSession options", () => {
       systemPrompt: { type: "preset", preset: "claude_code" },
       permissionMode: "default",
       includePartialMessages: true,
+      forwardSubagentText: true,
       mcpServers: {},
       allowedTools: [],
       canUseTool: SETTINGS.canUseTool,

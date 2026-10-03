@@ -239,6 +239,8 @@ const sessionOptions = (
   permissionMode: "default",
   canUseTool: settings.canUseTool,
   includePartialMessages: true,
+  // A subagent's thread shows what the agent wrote, not only the tools it called.
+  forwardSubagentText: true,
   mcpServers: settings.mcpServers ?? {},
   allowedTools: settings.allowedTools ?? [],
   ...(settings.resume === undefined ? {} : { resume: settings.resume }),

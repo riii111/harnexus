@@ -801,7 +801,7 @@ describe("Claude subagent threads", () => {
       parentThreadId: "th-claude",
       model: CLAUDE,
       path: "/fixture/rollout.jsonl",
-      turns: [],
+      turns: [{ status: "inProgress", items: [{ type: "userMessage" }] }],
     });
   });
 
@@ -832,7 +832,7 @@ describe("Claude subagent threads", () => {
       cwd: "/fixture/work",
       approvalPolicy: "on-request",
       thread: { id: child?.id, parentThreadId: "th-claude" },
-      turnsBackwardsCursor: null,
+      turnsBackwardsCursor: `at:${child?.id}-turn-1`,
     });
   });
 
@@ -925,7 +925,13 @@ describe("Claude subagent threads", () => {
     );
     await until(() => responseTo(sent, 34) !== null);
 
-    expect(responseTo(sent, 34).result.data).toEqual([]);
+    expect(responseTo(sent, 34).result.data).toMatchObject([
+      {
+        id: `${child?.id}-turn-1`,
+        status: "inProgress",
+        itemsView: "notLoaded",
+      },
+    ]);
     expect(responseTo(sent, 35)).toEqual({ id: 35, result: { goal: null } });
     expect(serverCalls).toEqual([]);
   });
@@ -1656,7 +1662,12 @@ const setup = (
   const threads = new Map(
     claudeThreads.map((id) => [id, { model: CLAUDE, cwd: "/fixture/work" }]),
   );
+  const subagents = createSubagents({
+    send: (message) => sent.push(message),
+    now: () => SUBAGENT_STARTED_MS,
+  });
   const history = createHistoryRequests({
+    subagentHistory: subagents.historyOf,
     threads: {
       threadOf: (threadId) => threads.get(threadId),
       sessionIdOf: (threadId) =>
@@ -1687,10 +1698,6 @@ const setup = (
       ? null
       : rule(model, efforts.get(threadId) ?? null);
   };
-  const subagents = createSubagents({
-    send: (message) => sent.push(message),
-    now: () => SUBAGENT_STARTED_MS,
-  });
   const serverCalls: [string, unknown][] = [];
   const subagentRequests = createSubagentRequests({
     subagents,
@@ -1857,6 +1864,8 @@ const startAgent = (
     taskId: "task-1",
     description: "read the README",
     agentType: "Explore",
+    cwd: "/fixture/work",
+    prompt: "read the README",
   });
 
 const until = async (condition: () => boolean) => {
