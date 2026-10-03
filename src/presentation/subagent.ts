@@ -18,12 +18,14 @@ import {
 
 // A Claude subagent is shown as a Codex subagent is: a thread of its own under the thread whose agent started it, which the app lists in its subagents panel.
 // rootThreadId is the Claude thread whose session runs the agent, and parentThreadId that thread or the agent's thread whose agent started this one, depth levels below the root.
+// spawnToolUseId is the call that first started the agent and toolUseId the one that last did, as a resumed agent runs under a call of its own.
 // turnId is the parent's turn the agent last started in, which also carries its completion, as Codex does even once that turn has ended; runs counts its starts, since Claude can resume an agent that finished.
 export type SubagentThread = {
   id: string;
   rootThreadId: string;
   parentThreadId: string;
   depth: number;
+  spawnToolUseId: string;
   toolUseId: string;
   taskId: string;
   nickname: string;

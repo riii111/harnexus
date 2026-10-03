@@ -1,4 +1,4 @@
-import type { Result } from "better-result";
+import { Result, TaggedError } from "better-result";
 import type { SubagentRecord } from "../infra/claude/session.ts";
 import {
   type AgentRef,
@@ -7,15 +7,25 @@ import {
   startOfRecord,
 } from "../presentation/history.ts";
 import type { SubagentThread } from "../presentation/subagent.ts";
-import { agentName, childThreadId, type Subagents } from "./subagents.ts";
+import {
+  agentNickname,
+  childThreadId,
+  freePath,
+  type Subagents,
+} from "./subagents.ts";
 
 type ReadSubagents<E> = (
   sessionId: string,
 ) => Promise<Result<SubagentRecord[], E>>;
 
+class SubagentsUnrebuilt extends TaggedError("SubagentsUnrebuilt")<{
+  cause: unknown;
+  message: string;
+}> {}
+
 export type SubagentRestoreEvent<E extends { _tag: string }> = {
   event: "claude_subagents_unreadable";
-  error: E["_tag"];
+  error: E["_tag"] | SubagentsUnrebuilt["_tag"];
 };
 
 // The bridge keeps no agent across a restart, so a Claude thread's agents are read back from Claude's records the first time its conversation is read.
@@ -36,13 +46,27 @@ export const createSubagentRestore = <E extends { _tag: string }>({
     const key = `${threadId}\n${sessionId}`;
     const running = restored.get(key);
     if (running !== undefined) return running;
+    // A record the bridge cannot make sense of leaves the thread's agents out, and a later read tries again.
     const reading = readSubagents(sessionId).then((read) => {
-      if (read.isErr()) {
+      const rebuilt = read.andThen((records) =>
+        Result.try({
+          try: () => rebuild(threadId, cwd, records, now()),
+          catch: (cause) =>
+            new SubagentsUnrebuilt({
+              cause,
+              message: "cannot rebuild a Claude thread's agents",
+            }),
+        }),
+      );
+      if (rebuilt.isErr()) {
         restored.delete(key);
-        log({ event: "claude_subagents_unreadable", error: read.error._tag });
+        log({
+          event: "claude_subagents_unreadable",
+          error: rebuilt.error._tag,
+        });
         return;
       }
-      subagents.restore(rebuild(threadId, cwd, read.value, now()));
+      subagents.restore(rebuilt.value);
     });
     restored.set(key, reading);
     return reading;
@@ -55,7 +79,7 @@ export type SubagentRestore<E extends { _tag: string }> = ReturnType<
   typeof createSubagentRestore<E>
 >;
 
-// Agents are numbered under their parent in the order they started, as they were while they ran; an agent another agent started names it in its records.
+// Agents are numbered under their parent in the order they started, as they were while they ran; an agent another agent started names it in its records, and one that does not, though Claude noted it as nested, is left out.
 const rebuild = (
   threadId: string,
   cwd: string,
@@ -70,24 +94,26 @@ const rebuild = (
     }))
     .sort((a, b) => a.startedAtMs - b.startedAtMs);
   const threads = new Map<string, SubagentThread>();
-  const counts = new Map<string, number>();
   for (const { record, startedAtMs, parentAgentId } of started) {
     const parent =
       parentAgentId === null ? undefined : threads.get(parentAgentId);
     if (parentAgentId !== null && parent === undefined) continue;
+    if (parentAgentId === null && record.depth > 1) continue;
     const parentThreadId = parent?.id ?? threadId;
-    const number = (counts.get(parentThreadId) ?? 0) + 1;
-    counts.set(parentThreadId, number);
+    const siblings = [...threads.values()].filter(
+      (thread) => thread.parentThreadId === parentThreadId,
+    );
     threads.set(record.agentId, {
       id: childThreadId(threadId, record.agentId),
       rootThreadId: threadId,
       parentThreadId,
       depth: parent === undefined ? 1 : parent.depth + 1,
+      spawnToolUseId: record.toolUseId,
       toolUseId: record.toolUseId,
       taskId: record.agentId,
-      nickname: record.description ?? record.agentType ?? "agent",
+      nickname: agentNickname(record.description, record.agentType),
       role: record.agentType,
-      path: `${parent?.path ?? "/root"}/${agentName(record.agentType)}_${number}`,
+      path: freePath(parent?.path ?? null, record.agentType, siblings),
       turnId: null,
       runs: 1,
       active: false,
@@ -101,7 +127,7 @@ const rebuild = (
     );
     return agent === undefined
       ? undefined
-      : { threadId: agent.id, path: agent.path };
+      : { threadId: agent.id, path: agent.path, active: false };
   };
   return started.flatMap(({ record }) => {
     const thread = threads.get(record.agentId);

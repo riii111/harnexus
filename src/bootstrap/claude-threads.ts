@@ -68,8 +68,14 @@ export const connectClaudeThreads = ({
         log({ event: "claude_history_unreadable", error: read.error._tag });
         return [];
       }
+      // A picked conversation's agents are read back first, so its replay names them as a later read does.
+      await subagentRestore.restore(threadId, sessionId, cwd);
       return replayHistory(
-        buildHistory(read.value, { threadId, cwd }),
+        buildHistory(
+          read.value,
+          { threadId, cwd },
+          subagents.agentRefOf(threadId),
+        ),
         threadId,
         Date.now(),
       );

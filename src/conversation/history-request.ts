@@ -66,10 +66,10 @@ export const createHistoryRequests = ({
       return Promise.resolve(Result.ok([]));
     }
     const loaded = readSession(sessionId).then(async (read) => {
+      reading.delete(threadId);
       if (read.isOk()) {
         await subagents.restore(threadId, sessionId, thread.cwd);
       }
-      reading.delete(threadId);
       return read
         .tapError((error) =>
           log({ event: "claude_history_unreadable", error: error._tag }),

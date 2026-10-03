@@ -134,7 +134,8 @@ export const buildSubagentHistory = (
     agentThreadOf,
   );
 
-export type AgentRef = { threadId: string; path: string };
+// active marks an agent still running, which has not completed where its call was made.
+export type AgentRef = { threadId: string; path: string; active: boolean };
 
 const noteAgents = (
   replay: Replay,
@@ -148,7 +149,10 @@ const noteAgents = (
     }
     const agent = agentThreadOf(block.id);
     if (agent === undefined) continue;
-    for (const kind of ["started", "completed"] as const) {
+    const kinds = agent.active
+      ? (["started"] as const)
+      : (["started", "completed"] as const);
+    for (const kind of kinds) {
       const item: ThreadItem = {
         type: "subAgentActivity",
         id: `${agent.threadId}-${kind}-1`,

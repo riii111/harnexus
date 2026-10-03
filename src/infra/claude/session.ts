@@ -228,7 +228,7 @@ export type SubagentRecord = {
   messages: SessionMessage[];
 };
 
-// Claude keeps each subagent's messages in a folder beside the conversation's record, each with a note of how it was started; a note that cannot be read leaves that agent out.
+// Claude keeps each subagent's messages in a folder beside the conversation's record, each with a note of how it was started; an agent whose note or messages cannot be read is left out.
 export const readClaudeSubagents = (
   sessionId: string,
   {
@@ -241,22 +241,37 @@ export const readClaudeSubagents = (
     if (path === null) return Result.ok<SubagentRecord[]>([]);
     const folder = join(path.slice(0, -RECORD_SUFFIX.length), "subagents");
     const files = yield* Result.await(listDirectoryIfExists(folder));
-    const records: SubagentRecord[] = [];
-    for (const file of [...(files ?? [])].sort()) {
+    const agentIds = (files ?? []).flatMap((file) => {
       const agentId = AGENT_NOTE.exec(file)?.[1];
-      if (agentId === undefined) continue;
-      const text = yield* Result.await(
-        readTextFileIfExists(join(folder, file)),
-      );
-      const note = text === null ? null : agentNote(text);
-      if (note === null) continue;
-      const messages = yield* Result.await(
-        readSubagentMessages(read, sessionId, agentId),
-      );
-      records.push({ agentId, ...note, messages });
-    }
-    return Result.ok(records);
+      return agentId === undefined ? [] : [agentId];
+    });
+    const agents = await Promise.all(
+      agentIds.map((agentId) => readAgent(folder, sessionId, agentId, read)),
+    );
+    return Result.ok(
+      agents
+        .filter((record): record is SubagentRecord => record !== null)
+        .sort((a, b) => a.agentId.localeCompare(b.agentId)),
+    );
   });
+
+const readAgent = async (
+  folder: string,
+  sessionId: string,
+  agentId: string,
+  read: GetSubagentMessages,
+): Promise<SubagentRecord | null> => {
+  const text = await readTextFileIfExists(
+    join(folder, `agent-${agentId}.meta.json`),
+  );
+  const note =
+    text.isOk() && text.value !== null ? agentNote(text.value) : null;
+  if (note === null) return null;
+  const messages = await readSubagentMessages(read, sessionId, agentId);
+  return messages.isOk()
+    ? { agentId, ...note, messages: messages.value }
+    : null;
+};
 
 const agentNote = (text: string) => {
   const parsed = parseJson(text);

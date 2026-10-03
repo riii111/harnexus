@@ -712,6 +712,31 @@ describe("readClaudeSubagents", () => {
     expect(asked).toEqual([`${SESSION_ID}/a1`]);
   });
 
+  test("leaves out an agent whose messages cannot be read and keeps the others", async () => {
+    const record = writeRecord(configDir, SESSION_ID, RECORD_LINE);
+    const folder = join(record.slice(0, -".jsonl".length), "subagents");
+    mkdirSync(folder, { recursive: true });
+    for (const agentId of ["a1", "a2"]) {
+      writeFileSync(
+        join(folder, `agent-${agentId}.meta.json`),
+        JSON.stringify({ toolUseId: `toolu-${agentId}`, spawnDepth: 1 }),
+      );
+    }
+
+    const read = await readClaudeSubagents(SESSION_ID, {
+      read: async (_sessionId, agentId) => {
+        // biome-ignore lint/plugin/no-throw-try-catch: getSubagentMessages rejects when the record cannot be read.
+        if (agentId === "a1") throw new Error("unreadable");
+        return [];
+      },
+      configDir,
+    });
+
+    expect(read.isOk() && read.value.map((agent) => agent.agentId)).toEqual([
+      "a2",
+    ]);
+  });
+
   test("reads no agent for a conversation without a record", async () => {
     mkdirSync(join(configDir, "projects", "-work-tree"), { recursive: true });
 

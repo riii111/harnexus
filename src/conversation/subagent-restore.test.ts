@@ -85,6 +85,53 @@ describe("agents read back after a restart", () => {
     ]);
   });
 
+  test("shows a running agent as started only and numbers read-back agents past the paths live ones hold", async () => {
+    const { history, subagents } = setup(() =>
+      Result.ok([
+        AGENTS[1] as SubagentRecord,
+        {
+          ...(AGENTS[1] as SubagentRecord),
+          agentId: "a9",
+          toolUseId: "toolu-9",
+        },
+      ]),
+    );
+    subagents.start({
+      threadId: THREAD,
+      turnId: "turn-1",
+      toolUseId: "toolu-1",
+      taskId: "a1",
+      description: "live agent",
+      agentType: "Explore",
+      cwd: "/fixture/work",
+      prompt: null,
+      depth: 1,
+    });
+
+    const parentHistory = (await history.load(THREAD)).unwrap();
+
+    expect(
+      parentHistory
+        .flatMap((turn) => turn.items.map(({ item }) => item))
+        .filter((item) => item.type === "subAgentActivity")
+        .map((item) => item.kind),
+    ).toEqual(["started"]);
+    expect(subagents.childrenOf(THREAD).map((child) => child.path)).toEqual([
+      "/root/explore_1",
+      "/root/explore_2",
+    ]);
+  });
+
+  test("leaves out an agent noted as nested whose records name no parent", async () => {
+    const { history, subagents } = setup(() =>
+      Result.ok([{ ...(AGENTS[0] as SubagentRecord), messages: [] }]),
+    );
+
+    await history.load(THREAD);
+
+    expect(subagents.descendantsOf(THREAD)).toEqual([]);
+  });
+
   test("logs agents it cannot read and shows the thread's history without them", async () => {
     const { history, subagents, events } = setup(() =>
       Result.err(new Unreadable({ message: "cannot read" })),
