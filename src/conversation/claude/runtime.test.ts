@@ -8,6 +8,11 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
+import {
+  type Connection,
+  SUBSCRIPTION_CONNECTION,
+} from "../../infra/claude/connection.ts";
+import { createConnectionResolver } from "../../infra/claude/connection-settings.ts";
 import { createModelCatalog, effortRule } from "../../infra/claude/models.ts";
 import { startClaudeSession } from "../../infra/claude/session.ts";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
@@ -53,6 +58,8 @@ import {
   twoWorkers,
   until,
   useTempDir,
+  VERTEX,
+  VERTEX_ACCOUNT,
   withEffort,
 } from "../testing/harness.ts";
 
@@ -1158,6 +1165,144 @@ describe("session ids", () => {
       error: "StatePersistFailed",
     });
     expect(settings[1]).toMatchObject({ resume: "se-1" });
+  });
+});
+
+describe("repository connections", () => {
+  test("show the Vertex connection once Claude Code confirms it, before Claude's reply and only on the first turn", async () => {
+    const claude = fakeClaude(VERTEX_ACCOUNT);
+    const { turns, sent, store, settings, events } = await harness([claude], {
+      resolveConnection: async () => Result.ok(VERTEX),
+    });
+
+    await completeTurn(turns, sent, claude, 10);
+    await completeTurn(turns, sent, claude, 11);
+
+    expect(agentMessages(sent)).toEqual([
+      { phase: "commentary", text: VERTEX_NOTICE },
+      { phase: "final_answer", text: "ok" },
+      { phase: "final_answer", text: "ok" },
+    ]);
+    expect(settings[0]?.connection).toEqual(VERTEX);
+    expect(store.get(THREAD)?.connection).toEqual(VERTEX_TARGET);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "connection_confirmed",
+      provider: "vertex",
+    });
+  });
+
+  test("show nothing about the subscription", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store } = await harness([claude]);
+
+    await completeTurn(turns, sent, claude, 10);
+
+    expect(agentMessages(sent)).toEqual([
+      { phase: "final_answer", text: "ok" },
+    ]);
+    expect(store.get(THREAD)?.connection).toEqual({ provider: "subscription" });
+  });
+
+  test("do not show the Vertex connection again after a restart", async () => {
+    const first = fakeClaude(VERTEX_ACCOUNT);
+    const before = await harness([first], {
+      resolveConnection: async () => Result.ok(VERTEX),
+    });
+    await completeTurn(before.turns, before.sent, first, 10);
+    await until(() => before.store.get(THREAD)?.runState === "idle");
+    const second = fakeClaude(VERTEX_ACCOUNT);
+
+    const after = await harness([second], {
+      resolveConnection: async () => Result.ok(VERTEX),
+    });
+    await completeTurn(after.turns, after.sent, second, 11);
+
+    expect(agentMessages(after.sent)).toEqual([
+      { phase: "final_answer", text: "ok" },
+    ]);
+    expect(after.settings[0]).toMatchObject({
+      resume: "se-1",
+      connection: VERTEX,
+    });
+  });
+
+  test.each([
+    {
+      name: "the subscription",
+      configured: SUBSCRIPTION_CONNECTION,
+      expected: "your Claude subscription",
+    },
+    {
+      name: "another Google Cloud project",
+      configured: { ...VERTEX, projectId: "other-project" },
+      expected: "project `other-project`",
+    },
+  ])("refuse a turn without reaching Claude once the repository's settings choose $name", async ({
+    configured,
+    expected,
+  }) => {
+    let current: Connection = VERTEX;
+    const first = fakeClaude(VERTEX_ACCOUNT);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings, events, store } = await harness(
+      [first, second],
+      { resolveConnection: async () => Result.ok(current) },
+    );
+    await completeTurn(turns, sent, first, 10);
+    current = configured;
+
+    turns.startTurn(turnStart(11, "next"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+    await settle();
+
+    expect(completedTurns(sent).at(-1)?.error?.message).toContain(expected);
+    expect(completedTurns(sent).at(-1)?.error?.message).toContain(
+      "/switch-connection",
+    );
+    expect(await promptsUntil(first, 1)).toEqual(["prompt 10"]);
+    expect(first.nextCalls()).toBeGreaterThan(0);
+    expect(settings).toHaveLength(1);
+    expect(store.get(THREAD)?.connection).toEqual(VERTEX_TARGET);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "connection_changed",
+    });
+  });
+
+  test("refuse a turn without starting Claude when the connection settings cannot be read", async () => {
+    const path = join(dir, "connections.json");
+    await writeFile(path, '{"repositories": {"relative": {}}}');
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store } = await harness([claude], {
+      resolveConnection: createConnectionResolver({
+        path,
+        repositoryOf: async () => null,
+      }),
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
+    expect(turnCompleted(sent)?.error?.message).toContain(path);
+    expect(claude.started()).toBe(false);
+    expect(store.get(THREAD)?.connection).toBeNull();
+  });
+
+  test("leave a thread unconfirmed when Claude Code does not report the chosen provider", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store } = await harness([claude], {
+      resolveConnection: async () => Result.ok(VERTEX),
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnCompleted(sent)?.error?.message).toContain("Google Vertex AI");
+    expect(await claude.prompts()).toEqual([]);
+    expect(agentMessages(sent)).toEqual([]);
+    expect(store.get(THREAD)?.connection).toBeNull();
   });
 });
 
@@ -3557,3 +3702,22 @@ const subagentEvents = (sent: Sent[]) =>
     }
     return [];
   });
+
+const agentMessages = (sent: Sent[]) =>
+  completedItems(sent)
+    .filter((item) => item.type === "agentMessage")
+    .map(({ phase, text }) => ({ phase, text }));
+
+const VERTEX_TARGET = {
+  provider: "vertex",
+  projectId: "sidework-project",
+  region: "global",
+} as const;
+
+const VERTEX_NOTICE = [
+  "Harnexus connection",
+  "",
+  "- Provider: Google Vertex AI (confirmed by Claude Code)",
+  "- Google Cloud project: `sidework-project` (from harnexus settings)",
+  "- Region: `global` (from harnexus settings)",
+].join("\n");

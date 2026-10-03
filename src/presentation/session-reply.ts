@@ -1,4 +1,12 @@
-// The bridge answers /resume, a number picked from its list and /session itself, so none of these replies reaches Claude.
+import {
+  type ConnectionView,
+  resumeEnvOf,
+  type SessionConnection,
+  sessionConnectionLines,
+  switchedText,
+} from "./connection.ts";
+
+// The bridge answers /resume, a number picked from its list, /session and /switch-connection itself, so none of these replies reaches Claude.
 export type SessionReply =
   | {
       kind: "listed";
@@ -13,7 +21,15 @@ export type SessionReply =
   | { kind: "recordGone" }
   | { kind: "notSaved" }
   | { kind: "selected"; title: string; name: string | null; unsynced: boolean }
-  | { kind: "session"; cwd: string; sessionId: string | null };
+  | {
+      kind: "session";
+      cwd: string;
+      sessionId: string | null;
+      connection: SessionConnection;
+    }
+  | { kind: "connectionSwitched"; to: ConnectionView }
+  | { kind: "connectionUnchanged" }
+  | { kind: "connectionUnreadable"; problem: string };
 
 export type ListedConversation = {
   title: string;
@@ -49,7 +65,13 @@ export const sessionReplyText = (reply: SessionReply, now: number): string => {
           : []),
       ].join(" ");
     case "session":
-      return sessionText(reply.cwd, reply.sessionId);
+      return sessionText(reply);
+    case "connectionSwitched":
+      return switchedText(reply.to);
+    case "connectionUnchanged":
+      return "This chat already uses the connection harnexus settings choose for this repository, so nothing changed.";
+    case "connectionUnreadable":
+      return `${reply.problem}. Nothing changed.`;
   }
 };
 
@@ -83,18 +105,33 @@ const listText = (
   ].join("\n");
 };
 
-const sessionText = (cwd: string, sessionId: string | null) =>
-  sessionId === null
-    ? "This thread has no Claude conversation yet. Send a message first, then /session again."
-    : [
-        `Working directory: \`${cwd}\``,
-        "",
-        "Continue this conversation in a terminal:",
-        "",
-        "```sh",
-        `cd ${shellQuote(cwd)} && claude --resume ${shellQuote(sessionId)}`,
-        "```",
-      ].join("\n");
+const sessionText = ({
+  cwd,
+  sessionId,
+  connection,
+}: Extract<SessionReply, { kind: "session" }>) => {
+  const connectionLines = sessionConnectionLines(connection);
+  const extra = connectionLines.length === 0 ? [] : ["", ...connectionLines];
+  if (sessionId === null) {
+    return [
+      "This thread has no Claude conversation yet. Send a message first, then /session again.",
+      ...extra,
+    ].join("\n");
+  }
+  const env = resumeEnvOf(connection.saved)
+    .map(([name, value]) => `${name}=${shellQuote(value)} `)
+    .join("");
+  return [
+    `Working directory: \`${cwd}\``,
+    ...extra,
+    "",
+    "Continue this conversation in a terminal:",
+    "",
+    "```sh",
+    `cd ${shellQuote(cwd)} && ${env}claude --resume ${shellQuote(sessionId)}`,
+    "```",
+  ].join("\n");
+};
 
 const shortTitle = (title: string) => {
   const line = title.replace(/\s+/g, " ").trim();

@@ -21,11 +21,14 @@ import {
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 import {
+  checkAccount,
   checkSettingsEnv,
   checkSubscription,
+  connectionEnv,
   type Env,
   withoutApiBilling,
 } from "./auth.ts";
+import type { Connection } from "./connection.ts";
 import { modelsFromSdk } from "./models.ts";
 import { createPromptQueue } from "./prompt-queue.ts";
 import {
@@ -51,6 +54,7 @@ import { claudeConfigDir, findSessionFile } from "./transcripts.ts";
 export type ClaudeSessionSettings = {
   cwd: string;
   model: string;
+  connection: Connection;
   resume?: string;
   // Resumes into a new conversation, leaving the resumed one as it was.
   forkSession?: boolean;
@@ -78,7 +82,7 @@ class NoClaudeModelsListed extends TaggedError("NoClaudeModelsListed")<{
 
 type ClaudeRuntime = ClaudeSdk & { env: Env };
 
-// The settings and the account are checked before any prompt is sent, so a login that would bill the API never starts a conversation.
+// The settings and the account are checked before any prompt is sent, so a connection other than the one chosen for the repository never starts a conversation.
 export const startClaudeSession = (
   settings: ClaudeSessionSettings,
   runtime: ClaudeRuntime = PROCESS_RUNTIME,
@@ -89,7 +93,7 @@ export const startClaudeSession = (
     const resolved = yield* Result.await(
       readSettings(runtime.resolveSettings, settings.cwd, SETTING_SOURCES),
     );
-    yield* checkSettingsEnv(resolved.env ?? {});
+    yield* checkSettingsEnv(resolved.env ?? {}, settings.connection);
     if (signal?.aborted) return Result.err(sessionStartCancelled());
     const prompt = createPromptQueue();
     const claude = yield* openQuery(
@@ -109,7 +113,7 @@ export const startClaudeSession = (
     signal?.addEventListener("abort", closeOnAbort, { once: true });
     if (signal?.aborted) closeStartup();
     const checked = (await readAccount(claude, undefined, signal)).andThen(
-      checkSubscription,
+      (account) => checkAccount(account, settings.connection),
     );
     if (checked.isErr()) {
       closeStartup();
@@ -324,7 +328,7 @@ const sessionOptions = (
 ): Options => ({
   cwd: settings.cwd,
   model: settings.model,
-  env: withoutApiBilling(env),
+  env: connectionEnv(settings.connection, env),
   settingSources: SETTING_SOURCES,
   systemPrompt: { type: "preset", preset: "claude_code" },
   // A user's default mode such as bypassPermissions would skip canUseTool, which is how the app approves tools.

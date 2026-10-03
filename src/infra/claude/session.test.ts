@@ -18,6 +18,10 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Result } from "better-result";
 import {
+  SUBSCRIPTION_CONNECTION,
+  type VertexConnection,
+} from "./connection.ts";
+import {
   type ClaudeSessionSettings,
   claudeSessionExists,
   loadClaudeModels,
@@ -203,6 +207,59 @@ describe("startClaudeSession authentication", () => {
     });
 
     expect(started.isErr() && started.error._tag).toBe("ClaudeStartFailed");
+  });
+});
+
+describe("startClaudeSession Vertex connection", () => {
+  test("starts Claude on the repository's Vertex project once Claude Code reports Vertex", async () => {
+    const claude = fakeClaude(
+      { apiProvider: "vertex" },
+      { env: { PATH: "/usr/bin", ANTHROPIC_API_KEY: "api-key" } },
+    );
+
+    const started = await startClaudeSession(VERTEX_SETTINGS, claude.runtime);
+
+    expect(started.isOk()).toBe(true);
+    expect(claude.options().env).toEqual({
+      PATH: "/usr/bin",
+      CLAUDE_CODE_USE_VERTEX: "1",
+      ANTHROPIC_VERTEX_PROJECT_ID: "sidework-project",
+      CLOUD_ML_REGION: "global",
+    });
+  });
+
+  test("stops before any prompt when Claude Code reports the subscription instead", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+
+    const started = await startClaudeSession(VERTEX_SETTINGS, claude.runtime);
+
+    expect(started.isErr() && started.error._tag).toBe("ClaudeNotVertex");
+    expect(claude.closes()).toBe(1);
+    expect(await claude.prompts()).toEqual([]);
+  });
+
+  test("stops before starting Claude when settings set another Vertex project", async () => {
+    const claude = fakeClaude(
+      { apiProvider: "vertex" },
+      { settingsEnv: { ANTHROPIC_VERTEX_PROJECT_ID: "other-project" } },
+    );
+
+    const started = await startClaudeSession(VERTEX_SETTINGS, claude.runtime);
+
+    expect(started.isErr() && started.error).toMatchObject({
+      _tag: "ClaudeSettingsOverrideAuth",
+      names: ["ANTHROPIC_VERTEX_PROJECT_ID"],
+    });
+    expect(claude.started()).toBe(false);
+  });
+
+  test("refuses Vertex on a repository left on the subscription", async () => {
+    const claude = fakeClaude({ apiProvider: "vertex" });
+
+    const started = await startClaudeSession(SETTINGS, claude.runtime);
+
+    expect(started.isErr() && started.error._tag).toBe("ClaudeNotSubscription");
+    expect(await claude.prompts()).toEqual([]);
   });
 });
 
@@ -862,7 +919,22 @@ describe("readClaudeSession", () => {
 const SETTINGS: ClaudeSessionSettings = {
   cwd: "/work/tree",
   model: "claude-sonnet-5",
+  connection: SUBSCRIPTION_CONNECTION,
   canUseTool: async () => ({ behavior: "deny", message: "not in this test" }),
+};
+
+const VERTEX: VertexConnection = {
+  provider: "vertex",
+  projectId: "sidework-project",
+  region: "global",
+  credentialsFile: null,
+  models: {},
+  modelRegions: {},
+};
+
+const VERTEX_SETTINGS: ClaudeSessionSettings = {
+  ...SETTINGS,
+  connection: VERTEX,
 };
 
 const SUBSCRIPTION: AccountInfo = {

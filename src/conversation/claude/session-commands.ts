@@ -1,16 +1,24 @@
 import type { InferErr } from "better-result";
+import {
+  type Connection,
+  sameTarget,
+  targetOf,
+} from "../../infra/claude/connection.ts";
+import type { createConnectionResolver } from "../../infra/claude/connection-settings.ts";
 import type { claudeSessionExists } from "../../infra/claude/session.ts";
 import type {
   ClaudeConversation,
   listClaudeConversations,
   readLastRecordUuid,
 } from "../../infra/claude/transcripts.ts";
+import type { SessionConnection } from "../../presentation/connection.ts";
 import type { SessionReply } from "../../presentation/session-reply.ts";
 import type { ThreadValues } from "../thread-values.ts";
 
 export type SessionCommand =
   | { kind: "list" }
   | { kind: "session" }
+  | { kind: "switchConnection" }
   | { kind: "select"; picked: number; listing: readonly ClaudeConversation[] };
 
 // Only the command, the reply's kind and error tags are logged, never a title or a session id.
@@ -38,6 +46,8 @@ type FindSession = (
   sessionId: string,
 ) => ReturnType<typeof claudeSessionExists>;
 
+export type ResolveConnection = ReturnType<typeof createConnectionResolver>;
+
 type ErrorTagOf<F extends (...args: never[]) => unknown> =
   InferErr<Awaited<ReturnType<F>>> extends { _tag: infer T } ? T : never;
 
@@ -47,7 +57,10 @@ type BindErrorTag = NonNullable<
   Awaited<ReturnType<ThreadValues["bindSession"]>>["error"]
 >;
 
-type SessionErrorTag = ErrorTagOf<ListConversations> | BindErrorTag;
+type SessionErrorTag =
+  | ErrorTagOf<ListConversations>
+  | ErrorTagOf<ResolveConnection>
+  | BindErrorTag;
 
 // The last record each thread's own turn left, so a record that moved on before the next turn was continued elsewhere, such as by claude --resume.
 export const createSessionCommands = ({
@@ -55,13 +68,18 @@ export const createSessionCommands = ({
   listConversations,
   lastRecordOf,
   findSession,
+  resolveConnection,
   log,
   now,
 }: {
-  threads: Pick<ThreadValues, "sessionIdOf" | "isBound" | "bindSession">;
+  threads: Pick<
+    ThreadValues,
+    "sessionIdOf" | "isBound" | "bindSession" | "connectionOf" | "setConnection"
+  >;
   listConversations: ListConversations;
   lastRecordOf: LastRecordOf;
   findSession: FindSession;
+  resolveConnection: ResolveConnection;
   log: (event: SessionEvent) => void;
   now: () => number;
 }) => {
@@ -98,19 +116,52 @@ export const createSessionCommands = ({
   ): Promise<{ reply: SessionReply; error: SessionErrorTag | null }> => {
     switch (command.kind) {
       case "session":
-        return {
-          reply: {
-            kind: "session",
-            cwd,
-            sessionId: threads.sessionIdOf(threadId),
-          },
-          error: null,
-        };
+        return session(threadId, cwd);
+      case "switchConnection":
+        return switchConnection(threadId, cwd);
       case "list":
         return list(threadId, cwd);
       case "select":
         return select(threadId, command.picked, command.listing);
     }
+  };
+
+  const session = async (threadId: string, cwd: string) => {
+    const saved = threads.connectionOf(threadId);
+    const configured = await resolveConnection(cwd);
+    const connection: SessionConnection = configured.isErr()
+      ? { kind: "unreadable", saved, problem: configured.error.message }
+      : compared(saved, configured.value);
+    return {
+      reply: {
+        kind: "session",
+        cwd,
+        sessionId: threads.sessionIdOf(threadId),
+        connection,
+      } as const,
+      error: configured.isErr() ? configured.error._tag : null,
+    };
+  };
+
+  // The saved connection is cleared rather than replaced, so the next turn has Claude Code confirm the new one and shows it as a first connection.
+  const switchConnection = async (threadId: string, cwd: string) => {
+    const configured = await resolveConnection(cwd);
+    if (configured.isErr()) {
+      return {
+        reply: {
+          kind: "connectionUnreadable",
+          problem: configured.error.message,
+        } as const,
+        error: configured.error._tag,
+      };
+    }
+    const saved = threads.connectionOf(threadId);
+    const to = targetOf(configured.value);
+    if (saved === null || sameTarget(saved, to)) {
+      return answered({ kind: "connectionUnchanged" });
+    }
+    await threads.setConnection(threadId, null);
+    return answered({ kind: "connectionSwitched", to });
   };
 
   // A thread with a conversation would lose it, so only an empty thread lists others.
@@ -216,9 +267,20 @@ const commandOf = (
 ): SessionCommand | null => {
   if (typed === "/resume") return { kind: "list" };
   if (typed === "/session") return { kind: "session" };
+  if (typed === "/switch-connection") return { kind: "switchConnection" };
   return listing !== undefined && /^\d+$/.test(typed)
     ? { kind: "select", picked: Number(typed), listing }
     : null;
+};
+
+const compared = (
+  saved: ReturnType<ThreadValues["connectionOf"]>,
+  configured: Connection,
+): SessionConnection => {
+  const target = targetOf(configured);
+  return saved === null || sameTarget(saved, target)
+    ? { kind: "same", saved, configured: target }
+    : { kind: "changed", saved, configured: target };
 };
 
 const answered = (reply: SessionReply) => ({ reply, error: null });

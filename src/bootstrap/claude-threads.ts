@@ -26,6 +26,7 @@ export const connectClaudeThreads = ({
   findSession,
   listConversations,
   lastRecordOf,
+  resolveConnection,
   readSession,
   readSubagents,
   effortRule,
@@ -40,6 +41,7 @@ export const connectClaudeThreads = ({
   findSession: Runtime["findSession"];
   listConversations: Runtime["listConversations"];
   lastRecordOf: Runtime["lastRecordOf"];
+  resolveConnection: Runtime["resolveConnection"];
   readSession: Parameters<typeof createHistoryRequests>[0]["readSession"];
   readSubagents: (sessionId: string) => ReturnType<typeof readClaudeSubagents>;
   effortRule: Runtime["effortRule"];
@@ -62,6 +64,7 @@ export const connectClaudeThreads = ({
     findSession,
     listConversations,
     lastRecordOf,
+    resolveConnection,
     readHistory: async (threadId, sessionId, cwd) => {
       const read = await readSession(sessionId);
       if (read.isErr()) {

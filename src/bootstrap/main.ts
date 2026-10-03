@@ -1,6 +1,7 @@
 import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import { Result } from "better-result";
+import { createConnectionResolver } from "../infra/claude/connection-settings.ts";
 import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import {
   claudeSessionExists,
@@ -21,6 +22,7 @@ import { type RelayObserver, relayStreams } from "../infra/codex/relay.ts";
 import { attachServerRequests } from "../infra/codex/server-requests.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import {
+  loadConnectionsPath,
   loadShutdownGraceMs,
   loadStatePath,
   loadUnverifiedCodexPolicy,
@@ -92,6 +94,14 @@ async function withClaude(relay: {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
     return plain;
   }
+  const connections = loadConnectionsPath(process.env);
+  if (connections.isErr()) {
+    logger.log({
+      event: "claude_unavailable",
+      reason: connections.error._tag,
+    });
+    return plain;
+  }
   const catalog = createModelCatalog();
   // Not awaited, since the app lists models before Claude Code can answer and holding that answer would hold every later server line; the app asks again later.
   void loadClaudeModels().then((loaded) => {
@@ -123,6 +133,7 @@ async function withClaude(relay: {
     findSession: claudeSessionExists,
     listConversations: (cwd, since) => listClaudeConversations(cwd, { since }),
     lastRecordOf: (sessionId) => readLastRecordUuid(sessionId),
+    resolveConnection: createConnectionResolver({ path: connections.value }),
     readSession: (sessionId) => readClaudeSession(sessionId),
     readSubagents: (sessionId) => readClaudeSubagents(sessionId),
     // Unreadable settings leave threads with none picked on the model default, which is still the level the app shows.

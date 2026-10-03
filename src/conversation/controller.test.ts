@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { type InferErr, Result } from "better-result";
+import { SUBSCRIPTION_CONNECTION } from "../infra/claude/connection.ts";
 import type { ClaudeSessionSettings } from "../infra/claude/session.ts";
 import { fakeClaude } from "../infra/claude/testing/fake-claude.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
@@ -51,6 +52,8 @@ import {
   twoWorkers,
   until,
   useTempDir,
+  VERTEX,
+  VERTEX_ACCOUNT,
   withEffort,
   withMessageId,
 } from "./testing/harness.ts";
@@ -1172,6 +1175,27 @@ describe("several workers", () => {
       sessionId: "se-b",
       worktree: OTHER_DIR,
     });
+  });
+
+  test("run at once on the connection each repository chooses", async () => {
+    const first = fakeClaude(VERTEX_ACCOUNT);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { settings } = await twoWorkers([first, second], {
+      resolveConnection: async (worktree) =>
+        Result.ok(worktree === dir ? VERTEX : SUBSCRIPTION_CONNECTION),
+    });
+
+    await until(() => second.started());
+
+    expect(settings.map((session) => session.connection.provider)).toEqual([
+      "vertex",
+      "subscription",
+    ]);
+    expect(first.options().env).toMatchObject({
+      CLAUDE_CODE_USE_VERTEX: "1",
+      ANTHROPIC_VERTEX_PROJECT_ID: "sidework-project",
+    });
+    expect(second.options().env).not.toHaveProperty("CLAUDE_CODE_USE_VERTEX");
   });
 
   test("leave the other worker's turn and prompt open when one is stopped", async () => {

@@ -15,7 +15,11 @@ import {
   serializeObservationEvent,
 } from "../infra/codex/observe.ts";
 import type { openThreadStore } from "../infra/thread-store.ts";
-import { loadLogPath, type loadStatePath } from "../runtime/config.ts";
+import {
+  type loadConnectionsPath,
+  loadLogPath,
+  type loadStatePath,
+} from "../runtime/config.ts";
 import { openLogSink } from "../runtime/fs.boundary.ts";
 import { createLogger, type LogSink } from "../runtime/logger.ts";
 import type { Signal } from "../runtime/process.boundary.ts";
@@ -45,6 +49,7 @@ type LogFileFailure = "LogPathNotAbsolute" | "LogFileOpenFailed";
 
 type ClaudeUnavailable =
   | InferErr<ReturnType<typeof loadStatePath>>["_tag"]
+  | InferErr<ReturnType<typeof loadConnectionsPath>>["_tag"]
   | InferErr<Awaited<ReturnType<typeof openThreadStore>>>["_tag"];
 
 type EffortSettingsFailure = InferErr<

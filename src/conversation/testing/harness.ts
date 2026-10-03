@@ -12,6 +12,10 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
 import {
+  SUBSCRIPTION_CONNECTION,
+  type VertexConnection,
+} from "../../infra/claude/connection.ts";
+import {
   createModelCatalog,
   type EffortRule,
   effortRule,
@@ -111,8 +115,11 @@ export const diskFull = async (target: string) =>
   );
 
 // The harness hands out fakes in the order Claude starts, so OTHER_THREAD waits until THREAD has taken the first.
-export const twoWorkers = async (fakes: ReturnType<typeof fakeClaude>[]) => {
-  const started = await harness(fakes);
+export const twoWorkers = async (
+  fakes: ReturnType<typeof fakeClaude>[],
+  options: Parameters<typeof harness>[1] = {},
+) => {
+  const started = await harness(fakes, options);
   started.turns.adopt(OTHER_THREAD, { model: MODEL, cwd: OTHER_DIR });
   started.turns.startTurn(turnStart(10, "hello"), undefined);
   await until(() => fakes[0]?.started() === true);
@@ -168,6 +175,17 @@ export const BUILT_IN_EFFORTS = createModelCatalog().effortsOf;
 
 export const defaultRule = effortRule({}, BUILT_IN_EFFORTS);
 
+export const VERTEX_ACCOUNT: AccountInfo = { apiProvider: "vertex" };
+
+export const VERTEX: VertexConnection = {
+  provider: "vertex",
+  projectId: "sidework-project",
+  region: "global",
+  credentialsFile: null,
+  models: {},
+  modelRegions: {},
+};
+
 export const SUBSCRIPTION: AccountInfo = {
   subscriptionType: "Claude Max",
   apiProvider: "firstParty",
@@ -189,6 +207,7 @@ export const harness = async (
     sessionLookupFails = false,
     lookupSession,
     lastRecord,
+    resolveConnection = async () => Result.ok(SUBSCRIPTION_CONNECTION),
     startSession: startSessionOverride,
     materializeFailures = 0,
     renameFails = false,
@@ -208,6 +227,9 @@ export const harness = async (
     sessionLookupFails?: boolean;
     lookupSession?: Parameters<typeof createClaudeRuntime>[0]["findSession"];
     lastRecord?: Parameters<typeof createClaudeRuntime>[0]["lastRecordOf"];
+    resolveConnection?: Parameters<
+      typeof createClaudeRuntime
+    >[0]["resolveConnection"];
     startSession?: StartSessionOverride;
     materializeFailures?: number;
     renameFails?: boolean;
@@ -251,6 +273,7 @@ export const harness = async (
       listClaudeConversations(cwd, { since, configDir: claudeDir() }),
     lastRecordOf:
       lastRecord ?? ((sessionId) => readLastRecordUuid(sessionId, claudeDir())),
+    resolveConnection,
     openLink: (threadId) => {
       links.push(threadId);
       const link =
