@@ -237,7 +237,7 @@ export const createClaudeRuntime = ({
   now?: () => number;
   idleSessionMs?: number;
   effortRule: EffortRule;
-  subagents: Pick<Subagents, "start" | "complete">;
+  subagents: Pick<Subagents, "start" | "complete" | "settle">;
 }): TurnRuntime<ClaudeFailureTag> => {
   type Turn = RunningTurn<ClaudeFailureTag>;
 
@@ -806,10 +806,12 @@ export const createClaudeRuntime = ({
         agentType: message.subagent_type ?? null,
       });
     } else if (
-      message.subtype === "task_notification" &&
-      message.tool_use_id !== undefined
+      message.subtype === "task_notification" ||
+      (message.subtype === "task_updated" &&
+        message.patch.status !== undefined &&
+        ENDED_TASK_STATUSES.has(message.patch.status))
     ) {
-      subagents.complete(threadId, message.tool_use_id);
+      subagents.complete(threadId, message.task_id);
     }
   };
 
@@ -1128,7 +1130,10 @@ export const createClaudeRuntime = ({
   };
 
   const dropSession = (threadId: string, slot: SessionSlot) => {
-    if (sessions.get(threadId) === slot) sessions.delete(threadId);
+    if (sessions.get(threadId) === slot) {
+      sessions.delete(threadId);
+      subagents.settle(threadId);
+    }
     slot.session.close();
   };
 
@@ -1323,6 +1328,13 @@ const CLAUDE_STEPS: Record<ClaudeTurnEvent["step"], true> = {
 };
 
 const COMPACT_PROMPT = "/compact";
+
+// A task that ends in any of these runs no more, whichever way Claude reports it.
+const ENDED_TASK_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "killed",
+]);
 
 const IDLE_SESSION_MS = 10 * 60_000;
 

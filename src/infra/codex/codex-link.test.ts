@@ -798,8 +798,9 @@ const CODEX_ONLY_TURNS: Parameters<typeof createRouter>[0] = {
 const NO_SUBAGENTS: Parameters<typeof createRouter>[6] = {
   isChild: () => false,
   answer: async () => {},
-  withChildren: async (result) => result,
+  withChildren: (result) => result,
   listedParentOf: () => null,
+  remember: () => {},
 };
 
 const NO_HISTORY: Parameters<typeof createRouter>[3] = {

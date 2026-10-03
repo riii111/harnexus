@@ -1503,6 +1503,45 @@ describe("subagent threads", () => {
     );
   });
 
+  test.each([
+    { name: "is killed", status: "killed" },
+    { name: "fails", status: "failed" },
+  ])("ends an agent's thread when the agent $name", async ({ status }) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, subagents } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    claude.emit(sdk(taskStarted("toolu-agent", 1)));
+    claude.emit(
+      sdk({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "task-toolu-agent",
+        patch: { status },
+      }),
+    );
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(subagents.childrenOf(THREAD)).toMatchObject([{ active: false }]);
+  });
+
+  test("ends the agents of a session that closed", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, subagents } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    claude.emit(sdk(taskStarted("toolu-agent", 1)));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+    claude.fail(new Error("Claude Code process exited with code 1"));
+    await until(() => subagents.childrenOf(THREAD)[0]?.active === false);
+
+    expect(subagentEvents(sent).at(-1)).toContain("completed");
+  });
+
   test("leaves an agent a subagent starts inside its parent agent", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, subagents } = await harness([claude]);

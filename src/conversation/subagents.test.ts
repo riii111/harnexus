@@ -38,9 +38,9 @@ describe("subagents", () => {
 
     subagents.start(agent("th-1", "toolu-1"));
     subagents.start(agent("th-1", "toolu-1"));
-    subagents.complete("th-1", "toolu-1");
-    subagents.complete("th-1", "toolu-1");
-    subagents.complete("th-1", "toolu-unknown");
+    subagents.complete("th-1", "task-toolu-1");
+    subagents.complete("th-1", "task-toolu-1");
+    subagents.complete("th-1", "task-unknown");
 
     expect(sent.map((m) => (m as { method: string }).method)).toEqual([
       "item/started",
@@ -51,6 +51,40 @@ describe("subagents", () => {
       "item/completed",
     ]);
   });
+});
+
+test("starts a resumed agent again on the thread it had", () => {
+  const sent: { params: { item?: { id: string } } }[] = [];
+  const subagents = createSubagents({
+    send: (m) => sent.push(m as (typeof sent)[number]),
+  });
+
+  subagents.start(agent("th-1", "toolu-1"));
+  subagents.complete("th-1", "task-toolu-1");
+  subagents.start({ ...agent("th-1", "toolu-2"), taskId: "task-toolu-1" });
+
+  expect(subagents.childrenOf("th-1")).toMatchObject([
+    { active: true, runs: 2 },
+  ]);
+  const itemIds = sent.flatMap((m) =>
+    m.params.item === undefined ? [] : [m.params.item.id],
+  );
+  expect(new Set(itemIds).size).toBe(itemIds.length / 2);
+});
+
+test("ends every running agent of a thread whose session closed", () => {
+  const subagents = createSubagents({ send: () => {} });
+
+  subagents.start(agent("th-1", "toolu-1"));
+  subagents.start(agent("th-1", "toolu-2"));
+  subagents.start(agent("th-2", "toolu-3"));
+  subagents.settle("th-1");
+
+  expect(
+    [...subagents.childrenOf("th-1"), ...subagents.childrenOf("th-2")].map(
+      (child) => child.active,
+    ),
+  ).toEqual([false, false, true]);
 });
 
 const agent = (

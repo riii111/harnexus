@@ -5,7 +5,7 @@ import {
   type SubagentThread,
 } from "../presentation/subagent.ts";
 
-// The subagents each thread's agent started, kept while the bridge runs; a child's id is made from its parent and the call that started it, so the same agent always gets the same thread.
+// The subagents each thread's agent started, kept while the bridge runs; a child's id is made from its parent and the agent's task, so the same agent, resumed or seen again, always gets the same thread.
 export const createSubagents = ({
   send,
   now = Date.now,
@@ -30,30 +30,41 @@ export const createSubagents = ({
     description: string | null;
     agentType: string | null;
   }) => {
-    const id = childThreadId(threadId, toolUseId);
-    if (children.has(id)) return;
+    const id = childThreadId(threadId, taskId);
     const at = now();
-    const child: SubagentThread = {
-      id,
-      parentThreadId: threadId,
-      toolUseId,
-      taskId,
-      nickname: description ?? agentType ?? DEFAULT_NAME,
-      role: agentType,
-      path: `/root/${agentName(agentType)}_${childrenOf(threadId).length + 1}`,
-      turnId,
-      active: true,
-      createdAtMs: at,
-      updatedAtMs: at,
-    };
+    const known = children.get(id);
+    if (known?.active === true) return;
+    const child: SubagentThread =
+      known === undefined
+        ? {
+            id,
+            parentThreadId: threadId,
+            toolUseId,
+            taskId,
+            nickname: description ?? agentType ?? DEFAULT_NAME,
+            role: agentType,
+            path: `/root/${agentName(agentType)}_${childrenOf(threadId).length + 1}`,
+            turnId,
+            runs: 1,
+            active: true,
+            createdAtMs: at,
+            updatedAtMs: at,
+          }
+        : {
+            ...known,
+            turnId,
+            runs: known.runs + 1,
+            active: true,
+            updatedAtMs: at,
+          };
     children.set(id, child);
     for (const notification of renderSubagentStarted(child, at)) {
       send(notification);
     }
   };
 
-  const complete = (threadId: string, toolUseId: string) => {
-    const child = children.get(childThreadId(threadId, toolUseId));
+  const complete = (threadId: string, taskId: string) => {
+    const child = children.get(childThreadId(threadId, taskId));
     if (child === undefined || !child.active) return;
     const at = now();
     const done = { ...child, active: false, updatedAtMs: at };
@@ -63,12 +74,20 @@ export const createSubagents = ({
     }
   };
 
+  // A session that closes ends the agents running in it.
+  const settle = (threadId: string) => {
+    for (const child of childrenOf(threadId)) {
+      if (child.active) complete(threadId, child.taskId);
+    }
+  };
+
   const childrenOf = (threadId: string) =>
     [...children.values()].filter((child) => child.parentThreadId === threadId);
 
   return {
     start,
     complete,
+    settle,
     childrenOf,
     get: (threadId: unknown) =>
       typeof threadId === "string" ? children.get(threadId) : undefined,
@@ -78,9 +97,9 @@ export const createSubagents = ({
 export type Subagents = ReturnType<typeof createSubagents>;
 
 // Shaped as a UUID, as the app's own thread ids are.
-const childThreadId = (parentThreadId: string, toolUseId: string) => {
+const childThreadId = (parentThreadId: string, taskId: string) => {
   const hex = createHash("sha256")
-    .update(`${parentThreadId}\n${toolUseId}`)
+    .update(`${parentThreadId}\n${taskId}`)
     .digest("hex");
   return [
     hex.slice(0, 8),

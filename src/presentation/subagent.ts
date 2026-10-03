@@ -2,7 +2,7 @@ import { isObject } from "../runtime/object.ts";
 import type { AppNotification, SubAgentActivityItem } from "./protocol.ts";
 
 // A Claude subagent is shown as a Codex subagent is: a thread of its own under the thread whose Claude started it, which the app lists in its subagents panel.
-// turnId is the parent's turn the agent started in, which also carries its completion, as Codex does even once that turn has ended.
+// turnId is the parent's turn the agent last started in, which also carries its completion, as Codex does even once that turn has ended; runs counts its starts, since Claude can resume an agent that finished.
 export type SubagentThread = {
   id: string;
   parentThreadId: string;
@@ -12,6 +12,7 @@ export type SubagentThread = {
   role: string | null;
   path: string;
   turnId: string | null;
+  runs: number;
   active: boolean;
   createdAtMs: number;
   updatedAtMs: number;
@@ -86,7 +87,7 @@ const activity = (
   if (child.turnId === null) return [];
   const item: SubAgentActivityItem = {
     type: "subAgentActivity",
-    id: `${child.id}-${kind}`,
+    id: `${child.id}-${kind}-${child.runs}`,
     kind,
     agentThreadId: child.id,
     agentPath: child.path,

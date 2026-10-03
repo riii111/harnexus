@@ -805,7 +805,7 @@ describe("Claude subagent threads", () => {
     });
   });
 
-  test("resumes an agent's thread through its parent and answers with the agent's thread", async () => {
+  test("resumes an agent's thread through its parent with none of the app's settings when the parent was not opened", async () => {
     const { router, subagents, sent, serverCalls } = setup(["th-claude"]);
     startAgent(subagents, "th-claude", "toolu-1");
     const [child] = subagents.childrenOf("th-claude");
@@ -825,14 +825,7 @@ describe("Claude subagent threads", () => {
     await until(() => responseTo(sent, 33) !== null);
 
     expect(serverCalls).toEqual([
-      [
-        "thread/resume",
-        {
-          threadId: "th-claude",
-          excludeTurns: true,
-          approvalPolicy: "on-request",
-        },
-      ],
+      ["thread/resume", { threadId: "th-claude", excludeTurns: true }],
     ]);
     expect(responseTo(sent, 33).result).toMatchObject({
       model: CLAUDE,
@@ -841,6 +834,74 @@ describe("Claude subagent threads", () => {
       thread: { id: child?.id, parentThreadId: "th-claude" },
       turnsBackwardsCursor: null,
     });
+  });
+
+  test("answers an agent's resume and list from the answer that opened its parent", async () => {
+    const { router, subagents, sent, serverCalls } = setup(["th-claude"]);
+    router.fromApp(
+      encode({
+        id: 40,
+        method: "thread/resume",
+        params: { threadId: "th-claude", excludeTurns: true },
+      }),
+    );
+    await router.fromServer(
+      encode({
+        id: 40,
+        result: { ...PARENT_RESUMED, thread: parentThread("th-claude") },
+      }),
+    );
+    startAgent(subagents, "th-claude", "toolu-1");
+    const [child] = subagents.childrenOf("th-claude");
+
+    router.fromApp(
+      encode({
+        id: 41,
+        method: "thread/resume",
+        params: { threadId: child?.id, excludeTurns: true },
+      }),
+    );
+    router.fromApp(
+      encode({
+        id: 42,
+        method: "thread/list",
+        params: { ancestorThreadId: "th-claude" },
+      }),
+    );
+    const listed = parse(
+      router.fromServer(encode({ id: 42, result: { data: [] } })) as Buffer,
+    );
+    await until(() => responseTo(sent, 41) !== null);
+
+    expect(serverCalls).toEqual([]);
+    expect(responseTo(sent, 41).result).toMatchObject({
+      approvalPolicy: "on-request",
+      thread: { id: child?.id, path: "/fixture/rollout.jsonl" },
+    });
+    expect(listed.result.data).toMatchObject([
+      { id: child?.id, path: "/fixture/rollout.jsonl", model: CLAUDE },
+    ]);
+  });
+
+  test.each([
+    { name: "a later page", params: { cursor: "page-2" } },
+    { name: "archived threads", params: { archived: true } },
+  ])("adds no agent to $name", async ({ params }) => {
+    const { router, subagents } = setup(["th-claude"]);
+    startAgent(subagents, "th-claude", "toolu-1");
+    const response = encode({ id: 43, result: { data: [] } });
+
+    router.fromApp(
+      encode({
+        id: 43,
+        method: "thread/list",
+        params: { ancestorThreadId: "th-claude", ...params },
+      }),
+    );
+
+    expect(parse(router.fromServer(response) as Buffer).result.data).toEqual(
+      [],
+    );
   });
 
   test("answers an agent's turn pages and goal itself", async () => {

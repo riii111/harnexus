@@ -27,6 +27,7 @@ type ChildHistory = (
 ) => Promise<Result<HistoryTurn[], unknown>>;
 
 // The server knows nothing of a Claude subagent's thread, so the bridge answers every request that names one, building it from its parent's thread as the server reports it.
+// The app opens the parent before it shows the agents under it, so the answer that opened the parent is kept and the agents' threads are made from it without asking the server again.
 export const createSubagentRequests = ({
   subagents,
   threads,
@@ -40,6 +41,15 @@ export const createSubagentRequests = ({
   history: ChildHistory;
   send: (message: object) => void;
 }) => {
+  const opened = new Map<string, Record<string, unknown>>();
+
+  const remember = (answer: Record<string, unknown>) => {
+    const thread = threadOfAnswer(answer);
+    if (thread !== null && typeof thread.id === "string") {
+      opened.set(thread.id, answer);
+    }
+  };
+
   const viewOf = (
     child: SubagentThread,
     parentThread: Record<string, unknown>,
@@ -52,11 +62,29 @@ export const createSubagentRequests = ({
   };
 
   const parentThreadOf = async (parentThreadId: string) => {
+    const known = openedThreadOf(parentThreadId);
+    if (known !== null) return known;
     const read = await call("thread/read", {
       threadId: parentThreadId,
       includeTurns: false,
     });
     return read.isOk() ? threadOfAnswer(read.value) : null;
+  };
+
+  const openedThreadOf = (parentThreadId: string) => {
+    const answer = opened.get(parentThreadId);
+    return answer === undefined ? null : threadOfAnswer(answer);
+  };
+
+  // Resuming the parent with no settings of the app's leaves it as it runs.
+  const parentResumeOf = async (parentThreadId: string) => {
+    const known = opened.get(parentThreadId);
+    if (known !== undefined) return known;
+    const resumed = await call("thread/resume", {
+      threadId: parentThreadId,
+      excludeTurns: true,
+    });
+    return resumed.isOk() && isObject(resumed.value) ? resumed.value : null;
   };
 
   const answer = async (method: string, request: AppRequest) => {
@@ -88,22 +116,16 @@ export const createSubagentRequests = ({
     send({ id: request.id, result: withTurns(result, turns.value) });
   };
 
-  // The parent is resumed in the agent's place, which leaves it as it was since the app already has it open, and its answer carries the settings the agent runs with.
+  // The agent runs with its parent's settings, so the answer that opened the parent carries them, and the settings the app sends with the agent's resume change nothing.
   const answerResume = async (child: SubagentThread, request: AppRequest) => {
-    const { path: _path, history: _history, ...params } = request.params;
-    const resumed = await call("thread/resume", {
-      ...params,
-      threadId: child.parentThreadId,
-      excludeTurns: true,
-    });
-    if (resumed.isErr() || !isObject(resumed.value)) return unreadable(request);
-    const parentThread = threadOfAnswer(resumed.value);
-    if (parentThread === null) return unreadable(request);
+    const resumed = await parentResumeOf(child.parentThreadId);
+    const parentThread = resumed === null ? null : threadOfAnswer(resumed);
+    if (resumed === null || parentThread === null) return unreadable(request);
     const turns = await history(child.id);
     if (turns.isErr()) return unreadable(request);
     const thread = viewOf(child, parentThread);
     const result = {
-      ...resumed.value,
+      ...resumed,
       thread,
       model: thread.model,
       reasoningEffort: thread.reasoningEffort,
@@ -114,17 +136,21 @@ export const createSubagentRequests = ({
     });
   };
 
-  // A list of threads under a Claude thread gains the agents its Claude started, which the server never saw.
-  const withChildren = async (
+  // A list of threads under a Claude thread gains the agents its Claude started, which the server never saw; they all go on its first page, which holds the newest.
+  // The list holds back every later server line until it is answered, so it never waits on the server; a parent not opened yet lends only what the bridge knows of it.
+  const withChildren = (
     result: Record<string, unknown>,
     params: Record<string, unknown>,
   ) => {
     const parentThreadId = listedParentOf(params);
     if (parentThreadId === null || !listsSubagents(params)) return result;
+    if (params.cursor != null || params.archived === true) return result;
     const children = subagents.childrenOf(parentThreadId);
     if (children.length === 0 || !Array.isArray(result.data)) return result;
-    const parentThread = await parentThreadOf(parentThreadId);
-    if (parentThread === null) return result;
+    const parentThread = openedThreadOf(parentThreadId) ?? {
+      id: parentThreadId,
+      cwd: threads.threadOf(parentThreadId)?.cwd ?? null,
+    };
     const listed = new Set(
       result.data.flatMap((thread) =>
         isObject(thread) && typeof thread.id === "string" ? [thread.id] : [],
@@ -154,6 +180,7 @@ export const createSubagentRequests = ({
     answer,
     withChildren,
     listedParentOf,
+    remember,
   };
 };
 

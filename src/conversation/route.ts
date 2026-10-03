@@ -96,7 +96,7 @@ export const createRouter = (
   unverifiedCodex: "warn" | "pause",
   subagents: Pick<
     SubagentRequests,
-    "isChild" | "answer" | "withChildren" | "listedParentOf"
+    "isChild" | "answer" | "withChildren" | "listedParentOf" | "remember"
   >,
 ) => {
   const pending = new Map<AppRequest["id"], Pending>();
@@ -370,9 +370,10 @@ export const createRouter = (
     }
     const result = message.result;
     if (request.kind === "childList") {
-      return subagents
-        .withChildren(result, request.params)
-        .then((listed) => encode({ ...message, result: listed }));
+      return encode({
+        ...message,
+        result: subagents.withChildren(result, request.params),
+      });
     }
     if (request.kind === "threadRead") {
       return request.history.then((loaded) => {
@@ -430,6 +431,7 @@ export const createRouter = (
         },
       }),
     };
+    subagents.remember(opened);
     if (request.history === null) return encode({ ...message, result: opened });
     const { params } = request;
     return request.history.then((loaded) => {
