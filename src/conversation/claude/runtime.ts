@@ -914,7 +914,10 @@ export const createClaudeRuntime = ({
     >
   > => {
     const existing = sessions.get(record.threadId);
-    if (existing?.model === model) return Result.ok(existing);
+    // A session that failed while no turn read it closed itself before anything dropped it.
+    if (existing?.model === model && !existing.session.isClosed()) {
+      return Result.ok(existing);
+    }
     if (existing !== undefined) dropSession(record.threadId, existing);
     if (closed) return Result.err(bridgeClosingError());
     const pending = startup ?? beginSessionStart(turn);
