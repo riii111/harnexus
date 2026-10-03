@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { pageTimeline } from "../presentation/history-page.ts";
 import { createSubagents } from "./subagents.ts";
 
 describe("subagents", () => {
@@ -243,6 +244,53 @@ test("keeps a nested agent's activity in its parent agent's turn, even once that
   ).toMatchObject([{ kind: "started" }, { kind: "completed" }]);
 });
 
+test("adds a nested agent's completion to its parent agent's last turn once that agent has ended", () => {
+  const sent: Notification[] = [];
+  const subagents = createSubagents({
+    send: (m) => sent.push(m as Notification),
+  });
+
+  subagents.start(agent("th-1", "toolu-1"));
+  const [outer] = subagents.childrenOf("th-1");
+  subagents.message("th-1", agentCall("toolu-1", "toolu-inner"));
+  subagents.start({ ...agent("th-1", "toolu-inner"), depth: 2 });
+  subagents.complete("th-1", "task-toolu-1", DONE);
+  subagents.start({ ...agent("th-1", "toolu-2"), taskId: "task-toolu-1" });
+  subagents.complete("th-1", "task-toolu-1", DONE);
+  subagents.complete("th-1", "task-toolu-inner", DONE);
+
+  const lastTurn = `${outer?.id}-turn-2`;
+  const entries = pageTimeline(subagents.historyOf(outer?.id ?? "") ?? [], {
+    cursor: null,
+    limit: null,
+  })?.data;
+  expect(entries?.slice(-2)).toMatchObject([
+    {
+      type: "item",
+      turnId: lastTurn,
+      item: { type: "subAgentActivity", kind: "completed" },
+    },
+    { type: "turnCompleted", turnId: lastTurn },
+  ]);
+  expect(
+    entries?.filter(
+      (entry) =>
+        entry.type === "item" && entry.item.type === "subAgentActivity",
+    ),
+  ).toHaveLength(2);
+  expect(
+    sent.filter(
+      (m) =>
+        m.method === "item/completed" &&
+        m.params.threadId === outer?.id &&
+        m.params.item?.type === "subAgentActivity",
+    ),
+  ).toMatchObject([
+    { params: { turnId: `${outer?.id}-turn-1` } },
+    { params: { turnId: lastTurn } },
+  ]);
+});
+
 test("leaves out an agent whose caller is unknown", () => {
   const subagents = createSubagents({ send: () => {} });
 
@@ -332,6 +380,7 @@ type Notification = {
   method: string;
   params: {
     threadId?: string;
+    turnId?: string;
     item?: { id: string; type: string };
     status?: { type: string };
     turn?: unknown;
