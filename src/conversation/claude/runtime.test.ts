@@ -2047,6 +2047,87 @@ describe("approvals no turn could show", () => {
     expect(startedTurns(sent)).not.toContain("turn-3");
   });
 
+  test("keeps showing what a background agent does while the approval waits with a turn the user sent queued, and answers that turn after", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, subagents } = await harness([claude]);
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    const prompts = claude.prompt()?.[Symbol.asyncIterator]();
+    await prompts?.next();
+    claude.emit(sdk(taskStarted("toolu-agent", 1)));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+    const [child] = subagents.childrenOf(THREAD);
+    const childItems = (method: string) =>
+      sent.filter(
+        (m) => m.method === method && m.params.threadId === child?.id,
+      );
+
+    const decision = agentAsks(claude, "tool-1");
+    const request = await appRequest(sent);
+    turns.startTurn(turnStart(11, "next"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    claude.emit(
+      sdk({ ...bashCall("toolu-ls"), parent_tool_use_id: "toolu-agent" }),
+    );
+    claude.emit(
+      sdk({ ...toolError("toolu-ls"), parent_tool_use_id: "toolu-agent" }),
+    );
+    claude.emit(sdk(AGENT_SPOKE));
+    await until(
+      () =>
+        childItems("item/completed").some(
+          (m) => m.params.item.type === "commandExecution",
+        ) &&
+        childItems("item/started").some(
+          (m) => m.params.item.type === "agentMessage",
+        ),
+    );
+    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
+    turns.answerRequest({ id: request.id, result: ALLOWED });
+    const next = await prompts?.next();
+    claude.emit(sdk(answer("msg-3", "hi")));
+    claude.emit(sdk(success([next?.value?.uuid])));
+    await until(() => completedTurnStatuses(sent).length === 3);
+
+    expect(await decision).toEqual({ behavior: "allow" });
+    expect(next?.value?.message.content).toBe("next");
+    expect(completedTurns(sent).slice(1)).toMatchObject([
+      { id: "turn-2", status: "completed" },
+      { id: "turn-3", status: "completed", items: [{ text: "hi" }] },
+    ]);
+    expect(
+      childItems("item/started").filter(
+        (m) => m.params.item.type === "commandExecution",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("declines the approvals when Claude's stream ends with a turn the user sent queued, and runs that turn on a new Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const next = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings } = await harness([claude, next]);
+    await completeTurn(turns, sent, claude, 10);
+
+    const decision = agentAsks(claude, "tool-1");
+    await appRequest(sent);
+    turns.startTurn(turnStart(11, "next"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    claude.emit(sdk(AGENT_SPOKE));
+    claude.end();
+    expect((await decision)?.behavior).toBe("deny");
+    await until(() => next.started());
+    next.emit(sdk(answer("msg-3", "hi")));
+    next.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 3);
+
+    expect(completedTurns(sent).slice(1)).toMatchObject([
+      { id: "turn-2", status: "failed" },
+      { id: "turn-3", status: "completed", items: [{ text: "hi" }] },
+    ]);
+    expect(settings[1]).toMatchObject({ resume: "se-1" });
+  });
+
   test("shows a main agent's approval that comes while a turn Claude started waits behind the approval turn in that turn without an item", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
@@ -2290,7 +2371,9 @@ describe("approvals no turn could show", () => {
     expect(completedTurns(sent)[1]).toMatchObject({
       id: "turn-2",
       status: "failed",
-      error: { message: "Claude stopped before the approval was answered" },
+      error: {
+        message: "Claude's session ended before the approval was answered",
+      },
     });
     expect(resolvedRequests(sent)).toEqual(
       askedRequests(sent).map((m) => m.id),
