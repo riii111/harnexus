@@ -59,6 +59,7 @@ export type ClaudeSessionSettings = {
   mcpServers?: Record<string, McpServerConfig>;
   // Tools that run without asking, on top of the user's own allow rules.
   allowedTools?: string[];
+  permissionMode?: "default" | "auto" | "plan";
   canUseTool: CanUseTool;
 };
 
@@ -327,8 +328,8 @@ const sessionOptions = (
   env: withoutApiBilling(env),
   settingSources: SETTING_SOURCES,
   systemPrompt: { type: "preset", preset: "claude_code" },
-  // A user's default mode such as bypassPermissions would skip canUseTool, which is how the app approves tools.
-  permissionMode: "default",
+  // The bridge selects the mode explicitly so user settings cannot silently enable bypassPermissions.
+  permissionMode: settings.permissionMode ?? "auto",
   canUseTool: settings.canUseTool,
   includePartialMessages: true,
   // A subagent's thread shows what the agent wrote, not only the tools it called.

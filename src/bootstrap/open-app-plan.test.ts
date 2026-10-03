@@ -17,19 +17,22 @@ describe("openArguments", () => {
     ]);
   });
 
-  test("passes this shell's log, state and version settings through and leaves others out", () => {
+  test("passes this shell's paths, version policy and permission mode without credentials", () => {
     const args = openArguments(PATHS, "harnexus", {
       HARNEXUS_LOG_PATH: "/tmp/harnexus.log",
       HARNEXUS_STATE_PATH: "",
       HARNEXUS_UNVERIFIED_CODEX: "pause",
+      HARNEXUS_PERMISSION_MODE: "auto",
       ANTHROPIC_API_KEY: "sk-fixture",
     });
 
-    expect(args.slice(-4)).toEqual([
+    expect(args.slice(-6)).toEqual([
       "--env",
       "HARNEXUS_LOG_PATH=/tmp/harnexus.log",
       "--env",
       "HARNEXUS_UNVERIFIED_CODEX=pause",
+      "--env",
+      "HARNEXUS_PERMISSION_MODE=auto",
     ]);
     expect(args.join(" ")).not.toContain("sk-fixture");
   });

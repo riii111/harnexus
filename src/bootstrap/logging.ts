@@ -15,7 +15,11 @@ import {
   serializeObservationEvent,
 } from "../infra/codex/observe.ts";
 import type { openThreadStore } from "../infra/thread-store.ts";
-import { loadLogPath, type loadStatePath } from "../runtime/config.ts";
+import {
+  loadLogPath,
+  type loadPermissionMode,
+  type loadStatePath,
+} from "../runtime/config.ts";
 import { openLogSink } from "../runtime/fs.boundary.ts";
 import { createLogger, type LogSink } from "../runtime/logger.ts";
 import type { Signal } from "../runtime/process.boundary.ts";
@@ -44,6 +48,7 @@ type StartupFailure = "ServerPipesUnavailable";
 type LogFileFailure = "LogPathNotAbsolute" | "LogFileOpenFailed";
 
 type ClaudeUnavailable =
+  | InferErr<ReturnType<typeof loadPermissionMode>>["_tag"]
   | InferErr<ReturnType<typeof loadStatePath>>["_tag"]
   | InferErr<Awaited<ReturnType<typeof openThreadStore>>>["_tag"];
 

@@ -21,6 +21,7 @@ import { type RelayObserver, relayStreams } from "../infra/codex/relay.ts";
 import { attachServerRequests } from "../infra/codex/server-requests.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import {
+  loadPermissionMode,
   loadShutdownGraceMs,
   loadStatePath,
   loadUnverifiedCodexPolicy,
@@ -92,6 +93,14 @@ async function withClaude(relay: {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
     return plain;
   }
+  const permissionMode = loadPermissionMode(process.env);
+  if (permissionMode.isErr()) {
+    logger.log({
+      event: "claude_unavailable",
+      reason: permissionMode.error._tag,
+    });
+    return plain;
+  }
   const catalog = createModelCatalog();
   // Not awaited, since the app lists models before Claude Code can answer and holding that answer would hold every later server line; the app asks again later.
   void loadClaudeModels().then((loaded) => {
@@ -117,6 +126,7 @@ async function withClaude(relay: {
   const serverCalls = attachServerRequests(relay);
   const { router, closeAll } = connectClaudeThreads({
     store: store.value,
+    permissionMode: permissionMode.value,
     request: serverCalls.request,
     startSession: (session, signal) =>
       startClaudeSession(session, undefined, signal),
