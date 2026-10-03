@@ -214,7 +214,6 @@ export const harness = async (
     linkRequest?: ServerRequest;
     readHistory?: Parameters<typeof createClaudeRuntime>[0]["readHistory"];
     effortRule?: EffortRule;
-    // False stands for an app that cannot be shown a turn of Claude's own, as when the bridge is closing.
     ownTurnsShown?: boolean;
     now?: () => number;
   } = {},

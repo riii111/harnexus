@@ -3205,7 +3205,6 @@ const ALLOWED = { answers: { approval: { answers: ["Allow"] } } };
 const isTurnCompleted = (turnId: string) => (message: Sent) =>
   message.method === "turn/completed" && message.params.turn.id === turnId;
 
-// What a background agent says while no turn of its parent runs.
 const AGENT_SPOKE = {
   ...answer("msg-agent", "working"),
   parent_tool_use_id: "toolu-agent",

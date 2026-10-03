@@ -182,7 +182,7 @@ type ClaudeTurn = {
   steers: number;
 };
 
-// Approvals a background agent asks for while no turn could show them wait in a turn of Claude's own opened for them, which ends once each is answered; turn is null until the app is shown it, and ended declines what it holds once its Claude is gone.
+// turn stays null until the app is shown the holding turn, and ended declines every approval in it once its Claude is gone.
 type HeldApprovals = {
   turn: RunningTurn<ClaudeFailureTag> | null;
   waiting: number;
@@ -190,7 +190,7 @@ type HeldApprovals = {
   ended: AbortController;
 };
 
-// held is the turn an approval waits in once it joined one, and signal also ends when that turn's Claude is gone.
+// signal also ends once the held turn's Claude is gone.
 type Approval = { held: HeldApprovals | null; signal: AbortSignal };
 
 class BridgeClosing extends TaggedError("BridgeClosing")<{
@@ -621,7 +621,7 @@ export const createClaudeRuntime = ({
     turnWaiters.delete(threadId);
   };
 
-  // Claude sent nothing for this turn, so it reads nothing; approvals that all settled before it was shown leave it empty and completed.
+  // Claude sent nothing for this turn, so it reads nothing.
   const holdApprovals = async (turn: Turn, held: HeldApprovals) => {
     held.turn = turn;
     showTurn(turn.threadId);
@@ -918,7 +918,6 @@ export const createClaudeRuntime = ({
 
   // What waited for turns that took none of it, such as a turn Claude started right as the last one ended, is read again once the thread has no turn left.
   // A turn of Claude's own that could not run was shown as failed, so what it held is not shown again.
-  // Approvals whose turn never ran are declined, not held again.
   const threadIdle = (threadId: string) => {
     busyThreads.delete(threadId);
     heldApprovals.delete(threadId);
@@ -1230,7 +1229,6 @@ export const createClaudeRuntime = ({
     return undefined;
   };
 
-  // A turn the app cannot be shown, as when the bridge is closing, leaves the approval declined.
   const openHeld = (threadId: string, approval: Approval) => {
     const held: HeldApprovals = {
       turn: null,
