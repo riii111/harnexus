@@ -90,7 +90,6 @@ export const createSubagents = ({
     sendAll(opened.notifications);
   };
 
-  // The running agent of this session whose turn made the call.
   const callerOf = (threadId: string, toolUseId: string) =>
     sessionAgents(threadId).find((child) => {
       const turn = running.get(child.id);
