@@ -265,7 +265,8 @@ export const createClaudeRuntime = ({
   const turns = new WeakMap<Turn, ClaudeTurn>();
   const runningTurns = new Map<string, Turn>();
   const startingSessions = new Map<string, SessionStartup>();
-  const busyThreads = new Set<string>();
+  // The turns each thread accepted since it last had none, so a thread whose only turn holds approvals is read as an idle one.
+  const acceptedTurns = new Map<string, number>();
   const commands = createSessionCommands({
     threads,
     listConversations,
@@ -621,7 +622,8 @@ export const createClaudeRuntime = ({
     turnWaiters.delete(threadId);
   };
 
-  // The turn shows only the prompts it holds, so it neither sends Claude anything nor reads the session; what Claude says meanwhile waits for the turn after it, as for any turn the thread has accepted.
+  // The turn shows only the prompts it holds, so it neither sends Claude anything nor reads the session; a turn Claude starts meanwhile waits for the turn after it, as for any turn the thread has accepted.
+  // Approvals that all settled before the turn was shown leave it empty and completed.
   const holdApprovals = async (turn: Turn, held: HeldApprovals) => {
     held.turn = turn;
     showTurn(turn.threadId);
@@ -633,12 +635,16 @@ export const createClaudeRuntime = ({
     if (heldApprovals.get(turn.threadId) === held) {
       heldApprovals.delete(turn.threadId);
     }
-    turn.finish(
-      turn.state().interrupting
-        ? { status: "interrupted" }
-        : { status: "completed" },
-      null,
-    );
+    turn.finish(heldOutcome(turn, held), null);
+  };
+
+  // A Claude that stopped answered no approval, so the turn says so rather than end as if each had been answered.
+  const heldOutcome = (turn: Turn, held: HeldApprovals): TurnOutcome => {
+    if (turn.state().interrupting) return { status: "interrupted" };
+    if (held.ended.signal.aborted) {
+      return { status: "failed", message: APPROVALS_UNANSWERED };
+    }
+    return { status: "completed" };
   };
 
   // The last record of each fork's source when the fork was made, null when the source had said nothing yet; a fork whose source could not be read has none.
@@ -820,8 +826,9 @@ export const createClaudeRuntime = ({
     }
     // A session already dropped has nothing left for a turn to read.
     if (sessions.get(threadId) !== slot) return null;
-    const own = !busyThreads.has(threadId);
-    if (own) {
+    const own = !acceptedTurns.has(threadId);
+    // A turn holding approvals reads nothing, so while it is the only turn accepted Claude is read as on an idle thread, and only a turn Claude starts waits for the turn after it.
+    if (own || onlyHolding(threadId)) {
       if (next.done === true || next.value.isErr()) {
         dropSession(threadId, slot);
         return null;
@@ -841,6 +848,10 @@ export const createClaudeRuntime = ({
     slot.unclaimed = own ? "own" : "turn";
     return inbox;
   };
+
+  // A thread holds approvals only after opening their turn with no other accepted, so one turn accepted is that one.
+  const onlyHolding = (threadId: string) =>
+    heldApprovals.has(threadId) && acceptedTurns.get(threadId) === 1;
 
   // An agent Claude starts, in the turn or in the background, shows as a thread of its own under this one, which also gets what the agent says; one an agent starts goes under that agent's thread.
   const trackSubagents = (threadId: string, message: SDKMessage) => {
@@ -909,7 +920,7 @@ export const createClaudeRuntime = ({
   // A turn of Claude's own that could not run was shown as failed, so what it held is not shown again.
   // A turn opened to hold approvals that never ran leaves them to be declined.
   const threadIdle = (threadId: string) => {
-    busyThreads.delete(threadId);
+    acceptedTurns.delete(threadId);
     heldApprovals.delete(threadId);
     scheduleIdleClose(threadId);
     showTurn(threadId);
@@ -932,7 +943,7 @@ export const createClaudeRuntime = ({
   };
 
   const threadBusy = (threadId: string) => {
-    busyThreads.add(threadId);
+    acceptedTurns.set(threadId, (acceptedTurns.get(threadId) ?? 0) + 1);
     cancelIdleClose(threadId);
   };
 
@@ -1194,21 +1205,28 @@ export const createClaudeRuntime = ({
 
   // An approval goes to the turn the app is shown, and waits while the thread has a turn accepted that is not shown yet or is ending; with none, a turn of Claude's own opens to hold it.
   // An approval whose holding turn could not be shown is declined rather than held again, so a thread whose turns cannot run does not keep opening them.
+  // A turn the user stopped before the approval waiting for it was shown is waited past like an ending one, while an approval that comes as the user stops the running turn, or stops the turn holding it, is declined with that turn.
   const turnToAsk = async (threadId: string, approval: Approval) => {
+    let waited = false;
     while (!closed && !approval.signal.aborted) {
       const turn = openTurn(threadId);
       const held = heldApprovals.get(threadId);
       if (held !== undefined && (held.turn === null || held.turn === turn)) {
         joinHeld(approval, held);
       }
-      if (turn !== undefined) return turn;
-      if (held === undefined && !busyThreads.has(threadId)) {
+      const stoppedAhead =
+        waited &&
+        turn?.state().interrupting === true &&
+        approval.held?.turn !== turn;
+      if (turn !== undefined && !stoppedAhead) return turn;
+      if (held === undefined && !acceptedTurns.has(threadId)) {
         if (approval.held !== null || !openHeld(threadId, approval)) {
           return undefined;
         }
       }
       const shown = await waitForAbort(turnShown(threadId), approval.signal);
       if (shown === ABORTED) return undefined;
+      waited = true;
     }
     return undefined;
   };
@@ -1491,6 +1509,8 @@ const AGENT_FAILED = "The agent failed";
 const IDLE_SESSION_MS = 10 * 60_000;
 
 const NO_TURN = "no Claude turn is running to ask the app for approval";
+
+const APPROVALS_UNANSWERED = "Claude stopped before the approval was answered";
 
 // The SDK documents user_message_uuids as holding at most this many entries.
 const TAKEN_UUIDS_LIMIT = 64;

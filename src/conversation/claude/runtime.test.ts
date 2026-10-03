@@ -1959,6 +1959,7 @@ describe("approvals no turn could show", () => {
 
     const decision = agentAsks(claude, "tool-1");
     const request = await appRequest(sent);
+    claude.emit(sdk(AGENT_SPOKE));
     claude.emit(sdk(INIT));
     claude.emit(sdk(answer("msg-2", "the agent finished")));
     claude.emit(sdk(ownResult()));
@@ -2007,6 +2008,178 @@ describe("approvals no turn could show", () => {
       { id: "turn-3", status: "completed", items: [{ text: "hi" }] },
     ]);
     expect(claude.closes()).toBe(0);
+  });
+
+  test("shows what a background agent does while the approval waits in its thread as it happens, once", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, subagents } = await harness([claude]);
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    claude.emit(sdk(taskStarted("toolu-agent", 1)));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+    const [child] = subagents.childrenOf(THREAD);
+    const childCommands = (method: string) =>
+      sent.filter(
+        (m) =>
+          m.method === method &&
+          m.params.threadId === child?.id &&
+          m.params.item.type === "commandExecution",
+      );
+
+    const decision = agentAsks(claude, "tool-1");
+    const request = await appRequest(sent);
+    claude.emit(
+      sdk({ ...bashCall("toolu-ls"), parent_tool_use_id: "toolu-agent" }),
+    );
+    claude.emit(
+      sdk({ ...toolError("toolu-ls"), parent_tool_use_id: "toolu-agent" }),
+    );
+    await until(() => childCommands("item/completed").length === 1);
+    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
+    turns.answerRequest({ id: request.id, result: ALLOWED });
+    await until(() => completedTurnStatuses(sent).length === 2);
+    await settle();
+
+    expect(await decision).toEqual({ behavior: "allow" });
+    expect(childCommands("item/started")).toHaveLength(1);
+    expect(childCommands("item/completed")).toHaveLength(1);
+    expect(startedTurns(sent)).not.toContain("turn-3");
+  });
+
+  test("shows a main agent's approval that comes while a turn Claude started waits behind the approval turn in that turn without an item", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+
+    const background = agentAsks(claude, "tool-1");
+    await until(() => askedRequests(sent).length === 1);
+    claude.emit(sdk(INIT));
+    claude.emit(sdk(answer("msg-2", "the agent finished")));
+    await settle();
+    const main = askTool(
+      claude,
+      "Bash",
+      { command: "rm -rf build" },
+      { toolUseID: "tool-2" },
+    );
+    await until(() => askedRequests(sent).length === 2);
+    const [first, second] = askedRequests(sent);
+    turns.answerRequest({ id: first.id, result: ALLOWED });
+    turns.answerRequest({ id: second.id, result: ALLOWED });
+    expect(await background).toEqual({ behavior: "allow" });
+    expect(await main).toEqual({ behavior: "allow" });
+    claude.emit(sdk(ownResult()));
+    await until(() => completedTurnStatuses(sent).length === 3);
+
+    expect(second).toMatchObject({
+      method: "item/tool/requestUserInput",
+      params: { turnId: "turn-2" },
+    });
+    const held = sent.slice(
+      sent.findIndex(isTurnStarted("turn-2")),
+      sent.findIndex(isTurnStarted("turn-3")),
+    );
+    expect(held.filter((m) => m.method === "item/started")).toEqual([]);
+    expect(completedTurns(sent).slice(1)).toMatchObject([
+      { id: "turn-2", status: "completed" },
+      {
+        id: "turn-3",
+        status: "completed",
+        items: [{ text: "the agent finished" }],
+      },
+    ]);
+  });
+
+  test("runs a turn the app queued behind the approval turn once the app interrupts it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+    const prompts = claude.prompt()?.[Symbol.asyncIterator]();
+    await prompts?.next();
+
+    const decision = agentAsks(claude, "tool-1");
+    await appRequest(sent);
+    turns.startTurn(turnStart(11, "next"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    turns.interruptTurn(interrupt(20, "turn-2"));
+    expect((await decision)?.behavior).toBe("deny");
+    const next = await prompts?.next();
+    claude.emit(sdk(answer("msg-3", "hi")));
+    claude.emit(sdk(success([next?.value?.uuid])));
+    await until(() => completedTurnStatuses(sent).length === 3);
+
+    expect(next?.value?.message.content).toBe("next");
+    expect(completedTurns(sent).slice(1)).toMatchObject([
+      { id: "turn-2", status: "interrupted" },
+      { id: "turn-3", status: "completed", items: [{ text: "hi" }] },
+    ]);
+    expect(claude.interrupts()).toBe(0);
+  });
+
+  test("opens another turn for an approval that comes after the approval turn ended but before the thread is idle", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const asked: { decision?: ReturnType<typeof askTool> } = {};
+    const { turns, sent } = await harness([claude], {
+      onSend: (message) => {
+        if (
+          isTurnCompleted("turn-2")(message) &&
+          asked.decision === undefined
+        ) {
+          asked.decision = agentAsks(claude, "tool-2");
+        }
+      },
+    });
+    await completeTurn(turns, sent, claude, 10);
+
+    const first = agentAsks(claude, "tool-1");
+    const request = await appRequest(sent);
+    turns.answerRequest({ id: request.id, result: ALLOWED });
+    expect(await first).toEqual({ behavior: "allow" });
+    await until(() => askedRequests(sent).length === 2);
+    turns.answerRequest({ id: askedRequests(sent)[1].id, result: ALLOWED });
+    await until(() => completedTurnStatuses(sent).length === 3);
+
+    expect(await asked.decision).toEqual({ behavior: "allow" });
+    expect(askedRequests(sent)[1].params.turnId).toBe("turn-3");
+    expect(completedTurnStatuses(sent)).toEqual([
+      "completed",
+      "completed",
+      "completed",
+    ]);
+  });
+
+  test("waits past a turn the user stopped before it was shown and holds the approval in a turn after it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const asked: { decision?: ReturnType<typeof askTool> } = {};
+    const { turns, sent } = await harness([claude], {
+      onSend: (message) => {
+        if (
+          isTurnCompleted("turn-1")(message) &&
+          asked.decision === undefined
+        ) {
+          asked.decision = agentAsks(claude, "tool-1");
+        }
+      },
+    });
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    turns.startTurn(turnStart(11, "next"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    turns.interruptTurn(interrupt(20, "turn-2"));
+
+    claude.emit(sdk(success()));
+    const request = await appRequest(sent);
+    turns.answerRequest({ id: request.id, result: ALLOWED });
+    await until(() => completedTurnStatuses(sent).length === 3);
+
+    expect(await asked.decision).toEqual({ behavior: "allow" });
+    expect(request.params.turnId).toBe("turn-3");
+    expect(completedTurnStatuses(sent)).toEqual([
+      "completed",
+      "interrupted",
+      "completed",
+    ]);
   });
 
   test("declines the approvals the turn holds when the app interrupts it and ends it as interrupted without stopping Claude", async () => {
@@ -2078,13 +2251,27 @@ describe("approvals no turn could show", () => {
       end: (_started, claude) => claude.fail(new Error("socket closed")),
     },
     {
+      name: "Claude stops after an agent spoke during the wait",
+      end: (_started, claude) => {
+        claude.emit(sdk(AGENT_SPOKE));
+        claude.fail(new Error("socket closed"));
+      },
+    },
+    {
+      name: "Claude's stream ends after an agent spoke during the wait",
+      end: (_started, claude) => {
+        claude.emit(sdk(AGENT_SPOKE));
+        claude.end();
+      },
+    },
+    {
       name: "its session is dropped",
       end: ({ runtime, sessionLinks: [link] }) => {
         if (link !== undefined) runtime.dropSession(THREAD, link);
       },
     },
     { name: "the bridge closes", end: ({ turns }) => turns.closeAll() },
-  ])("declines the approvals the turn holds and ends it when $name", async ({
+  ])("declines the approvals the turn holds and fails it when $name", async ({
     end,
   }) => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -2100,6 +2287,11 @@ describe("approvals no turn could show", () => {
     expect((await first)?.behavior).toBe("deny");
     expect((await second)?.behavior).toBe("deny");
     await until(() => completedTurnStatuses(sent).length === 2);
+    expect(completedTurns(sent)[1]).toMatchObject({
+      id: "turn-2",
+      status: "failed",
+      error: { message: "Claude stopped before the approval was answered" },
+    });
     expect(resolvedRequests(sent)).toEqual(
       askedRequests(sent).map((m) => m.id),
     );
@@ -2825,6 +3017,15 @@ const askedRequests = (sent: Sent[]) =>
   sent.filter((m) => typeof m.id === "string" && m.id.startsWith("harnexus-"));
 
 const ALLOWED = { answers: { approval: { answers: ["Allow"] } } };
+
+const isTurnCompleted = (turnId: string) => (message: Sent) =>
+  message.method === "turn/completed" && message.params.turn.id === turnId;
+
+// What a background agent says while no turn of its parent runs.
+const AGENT_SPOKE = {
+  ...answer("msg-agent", "working"),
+  parent_tool_use_id: "toolu-agent",
+};
 
 const DENIED = { answers: { approval: { answers: ["Deny"] } } };
 
