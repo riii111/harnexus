@@ -169,11 +169,11 @@ type SessionSlot = {
 };
 
 // Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken; sends holds the uuid of every message the turn sent Claude.
-// command marks a turn the bridge answers itself, such as /session, own one Claude started on its own, holding one opened only to show approvals no other turn could, and completed one Claude ended with a successful result.
+// command marks a turn the bridge answers itself, such as /session, own one Claude started on its own, holdsApprovals one that only shows approvals, and completed one Claude ended with a successful result.
 type ClaudeTurn = {
   command: boolean;
   own: boolean;
-  holding: boolean;
+  holdsApprovals: boolean;
   completed: boolean;
   slot: SessionSlot | null;
   unsentSteers: string[];
@@ -336,7 +336,7 @@ export const createClaudeRuntime = ({
     const claude: ClaudeTurn = {
       command: command !== null,
       own: false,
-      holding: false,
+      holdsApprovals: false,
       completed: false,
       slot: null,
       unsentSteers: [],
@@ -355,7 +355,7 @@ export const createClaudeRuntime = ({
         ? heldApprovals.get(turn.threadId)
         : undefined;
     if (held?.turn === null) {
-      claude.holding = true;
+      claude.holdsApprovals = true;
       await holdApprovals(turn, held);
       return;
     }
@@ -445,6 +445,21 @@ export const createClaudeRuntime = ({
     await waitForPendingInterrupt(threadId);
     if (turn.state().interrupting) {
       turn.finish({ status: "interrupted" }, null);
+      return;
+    }
+    // A session closes itself on its stream's end, and replacing it would drop what Claude said before the end while waiting for this turn.
+    const stopped = sessions.get(threadId);
+    if (stopped?.session.isClosed() && stopped.unclaimed === "turn") {
+      const inbox = claimReader(stopped);
+      try {
+        await read(turn, claude, stopped, inbox, {
+          effort: effortRule(model, input.effort),
+          sessionStartMs: null,
+          sentAt: now(),
+        });
+      } finally {
+        releaseReader(threadId, stopped, inbox);
+      }
       return;
     }
     let startup: SessionStartup | null = beginSessionStart(turn);
@@ -801,7 +816,8 @@ export const createClaudeRuntime = ({
       const next = await slot.session.messages.next();
       track(threadId, slot, next);
       const inbox = route(threadId, slot, next);
-      // The next message waits until the reader has handled this one, as a turn reading the session itself would; a turn holding approvals reads none, so agents stay live and Claude stopping is seen while it waits.
+      // The next message waits until the reader has handled this one, as a turn reading the session itself would.
+      // An approval turn never reads, so waiting would freeze agents' threads and hide Claude stopping.
       if (!heldApprovals.has(threadId)) await inbox?.settled();
       if (next.done === true || next.value.isErr()) return;
     }
@@ -950,7 +966,7 @@ export const createClaudeRuntime = ({
     const claude = turns.get(turn);
     if (claude === undefined) return "no_running_turn";
     if (claude.command) return "command_not_steerable";
-    if (claude.holding) return "approvals_not_steerable";
+    if (claude.holdsApprovals) return "approvals_not_steerable";
     if (claude.steers >= MAX_STEERS_PER_TURN) return "too_many_steers";
     if (claude.slot === null) {
       claude.unsentSteers.push(text);
@@ -972,7 +988,7 @@ export const createClaudeRuntime = ({
 
   // A turn holding approvals has nothing of Claude's to stop, and an interrupt could close the session its agents run in; the stop closed its prompts, so it ends once each is declined.
   const interrupt = (turn: Turn, repeated: boolean) => {
-    if (turns.get(turn)?.holding === true) return;
+    if (turns.get(turn)?.holdsApprovals === true) return;
     const threadId = turn.threadId;
     const startup = startingSessions.get(threadId);
     const stoppingStartup = startup?.turn === turn;
