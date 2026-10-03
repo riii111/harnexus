@@ -46,6 +46,7 @@ import {
   runsAgent,
 } from "../../presentation/turn.ts";
 import type { TurnEvent } from "../controller.ts";
+import type { Subagents } from "../subagents.ts";
 import { type Refusal, refusalMessage } from "../thread-request.ts";
 import type { ThreadValues } from "../thread-values.ts";
 import type {
@@ -217,6 +218,7 @@ export const createClaudeRuntime = ({
   now = Date.now,
   idleSessionMs = IDLE_SESSION_MS,
   effortRule,
+  subagents,
 }: {
   threads: ThreadValues;
   startSession: StartSession;
@@ -235,6 +237,7 @@ export const createClaudeRuntime = ({
   now?: () => number;
   idleSessionMs?: number;
   effortRule: EffortRule;
+  subagents: Pick<Subagents, "start" | "complete" | "settle">;
 }): TurnRuntime<ClaudeFailureTag> => {
   type Turn = RunningTurn<ClaudeFailureTag>;
 
@@ -755,6 +758,7 @@ export const createClaudeRuntime = ({
   ): Inbox<StreamedNext> | null => {
     if (next.done !== true && next.value.isOk()) {
       trackTasks(slot, next.value.value);
+      trackSubagents(threadId, next.value.value);
     }
     if (slot.reader !== null) {
       slot.reader.push(next);
@@ -782,6 +786,33 @@ export const createClaudeRuntime = ({
     slot.reader = inbox;
     slot.unclaimed = own ? "own" : "turn";
     return inbox;
+  };
+
+  // An agent Claude starts, in the turn or in the background, shows as a thread of its own under this one; one a subagent starts is left inside its parent agent.
+  const trackSubagents = (threadId: string, message: SDKMessage) => {
+    if (message.type !== "system") return;
+    if (
+      message.subtype === "task_started" &&
+      message.task_type === "local_agent" &&
+      message.tool_use_id !== undefined &&
+      (message.spawn_depth ?? 1) === 1
+    ) {
+      subagents.start({
+        threadId,
+        turnId: runningTurns.get(threadId)?.turnId ?? null,
+        toolUseId: message.tool_use_id,
+        taskId: message.task_id,
+        description: message.description || null,
+        agentType: message.subagent_type ?? null,
+      });
+    } else if (
+      message.subtype === "task_notification" ||
+      (message.subtype === "task_updated" &&
+        message.patch.status !== undefined &&
+        ENDED_TASK_STATUSES.has(message.patch.status))
+    ) {
+      subagents.complete(threadId, message.task_id);
+    }
   };
 
   // Messages that came while the thread had a turn accepted, such as a turn Claude started on its own while that turn was being set up, reach the turn ahead of its reply.
@@ -1099,7 +1130,10 @@ export const createClaudeRuntime = ({
   };
 
   const dropSession = (threadId: string, slot: SessionSlot) => {
-    if (sessions.get(threadId) === slot) sessions.delete(threadId);
+    if (sessions.get(threadId) === slot) {
+      sessions.delete(threadId);
+      subagents.settle(threadId);
+    }
     slot.session.close();
   };
 
@@ -1294,6 +1328,12 @@ const CLAUDE_STEPS: Record<ClaudeTurnEvent["step"], true> = {
 };
 
 const COMPACT_PROMPT = "/compact";
+
+const ENDED_TASK_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "killed",
+]);
 
 const IDLE_SESSION_MS = 10 * 60_000;
 

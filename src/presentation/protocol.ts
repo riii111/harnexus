@@ -85,8 +85,18 @@ export type ThreadItem =
   | AgentMessageItem
   | ReasoningItem
   | ToolItem
+  | SubAgentActivityItem
   // No recorded session carries a compaction, so this item and thread/compacted follow the types `codex app-server generate-ts` emits.
   | { type: "contextCompaction"; id: string };
+
+// How a Codex thread tells the app that one of its subagents started or finished; the app then lists the agent's thread under this one.
+export type SubAgentActivityItem = {
+  type: "subAgentActivity";
+  id: string;
+  kind: "started" | "completed";
+  agentThreadId: string;
+  agentPath: string;
+};
 
 // A turn another thread started through codex_app opens with the call's output, which the app shows as a message sent from that thread.
 export type FunctionCallOutputItem = {

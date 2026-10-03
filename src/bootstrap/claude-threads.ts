@@ -5,6 +5,8 @@ import {
 import { createTurnController } from "../conversation/controller.ts";
 import { createHistoryRequests } from "../conversation/history-request.ts";
 import { createRouter, type RouteEvent } from "../conversation/route.ts";
+import { createSubagentRequests } from "../conversation/subagent-requests.ts";
+import { createSubagents } from "../conversation/subagents.ts";
 import { createThreadValues } from "../conversation/thread-values.ts";
 import { createCodexLink } from "../infra/codex/codex-link.ts";
 import { createDelegationWatch } from "../infra/codex/delegations.ts";
@@ -44,6 +46,7 @@ export const connectClaudeThreads = ({
 }) => {
   const delegations = createDelegationWatch(store.claimReviewer);
   const threads = createThreadValues(store, log);
+  const subagents = createSubagents({ send });
   const runtime = createClaudeRuntime({
     threads,
     startSession,
@@ -73,6 +76,7 @@ export const connectClaudeThreads = ({
     send,
     log,
     effortRule,
+    subagents,
   });
   const turns = createTurnController({
     store,
@@ -94,6 +98,14 @@ export const connectClaudeThreads = ({
     send,
     log,
   });
+  const subagentRequests = createSubagentRequests({
+    subagents,
+    threads: turns,
+    call: (method, params) =>
+      request(method, params, { timeoutMs: SUBAGENT_PARENT_TIMEOUT_MS }),
+    history: history.load,
+    send,
+  });
   const router = createRouter(
     turns,
     log,
@@ -101,6 +113,7 @@ export const connectClaudeThreads = ({
     history,
     claudeModels,
     unverifiedCodex,
+    subagentRequests,
   );
   return { router, closeAll: turns.closeAll };
 };
@@ -120,3 +133,5 @@ const THREAD_NOTE = {
 const INJECT_TIMEOUT_MS = 30_000;
 
 const RENAME_TIMEOUT_MS = 10_000;
+
+const SUBAGENT_PARENT_TIMEOUT_MS = 10_000;
