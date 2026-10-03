@@ -43,7 +43,29 @@ export const renderSubagentActivity = (
   kind: SubAgentActivityItem["kind"],
   now: number,
   turnId: string | null = child.turnId,
-): AppNotification[] => activity(child, kind, now, turnId);
+): AppNotification[] => {
+  if (turnId === null) return [];
+  const item: SubAgentActivityItem = {
+    type: "subAgentActivity",
+    id: `${child.id}-${kind}-${child.runs}`,
+    kind,
+    agentThreadId: child.id,
+    agentPath: child.path,
+  };
+  const ref = { threadId: child.parentThreadId, turnId };
+  return [
+    {
+      method: "item/started",
+      params: { item, ...ref, startedAtMs: now },
+      emittedAtMs: now,
+    },
+    {
+      method: "item/completed",
+      params: { item, ...ref, completedAtMs: now },
+      emittedAtMs: now,
+    },
+  ];
+};
 
 // The parent's own thread, as the server reports it, gives the fields only the server knows, such as its directory and environment, which the agent shares.
 export const childThreadView = (
@@ -88,35 +110,6 @@ export const childThreadView = (
 
 export const threadOfAnswer = (answer: unknown) =>
   isObject(answer) && isObject(answer.thread) ? answer.thread : null;
-
-const activity = (
-  child: SubagentThread,
-  kind: SubAgentActivityItem["kind"],
-  now: number,
-  turnId: string | null,
-): AppNotification[] => {
-  if (turnId === null) return [];
-  const item: SubAgentActivityItem = {
-    type: "subAgentActivity",
-    id: `${child.id}-${kind}-${child.runs}`,
-    kind,
-    agentThreadId: child.id,
-    agentPath: child.path,
-  };
-  const ref = { threadId: child.parentThreadId, turnId };
-  return [
-    {
-      method: "item/started",
-      params: { item, ...ref, startedAtMs: now },
-      emittedAtMs: now,
-    },
-    {
-      method: "item/completed",
-      params: { item, ...ref, completedAtMs: now },
-      emittedAtMs: now,
-    },
-  ];
-};
 
 const statusOf = (child: SubagentThread) =>
   child.active
