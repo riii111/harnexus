@@ -156,7 +156,7 @@ describe("agents read back after a restart", () => {
     ]);
   });
 
-  test("lets a fault in rebuilding agents through, and reads them again on the next load", async () => {
+  test("shows the thread's history without its agents after a fault reading them back, and reads them again on the next load", async () => {
     let faults = 1;
     const { history, subagents, events } = setup(() => Result.ok(AGENTS), {
       restoreInto: (registry) => ({
@@ -171,15 +171,13 @@ describe("agents read back after a restart", () => {
       }),
     });
 
-    const failed = await history.load(THREAD).then(
-      () => "loaded",
-      (cause: unknown) => (cause instanceof Error ? cause.message : "rejected"),
-    );
-    const parentHistory = await history.load(THREAD);
+    const first = await history.load(THREAD);
+    const without = subagents.childrenOf(THREAD).length;
+    await history.load(THREAD);
 
-    expect(failed).toBe("broken invariant");
+    expect(first.isOk()).toBe(true);
+    expect(without).toBe(0);
     expect(events).toEqual([]);
-    expect(parentHistory.isOk()).toBe(true);
     expect(subagents.childrenOf(THREAD)).toHaveLength(1);
   });
 

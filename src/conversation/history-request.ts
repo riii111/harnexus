@@ -18,10 +18,12 @@ import {
 import { isObject } from "../runtime/object.ts";
 import type { AppRequest, Thread } from "./thread-request.ts";
 
-export type HistoryEvent = {
-  event: "claude_history_unreadable";
-  error: InferErr<Awaited<ReturnType<ReadSession>>>["_tag"];
-};
+export type HistoryEvent =
+  | {
+      event: "claude_history_unreadable";
+      error: InferErr<Awaited<ReturnType<ReadSession>>>["_tag"];
+    }
+  | { event: "claude_subagents_unrestored" };
 
 export type HistoryMethod = (typeof HISTORY_METHODS)[number];
 
@@ -68,8 +70,12 @@ export const createHistoryRequests = ({
     }
     const loaded = readSession(sessionId).then(async (read) => {
       reading.delete(threadId);
+      // The app's stream waits on this history, so a fault while reading back the thread's agents leaves them out rather than failing it; the next read tries again.
       if (read.isOk()) {
-        await subagents.restore(threadId, sessionId, thread.cwd, read.value);
+        const restored = await Result.tryPromise(() =>
+          subagents.restore(threadId, sessionId, thread.cwd, read.value),
+        );
+        if (restored.isErr()) log({ event: "claude_subagents_unrestored" });
       }
       return read
         .tapError((error) =>

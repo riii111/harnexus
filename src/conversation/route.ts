@@ -541,6 +541,8 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
     case "claude_history_unreadable":
     case "claude_subagents_unreadable":
       return { event: entry.event, error: entry.error };
+    case "claude_subagents_unrestored":
+      return { event: entry.event };
   }
 };
 
