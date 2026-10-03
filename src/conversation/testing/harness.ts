@@ -288,10 +288,18 @@ export const harness = async (
     effortRule,
     ...(idleSessionMs !== undefined && { idleSessionMs }),
   });
+  const runs = new Map<string, Promise<void>>();
   const turns = createTurnController({
     store,
     threads,
-    runtime,
+    runtime: {
+      ...runtime,
+      run: (turn) => {
+        const ran = runtime.run(turn);
+        runs.set(turn.turnId, ran);
+        return ran;
+      },
+    },
     materializeThread: async (threadId) => {
       materialized.push(threadId);
       if (failuresLeft === 0) return Result.ok({});
@@ -305,6 +313,7 @@ export const harness = async (
     effortRule,
   });
   if (adopt) turns.adopt(THREAD, { model: MODEL, cwd: dir });
+  turnRuns.set(turns, runs);
   return {
     turns,
     sent,
@@ -349,7 +358,16 @@ export const completeTurn = async (
   claude.emit(sdk(answer(`msg-${id}`, "ok")));
   claude.emit(sdk(success()));
   await until(() => completedTurnStatuses(sent).length > before);
+  // The turn reads Claude's record after turn/completed, so a record the test writes next would otherwise be taken as the turn's own.
+  const run = turnRuns.get(turns)?.get(responseTo(sent, id).result.turn.id);
+  if (run === undefined) return expect.unreachable("turn never ran");
+  await run;
 };
+
+const turnRuns = new WeakMap<
+  ReturnType<typeof createTurnController>,
+  Map<string, Promise<void>>
+>();
 
 export const turnStart = (id: number, text: string, threadId = THREAD) => ({
   id,
@@ -402,12 +420,18 @@ export const REFUSED = (id: number) => ({
   error: { code: -32600, message: expect.any(String) },
 });
 
+// The test's own timeout ends a wait that never holds; this only stops one left running after it.
 export const until = async (condition: () => boolean) => {
-  for (let waited = 0; !condition(); waited += 2) {
-    if (waited > 2000) return expect.unreachable("condition never held");
+  const deadline = performance.now() + UNTIL_BACKSTOP_MS;
+  while (!condition()) {
+    if (performance.now() > deadline) {
+      return expect.unreachable("condition never held");
+    }
     await Bun.sleep(2);
   }
 };
+
+const UNTIL_BACKSTOP_MS = 30_000;
 
 export const firstPrompt = async (
   prompt: AsyncIterable<SDKUserMessage> | null,
