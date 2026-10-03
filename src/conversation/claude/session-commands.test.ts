@@ -7,12 +7,14 @@ import {
   SUBSCRIPTION_CONNECTION,
 } from "../../infra/claude/connection.ts";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
+import { writeFileAtomic } from "../../runtime/fs.boundary.ts";
 import {
   claudeDir,
   completedItems,
   completedTurnStatuses,
   completeTurn,
   dir,
+  diskFull,
   harness,
   MODEL,
   OTHER_THREAD,
@@ -310,6 +312,29 @@ describe("/session", () => {
     );
   });
 
+  test("answers a terminal command with the repository's model settings and asks for its credentials file without showing its path", async () => {
+    const pinned = {
+      ...VERTEX,
+      credentialsFile: "/keys/sidework.json",
+      models: { haiku: "claude-haiku-4-5@20251001" },
+    };
+    const claude = fakeClaude(VERTEX_ACCOUNT);
+    const { turns, sent } = await harness([claude], {
+      resolveConnection: async () => Result.ok(pinned),
+    });
+    await completeTurn(turns, sent, claude, 10);
+
+    turns.startTurn(turnStart(11, "/session"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    const reply = agentTexts(sent).at(-1) ?? "";
+    expect(reply).toContain(
+      "CLOUD_ML_REGION='global' ANTHROPIC_DEFAULT_HAIKU_MODEL='claude-haiku-4-5@20251001' claude --resume 'se-1'",
+    );
+    expect(reply).toContain("Also set GOOGLE_APPLICATION_CREDENTIALS");
+    expect(reply).not.toContain("/keys/sidework.json");
+  });
+
   test("answers the Vertex connection a new thread will confirm without starting Claude", async () => {
     const claude = fakeClaude(VERTEX_ACCOUNT);
     const { turns, sent } = await harness([claude], {
@@ -385,6 +410,31 @@ describe("/switch-connection", () => {
       provider: "vertex",
       projectId: "next-project",
       region: "global",
+    });
+  });
+
+  test("keeps the chat's connection when the change cannot be saved", async () => {
+    let current: Connection = VERTEX;
+    const claude = fakeClaude(VERTEX_ACCOUNT);
+    let refuse = false;
+    const { turns, sent, store } = await harness([claude], {
+      resolveConnection: async () => Result.ok(current),
+      files: {
+        writeState: async (target, content) =>
+          refuse ? diskFull(target) : writeFileAtomic(target, content),
+      },
+    });
+    await completeTurn(turns, sent, claude, 10);
+    await until(() => store.get(THREAD)?.runState === "idle");
+    current = SUBSCRIPTION_CONNECTION;
+    refuse = true;
+
+    turns.startTurn(turnStart(11, "/switch-connection"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(agentTexts(sent).at(-1)).toContain("could not save the change");
+    expect(store.get(THREAD)?.connection).toMatchObject({
+      provider: "vertex",
     });
   });
 

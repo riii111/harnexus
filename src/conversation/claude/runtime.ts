@@ -13,6 +13,7 @@ import {
 import {
   type Connection,
   type ConnectionTarget,
+  sameConnection,
   sameTarget,
   targetOf,
 } from "../../infra/claude/connection.ts";
@@ -124,6 +125,7 @@ type ClaudeFailureTag =
   | ForkNotSeparate["_tag"]
   | ForkPointUnknown["_tag"]
   | ConnectionChanged["_tag"]
+  | ConnectionNotSaved["_tag"]
   | ErrorTag<ReturnType<ResolveConnection>>
   | "SteerUnconfirmed";
 
@@ -178,7 +180,7 @@ export type ClaudeLogEvent = TurnEvent<ClaudeFailureTag> | ClaudeTurnEvent;
 type SessionSlot = {
   session: ClaudeSession;
   model: string;
-  connection: ConnectionTarget;
+  connection: Connection;
   pendingInterrupt: Promise<void> | null;
   link: CodexLink;
   attachedSkills: Map<string, string>;
@@ -238,6 +240,10 @@ class ForkPointUnknown extends TaggedError("ForkPointUnknown")<{
 }> {}
 
 class ConnectionChanged extends TaggedError("ConnectionChanged")<{
+  message: string;
+}> {}
+
+class ConnectionNotSaved extends TaggedError("ConnectionNotSaved")<{
   message: string;
 }> {}
 
@@ -556,7 +562,17 @@ export const createClaudeRuntime = ({
     }
     const sessionStartMs = reused ? null : now() - sessionAskedAt;
     if (threads.connectionOf(threadId) === null) {
-      confirmConnection(turn, slot.value.connection);
+      const confirmed = await confirmConnection(turn, slot.value.connection);
+      if (!confirmed) {
+        dropSession(threadId, slot.value);
+        turn.fail(
+          new ConnectionNotSaved({
+            message:
+              "harnexus could not save which connection this chat runs on, so nothing was sent to Claude; send the message again to retry",
+          }),
+        );
+        return;
+      }
     }
     turn.useLink(slot.value.link);
     // Claude leaves plan mode when a plan is approved, so the mode the app asks for is set again on every turn.
@@ -692,23 +708,25 @@ export const createClaudeRuntime = ({
   };
 
   // Runs before the prompt is sent, so the notice comes ahead of Claude's reply.
-  const confirmConnection = (turn: Turn, connection: ConnectionTarget) => {
-    void threads.setConnection(turn.threadId, connection);
+  const confirmConnection = async (turn: Turn, connection: Connection) => {
+    const target = targetOf(connection);
+    if (!(await threads.setConnection(turn.threadId, target))) return false;
     log({
       event: "claude_turn",
       step: "connection_confirmed",
-      provider: connection.provider,
+      provider: target.provider,
     });
-    if (connection.provider === "vertex") {
+    if (target.provider === "vertex") {
       turn.apply(
         renderNotice(
           turn.state(),
-          connectionNoticeText(connection),
+          connectionNoticeText(target),
           "commentary",
           now(),
         ),
       );
     }
+    return true;
   };
 
   // Claude may ask for a tool before the app has been shown the turn the thread accepted, such as a turn of its own, so the approval waits until a turn is shown or the thread has none left.
@@ -1236,7 +1254,7 @@ export const createClaudeRuntime = ({
     const slot: SessionSlot = {
       session: started.value,
       model,
-      connection: targetOf(connection),
+      connection,
       pendingInterrupt: null,
       link,
       attachedSkills: new Map(),
@@ -1556,7 +1574,7 @@ const canReuse = (
   slot: SessionSlot | undefined,
   model: string,
   connection: Connection,
-) => slot?.model === model && sameTarget(slot.connection, targetOf(connection));
+) => slot?.model === model && sameConnection(slot.connection, connection);
 
 const resumeFrom = (sessionId: string | null) =>
   sessionId === null ? {} : { resume: sessionId };

@@ -1,6 +1,5 @@
 import {
   type ConnectionView,
-  resumeEnvOf,
   type SessionConnection,
   sessionConnectionLines,
   switchedText,
@@ -29,6 +28,7 @@ export type SessionReply =
     }
   | { kind: "connectionSwitched"; to: ConnectionView }
   | { kind: "connectionUnchanged" }
+  | { kind: "connectionNotSaved" }
   | { kind: "connectionUnreadable"; problem: string };
 
 export type ListedConversation = {
@@ -70,6 +70,8 @@ export const sessionReplyText = (reply: SessionReply, now: number): string => {
       return switchedText(reply.to);
     case "connectionUnchanged":
       return "This chat already uses the connection harnexus settings choose for this repository, so nothing changed.";
+    case "connectionNotSaved":
+      return "Harnexus could not save the change, so this chat stays on its connection. Send /switch-connection again to retry.";
     case "connectionUnreadable":
       return `${reply.problem}. Nothing changed.`;
   }
@@ -118,7 +120,7 @@ const sessionText = ({
       ...extra,
     ].join("\n");
   }
-  const env = resumeEnvOf(connection.saved)
+  const env = connection.resumeEnv
     .map(([name, value]) => `${name}=${shellQuote(value)} `)
     .join("");
   return [
@@ -130,6 +132,12 @@ const sessionText = ({
     "```sh",
     `cd ${shellQuote(cwd)} && ${env}claude --resume ${shellQuote(sessionId)}`,
     "```",
+    ...(connection.credentialsFile
+      ? [
+          "",
+          "Also set GOOGLE_APPLICATION_CREDENTIALS to the credentialsFile in your harnexus settings.",
+        ]
+      : []),
   ].join("\n");
 };
 

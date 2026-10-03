@@ -1,6 +1,8 @@
 import type { InferErr } from "better-result";
+import { terminalEnv } from "../../infra/claude/auth.ts";
 import {
   type Connection,
+  type ConnectionTarget,
   sameTarget,
   targetOf,
 } from "../../infra/claude/connection.ts";
@@ -130,7 +132,12 @@ export const createSessionCommands = ({
     const saved = threads.connectionOf(threadId);
     const configured = await resolveConnection(cwd);
     const connection: SessionConnection = configured.isErr()
-      ? { kind: "unreadable", saved, problem: configured.error.message }
+      ? {
+          kind: "unreadable",
+          saved,
+          problem: configured.error.message,
+          ...resumeOn(saved),
+        }
       : compared(saved, configured.value);
     return {
       reply: {
@@ -160,8 +167,9 @@ export const createSessionCommands = ({
     if (saved === null || sameTarget(saved, to)) {
       return answered({ kind: "connectionUnchanged" });
     }
-    await threads.setConnection(threadId, null);
-    return answered({ kind: "connectionSwitched", to });
+    return (await threads.setConnection(threadId, null))
+      ? answered({ kind: "connectionSwitched", to })
+      : answered({ kind: "connectionNotSaved" });
   };
 
   // A thread with a conversation would lose it, so only an empty thread lists others.
@@ -274,14 +282,39 @@ const commandOf = (
 };
 
 const compared = (
-  saved: ReturnType<ThreadValues["connectionOf"]>,
+  saved: ConnectionTarget | null,
   configured: Connection,
 ): SessionConnection => {
   const target = targetOf(configured);
-  return saved === null || sameTarget(saved, target)
-    ? { kind: "same", saved, configured: target }
-    : { kind: "changed", saved, configured: target };
+  if (saved !== null && !sameTarget(saved, target)) {
+    return { kind: "changed", saved, configured: target, ...resumeOn(saved) };
+  }
+  return {
+    kind: "same",
+    saved,
+    configured: target,
+    ...(saved?.provider === "vertex" && configured.provider === "vertex"
+      ? {
+          resumeEnv: terminalEnv(configured),
+          credentialsFile: configured.credentialsFile !== null,
+        }
+      : resumeOn(saved)),
+  };
 };
+
+// Without these variables claude --resume would continue the conversation on the terminal's own login.
+const resumeOn = (saved: ConnectionTarget | null) => ({
+  resumeEnv:
+    saved?.provider === "vertex"
+      ? terminalEnv({
+          ...saved,
+          credentialsFile: null,
+          models: {},
+          modelRegions: {},
+        })
+      : [],
+  credentialsFile: false,
+});
 
 const answered = (reply: SessionReply) => ({ reply, error: null });
 

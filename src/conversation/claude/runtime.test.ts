@@ -1144,11 +1144,12 @@ describe("session ids", () => {
   test("resumes from the session id Claude reported even when saving it failed", async () => {
     const first = fakeClaude(SUBSCRIPTION);
     const second = fakeClaude(SUBSCRIPTION);
-    let writes = 0;
     const { turns, sent, settings, events } = await harness([first, second], {
       files: {
         writeState: async (target, content) =>
-          ++writes === 1 ? writeFileAtomic(target, content) : diskFull(target),
+          content.includes('"se-1"')
+            ? diskFull(target)
+            : writeFileAtomic(target, content),
       },
     });
 
@@ -1268,6 +1269,73 @@ describe("repository connections", () => {
       event: "claude_turn",
       step: "connection_changed",
     });
+  });
+
+  test("send nothing to Claude while the confirmed connection cannot be saved, and confirm it on the next turn", async () => {
+    const first = fakeClaude(VERTEX_ACCOUNT);
+    const second = fakeClaude(VERTEX_ACCOUNT);
+    let refuse = true;
+    const { turns, sent, store, events } = await harness([first, second], {
+      resolveConnection: async () => Result.ok(VERTEX),
+      files: {
+        writeState: async (target, content) =>
+          refuse && content.includes('"provider"')
+            ? diskFull(target)
+            : writeFileAtomic(target, content),
+      },
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+    const failed = turnCompleted(sent);
+    const shownBefore = agentMessages(sent);
+    refuse = false;
+    await completeTurn(turns, sent, second, 11);
+
+    expect(failed?.error?.message).toContain("could not save");
+    expect(await first.prompts()).toEqual([]);
+    expect(first.closes()).toBe(1);
+    expect(shownBefore).toEqual([]);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "connection_not_saved",
+      error: "StatePersistFailed",
+    });
+    expect(agentMessages(sent)).toEqual([
+      { phase: "commentary", text: VERTEX_NOTICE },
+      { phase: "final_answer", text: "ok" },
+    ]);
+    expect(store.get(THREAD)?.connection).toEqual(VERTEX_TARGET);
+  });
+
+  test("restart Claude on the same conversation when only the credentials or model settings change", async () => {
+    let current: Connection = VERTEX;
+    const first = fakeClaude(VERTEX_ACCOUNT);
+    const second = fakeClaude(VERTEX_ACCOUNT);
+    const { turns, sent, settings } = await harness([first, second], {
+      resolveConnection: async () => Result.ok(current),
+    });
+    await completeTurn(turns, sent, first, 10);
+    current = {
+      ...VERTEX,
+      credentialsFile: "/keys/sidework.json",
+      models: { haiku: "claude-haiku-4-5@20251001" },
+    };
+
+    await completeTurn(turns, sent, second, 11);
+
+    expect(first.closes()).toBe(1);
+    expect(settings[1]).toMatchObject({ resume: "se-1", connection: current });
+    expect(second.options().env).toMatchObject({
+      GOOGLE_APPLICATION_CREDENTIALS: "/keys/sidework.json",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5@20251001",
+    });
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
+    expect(agentMessages(sent).map(({ phase }) => phase)).toEqual([
+      "commentary",
+      "final_answer",
+      "final_answer",
+    ]);
   });
 
   test("refuse a turn without starting Claude when the connection settings cannot be read", async () => {
@@ -3337,7 +3405,7 @@ describe("thread tools", () => {
     const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
     const { turns, gates } = await harness([claude]);
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => gates.length > 0);
     expect(gates).toEqual(["accept"]);
 
     turns.interruptTurn(interrupt(20, "turn-1"));

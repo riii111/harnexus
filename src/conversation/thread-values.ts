@@ -1,5 +1,8 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
-import type { ConnectionTarget } from "../infra/claude/connection.ts";
+import {
+  type ConnectionTarget,
+  sameTarget,
+} from "../infra/claude/connection.ts";
 import { isClaudeEffort } from "../infra/claude/models.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
 import type { Thread } from "./thread-request.ts";
@@ -35,7 +38,7 @@ export type StoreTag =
   | "WriteNotStarted"
   | "RunStateNotSaved";
 
-// The model, effort, session id and connection a thread runs with are set here before the store saves them and win over what it holds, so a failed save still applies while the bridge runs; a null session id is one Claude lost.
+// The model, effort and session id a thread runs with are set here before the store saves them and win over what it holds, so a failed save still applies while the bridge runs; a null session id is one Claude lost.
 export const createThreadValues = (
   store: ThreadStore,
   log: (event: ThreadValueEvent) => void,
@@ -47,7 +50,6 @@ export const createThreadValues = (
   const models = new Map<string, string>();
   const efforts = new Map<string, EffortLevel>();
   const sessionIds = new Map<string, string | null>();
-  const connections = new Map<string, ConnectionTarget | null>();
   // Threads given a picked conversation since the app last opened them, whose history the app does not hold yet.
   const picked = new Set<string>();
 
@@ -75,9 +77,7 @@ export const createThreadValues = (
       : (store.get(threadId)?.sessionId ?? null);
 
   const connectionOf = (threadId: string) =>
-    connections.has(threadId)
-      ? (connections.get(threadId) ?? null)
-      : (store.get(threadId)?.connection ?? null);
+    store.get(threadId)?.connection ?? null;
 
   const adopt = (threadId: string, thread: Thread) => {
     if (store.get(threadId) === undefined) adopted.set(threadId, thread);
@@ -163,11 +163,11 @@ export const createThreadValues = (
     }
   };
 
+  // Unlike a session id, a connection applies only once the store holds it, so a restart never resumes a conversation on a connection nobody confirmed; a save whose sync failed already holds it.
   const setConnection = async (
     threadId: string,
     connection: ConnectionTarget | null,
   ) => {
-    connections.set(threadId, connection);
     const saved = await store.setConnection(threadId, connection);
     if (saved.isErr()) {
       log({
@@ -176,6 +176,10 @@ export const createThreadValues = (
         error: saved.error._tag,
       });
     }
+    const held = connectionOf(threadId);
+    return connection === null || held === null
+      ? held === connection
+      : sameTarget(held, connection);
   };
 
   const saveModel = (threadId: string, model: string) => {

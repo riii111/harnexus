@@ -38,6 +38,10 @@ export const sameTarget = (a: ConnectionTarget, b: ConnectionTarget) =>
     ? a.provider === b.provider
     : a.projectId === b.projectId && a.region === b.region;
 
+// Credentials, model pins and model regions change how Claude Code reaches the same project, so they restart the session without counting as a move to another connection.
+export const sameConnection = (a: Connection, b: Connection) =>
+  settingsKey(a) === settingsKey(b);
+
 export const isConnectionTarget = (value: unknown): value is ConnectionTarget =>
   isObject(value) &&
   (value.provider === "subscription" ||
@@ -46,3 +50,17 @@ export const isConnectionTarget = (value: unknown): value is ConnectionTarget =>
       value.projectId !== "" &&
       typeof value.region === "string" &&
       value.region !== ""));
+
+const settingsKey = (connection: Connection) =>
+  connection.provider === "subscription"
+    ? connection.provider
+    : JSON.stringify([
+        connection.projectId,
+        connection.region,
+        connection.credentialsFile,
+        sortedEntries(connection.models),
+        sortedEntries(connection.modelRegions),
+      ]);
+
+const sortedEntries = (record: Readonly<Record<string, string>>) =>
+  Object.entries(record).sort(([a], [b]) => a.localeCompare(b));

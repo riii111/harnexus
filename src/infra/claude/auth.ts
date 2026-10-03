@@ -115,6 +115,14 @@ export const checkSubscription = (account: AccountInfo) => {
   );
 };
 
+// The credentials file stays out, since the command is shown in the chat.
+export const terminalEnv = (connection: VertexConnection) =>
+  Object.entries(vertexEnv(connection)).flatMap(([name, value]) =>
+    name === "GOOGLE_APPLICATION_CREDENTIALS" || value === undefined
+      ? []
+      : [[name, value] as [string, string]],
+  );
+
 const vertexEnv = (connection: VertexConnection): Env => ({
   CLAUDE_CODE_USE_VERTEX: "1",
   ANTHROPIC_VERTEX_PROJECT_ID: connection.projectId,

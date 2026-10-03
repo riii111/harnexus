@@ -2,10 +2,12 @@ export type ConnectionView =
   | { provider: "subscription" }
   | { provider: "vertex"; projectId: string; region: string };
 
-export type SessionConnection =
+// credentialsFile says whether the settings name a credentials file, which the resume command leaves out.
+export type SessionConnection = (
   | { kind: "same"; saved: ConnectionView | null; configured: ConnectionView }
   | { kind: "changed"; saved: ConnectionView; configured: ConnectionView }
-  | { kind: "unreadable"; saved: ConnectionView | null; problem: string };
+  | { kind: "unreadable"; saved: ConnectionView | null; problem: string }
+) & { resumeEnv: readonly [string, string][]; credentialsFile: boolean };
 
 type VertexView = Extract<ConnectionView, { provider: "vertex" }>;
 
@@ -55,18 +57,6 @@ export const sessionConnectionLines = (connection: SessionConnection) => {
         : saved;
   }
 };
-
-// Without these variables claude --resume would continue the conversation on the terminal's own login.
-export const resumeEnvOf = (
-  saved: ConnectionView | null,
-): [string, string][] =>
-  saved?.provider === "vertex"
-    ? [
-        ["CLAUDE_CODE_USE_VERTEX", "1"],
-        ["ANTHROPIC_VERTEX_PROJECT_ID", saved.projectId],
-        ["CLOUD_ML_REGION", saved.region],
-      ]
-    : [];
 
 const vertexLines = (connection: VertexView, confirmed: string) => [
   `- Provider: Google Vertex AI (${confirmed})`,
