@@ -7,6 +7,7 @@ import {
   loadClaudeModels,
   loadEffortSettings,
   readClaudeSession,
+  readClaudeSubagents,
   startClaudeSession,
 } from "../infra/claude/session.ts";
 import {
@@ -150,6 +151,7 @@ async function withClaude(relay: {
     listConversations: (cwd, since) => listClaudeConversations(cwd, { since }),
     lastRecordOf: (sessionId) => readLastRecordUuid(sessionId),
     readSession: (sessionId) => readClaudeSession(sessionId),
+    readSubagents: (sessionId) => readClaudeSubagents(sessionId),
     // Unreadable settings leave threads with none picked on the model default, which is still the level the app shows.
     effortRule: effortRule(
       settings.isOk() ? settings.value : {},

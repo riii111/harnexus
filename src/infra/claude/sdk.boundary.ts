@@ -38,6 +38,11 @@ type ResolveSettings = (options: {
 
 type GetSessionMessages = (sessionId: string) => Promise<SessionMessage[]>;
 
+export type GetSubagentMessages = (
+  sessionId: string,
+  agentId: string,
+) => Promise<SessionMessage[]>;
+
 export type ClaudeSdk = {
   query: RunQuery;
   resolveSettings: ResolveSettings;
@@ -213,6 +218,20 @@ export const readSessionMessages = (
       new ClaudeRecordUnreadable({
         cause,
         message: "cannot read the Claude conversation record",
+      }),
+  });
+
+export const readSubagentMessages = (
+  read: GetSubagentMessages,
+  sessionId: string,
+  agentId: string,
+) =>
+  Result.tryPromise({
+    try: () => read(sessionId, agentId),
+    catch: (cause) =>
+      new ClaudeRecordUnreadable({
+        cause,
+        message: "cannot read a Claude subagent's record",
       }),
   });
 

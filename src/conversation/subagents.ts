@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { type HistoryTurn, noteItem } from "../presentation/history.ts";
+import {
+  type AgentRef,
+  type HistoryTurn,
+  noteItem,
+} from "../presentation/history.ts";
 import {
   closeSubagentTurn,
   declineSubagentTool,
@@ -193,6 +197,29 @@ export const createSubagents = ({
       ...descendantsOf(child.id),
     ]);
 
+  // Agents read back from Claude's records after a restart join as ended, keeping any the bridge already knows.
+  const restore = (
+    agents: readonly { thread: SubagentThread; history: HistoryTurn[] }[],
+  ) => {
+    for (const { thread, history } of agents) {
+      if (children.has(thread.id)) continue;
+      children.set(thread.id, thread);
+      histories.set(thread.id, history);
+    }
+  };
+
+  // The agent a session's call started, as a parent's history names it.
+  const agentRefOf =
+    (threadId: string) =>
+    (toolUseId: string): AgentRef | undefined => {
+      const child = sessionAgents(threadId).find(
+        (candidate) => candidate.toolUseId === toolUseId,
+      );
+      return child === undefined
+        ? undefined
+        : { threadId: child.id, path: child.path };
+    };
+
   // Undefined for a thread that is no agent's.
   const historyOf = (threadId: string): HistoryTurn[] | undefined => {
     if (!children.has(threadId)) return undefined;
@@ -216,6 +243,8 @@ export const createSubagents = ({
     childrenOf,
     descendantsOf,
     historyOf,
+    restore,
+    agentRefOf,
     get: (threadId: unknown) =>
       typeof threadId === "string" ? children.get(threadId) : undefined,
   };
@@ -224,7 +253,7 @@ export const createSubagents = ({
 export type Subagents = ReturnType<typeof createSubagents>;
 
 // Shaped as a UUID, as the app's own thread ids are.
-const childThreadId = (parentThreadId: string, taskId: string) => {
+export const childThreadId = (parentThreadId: string, taskId: string) => {
   const hex = createHash("sha256")
     .update(`${parentThreadId}\n${taskId}`)
     .digest("hex");
@@ -238,7 +267,7 @@ const childThreadId = (parentThreadId: string, taskId: string) => {
 };
 
 // The app reads an agent path as Codex writes it, whose names hold only lowercase letters, digits and underscores.
-const agentName = (agentType: string | null) => {
+export const agentName = (agentType: string | null) => {
   const name = (agentType ?? DEFAULT_NAME)
     .toLowerCase()
     .replace(/[^a-z0-9_]+/g, "_")

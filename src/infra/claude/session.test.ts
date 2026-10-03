@@ -24,6 +24,7 @@ import {
   loadEffortSettings,
   readClaudeLogin,
   readClaudeSession,
+  readClaudeSubagents,
   startClaudeSession,
 } from "./session.ts";
 import { failingQuery, fakeClaude } from "./testing/fake-claude.ts";
@@ -659,6 +660,67 @@ describe("claudeSessionExists", () => {
     const found = await claudeSessionExists("se-1", configDir);
 
     expect(found.isErr() && found.error._tag).toBe("FileReadFailed");
+  });
+});
+
+describe("readClaudeSubagents", () => {
+  let configDir: string;
+
+  beforeEach(() => {
+    configDir = mkdtempSync(join(tmpdir(), "harnexus-claude-config-"));
+  });
+
+  afterEach(() => {
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  test("reads each agent's note and messages from beside the conversation's record", async () => {
+    const record = writeRecord(configDir, SESSION_ID, RECORD_LINE);
+    const folder = join(record.slice(0, -".jsonl".length), "subagents");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(
+      join(folder, "agent-a1.meta.json"),
+      JSON.stringify({
+        agentType: "Explore",
+        description: "read the README",
+        toolUseId: "toolu-1",
+        spawnDepth: 1,
+      }),
+    );
+    writeFileSync(join(folder, "agent-a1.jsonl"), "");
+    writeFileSync(join(folder, "agent-a2.meta.json"), "not json");
+    const asked: string[] = [];
+
+    const read = await readClaudeSubagents(SESSION_ID, {
+      read: async (sessionId, agentId) => {
+        asked.push(`${sessionId}/${agentId}`);
+        return [];
+      },
+      configDir,
+    });
+
+    expect(read.isOk() && read.value).toEqual([
+      {
+        agentId: "a1",
+        toolUseId: "toolu-1",
+        description: "read the README",
+        agentType: "Explore",
+        depth: 1,
+        messages: [],
+      },
+    ]);
+    expect(asked).toEqual([`${SESSION_ID}/a1`]);
+  });
+
+  test("reads no agent for a conversation without a record", async () => {
+    mkdirSync(join(configDir, "projects", "-work-tree"), { recursive: true });
+
+    const read = await readClaudeSubagents("se-1", {
+      read: async () => [],
+      configDir,
+    });
+
+    expect(read.isOk() && read.value).toEqual([]);
   });
 });
 
