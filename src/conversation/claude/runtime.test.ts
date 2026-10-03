@@ -2621,6 +2621,53 @@ describe("approvals no turn could show", () => {
   });
 });
 
+describe("a Claude that stops while a turn waits to read it", () => {
+  test.each<{
+    name: string;
+    stop: (claude: ReturnType<typeof fakeClaude>) => void;
+  }>([
+    { name: "ends", stop: (claude) => claude.end() },
+    {
+      name: "fails",
+      stop: (claude) => claude.fail(new Error("socket closed")),
+    },
+  ])("runs the turn on a new Claude when the idle Claude $name before it", async ({
+    stop,
+  }) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const next = fakeClaude(SUBSCRIPTION);
+    const marking = { held: false };
+    const gate = createGate();
+    const { turns, sent, settings } = await harness([claude, next], {
+      files: {
+        createMarker: async (path) => {
+          if (marking.held) await gate.promise;
+          return createEmptyFile(path);
+        },
+      },
+    });
+    await completeTurn(turns, sent, claude, 10);
+
+    marking.held = true;
+    turns.startTurn(turnStart(11, "next"), undefined);
+    stop(claude);
+    await until(() => claude.closes() > 0);
+    gate.open();
+    await until(() => next.started());
+    next.emit(sdk(answer("msg-2", "hi")));
+    next.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(completedTurns(sent)[1]).toMatchObject({
+      id: "turn-2",
+      status: "completed",
+      items: [{ text: "hi" }],
+    });
+    expect(await firstPrompt(next.prompt())).toBe("next");
+    expect(settings[1]).toMatchObject({ resume: "se-1" });
+  });
+});
+
 describe("turn/steer", () => {
   test("answers with the turn id, passes the steer to Claude and shows it in the turn", async () => {
     const claude = fakeClaude(SUBSCRIPTION);

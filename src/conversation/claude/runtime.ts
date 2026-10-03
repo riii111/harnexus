@@ -169,7 +169,7 @@ type SessionSlot = {
 };
 
 // Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken; sends holds the uuid of every message the turn sent Claude.
-// command marks a turn the bridge answers itself, such as /session, own one Claude started on its own, holdsApprovals one that only shows approvals, and completed one Claude ended with a successful result.
+// command marks a turn the bridge answers itself, such as /session, own one Claude started on its own, holdsApprovals one opened only to show approvals no other turn could, and completed one Claude ended with a successful result.
 type ClaudeTurn = {
   command: boolean;
   own: boolean;
@@ -447,9 +447,13 @@ export const createClaudeRuntime = ({
       turn.finish({ status: "interrupted" }, null);
       return;
     }
-    // A session closes itself on its stream's end, and replacing it would drop what Claude said before the end while waiting for this turn.
+    // A session closes itself on its stream's end, and replacing it would drop what Claude said before the end while waiting for this turn; an end alone leaves nothing to show, so the turn runs on a new session.
     const stopped = sessions.get(threadId);
-    if (stopped?.session.isClosed() && stopped.unclaimed === "turn") {
+    if (
+      stopped?.session.isClosed() &&
+      stopped.unclaimed === "turn" &&
+      stopped.reader?.queued().some(saidSomething) === true
+    ) {
       const inbox = claimReader(stopped);
       try {
         await read(turn, claude, stopped, inbox, {
@@ -1421,6 +1425,9 @@ const answersTurn = (result: SDKResultMessage, sends: Set<string>) => {
 const takenUuids = (result: SDKResultMessage) =>
   result.user_message_uuids ??
   (result.user_message_uuid === undefined ? [] : [result.user_message_uuid]);
+
+const saidSomething = (next: StreamedNext) =>
+  next.done !== true && next.value.isOk();
 
 // Claude starts every turn with its init message, then streams its reply; a subagent's messages or a background task's report alone start none.
 const startsTurn = (message: SDKMessage) => {
