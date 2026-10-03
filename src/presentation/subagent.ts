@@ -84,7 +84,6 @@ export const childThreadView = (
   turns: [],
 });
 
-// Only the server's thread object is kept from its answer, since the rest of a thread/read answer names nothing else.
 export const threadOfAnswer = (answer: unknown) =>
   isObject(answer) && isObject(answer.thread) ? answer.thread : null;
 
