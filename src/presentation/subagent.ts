@@ -4,6 +4,7 @@ import { type HistoryItem, type HistoryTurn, noteItem } from "./history.ts";
 import type {
   AppNotification,
   SubAgentActivityItem,
+  ThreadItem,
   Turn,
 } from "./protocol.ts";
 import {
@@ -209,10 +210,39 @@ export const runningSubagentTurn = (turn: SubagentTurn): HistoryTurn => ({
 });
 
 // The turn's items are kept in one map for the turn's life, since an agent's turn can stream many messages.
+// The app can read a running turn while its text streams, so a started item takes in the text sent so far; its completion then replaces it with the whole text.
 const collect = (
   turn: SubagentTurn,
   notifications: readonly AppNotification[],
 ): SubagentTurn => {
-  for (const notification of notifications) noteItem(turn.items, notification);
+  for (const notification of notifications) {
+    noteItem(turn.items, notification);
+    if (notification.method === "item/agentMessage/delta") {
+      const { itemId, delta } = notification.params;
+      updateOpenItem(turn.items, itemId, (item) =>
+        item.type === "agentMessage"
+          ? { ...item, text: item.text + delta }
+          : item,
+      );
+    } else if (notification.method === "item/reasoning/textDelta") {
+      const { itemId, delta, contentIndex } = notification.params;
+      updateOpenItem(turn.items, itemId, (item) => {
+        if (item.type !== "reasoning") return item;
+        const content = [...item.content];
+        content[contentIndex] = (content[contentIndex] ?? "") + delta;
+        return { ...item, content };
+      });
+    }
+  }
   return turn;
+};
+
+const updateOpenItem = (
+  items: Map<string, HistoryItem>,
+  itemId: string,
+  update: (item: ThreadItem) => ThreadItem,
+) => {
+  const entry = items.get(itemId);
+  if (entry === undefined || entry.completedAtMs !== null) return;
+  items.set(itemId, { ...entry, item: update(entry.item) });
 };
