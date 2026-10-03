@@ -1,6 +1,11 @@
+import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { type InferErr, Result } from "better-result";
 import type { readClaudeSession } from "../infra/claude/session.ts";
-import { buildHistory, type HistoryTurn } from "../presentation/history.ts";
+import {
+  type AgentRef,
+  buildHistory,
+  type HistoryTurn,
+} from "../presentation/history.ts";
 import {
   pageItems,
   pageTimeline,
@@ -13,10 +18,12 @@ import {
 import { isObject } from "../runtime/object.ts";
 import type { AppRequest, Thread } from "./thread-request.ts";
 
-export type HistoryEvent = {
-  event: "claude_history_unreadable";
-  error: InferErr<Awaited<ReturnType<ReadSession>>>["_tag"];
-};
+export type HistoryEvent =
+  | {
+      event: "claude_history_unreadable";
+      error: InferErr<Awaited<ReturnType<ReadSession>>>["_tag"];
+    }
+  | { event: "claude_subagents_unrestored" };
 
 export type HistoryMethod = (typeof HISTORY_METHODS)[number];
 
@@ -31,19 +38,21 @@ type ReadSession = (sessionId: string) => ReturnType<typeof readClaudeSession>;
 type Loaded = Result<HistoryTurn[], InferErr<Awaited<ReturnType<ReadSession>>>>;
 
 // The server never sees a Claude turn, so a Claude thread's history comes from Claude's own record and is rebuilt on each request rather than stored by the bridge.
-// A subagent's thread has no record of its own, so its history comes from what the bridge kept of it.
+// A subagent's thread has no record the app can name, so its history comes from what the bridge kept of it; a Claude thread's agents are read back before its history is built, so the history shows where each started.
 export const createHistoryRequests = ({
   threads,
   readSession,
   send,
   log,
   subagentHistory = () => undefined,
+  subagents = NO_SUBAGENTS,
 }: {
   threads: Threads;
   readSession: ReadSession;
   send: (message: object) => void;
   log: (event: HistoryEvent) => void;
   subagentHistory?: (threadId: string) => HistoryTurn[] | undefined;
+  subagents?: SubagentsOfThread;
 }) => {
   // The app asks for a turn page and then each turn's items at once, so requests arriving while a read runs share it.
   const reading = new Map<string, Promise<Loaded>>();
@@ -59,14 +68,25 @@ export const createHistoryRequests = ({
     if (thread === undefined || sessionId === null) {
       return Promise.resolve(Result.ok([]));
     }
-    const loaded = readSession(sessionId).then((read) => {
+    const loaded = readSession(sessionId).then(async (read) => {
       reading.delete(threadId);
+      // The app's stream waits on this history, so a fault while reading back the thread's agents leaves them out rather than failing it; the next read tries again.
+      if (read.isOk()) {
+        const restored = await Result.tryPromise(() =>
+          subagents.restore(threadId, sessionId, thread.cwd, read.value),
+        );
+        if (restored.isErr()) log({ event: "claude_subagents_unrestored" });
+      }
       return read
         .tapError((error) =>
           log({ event: "claude_history_unreadable", error: error._tag }),
         )
         .map((messages) =>
-          buildHistory(messages, { threadId, cwd: thread.cwd }),
+          buildHistory(
+            messages,
+            { threadId, cwd: thread.cwd },
+            subagents.agentRefOf(threadId),
+          ),
         );
     });
     reading.set(threadId, loaded);
@@ -95,6 +115,21 @@ export const createHistoryRequests = ({
   };
 
   return { load, answer, takePicked: threads.takePicked };
+};
+
+type SubagentsOfThread = {
+  restore: (
+    threadId: string,
+    sessionId: string,
+    cwd: string,
+    messages: readonly SessionMessage[],
+  ) => Promise<void>;
+  agentRefOf: (threadId: string) => (toolUseId: string) => AgentRef | undefined;
+};
+
+const NO_SUBAGENTS: SubagentsOfThread = {
+  restore: async () => {},
+  agentRefOf: () => () => undefined,
 };
 
 export const isHistoryMethod = (method: string): method is HistoryMethod =>

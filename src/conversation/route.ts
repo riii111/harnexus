@@ -1,9 +1,11 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+import type { InferErr } from "better-result";
 import {
   type EffortRule,
   isClaudeModel,
   type ModelCatalog,
 } from "../infra/claude/models.ts";
+import type { readClaudeSubagents } from "../infra/claude/session.ts";
 import { delegationSource } from "../infra/codex/delegations.ts";
 import { codexVersion, isVerifiedCodex } from "../infra/codex/versions.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
@@ -17,6 +19,12 @@ import {
 } from "./history-request.ts";
 import { shownEffort, withClaudeModels } from "./model-list.ts";
 import type { SubagentRequests } from "./subagent-requests.ts";
+import type { SubagentRestoreEvent } from "./subagent-restore.ts";
+
+type SubagentsReadTag = InferErr<
+  Awaited<ReturnType<typeof readClaudeSubagents>>
+>["_tag"];
+
 import {
   type AppRequest,
   checkThread,
@@ -42,7 +50,8 @@ export type RouteEvent =
       picked: boolean;
       turns: number;
     }
-  | HistoryEvent;
+  | HistoryEvent
+  | SubagentRestoreEvent<{ _tag: SubagentsReadTag }>;
 
 type Turns = {
   isClaudeThread: (threadId: unknown) => boolean;
@@ -530,7 +539,10 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
         turns: entry.turns,
       };
     case "claude_history_unreadable":
+    case "claude_subagents_unreadable":
       return { event: entry.event, error: entry.error };
+    case "claude_subagents_unrestored":
+      return { event: entry.event };
   }
 };
 

@@ -6,8 +6,10 @@ import { createTurnController } from "../conversation/controller.ts";
 import { createHistoryRequests } from "../conversation/history-request.ts";
 import { createRouter, type RouteEvent } from "../conversation/route.ts";
 import { createSubagentRequests } from "../conversation/subagent-requests.ts";
+import { createSubagentRestore } from "../conversation/subagent-restore.ts";
 import { createSubagents } from "../conversation/subagents.ts";
 import { createThreadValues } from "../conversation/thread-values.ts";
+import type { readClaudeSubagents } from "../infra/claude/session.ts";
 import { createCodexLink } from "../infra/codex/codex-link.ts";
 import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
@@ -25,6 +27,7 @@ export const connectClaudeThreads = ({
   listConversations,
   lastRecordOf,
   readSession,
+  readSubagents,
   effortRule,
   claudeModels,
   unverifiedCodex,
@@ -38,6 +41,7 @@ export const connectClaudeThreads = ({
   listConversations: Runtime["listConversations"];
   lastRecordOf: Runtime["lastRecordOf"];
   readSession: Parameters<typeof createHistoryRequests>[0]["readSession"];
+  readSubagents: (sessionId: string) => ReturnType<typeof readClaudeSubagents>;
   effortRule: Runtime["effortRule"];
   claudeModels: Parameters<typeof createRouter>[4];
   unverifiedCodex: Parameters<typeof createRouter>[5];
@@ -47,6 +51,11 @@ export const connectClaudeThreads = ({
   const delegations = createDelegationWatch(store.claimReviewer);
   const threads = createThreadValues(store, log);
   const subagents = createSubagents({ send });
+  const subagentRestore = createSubagentRestore({
+    subagents,
+    readSubagents,
+    log,
+  });
   const runtime = createClaudeRuntime({
     threads,
     startSession,
@@ -59,8 +68,14 @@ export const connectClaudeThreads = ({
         log({ event: "claude_history_unreadable", error: read.error._tag });
         return [];
       }
+      // A picked conversation's agents are read back first, so its replay names them as a later read does.
+      await subagentRestore.restore(threadId, sessionId, cwd, read.value);
       return replayHistory(
-        buildHistory(read.value, { threadId, cwd }),
+        buildHistory(
+          read.value,
+          { threadId, cwd },
+          subagents.agentRefOf(threadId),
+        ),
         threadId,
         Date.now(),
       );
@@ -98,6 +113,10 @@ export const connectClaudeThreads = ({
     send,
     log,
     subagentHistory: subagents.historyOf,
+    subagents: {
+      restore: subagentRestore.restore,
+      agentRefOf: subagents.agentRefOf,
+    },
   });
   const subagentRequests = createSubagentRequests({
     subagents,

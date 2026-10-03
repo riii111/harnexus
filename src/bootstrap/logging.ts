@@ -100,6 +100,8 @@ const serializeLogEvent = (entry: LogEvent) => {
     case "codex_version":
     case "claude_history_served":
     case "claude_history_unreadable":
+    case "claude_subagents_unrestored":
+    case "claude_subagents_unreadable":
       return serializeRouteEvent(entry);
     case "rpc_message":
     case "rpc_unobserved":

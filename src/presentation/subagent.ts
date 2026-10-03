@@ -19,12 +19,14 @@ import {
 
 // A Claude subagent is shown as a Codex subagent is: a thread of its own under the thread whose agent started it, which the app lists in its subagents panel.
 // rootThreadId is the Claude thread whose session runs the agent, and parentThreadId that thread or the agent's thread whose agent started this one, depth levels below the root.
+// calls holds every call that started the agent, the last being toolUseId, as a resumed agent runs under a call of its own; each run's activity is named after its call, so a history rebuilt from the record names it as the live turn did.
 // turnId is the parent's turn the agent last started in, which also carries its completion, as Codex does even once that turn has ended, unless the parent is an agent whose newest turn is a later one; runs counts its starts, since Claude can resume an agent that finished.
 export type SubagentThread = {
   id: string;
   rootThreadId: string;
   parentThreadId: string;
   depth: number;
+  calls: string[];
   toolUseId: string;
   taskId: string;
   nickname: string;
@@ -47,7 +49,7 @@ export const renderSubagentActivity = (
   if (turnId === null) return [];
   const item: SubAgentActivityItem = {
     type: "subAgentActivity",
-    id: `${child.id}-${kind}-${child.runs}`,
+    id: subagentActivityId(child.id, kind, child.toolUseId),
     kind,
     agentThreadId: child.id,
     agentPath: child.path,
@@ -110,6 +112,12 @@ export const childThreadView = (
 
 export const threadOfAnswer = (answer: unknown) =>
   isObject(answer) && isObject(answer.thread) ? answer.thread : null;
+
+export const subagentActivityId = (
+  agentThreadId: string,
+  kind: SubAgentActivityItem["kind"],
+  toolUseId: string,
+) => `${agentThreadId}-${kind}-${toolUseId}`;
 
 const statusOf = (child: SubagentThread) =>
   child.active

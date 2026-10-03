@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { type HistoryTurn, noteItem } from "../presentation/history.ts";
+import {
+  type AgentRef,
+  type HistoryTurn,
+  noteItem,
+} from "../presentation/history.ts";
 import {
   closeSubagentTurn,
   declineSubagentTool,
@@ -64,11 +68,16 @@ export const createSubagents = ({
             rootThreadId: threadId,
             parentThreadId: parent?.id ?? threadId,
             depth: parent === null ? 1 : parent.depth + 1,
+            calls: [toolUseId],
             toolUseId,
             taskId,
-            nickname: description ?? agentType ?? DEFAULT_NAME,
+            nickname: agentNickname(description, agentType),
             role: agentType,
-            path: `${parent?.path ?? ROOT_PATH}/${agentName(agentType)}_${childrenOf(parent?.id ?? threadId).length + 1}`,
+            path: freePath(
+              parent?.path ?? null,
+              agentType,
+              childrenOf(parent?.id ?? threadId),
+            ),
             turnId: startedIn,
             runs: 1,
             active: true,
@@ -77,6 +86,7 @@ export const createSubagents = ({
           }
         : {
             ...known,
+            calls: [...known.calls, toolUseId],
             toolUseId,
             turnId: startedIn,
             runs: known.runs + 1,
@@ -202,14 +212,70 @@ export const createSubagents = ({
       ...descendantsOf(child.id),
     ]);
 
+  // Agents read back from Claude's records after a restart join as ended, keeping any the bridge already knows; one whose path an agent already holds takes the next free one, and the agents under it follow.
+  // A parent comes before the agents it started, so each agent is placed under its parent's path as the parent ended up.
+  const restore = (
+    agents: readonly { thread: SubagentThread; history: HistoryTurn[] }[],
+  ) => {
+    for (const { thread, history } of agents) {
+      if (children.has(thread.id)) continue;
+      const parent = children.get(thread.parentThreadId);
+      const siblings = childrenOf(thread.parentThreadId);
+      const placed =
+        parent === undefined
+          ? thread.path
+          : `${parent.path}${thread.path.slice(thread.path.lastIndexOf("/"))}`;
+      const taken = siblings.some((sibling) => sibling.path === placed);
+      children.set(thread.id, {
+        ...thread,
+        path: taken
+          ? freePath(parent?.path ?? null, thread.role, siblings)
+          : placed,
+      });
+      histories.set(thread.id, history);
+    }
+  };
+
+  // The agent a session's call started, as a parent's history names it.
+  const agentRefOf =
+    (threadId: string) =>
+    (toolUseId: string): AgentRef | undefined => {
+      const child = sessionAgents(threadId).find((candidate) =>
+        candidate.calls.includes(toolUseId),
+      );
+      return child === undefined
+        ? undefined
+        : {
+            threadId: child.id,
+            path: child.path,
+            active: child.active && child.toolUseId === toolUseId,
+          };
+    };
+
   // Undefined for a thread that is no agent's.
+  // An agent's activity names the path its agent holds now, which a read-back agent may have changed for one a live agent held.
   const historyOf = (threadId: string): HistoryTurn[] | undefined => {
     if (!children.has(threadId)) return undefined;
     const turn = running.get(threadId);
     return [
       ...(histories.get(threadId) ?? []),
       ...(turn === undefined ? [] : [runningSubagentTurn(turn)]),
-    ];
+    ].map((entry) => ({
+      ...entry,
+      items: entry.items.map((kept) =>
+        kept.item.type === "subAgentActivity"
+          ? {
+              ...kept,
+              item: {
+                ...kept.item,
+                agentPath:
+                  children.get(kept.item.agentThreadId)?.path ??
+                  kept.item.agentPath,
+              },
+            }
+          : kept,
+      ),
+    }));
   };
 
   const sendAll = (notifications: readonly object[]) => {
@@ -225,6 +291,8 @@ export const createSubagents = ({
     childrenOf,
     descendantsOf,
     historyOf,
+    restore,
+    agentRefOf,
     get: (threadId: unknown) =>
       typeof threadId === "string" ? children.get(threadId) : undefined,
   };
@@ -233,7 +301,7 @@ export const createSubagents = ({
 export type Subagents = ReturnType<typeof createSubagents>;
 
 // Shaped as a UUID, as the app's own thread ids are.
-const childThreadId = (parentThreadId: string, taskId: string) => {
+export const childThreadId = (parentThreadId: string, taskId: string) => {
   const hex = createHash("sha256")
     .update(`${parentThreadId}\n${taskId}`)
     .digest("hex");
@@ -245,6 +313,24 @@ const childThreadId = (parentThreadId: string, taskId: string) => {
     hex.slice(20, 32),
   ].join("-");
 };
+
+// An agent's path names its kind and its place among its parent's agents, as Codex numbers them; the first number no sibling holds is used.
+export const freePath = (
+  parentPath: string | null,
+  agentType: string | null,
+  siblings: readonly SubagentThread[],
+) => {
+  const used = new Set(siblings.map((sibling) => sibling.path));
+  const base = `${parentPath ?? ROOT_PATH}/${agentName(agentType)}`;
+  let number = siblings.length + 1;
+  while (used.has(`${base}_${number}`)) number += 1;
+  return `${base}_${number}`;
+};
+
+export const agentNickname = (
+  description: string | null,
+  agentType: string | null,
+) => description ?? agentType ?? DEFAULT_NAME;
 
 // The app reads an agent path as Codex writes it, whose names hold only lowercase letters, digits and underscores.
 const agentName = (agentType: string | null) => {
