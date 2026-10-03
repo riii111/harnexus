@@ -985,6 +985,43 @@ describe("Claude subagent threads", () => {
     expect(serverCalls).toEqual([]);
   });
 
+  test("completes an agent's turn in its timeline only once the agent completes", async () => {
+    const { router, subagents, sent } = setup(["th-claude"]);
+    startAgent(subagents, "th-claude", "toolu-1");
+    const [child] = subagents.childrenOf("th-claude");
+    const timeline = async (id: number) => {
+      router.fromApp(
+        encode({
+          id,
+          method: "thread/timeline/list",
+          params: { threadId: child?.id },
+        }),
+      );
+      await until(() => responseTo(sent, id) !== null);
+      return responseTo(sent, id).result.data;
+    };
+
+    const running = await timeline(37);
+    subagents.complete("th-claude", "task-1", { status: "completed" });
+    const completed = await timeline(38);
+
+    expect(running).toMatchObject([
+      { type: "turnStarted", position: 0, turnId: `${child?.id}-turn-1` },
+      { type: "item", position: 1, item: { type: "userMessage" } },
+    ]);
+    expect(running).toHaveLength(2);
+    expect(completed).toMatchObject([
+      ...running,
+      {
+        type: "turnCompleted",
+        position: 2,
+        turnId: `${child?.id}-turn-1`,
+        status: "completed",
+        completedAt: expect.any(Number),
+      },
+    ]);
+  });
+
   test("refuses a turn sent to an agent's thread", async () => {
     const { router, subagents, sent, calls } = setup(["th-claude"]);
     startAgent(subagents, "th-claude", "toolu-1");
