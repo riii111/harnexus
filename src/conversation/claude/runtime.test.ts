@@ -8,6 +8,11 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
+import {
+  type Connection,
+  SUBSCRIPTION_CONNECTION,
+} from "../../infra/claude/connection.ts";
+import { createConnectionResolver } from "../../infra/claude/connection-settings.ts";
 import { createModelCatalog, effortRule } from "../../infra/claude/models.ts";
 import { startClaudeSession } from "../../infra/claude/session.ts";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
@@ -53,6 +58,8 @@ import {
   twoWorkers,
   until,
   useTempDir,
+  VERTEX,
+  VERTEX_ACCOUNT,
   withEffort,
 } from "../testing/harness.ts";
 
@@ -939,7 +946,7 @@ describe("turn metrics", () => {
     const { turns, sent, events } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk({ type: "system", subtype: "status", status: null }));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -1231,16 +1238,17 @@ describe("session ids", () => {
   test("resumes from the session id Claude reported even when saving it failed", async () => {
     const first = fakeClaude(SUBSCRIPTION);
     const second = fakeClaude(SUBSCRIPTION);
-    let writes = 0;
     const { turns, sent, settings, events } = await harness([first, second], {
       files: {
         writeState: async (target, content) =>
-          ++writes === 1 ? writeFileAtomic(target, content) : diskFull(target),
+          content.includes('"se-1"')
+            ? diskFull(target)
+            : writeFileAtomic(target, content),
       },
     });
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => first.started());
+    await until(() => first.prompted());
     first.emit(sdk(answer("msg-1", "partial")));
     first.fail(new Error("socket closed"));
     await until(() => turnCompleted(sent) !== undefined);
@@ -1252,6 +1260,211 @@ describe("session ids", () => {
       error: "StatePersistFailed",
     });
     expect(settings[1]).toMatchObject({ resume: "se-1" });
+  });
+});
+
+describe("repository connections", () => {
+  test("show the Vertex connection once Claude Code confirms it, before Claude's reply and only on the first turn", async () => {
+    const claude = fakeClaude(VERTEX_ACCOUNT);
+    const { turns, sent, store, settings, events } = await harness([claude], {
+      resolveConnection: async () => Result.ok(VERTEX),
+    });
+
+    await completeTurn(turns, sent, claude, 10);
+    await completeTurn(turns, sent, claude, 11);
+
+    expect(agentMessages(sent)).toEqual([
+      { phase: "commentary", text: VERTEX_NOTICE },
+      { phase: "final_answer", text: "ok" },
+      { phase: "final_answer", text: "ok" },
+    ]);
+    expect(settings[0]?.connection).toEqual(VERTEX);
+    expect(store.get(THREAD)?.connection).toEqual(VERTEX_TARGET);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "connection_confirmed",
+      provider: "vertex",
+    });
+  });
+
+  test("show nothing about the subscription", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store } = await harness([claude]);
+
+    await completeTurn(turns, sent, claude, 10);
+
+    expect(agentMessages(sent)).toEqual([
+      { phase: "final_answer", text: "ok" },
+    ]);
+    expect(store.get(THREAD)?.connection).toEqual({ provider: "subscription" });
+  });
+
+  test("do not show the Vertex connection again after a restart", async () => {
+    const first = fakeClaude(VERTEX_ACCOUNT);
+    const before = await harness([first], {
+      resolveConnection: async () => Result.ok(VERTEX),
+    });
+    await completeTurn(before.turns, before.sent, first, 10);
+    await until(() => before.store.get(THREAD)?.runState === "idle");
+    const second = fakeClaude(VERTEX_ACCOUNT);
+
+    const after = await harness([second], {
+      resolveConnection: async () => Result.ok(VERTEX),
+    });
+    await completeTurn(after.turns, after.sent, second, 11);
+
+    expect(agentMessages(after.sent)).toEqual([
+      { phase: "final_answer", text: "ok" },
+    ]);
+    expect(after.settings[0]).toMatchObject({
+      resume: "se-1",
+      connection: VERTEX,
+    });
+  });
+
+  test.each([
+    {
+      name: "the subscription",
+      configured: SUBSCRIPTION_CONNECTION,
+      expected: "your Claude subscription",
+    },
+    {
+      name: "another Google Cloud project",
+      configured: { ...VERTEX, projectId: "other-project" },
+      expected: "project `other-project`",
+    },
+  ])("refuse a turn without reaching Claude once the repository's settings choose $name", async ({
+    configured,
+    expected,
+  }) => {
+    let current: Connection = VERTEX;
+    const first = fakeClaude(VERTEX_ACCOUNT);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings, events, store } = await harness(
+      [first, second],
+      { resolveConnection: async () => Result.ok(current) },
+    );
+    await completeTurn(turns, sent, first, 10);
+    current = configured;
+
+    turns.startTurn(turnStart(11, "next"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+    await settle();
+
+    expect(completedTurns(sent).at(-1)?.error?.message).toContain(expected);
+    expect(completedTurns(sent).at(-1)?.error?.message).toContain(
+      "/switch-connection",
+    );
+    expect(await promptsUntil(first, 1)).toEqual(["prompt 10"]);
+    expect(first.nextCalls()).toBeGreaterThan(0);
+    expect(settings).toHaveLength(1);
+    expect(store.get(THREAD)?.connection).toEqual(VERTEX_TARGET);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "connection_changed",
+    });
+  });
+
+  test("send nothing to Claude while the confirmed connection cannot be saved, and confirm it on the next turn", async () => {
+    const first = fakeClaude(VERTEX_ACCOUNT);
+    const second = fakeClaude(VERTEX_ACCOUNT);
+    let refuse = true;
+    const { turns, sent, store, events } = await harness([first, second], {
+      resolveConnection: async () => Result.ok(VERTEX),
+      files: {
+        writeState: async (target, content) =>
+          refuse && content.includes('"provider"')
+            ? diskFull(target)
+            : writeFileAtomic(target, content),
+      },
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+    const failed = turnCompleted(sent);
+    const shownBefore = agentMessages(sent);
+    refuse = false;
+    await completeTurn(turns, sent, second, 11);
+
+    expect(failed?.error?.message).toContain("could not save");
+    expect(await first.prompts()).toEqual([]);
+    expect(first.closes()).toBe(1);
+    expect(shownBefore).toEqual([]);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "connection_not_saved",
+      error: "StatePersistFailed",
+    });
+    expect(agentMessages(sent)).toEqual([
+      { phase: "commentary", text: VERTEX_NOTICE },
+      { phase: "final_answer", text: "ok" },
+    ]);
+    expect(store.get(THREAD)?.connection).toEqual(VERTEX_TARGET);
+  });
+
+  test("restart Claude on the same conversation when only the credentials or model settings change", async () => {
+    let current: Connection = VERTEX;
+    const first = fakeClaude(VERTEX_ACCOUNT);
+    const second = fakeClaude(VERTEX_ACCOUNT);
+    const { turns, sent, settings } = await harness([first, second], {
+      resolveConnection: async () => Result.ok(current),
+    });
+    await completeTurn(turns, sent, first, 10);
+    current = {
+      ...VERTEX,
+      credentialsFile: "/keys/sidework.json",
+      models: { haiku: "claude-haiku-4-5@20251001" },
+    };
+
+    await completeTurn(turns, sent, second, 11);
+
+    expect(first.closes()).toBe(1);
+    expect(settings[1]).toMatchObject({ resume: "se-1", connection: current });
+    expect(second.options().env).toMatchObject({
+      GOOGLE_APPLICATION_CREDENTIALS: "/keys/sidework.json",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5@20251001",
+    });
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
+    expect(agentMessages(sent).map(({ phase }) => phase)).toEqual([
+      "commentary",
+      "final_answer",
+      "final_answer",
+    ]);
+  });
+
+  test("refuse a turn without starting Claude when the connection settings cannot be read", async () => {
+    const path = join(dir, "connections.json");
+    await writeFile(path, '{"repositories": {"relative": {}}}');
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store } = await harness([claude], {
+      resolveConnection: createConnectionResolver({
+        path,
+        repositoryOf: async () => null,
+      }),
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
+    expect(turnCompleted(sent)?.error?.message).toContain(path);
+    expect(claude.started()).toBe(false);
+    expect(store.get(THREAD)?.connection).toBeNull();
+  });
+
+  test("leave a thread unconfirmed when Claude Code does not report the chosen provider", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store } = await harness([claude], {
+      resolveConnection: async () => Result.ok(VERTEX),
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnCompleted(sent)?.error?.message).toContain("Google Vertex AI");
+    expect(await claude.prompts()).toEqual([]);
+    expect(agentMessages(sent)).toEqual([]);
+    expect(store.get(THREAD)?.connection).toBeNull();
   });
 });
 
@@ -1558,7 +1771,7 @@ describe("subagent threads", () => {
     const { turns, sent, subagents } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
     claude.emit(sdk(taskNotification("toolu-agent")));
     claude.emit(sdk(success()));
@@ -1579,7 +1792,7 @@ describe("subagent threads", () => {
     const { turns, sent, subagents } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
     claude.emit(
       sdk({
@@ -1625,7 +1838,7 @@ describe("subagent threads", () => {
     const { turns, sent, subagents } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -1675,7 +1888,7 @@ describe("subagent threads", () => {
     const { turns, sent, subagents } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
     claude.emit(sdk(ending));
     claude.emit(sdk(success()));
@@ -1691,7 +1904,7 @@ describe("subagent threads", () => {
     const { turns, sent, subagents } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -1706,7 +1919,7 @@ describe("subagent threads", () => {
     const { turns, sent, subagents } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-inner", 2)));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -1867,7 +2080,7 @@ describe("turns Claude starts between app turns", () => {
     });
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(TASKS_RUNNING));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -1887,7 +2100,7 @@ describe("turns Claude starts between app turns", () => {
     const { turns, sent } = await harness([claude], { idleSessionMs: 5 });
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(
       sdk({
         ...TASKS_RUNNING,
@@ -2108,7 +2321,7 @@ describe("approvals no turn could show", () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, subagents } = await harness([claude]);
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -2210,7 +2423,7 @@ describe("approvals no turn could show", () => {
     claude.emit(sdk(BACKGROUND_AGENT_SPOKE));
     claude.end();
     expect((await decision)?.behavior).toBe("deny");
-    await until(() => next.started());
+    await until(() => next.prompted());
     next.emit(sdk(answer("msg-3", "hi")));
     next.emit(sdk(success()));
     await until(() => completedTurnStatuses(sent).length === 3);
@@ -2683,7 +2896,7 @@ describe("approvals no turn could show", () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, subagents } = await harness([claude]);
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(taskStarted("toolu-agent", 1)));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -2747,7 +2960,7 @@ describe("a Claude that stops while a turn waits to read it", () => {
     stop(claude);
     await until(() => claude.closes() > 0);
     gate.open();
-    await until(() => next.started());
+    await until(() => next.prompted());
     next.emit(sdk(answer("msg-2", "hi")));
     next.emit(sdk(success()));
     await until(() => completedTurnStatuses(sent).length === 2);
@@ -3269,7 +3482,7 @@ describe("thread tools", () => {
     const { turns, sent, settings, links } = await harness([first, second]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => first.started());
+    await until(() => first.prompted());
     first.fail(new Error("socket closed"));
     await until(() => turnCompleted(sent) !== undefined);
     await completeTurn(turns, sent, second, 11);
@@ -3286,7 +3499,7 @@ describe("thread tools", () => {
     const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
     const { turns, gates } = await harness([claude]);
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     expect(gates).toEqual(["accept"]);
 
     turns.interruptTurn(interrupt(20, "turn-1"));
@@ -3385,7 +3598,7 @@ describe("idle Claude sessions", () => {
 const startedTurn = async (claude: ReturnType<typeof fakeClaude>) => {
   const started = await harness([claude]);
   started.turns.startTurn(turnStart(10, "hello"), undefined);
-  await until(() => claude.started());
+  await until(() => claude.prompted());
   return started;
 };
 
@@ -3651,3 +3864,22 @@ const subagentEvents = (sent: Sent[]) =>
     }
     return [];
   });
+
+const agentMessages = (sent: Sent[]) =>
+  completedItems(sent)
+    .filter((item) => item.type === "agentMessage")
+    .map(({ phase, text }) => ({ phase, text }));
+
+const VERTEX_TARGET = {
+  provider: "vertex",
+  projectId: "sidework-project",
+  region: "global",
+} as const;
+
+const VERTEX_NOTICE = [
+  "Harnexus connection",
+  "",
+  "- Provider: Google Vertex AI (confirmed by Claude Code)",
+  "- Google Cloud project: `sidework-project` (from harnexus settings)",
+  "- Region: `global` (from harnexus settings)",
+].join("\n");

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { type InferErr, Result } from "better-result";
+import { SUBSCRIPTION_CONNECTION } from "../infra/claude/connection.ts";
 import type { ClaudeSessionSettings } from "../infra/claude/session.ts";
 import { fakeClaude } from "../infra/claude/testing/fake-claude.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
@@ -51,6 +52,8 @@ import {
   twoWorkers,
   until,
   useTempDir,
+  VERTEX,
+  VERTEX_ACCOUNT,
   withEffort,
   withMessageId,
 } from "./testing/harness.ts";
@@ -173,7 +176,7 @@ describe("turn/start on a Claude thread", () => {
     const { turns, sent, settings } = await harness([first, second]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => first.started());
+    await until(() => first.prompted());
     first.emit(sdk(answer("msg-1", "partial")));
     first.fail(new Error("socket closed"));
     await until(() => turnCompleted(sent) !== undefined);
@@ -480,7 +483,7 @@ describe("turn/interrupt", () => {
     const { turns, sent } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     turns.interruptTurn(interrupt(20, "turn-1"));
     await until(() => claude.interrupts() === 1);
     claude.emit(
@@ -510,7 +513,7 @@ describe("turn/interrupt", () => {
     const { turns, sent } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     turns.interruptTurn(interrupt(20, "turn-1"));
     await until(() => turnCompleted(sent) !== undefined);
 
@@ -528,7 +531,7 @@ describe("turn/interrupt", () => {
     const { turns, sent, settings } = await harness([first, second]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => first.started());
+    await until(() => first.prompted());
     first.emit(sdk(answer("msg-1", "partial")));
     turns.interruptTurn(interrupt(20, "turn-1"));
     first.emit(
@@ -630,7 +633,7 @@ describe("turn/interrupt", () => {
     const { turns, sent } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     turns.interruptTurn(interrupt(20, "turn-1"));
     await until(() => claude.interrupts() === 1);
     await Bun.sleep(0);
@@ -703,7 +706,7 @@ describe("model changes", () => {
     await until(() => responseTo(sent, 11) !== undefined);
     turns.changeModel(THREAD, OTHER_MODEL);
     gate.open();
-    await until(() => second.started());
+    await until(() => second.prompted());
     second.emit(sdk(success()));
     await until(() => completedTurnStatuses(sent).length === 2);
     await completeTurn(turns, sent, third, 12);
@@ -752,7 +755,7 @@ describe("model changes", () => {
 
     turns.startTurn(withModel(10, MODEL), undefined);
     turns.startTurn(withModel(11, OTHER_MODEL), undefined);
-    await until(() => first.started());
+    await until(() => first.prompted());
     first.emit(sdk(success()));
     await until(() => second.started());
 
@@ -1174,6 +1177,27 @@ describe("several workers", () => {
     });
   });
 
+  test("run at once on the connection each repository chooses", async () => {
+    const first = fakeClaude(VERTEX_ACCOUNT);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { settings } = await twoWorkers([first, second], {
+      resolveConnection: async (worktree) =>
+        Result.ok(worktree === dir ? VERTEX : SUBSCRIPTION_CONNECTION),
+    });
+
+    await until(() => second.started());
+
+    expect(settings.map((session) => session.connection.provider)).toEqual([
+      "vertex",
+      "subscription",
+    ]);
+    expect(first.options().env).toMatchObject({
+      CLAUDE_CODE_USE_VERTEX: "1",
+      ANTHROPIC_VERTEX_PROJECT_ID: "sidework-project",
+    });
+    expect(second.options().env).not.toHaveProperty("CLAUDE_CODE_USE_VERTEX");
+  });
+
   test("leave the other worker's turn and prompt open when one is stopped", async () => {
     const first = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
     const second = fakeClaude(SUBSCRIPTION);
@@ -1426,7 +1450,7 @@ describe("turn/start carrying another thread's message", () => {
         failWrites ? diskFull(target) : writeFileAtomic(target, content),
     });
     turns.startTurn(reply(10, THREAD, CODEX_WORKER), undefined);
-    await until(() => claude.started());
+    await until(() => claude.prompted());
     claude.emit(sdk(success()));
     await until(() => completedTurnStatuses(sent).length === 1);
     turns.startTurn(reply(11, THREAD, "th-lead"), undefined);
@@ -1487,7 +1511,7 @@ const interruptBeforeReceipt = async (
   claude: ReturnType<typeof fakeClaude>,
 ) => {
   turns.startTurn(turnStart(10, "hello"), undefined);
-  await until(() => claude.started());
+  await until(() => claude.prompted());
   turns.interruptTurn(interrupt(20, "turn-1"));
   claude.emit(
     sdk(result({ subtype: "error_during_execution", is_error: true })),

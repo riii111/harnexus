@@ -1,13 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { Result } from "better-result";
+import {
+  type Connection,
+  SUBSCRIPTION_CONNECTION,
+} from "../../infra/claude/connection.ts";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
+import { writeFileAtomic } from "../../runtime/fs.boundary.ts";
 import {
   claudeDir,
   completedItems,
   completedTurnStatuses,
   completeTurn,
   dir,
+  diskFull,
   harness,
   MODEL,
   OTHER_THREAD,
@@ -20,6 +27,8 @@ import {
   turnStart,
   until,
   useTempDir,
+  VERTEX,
+  VERTEX_ACCOUNT,
 } from "../testing/harness.ts";
 
 useTempDir();
@@ -277,7 +286,87 @@ describe("/session", () => {
 
     const reply = agentTexts(sent).at(-1) ?? "";
     expect(reply).toContain(`cd '${dir}' && claude --resume 'se-1'`);
+    expect(reply).not.toContain("harnexus settings");
     expect(await promptsUntil(claude, 1)).toEqual(["prompt 10"]);
+  });
+
+  test("answers a Vertex chat's provider, project and region with a terminal command that stays on them", async () => {
+    const claude = fakeClaude(VERTEX_ACCOUNT);
+    const { turns, sent } = await harness([claude], {
+      resolveConnection: async () => Result.ok(VERTEX),
+    });
+    await completeTurn(turns, sent, claude, 10);
+
+    turns.startTurn(turnStart(11, "/session"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    const reply = agentTexts(sent).at(-1) ?? "";
+    expect(reply).toContain(
+      "- Provider: Google Vertex AI (confirmed by Claude Code when this chat's Claude session started)",
+    );
+    expect(reply).toContain(
+      "- Google Cloud project: `sidework-project` (from harnexus settings)",
+    );
+    expect(reply).toContain(
+      `cd '${dir}' && CLAUDE_CODE_USE_VERTEX='1' ANTHROPIC_VERTEX_PROJECT_ID='sidework-project' CLOUD_ML_REGION='global' claude --resume 'se-1'`,
+    );
+  });
+
+  test("answers a terminal command with the repository's model settings and asks for its credentials file without showing its path", async () => {
+    const pinned = {
+      ...VERTEX,
+      credentialsFile: "/keys/sidework.json",
+      models: { haiku: "claude-haiku-4-5@20251001" },
+    };
+    const claude = fakeClaude(VERTEX_ACCOUNT);
+    const { turns, sent } = await harness([claude], {
+      resolveConnection: async () => Result.ok(pinned),
+    });
+    await completeTurn(turns, sent, claude, 10);
+
+    turns.startTurn(turnStart(11, "/session"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    const reply = agentTexts(sent).at(-1) ?? "";
+    expect(reply).toContain(
+      "CLOUD_ML_REGION='global' ANTHROPIC_DEFAULT_HAIKU_MODEL='claude-haiku-4-5@20251001' claude --resume 'se-1'",
+    );
+    expect(reply).toContain("Also set GOOGLE_APPLICATION_CREDENTIALS");
+    expect(reply).not.toContain("/keys/sidework.json");
+  });
+
+  test("answers the Vertex connection a new thread will confirm without starting Claude", async () => {
+    const claude = fakeClaude(VERTEX_ACCOUNT);
+    const { turns, sent } = await harness([claude], {
+      resolveConnection: async () => Result.ok(VERTEX),
+    });
+
+    turns.startTurn(turnStart(10, "/session"), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+
+    const reply = agentTexts(sent).at(-1) ?? "";
+    expect(reply).toContain("no Claude conversation yet");
+    expect(reply).toContain(
+      "harnexus settings choose Google Vertex AI (project `sidework-project`, region `global`)",
+    );
+    expect(claude.started()).toBe(false);
+  });
+
+  test("answers that the repository's settings changed and how to move the chat", async () => {
+    let current: Connection = VERTEX;
+    const claude = fakeClaude(VERTEX_ACCOUNT);
+    const { turns, sent } = await harness([claude], {
+      resolveConnection: async () => Result.ok(current),
+    });
+    await completeTurn(turns, sent, claude, 10);
+    current = SUBSCRIPTION_CONNECTION;
+
+    turns.startTurn(turnStart(11, "/session"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(agentTexts(sent).at(-1)).toContain(
+      "harnexus settings now choose your Claude subscription for this repository. Send /switch-connection",
+    );
   });
 
   test("answers that a thread has no conversation yet without starting Claude", async () => {
@@ -289,6 +378,81 @@ describe("/session", () => {
 
     expect(agentTexts(sent).at(-1)).toContain("no Claude conversation yet");
     expect(claude.started()).toBe(false);
+  });
+});
+
+describe("/switch-connection", () => {
+  test("moves a chat to the repository's new connection, which the next turn confirms and shows", async () => {
+    let current: Connection = VERTEX;
+    const first = fakeClaude(VERTEX_ACCOUNT);
+    const second = fakeClaude(VERTEX_ACCOUNT);
+    const { turns, sent, settings, store } = await harness([first, second], {
+      resolveConnection: async () => Result.ok(current),
+    });
+    await completeTurn(turns, sent, first, 10);
+    current = { ...VERTEX, projectId: "next-project" };
+
+    turns.startTurn(turnStart(11, "/switch-connection"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+    const switched = agentTexts(sent).at(-1);
+    await completeTurn(turns, sent, second, 12);
+
+    expect(switched).toContain("now follows harnexus settings");
+    expect(first.closes()).toBe(1);
+    expect(settings[1]).toMatchObject({
+      resume: "se-1",
+      connection: { projectId: "next-project" },
+    });
+    expect(agentTexts(sent).at(-2)).toContain(
+      "- Google Cloud project: `next-project` (from harnexus settings)",
+    );
+    expect(store.get(THREAD)?.connection).toEqual({
+      provider: "vertex",
+      projectId: "next-project",
+      region: "global",
+    });
+  });
+
+  test("keeps the chat's connection when the change cannot be saved", async () => {
+    let current: Connection = VERTEX;
+    const claude = fakeClaude(VERTEX_ACCOUNT);
+    let refuse = false;
+    const { turns, sent, store } = await harness([claude], {
+      resolveConnection: async () => Result.ok(current),
+      files: {
+        writeState: async (target, content) =>
+          refuse ? diskFull(target) : writeFileAtomic(target, content),
+      },
+    });
+    await completeTurn(turns, sent, claude, 10);
+    await until(() => store.get(THREAD)?.runState === "idle");
+    current = SUBSCRIPTION_CONNECTION;
+    refuse = true;
+
+    turns.startTurn(turnStart(11, "/switch-connection"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(agentTexts(sent).at(-1)).toContain("could not save the change");
+    expect(store.get(THREAD)?.connection).toMatchObject({
+      provider: "vertex",
+    });
+  });
+
+  test("changes nothing when the chat already runs on the repository's connection", async () => {
+    const claude = fakeClaude(VERTEX_ACCOUNT);
+    const { turns, sent, store } = await harness([claude], {
+      resolveConnection: async () => Result.ok(VERTEX),
+    });
+    await completeTurn(turns, sent, claude, 10);
+
+    turns.startTurn(turnStart(11, "/switch-connection"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(agentTexts(sent).at(-1)).toContain("nothing changed");
+    expect(claude.closes()).toBe(0);
+    expect(store.get(THREAD)?.connection).toMatchObject({
+      projectId: "sidework-project",
+    });
   });
 });
 

@@ -10,6 +10,13 @@ import {
   Result,
   TaggedError,
 } from "better-result";
+import {
+  type Connection,
+  type ConnectionTarget,
+  sameConnection,
+  sameTarget,
+  targetOf,
+} from "../../infra/claude/connection.ts";
 import type { EffortRule } from "../../infra/claude/models.ts";
 import type {
   ClaudeSessionSettings,
@@ -19,6 +26,10 @@ import type {
 import type { createCodexLink } from "../../infra/codex/codex-link.ts";
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
 import type { ThreadRecord } from "../../infra/thread-store.ts";
+import {
+  connectionChangedText,
+  connectionNoticeText,
+} from "../../presentation/connection.ts";
 import { promptFor } from "../../presentation/permission.ts";
 import {
   NO_PLAN,
@@ -59,6 +70,7 @@ import type {
 import { createInbox, type Inbox } from "./inbox.ts";
 import {
   createSessionCommands,
+  type ResolveConnection,
   type SessionCommand,
   type SessionEvent,
 } from "./session-commands.ts";
@@ -112,6 +124,9 @@ type ClaudeFailureTag =
   | SessionMissing["_tag"]
   | ForkNotSeparate["_tag"]
   | ForkPointUnknown["_tag"]
+  | ConnectionChanged["_tag"]
+  | ConnectionNotSaved["_tag"]
+  | ErrorTag<ReturnType<ResolveConnection>>
   | "SteerUnconfirmed";
 
 type SessionStartup = {
@@ -130,7 +145,13 @@ type ClaudeTurnEvent =
         | "session_missing"
         | "skill_unreadable"
         | "skill_link_only"
-        | "history_replayed";
+        | "history_replayed"
+        | "connection_changed";
+    }
+  | {
+      event: "claude_turn";
+      step: "connection_confirmed";
+      provider: ConnectionTarget["provider"];
     }
   | { event: "claude_turn"; step: "effort_applied"; effort: EffortLevel }
   | ({
@@ -159,6 +180,7 @@ export type ClaudeLogEvent = TurnEvent<ClaudeFailureTag> | ClaudeTurnEvent;
 type SessionSlot = {
   session: ClaudeSession;
   model: string;
+  connection: Connection;
   pendingInterrupt: Promise<void> | null;
   link: CodexLink;
   attachedSkills: Map<string, string>;
@@ -217,6 +239,14 @@ class ForkPointUnknown extends TaggedError("ForkPointUnknown")<{
   message: string;
 }> {}
 
+class ConnectionChanged extends TaggedError("ConnectionChanged")<{
+  message: string;
+}> {}
+
+class ConnectionNotSaved extends TaggedError("ConnectionNotSaved")<{
+  message: string;
+}> {}
+
 // A thread keeps one Claude session across turns; a session that fails is dropped and the next turn resumes it from the stored session id.
 export const createClaudeRuntime = ({
   threads,
@@ -224,6 +254,7 @@ export const createClaudeRuntime = ({
   findSession,
   listConversations,
   lastRecordOf,
+  resolveConnection,
   openLink,
   renameThread,
   readHistory = async () => [],
@@ -240,6 +271,7 @@ export const createClaudeRuntime = ({
   findSession: FindSession;
   listConversations: SessionCommandsDeps["listConversations"];
   lastRecordOf: SessionCommandsDeps["lastRecordOf"];
+  resolveConnection: ResolveConnection;
   openLink: (threadId: string) => CodexLink;
   renameThread: RenameThread;
   readHistory?: (
@@ -273,6 +305,7 @@ export const createClaudeRuntime = ({
     listConversations,
     lastRecordOf,
     findSession,
+    resolveConnection,
     log,
     now,
   });
@@ -490,6 +523,21 @@ export const createClaudeRuntime = ({
       turn.fail(bridgeClosingError());
       return;
     }
+    const checked = await waitForAbort(
+      connectionFor(turn),
+      startup.controller.signal,
+    );
+    if (checked === ABORTED) {
+      if (closed) turn.fail(bridgeClosingError());
+      else turn.finish({ status: "interrupted" }, null);
+      return;
+    }
+    if (checked.isErr()) {
+      cancelSessionStart(threadId, startup);
+      turn.fail(checked.error);
+      return;
+    }
+    const connection = checked.value;
     if (advanced) {
       turn.apply(
         renderNotice(turn.state(), RECORD_ADVANCED, "commentary", now()),
@@ -497,13 +545,13 @@ export const createClaudeRuntime = ({
       const stale = sessions.get(threadId);
       if (stale !== undefined) dropSession(threadId, stale);
     }
-    const reused = sessions.get(threadId)?.model === model;
+    const reused = canReuse(sessions.get(threadId), model, connection);
     if (reused) {
       clearSessionStart(threadId, startup);
       startup = null;
     }
     const sessionAskedAt = now();
-    const slot = await sessionFor(record, model, turn, startup);
+    const slot = await sessionFor(record, model, connection, turn, startup);
     if (startup !== null) clearSessionStart(threadId, startup);
     if (slot.isErr()) {
       if (slot.error._tag === "SessionStartCancelled") {
@@ -515,6 +563,19 @@ export const createClaudeRuntime = ({
       return;
     }
     const sessionStartMs = reused ? null : now() - sessionAskedAt;
+    if (threads.connectionOf(threadId) === null) {
+      const confirmed = await confirmConnection(turn, slot.value.connection);
+      if (!confirmed) {
+        dropSession(threadId, slot.value);
+        turn.fail(
+          new ConnectionNotSaved({
+            message:
+              "harnexus could not save which connection this chat runs on, so nothing was sent to Claude; send the message again to retry",
+          }),
+        );
+        return;
+      }
+    }
     turn.useLink(slot.value.link);
     // Claude leaves plan mode when a plan is approved, so the mode the app asks for is set again on every turn.
     const mode = await slot.value.session.setPermissionMode(
@@ -626,6 +687,48 @@ export const createClaudeRuntime = ({
     } finally {
       releaseReader(threadId, slot, inbox);
     }
+  };
+
+  // A conversation keeps the provider, project and region it started on until the user sends /switch-connection, whatever the settings say later.
+  const connectionFor = async (
+    turn: Turn,
+  ): Promise<
+    Result<
+      Connection,
+      ConnectionChanged | InferErr<Awaited<ReturnType<ResolveConnection>>>
+    >
+  > => {
+    const configured = await resolveConnection(turn.record.worktree);
+    if (configured.isErr()) return configured;
+    const saved = threads.connectionOf(turn.threadId);
+    const target = targetOf(configured.value);
+    if (saved === null || sameTarget(saved, target)) return configured;
+    log({ event: "claude_turn", step: "connection_changed" });
+    return Result.err(
+      new ConnectionChanged({ message: connectionChangedText(saved, target) }),
+    );
+  };
+
+  // Runs before the prompt is sent, so the notice comes ahead of Claude's reply.
+  const confirmConnection = async (turn: Turn, connection: Connection) => {
+    const target = targetOf(connection);
+    if (!(await threads.setConnection(turn.threadId, target))) return false;
+    log({
+      event: "claude_turn",
+      step: "connection_confirmed",
+      provider: target.provider,
+    });
+    if (target.provider === "vertex") {
+      turn.apply(
+        renderNotice(
+          turn.state(),
+          connectionNoticeText(target),
+          "commentary",
+          now(),
+        ),
+      );
+    }
+    return true;
   };
 
   // Claude may ask for a tool before the app has been shown the turn the thread accepted, such as a turn of its own, so the approval waits until a turn is shown or the thread has none left.
@@ -1039,6 +1142,7 @@ export const createClaudeRuntime = ({
   const sessionFor = async (
     record: ThreadRecord,
     model: string,
+    connection: Connection,
     turn: Turn,
     startup: SessionStartup | null,
   ): Promise<
@@ -1053,7 +1157,11 @@ export const createClaudeRuntime = ({
   > => {
     const existing = sessions.get(record.threadId);
     // A session that failed while no turn read it closed itself before anything dropped it.
-    if (existing?.model === model && !existing.session.isClosed()) {
+    if (
+      existing !== undefined &&
+      canReuse(existing, model, connection) &&
+      !existing.session.isClosed()
+    ) {
       return Result.ok(existing);
     }
     if (existing !== undefined) dropSession(record.threadId, existing);
@@ -1112,6 +1220,7 @@ export const createClaudeRuntime = ({
       {
         cwd: record.worktree,
         model,
+        connection,
         permissionMode:
           turn.input.permissionMode === "plan" ? "plan" : permissionMode,
         ...(forkFound && forkFrom !== null && forkAt !== null
@@ -1149,6 +1258,7 @@ export const createClaudeRuntime = ({
     const slot: SessionSlot = {
       session: started.value,
       model,
+      connection,
       pendingInterrupt: null,
       link,
       attachedSkills: new Map(),
@@ -1365,7 +1475,10 @@ export const serializeClaudeTurnEvent = (entry: ClaudeTurnEvent) => {
     case "skill_unreadable":
     case "skill_link_only":
     case "history_replayed":
+    case "connection_changed":
       return { event: entry.event, step: entry.step };
+    case "connection_confirmed":
+      return { event: entry.event, step: entry.step, provider: entry.provider };
     case "effort_applied":
       return { event: entry.event, step: entry.step, effort: entry.effort };
     case "metrics":
@@ -1462,6 +1575,12 @@ const trackTasks = (slot: SessionSlot, message: SDKMessage) => {
 const typedText = (input: RunningTurn<string>["input"]) =>
   input.toolOutput === null && input.items.length > 0 ? input.text : null;
 
+const canReuse = (
+  slot: SessionSlot | undefined,
+  model: string,
+  connection: Connection,
+) => slot?.model === model && sameConnection(slot.connection, connection);
+
 const resumeFrom = (sessionId: string | null) =>
   sessionId === null ? {} : { resume: sessionId };
 
@@ -1506,6 +1625,8 @@ const CLAUDE_STEPS: Record<ClaudeTurnEvent["step"], true> = {
   skill_unreadable: true,
   skill_link_only: true,
   history_replayed: true,
+  connection_changed: true,
+  connection_confirmed: true,
   effort_applied: true,
   metrics: true,
   interrupt_failed: true,

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  loadConnectionsPath,
   loadLogPath,
   loadPermissionMode,
   loadShutdownGraceMs,
@@ -74,6 +75,30 @@ describe("loadStatePath", () => {
     const path = loadStatePath({ HARNEXUS_STATE_PATH: "t.json" });
 
     expect(path.isErr() && path.error._tag).toBe("StatePathNotAbsolute");
+  });
+});
+
+describe("loadConnectionsPath", () => {
+  test("defaults to the user's config directory", () => {
+    const path = loadConnectionsPath({}, () => "/Users/fixture");
+
+    expect(path.isOk() && path.value).toBe(
+      "/Users/fixture/.config/harnexus/connections.json",
+    );
+  });
+
+  test("returns an absolute path as given", () => {
+    const path = loadConnectionsPath({
+      HARNEXUS_CONNECTIONS_PATH: "/tmp/c.json",
+    });
+
+    expect(path.isOk() && path.value).toBe("/tmp/c.json");
+  });
+
+  test("rejects a relative path", () => {
+    const path = loadConnectionsPath({ HARNEXUS_CONNECTIONS_PATH: "c.json" });
+
+    expect(path.isErr() && path.error._tag).toBe("ConnectionsPathNotAbsolute");
   });
 });
 
