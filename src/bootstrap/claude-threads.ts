@@ -31,7 +31,7 @@ export const connectClaudeThreads = ({
   effortRule,
   claudeModels,
   unverifiedCodex,
-  permissionMode = "default",
+  permissionMode = "auto",
   send,
   log,
 }: {

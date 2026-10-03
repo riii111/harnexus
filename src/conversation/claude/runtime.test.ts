@@ -400,9 +400,19 @@ describe("tool approval that must default to no", () => {
 });
 
 describe("permission mode", () => {
+  test("uses manual approvals when explicitly configured", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude], { permissionMode: "default" });
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.modes().length === 1);
+
+    expect(claude.options().permissionMode).toBe("default");
+    expect(claude.modes()).toEqual(["default"]);
+  });
+
   test("keeps auto mode when a plan is approved and the next turn reuses Claude", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude], { permissionMode: "auto" });
+    const { turns, sent } = await harness([claude]);
     turns.selectMode(THREAD, "plan");
     turns.startTurn(turnStart(10, "plan this"), undefined);
     await until(() => claude.modes().length === 1);
@@ -434,7 +444,6 @@ describe("permission mode", () => {
     const first = fakeClaude(SUBSCRIPTION);
     const second = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([first, second], {
-      permissionMode: "auto",
       idleSessionMs: 1,
     });
     await completeTurn(turns, sent, first, 10);
@@ -487,7 +496,7 @@ describe("permission mode", () => {
 
   test.each([
     { name: "plan", mode: "plan", expected: "plan" },
-    { name: "default", mode: "default", expected: "default" },
+    { name: "default", mode: "default", expected: "auto" },
   ])("runs a turn in the app's $name mode as Claude's $expected mode", async ({
     mode,
     expected,

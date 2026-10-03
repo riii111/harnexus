@@ -20,9 +20,9 @@ export const loadPermissionMode = (
   env: Record<string, string | undefined>,
 ): Result<"default" | "auto", PermissionModeInvalid> => {
   const mode = env.HARNEXUS_PERMISSION_MODE;
-  if (mode === undefined || mode === "" || mode === "default")
-    return Result.ok("default");
-  if (mode === "auto") return Result.ok("auto");
+  if (mode === undefined || mode === "" || mode === "auto")
+    return Result.ok("auto");
+  if (mode === "default") return Result.ok("default");
   return Result.err(
     new PermissionModeInvalid({
       message: "HARNEXUS_PERMISSION_MODE must be default or auto",

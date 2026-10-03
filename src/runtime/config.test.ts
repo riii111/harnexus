@@ -9,8 +9,8 @@ import {
 
 describe("loadPermissionMode", () => {
   test.each([
-    { name: "unset", value: undefined, expected: "default" },
-    { name: "empty", value: "", expected: "default" },
+    { name: "unset", value: undefined, expected: "auto" },
+    { name: "empty", value: "", expected: "auto" },
     { name: "manual", value: "default", expected: "default" },
     { name: "automatic", value: "auto", expected: "auto" },
   ])("uses $expected approvals when $name", ({ value, expected }) => {

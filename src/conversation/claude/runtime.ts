@@ -231,7 +231,7 @@ export const createClaudeRuntime = ({
   log,
   now = Date.now,
   idleSessionMs = IDLE_SESSION_MS,
-  permissionMode = "default",
+  permissionMode = "auto",
   effortRule,
   subagents,
 }: {

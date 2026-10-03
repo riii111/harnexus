@@ -329,7 +329,7 @@ const sessionOptions = (
   settingSources: SETTING_SOURCES,
   systemPrompt: { type: "preset", preset: "claude_code" },
   // The bridge selects the mode explicitly so user settings cannot silently enable bypassPermissions.
-  permissionMode: settings.permissionMode ?? "default",
+  permissionMode: settings.permissionMode ?? "auto",
   canUseTool: settings.canUseTool,
   includePartialMessages: true,
   // A subagent's thread shows what the agent wrote, not only the tools it called.

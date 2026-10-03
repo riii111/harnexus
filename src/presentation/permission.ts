@@ -158,7 +158,7 @@ const planPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
         updatedPermissions: [
           {
             type: "setMode",
-            mode: target.implementationMode ?? "default",
+            mode: target.implementationMode ?? "auto",
             destination: "session",
           },
         ],
