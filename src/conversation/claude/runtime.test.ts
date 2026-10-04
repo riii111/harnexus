@@ -1258,6 +1258,7 @@ describe("session ids", () => {
     await until(() => started.store.get(THREAD)?.runState === "outcomeUnknown");
     unsettled = false;
     await completeTurn(started.turns, started.sent, second, 11, "fresh-input");
+    await until(() => started.store.get(THREAD)?.runState === "idle");
     expect(started.settings[1]).toMatchObject({ resume: "se-1" });
     expect(completedTurns(started.sent)[1]?.status).toBe("completed");
     expect(started.store.get(THREAD)?.runState).toBe("idle");
