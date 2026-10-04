@@ -5,6 +5,7 @@ import {
   loadShutdownGraceMs,
   loadStatePath,
   loadUnverifiedCodexPolicy,
+  loadVertexModels,
 } from "./config.ts";
 
 describe("loadPermissionMode", () => {
@@ -105,5 +106,18 @@ describe("loadUnverifiedCodexPolicy", () => {
     expect(
       loadUnverifiedCodexPolicy({ HARNEXUS_UNVERIFIED_CODEX: value }),
     ).toBe(expected);
+  });
+});
+
+describe("loadVertexModels", () => {
+  test.each([
+    { name: "on", env: { HARNEXUS_VERTEX: "on" }, expected: true },
+    { name: "unset", env: {}, expected: false },
+    { name: "another value", env: { HARNEXUS_VERTEX: "1" }, expected: false },
+  ])("lists the Vertex AI models only when the variable is on: $name", ({
+    env,
+    expected,
+  }) => {
+    expect(loadVertexModels(env)).toBe(expected);
   });
 });

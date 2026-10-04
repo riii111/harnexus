@@ -6,7 +6,7 @@ Use Claude in the Codex App.
 
 Choose Claude from the model picker and work in a regular chat. Ask it to explore a project, make changes, or work with a Codex reviewer—all from the same app.
 
-harnexus uses your Claude subscription through the official Claude Agent SDK. It is experimental and currently runs on macOS.
+harnexus uses your Claude subscription through the official Claude Agent SDK, or Claude on Google Vertex AI for the repositories you choose. It is experimental and currently runs on macOS.
 
 ## Features
 
@@ -24,7 +24,7 @@ You need:
 
 - macOS with Codex available in the ChatGPT app at `/Applications/ChatGPT.app`.
 - Bun installed. This project pins Bun 1.3.13.
-- Claude Code signed in with your Claude subscription. API-key and cloud-provider authentication are not supported.
+- Claude Code signed in with your Claude subscription, or [Google Vertex AI](#use-google-vertex-ai-for-a-repository) set in the Claude Code settings of the repositories that should use it. API keys and other cloud providers are not supported.
 
 ### Install and open
 
@@ -93,6 +93,31 @@ harnexus warns when the app bundles a Codex CLI version it has not been checked 
 ```sh
 HARNEXUS_UNVERIFIED_CODEX=pause bun run open-app
 ```
+
+## Use Google Vertex AI for a repository
+
+Chats use your Claude subscription. To run a repository's chats on Claude through Google Vertex AI instead:
+
+1. Set up Vertex AI in the repository's `.claude/settings.local.json`, as for `claude` in a terminal. If `claude` already runs on Vertex AI there, skip this step.
+
+   ```json
+   {
+     "env": {
+       "CLAUDE_CODE_USE_VERTEX": "1",
+       "ANTHROPIC_VERTEX_PROJECT_ID": "your-project",
+       "CLOUD_ML_REGION": "global"
+     }
+   }
+   ```
+
+2. Open the app with `HARNEXUS_VERTEX=on bun run open-app`.
+3. In a chat in that repository, pick a model marked `· Vertex AI`, such as `Claude Opus 5.5 · Vertex AI`.
+
+Before Claude's first reply, the chat shows the Google Cloud project and region it runs on. Send `/session` to see them again. Other repositories stay on your subscription.
+
+For the Google Cloud side, see [Claude Code on Google Vertex AI](https://code.claude.com/docs/en/google-vertex-ai). Keep Vertex AI settings out of `~/.claude/settings.json`, since they would apply to every repository.
+
+harnexus never falls back to your subscription. Errors from Google Cloud, such as missing credentials or a model not enabled in your project, appear in the chat; the guide above covers them.
 
 ## Optional Settings
 

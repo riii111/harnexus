@@ -6,6 +6,7 @@ import type { AccountInfo } from "@anthropic-ai/claude-agent-sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Result } from "better-result";
+import { SUBSCRIPTION_CONNECTION } from "../infra/claude/connection.ts";
 import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import {
   type ClaudeSessionSettings,
@@ -111,6 +112,7 @@ const connectWith = async (
     findSession: async () => Result.ok(true),
     listConversations,
     lastRecordOf: async () => Result.ok(null),
+    resolveConnection: async () => Result.ok(SUBSCRIPTION_CONNECTION),
     readSession: async () => Result.ok([]),
     readSubagents: async () => Result.ok([]),
     effortRule: effortRule({}, catalog.effortsOf),
@@ -164,6 +166,7 @@ const workerA = async () => {
     findSession: async () => Result.ok(true),
     listConversations: async () => Result.ok([]),
     lastRecordOf: async () => Result.ok(null),
+    resolveConnection: async () => Result.ok(SUBSCRIPTION_CONNECTION),
     readSession: async () => Result.ok([]),
     readSubagents: async () => Result.ok([]),
     effortRule: effortRule({}, catalog.effortsOf),

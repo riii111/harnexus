@@ -1,10 +1,6 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import type { InferErr } from "better-result";
-import {
-  type EffortRule,
-  isClaudeModel,
-  type ModelCatalog,
-} from "../infra/claude/models.ts";
+import { type EffortRule, isClaudeModel } from "../infra/claude/models.ts";
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
 import { delegationSource } from "../infra/codex/delegations.ts";
 import { codexVersion, isVerifiedCodex } from "../infra/codex/versions.ts";
@@ -17,7 +13,11 @@ import {
   withResumeHistory,
   withTurns,
 } from "./history-request.ts";
-import { shownEffort, withClaudeModels } from "./model-list.ts";
+import {
+  type ListedClaudeModels,
+  shownEffort,
+  withClaudeModels,
+} from "./model-list.ts";
 import type { SubagentRequests } from "./subagent-requests.ts";
 import type { SubagentRestoreEvent } from "./subagent-restore.ts";
 
@@ -101,7 +101,7 @@ export const createRouter = (
   log: (event: RouteEvent) => void,
   onDelegated: (sourceThreadId: string, threadId: string) => void,
   history: History,
-  claudeModels: ModelCatalog["models"],
+  claudeModels: () => ListedClaudeModels,
   unverifiedCodex: "warn" | "pause",
   subagents: Pick<
     SubagentRequests,

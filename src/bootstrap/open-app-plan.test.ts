@@ -17,20 +17,23 @@ describe("openArguments", () => {
     ]);
   });
 
-  test("passes this shell's paths, version policy and permission mode without credentials", () => {
+  test("passes this shell's paths, version policy, Vertex AI models and permission mode without credentials", () => {
     const args = openArguments(PATHS, "harnexus", {
       HARNEXUS_LOG_PATH: "/tmp/harnexus.log",
       HARNEXUS_STATE_PATH: "",
       HARNEXUS_UNVERIFIED_CODEX: "pause",
       HARNEXUS_PERMISSION_MODE: "auto",
+      HARNEXUS_VERTEX: "on",
       ANTHROPIC_API_KEY: "sk-fixture",
     });
 
-    expect(args.slice(-6)).toEqual([
+    expect(args.slice(-8)).toEqual([
       "--env",
       "HARNEXUS_LOG_PATH=/tmp/harnexus.log",
       "--env",
       "HARNEXUS_UNVERIFIED_CODEX=pause",
+      "--env",
+      "HARNEXUS_VERTEX=on",
       "--env",
       "HARNEXUS_PERMISSION_MODE=auto",
     ]);
