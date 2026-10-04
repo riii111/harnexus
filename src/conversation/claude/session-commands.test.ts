@@ -105,7 +105,7 @@ describe("/resume", () => {
     expect(await promptsUntil(claude, 1)).toEqual(["prompt 11"]);
   });
 
-  test("lists older conversations a page at a time and continues one picked from a later page", async () => {
+  test("pages through older and newer conversations and continues one picked after going back", async () => {
     const { turns, sent, store } = await harness([]);
     for (let n = 1; n <= 10; n += 1) {
       await writeClaudeRecord(`se-${n}`, conversationRecords(`ask ${n}`), n);
@@ -115,22 +115,24 @@ describe("/resume", () => {
 
     answerPick(turns, first, "Older conversations");
     const second = await pickQuestion(sent, 2);
-    answerPick(turns, second, "ask 10");
+    answerPick(turns, second, "Newer conversations");
+    const third = await pickQuestion(sent, 3);
+    answerPick(turns, third, "ask 2");
     await until(() => completedTurnStatuses(sent).length === 1);
 
     expect(optionLabels(first)).toEqual([
-      ...["ask 1", "ask 2", "ask 3", "ask 4", "ask 5", "ask 6", "ask 7"],
+      ...["ask 1", "ask 2", "ask 3", "ask 4", "ask 5", "ask 6"],
       "Older conversations",
       "Search",
     ]);
     expect(optionLabels(second)).toEqual([
-      "ask 8",
-      "ask 9",
-      "ask 10",
+      ...["ask 7", "ask 8", "ask 9", "ask 10"],
+      "Newer conversations",
       "Search",
     ]);
-    expect(questionText(second)).toContain("Showing 8–10 of 10.");
-    expect(store.get(THREAD)?.sessionId).toBe("se-10");
+    expect(questionText(second)).toContain("Showing 7–10 of 10.");
+    expect(optionLabels(third)).toEqual(optionLabels(first));
+    expect(store.get(THREAD)?.sessionId).toBe("se-2");
   });
 
   test.each<{ name: string; command: string; typed: string | null }>([

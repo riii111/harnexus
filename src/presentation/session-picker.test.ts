@@ -33,42 +33,78 @@ describe("pickerPrompt", () => {
     expect(prompt.answerOf(picked("Search"))).toEqual({ kind: "searching" });
   });
 
-  test("offers older conversations only while the list continues past the page", () => {
-    const continued = pickerPrompt(
+  test.each<{
+    name: string;
+    offset: number;
+    expected: {
+      labels: string[];
+      newer: PageAnswerKind;
+      older: PageAnswerKind;
+    };
+  }>([
+    {
+      name: "the first page",
+      offset: 0,
+      expected: {
+        labels: ["ask", "Older conversations", "Search"],
+        newer: "none",
+        older: "older",
+      },
+    },
+    {
+      name: "a middle page",
+      offset: 1,
+      expected: {
+        labels: ["ask", "Newer conversations", "Older conversations", "Search"],
+        newer: "newer",
+        older: "older",
+      },
+    },
+    {
+      name: "the last page",
+      offset: 2,
+      expected: {
+        labels: ["ask", "Newer conversations", "Search"],
+        newer: "newer",
+        older: "none",
+      },
+    },
+  ])("offers newer and older conversations only where the list continues on $name", ({
+    offset,
+    expected,
+  }) => {
+    const prompt = pickerPrompt(
       TARGET,
-      page([listed("ask")], { total: 3 }),
-      NOW,
-    );
-    const last = pickerPrompt(
-      TARGET,
-      page([listed("ask")], { offset: 2, total: 3 }),
+      page([listed("ask")], { offset, total: 3 }),
       NOW,
     );
 
-    expect(labelsOf(continued)).toEqual([
-      "ask",
-      "Older conversations",
-      "Search",
-    ]);
-    expect(continued.answerOf(picked("Older conversations"))).toEqual({
-      kind: "older",
-    });
-    expect(labelsOf(last)).toEqual(["ask", "Search"]);
-    expect(last.answerOf(picked("Older conversations"))).toEqual({
-      kind: "none",
-    });
+    expect({
+      labels: labelsOf(prompt),
+      newer: prompt.answerOf(picked("Newer conversations")).kind,
+      older: prompt.answerOf(picked("Older conversations")).kind,
+    }).toEqual(expected);
   });
 
   test("keeps titles that read like its own choices apart from them", () => {
     const prompt = pickerPrompt(
       TARGET,
-      page([listed("Older conversations"), listed("Search")], { total: 3 }),
+      page(
+        [
+          listed("Newer conversations"),
+          listed("Older conversations"),
+          listed("Search"),
+        ],
+        { offset: 1, total: 5 },
+      ),
       NOW,
     );
 
     expect(labelsOf(prompt)).toEqual([
+      "Newer conversations (2)",
       "Older conversations (2)",
       "Search (2)",
+      "Newer conversations",
       "Older conversations",
       "Search",
     ]);
@@ -127,6 +163,10 @@ describe("searchPrompt", () => {
     expect(searchPrompt(TARGET).answerOf(result)).toEqual({ kind: "none" });
   });
 });
+
+type PageAnswerKind = ReturnType<
+  ReturnType<typeof pickerPrompt>["answerOf"]
+>["kind"];
 
 const page = (
   conversations: ListedConversation[],

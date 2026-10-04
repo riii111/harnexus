@@ -225,6 +225,8 @@ export const createSessionCommands = ({
     switch (answer.kind) {
       case "none":
         return answered({ kind: "notPicked" });
+      case "newer":
+        return pick(threadId, cwd, ask, all, view, offset - PAGE_SIZE);
       case "older":
         return pick(threadId, cwd, ask, all, view, offset + PAGE_SIZE);
       case "search":
@@ -381,7 +383,7 @@ const MAX_AGE_DAYS = 14;
 
 const MAX_AGE_MS = MAX_AGE_DAYS * 24 * 60 * 60_000;
 
-// Seven conversations, the way to older ones and searching keep a page to nine choices.
-const PAGE_SIZE = 7;
+// Six conversations, the ways to newer and older ones and searching keep a page to nine choices.
+const PAGE_SIZE = 6;
 
 const RESUME = /^\/resume(?:\s+(.*))?$/s;

@@ -21,6 +21,7 @@ export type ListedConversation = {
 
 export type PickerAnswer =
   | { kind: "picked"; index: number }
+  | { kind: "newer" }
   | { kind: "older" }
   | { kind: "search"; text: string }
   | { kind: "none" };
@@ -33,10 +34,11 @@ export const pickerPrompt = (
   page: PickerPage,
   now: number,
 ) => {
+  const newer = page.offset;
   const more = page.total - page.offset - page.conversations.length;
   const labels = distinctLabels(
     page.conversations.map(({ title }) => shortTitle(title)),
-    [SEARCH, ...(more > 0 ? [OLDER] : [])],
+    [SEARCH, ...(newer > 0 ? [NEWER] : []), ...(more > 0 ? [OLDER] : [])],
   );
   return {
     method: REQUEST_USER_INPUT,
@@ -51,6 +53,7 @@ export const pickerPrompt = (
           label: labels[index] ?? "",
           description: detailsOf(conversation, now),
         })),
+        ...(newer > 0 ? [{ label: NEWER, description: `${newer} more` }] : []),
         ...(more > 0 ? [{ label: OLDER, description: `${more} more` }] : []),
         {
           label: SEARCH,
@@ -64,6 +67,7 @@ export const pickerPrompt = (
     ): Exclude<PickerAnswer, { kind: "search" }> | { kind: "searching" } => {
       const chosen = answerTo(answer, PICK_QUESTION);
       if (chosen === SEARCH) return { kind: "searching" };
+      if (newer > 0 && chosen === NEWER) return { kind: "newer" };
       if (more > 0 && chosen === OLDER) return { kind: "older" };
       const index = chosen === null ? -1 : labels.indexOf(chosen);
       return index >= 0 ? { kind: "picked", index } : { kind: "none" };
@@ -173,6 +177,8 @@ const REQUEST_USER_INPUT = "item/tool/requestUserInput";
 const PICK_QUESTION = "conversation";
 
 const SEARCH_QUESTION = "search";
+
+const NEWER = "Newer conversations";
 
 const OLDER = "Older conversations";
 
