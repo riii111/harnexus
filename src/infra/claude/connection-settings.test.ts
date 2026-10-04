@@ -132,6 +132,13 @@ describe("createConnectionResolver", () => {
   test.each([
     { name: "not JSON", content: "{" },
     { name: "not an object", content: "[]" },
+    {
+      name: "a value Claude Code refuses",
+      content: JSON.stringify({
+        env: { CLAUDE_CODE_USE_VERTEX: "1" },
+        permissions: { allow: 42 },
+      }),
+    },
   ])("stops on a settings file that is $name rather than using the subscription", async ({
     content,
   }) => {

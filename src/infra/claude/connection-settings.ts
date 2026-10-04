@@ -3,7 +3,7 @@ import {
   resolveSettings,
   type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
-import { Result, TaggedError } from "better-result";
+import { type InferErr, Result, TaggedError } from "better-result";
 import { readTextFileIfExists } from "../../runtime/fs.boundary.ts";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
@@ -13,7 +13,7 @@ import {
   SUBSCRIPTION_CONNECTION,
   VERTEX_REGION_PREFIX,
 } from "./connection.ts";
-import { type ClaudeSdk, readSettings } from "./sdk.boundary.ts";
+import { type ClaudeSdk, readSettingsLayer } from "./sdk.boundary.ts";
 
 class RepositorySettingsUnreadable extends TaggedError(
   "RepositorySettingsUnreadable",
@@ -58,9 +58,8 @@ export const createConnectionResolver = ({
       const repository = await repositoryFor(worktree);
       const env: Record<string, string> = {};
       for (const [dir, source] of layersOf(worktree, repository)) {
-        yield* Result.await(checkReadable(dir, source));
-        const read = yield* Result.await(readSettings(resolve, dir, [source]));
-        Object.assign(env, read.env ?? {});
+        const layer = yield* Result.await(readLayer(resolve, dir, source));
+        Object.assign(env, layer);
       }
       return choosesVertex(env)
         ? vertexFrom(env)
@@ -84,19 +83,37 @@ const layersOf = (
         [worktree, "local"],
       ];
 
-// The SDK reads a settings file it cannot parse as having no settings, which would leave a Vertex repository on the subscription.
-const checkReadable = async (dir: string, source: SettingSource) => {
+// The SDK reads a settings file it cannot parse or refuses as having no settings, which would leave a Vertex repository on the subscription.
+const readLayer = async (
+  resolve: ClaudeSdk["resolveSettings"],
+  dir: string,
+  source: SettingSource,
+): Promise<
+  Result<
+    Record<string, string>,
+    | RepositorySettingsUnreadable
+    | InferErr<Awaited<ReturnType<typeof readSettingsLayer>>>
+  >
+> => {
   const path = join(dir, ".claude", SETTINGS_FILES[source]);
   const text = await readTextFileIfExists(path);
-  return text.isOk() && (text.value === null || isSettingsText(text.value))
-    ? Result.ok()
-    : Result.err(
-        new RepositorySettingsUnreadable({
-          path,
-          message: `harnexus cannot read the Claude Code settings in ${path}, so nothing was sent to Claude`,
-        }),
-      );
+  if (text.isErr()) return Result.err(unreadable(path));
+  const layer = await readSettingsLayer(resolve, dir, source);
+  if (layer.isErr()) return Result.err(layer.error);
+  if (
+    text.value !== null &&
+    (!isSettingsText(text.value) || !layer.value.loaded)
+  ) {
+    return Result.err(unreadable(path));
+  }
+  return Result.ok(layer.value.env);
 };
+
+const unreadable = (path: string) =>
+  new RepositorySettingsUnreadable({
+    path,
+    message: `harnexus cannot read the Claude Code settings in ${path}, so nothing was sent to Claude`,
+  });
 
 const vertexFrom = (
   env: Record<string, string>,

@@ -101,12 +101,12 @@ describe("connectionEnv", () => {
 
 describe("checkSettingsEnv", () => {
   test.each([
-    { name: "project", env: { ANTHROPIC_VERTEX_PROJECT_ID: "other-project" } },
-    { name: "region", env: { CLOUD_ML_REGION: "us-east5" } },
     { name: "model region", env: { VERTEX_REGION_CLAUDE_5_OPUS: "us-east5" } },
     { name: "gateway", env: { ANTHROPIC_VERTEX_BASE_URL: "https://gw" } },
     { name: "API key", env: { ANTHROPIC_API_KEY: "api-key" } },
-  ])("refuses Claude settings that set another Vertex $name", ({ env }) => {
+  ])("refuses Claude settings that set a Vertex $name the repository does not", ({
+    env,
+  }) => {
     const checked = checkSettingsEnv(env, VERTEX);
 
     expect(checked.isErr() && checked.error._tag).toBe(
@@ -120,23 +120,13 @@ describe("checkSettingsEnv", () => {
     expect(checked.isOk()).toBe(true);
   });
 
-  test("refuses a model pin in Claude settings only when the repository's connection pins it differently", () => {
-    const pinned = checkSettingsEnv(
-      { ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-4-8" },
-      {
-        ...VERTEX,
-        env: { ...VERTEX.env, ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5" },
-      },
-    );
-    const unpinned = checkSettingsEnv(
-      { ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-4-8" },
+  test("accepts Claude settings that set the connection's Vertex variables to other values, which the flag settings outrank", () => {
+    const checked = checkSettingsEnv(
+      { ANTHROPIC_VERTEX_PROJECT_ID: "shared-project", CLOUD_ML_REGION: "us" },
       VERTEX,
     );
 
-    expect(pinned.isErr() && pinned.error.names).toEqual([
-      "ANTHROPIC_DEFAULT_OPUS_MODEL",
-    ]);
-    expect(unpinned.isOk()).toBe(true);
+    expect(checked.isOk()).toBe(true);
   });
 
   test("accepts Vertex variables other than the provider switch on the subscription", () => {

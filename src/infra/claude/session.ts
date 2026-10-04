@@ -337,6 +337,10 @@ const sessionOptions = (
   cwd: settings.cwd,
   model: settings.model,
   env: connectionEnv(settings.connection, env),
+  // A worktree's own shared settings may set another project, and the flag layer outranks them as the repository's local settings do in its own checkout.
+  ...(settings.connection.provider === "vertex" && {
+    settings: { env: { ...settings.connection.env } },
+  }),
   settingSources: SETTING_SOURCES,
   systemPrompt: { type: "preset", preset: "claude_code" },
   // The bridge selects the mode explicitly so user settings cannot silently enable bypassPermissions.

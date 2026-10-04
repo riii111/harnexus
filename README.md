@@ -128,7 +128,8 @@ harnexus never falls back to your subscription or another billing route. The fai
 | `harnexus cannot read the Claude Code settings in …` | Fix the JSON in the file it names. |
 | `… choose Google Vertex AI without …` | Add the named variable to the repository's Claude Code settings. |
 | `… which harnexus does not support` | Remove the gateway variable it names; Vertex AI gateways are not supported. |
-| `Claude Code user settings must not set …` or `Claude settings must not set …` | Remove the named variables from `~/.claude/settings.json`, or make them match the repository's settings. |
+| `Claude Code user settings must not set …` | Remove the named variables from `~/.claude/settings.json`; keep Vertex settings in each repository's settings. |
+| `Claude settings must not set …` | Remove the named variables from the Claude Code settings that set them. |
 | `Claude Code did not report Google Vertex AI …` | Check that no other provider variable reaches Claude Code, then send the message again. |
 
 ## Optional Settings

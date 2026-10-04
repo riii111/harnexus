@@ -272,6 +272,21 @@ describe("startClaudeSession Vertex connection", () => {
     expect(claude.started()).toBe(false);
   });
 
+  test("passes the repository's Vertex variables as flag settings over a worktree's shared settings", async () => {
+    const claude = fakeClaude(
+      { apiProvider: "vertex" },
+      {
+        settingsEnv: { ANTHROPIC_VERTEX_PROJECT_ID: "shared-project" },
+        userSettingsEnv: {},
+      },
+    );
+
+    const started = await startClaudeSession(VERTEX_SETTINGS, claude.runtime);
+
+    expect(started.isOk()).toBe(true);
+    expect(claude.options().settings).toEqual({ env: VERTEX.env });
+  });
+
   test("starts when only the repository's settings repeat its Vertex values", async () => {
     const claude = fakeClaude(
       { apiProvider: "vertex" },
