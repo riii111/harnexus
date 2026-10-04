@@ -5,7 +5,12 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
-import type { AppNotification, ThreadItem, Turn } from "./protocol.ts";
+import type {
+  AppNotification,
+  ThreadItem,
+  Turn,
+  UserInput,
+} from "./protocol.ts";
 import {
   closeTurn,
   type Rendered,
@@ -45,9 +50,9 @@ export const buildHistory = (
         if (replay !== null) {
           replay = feed(replay, toolResultsOf(message, body), at);
         }
-      } else if (INTERRUPTED.test(prompt)) {
+      } else if (INTERRUPTED.test(prompt.text)) {
         if (replay !== null) replay = interrupt(replay);
-      } else if (!LOCAL_COMMAND.test(prompt)) {
+      } else if (!LOCAL_COMMAND.test(prompt.text)) {
         if (replay !== null) turns.push(close(replay));
         replay = start(thread, message.uuid, prompt, at);
       }
@@ -281,7 +286,7 @@ const interrupt = (replay: Replay): Replay => ({
 const start = (
   thread: { threadId: string; cwd: string },
   uuid: string,
-  prompt: string | null,
+  prompt: Prompt | null,
   at: number | null,
 ): Replay => {
   const opened = renderTurnStarted({
@@ -301,7 +306,12 @@ const start = (
     opened,
   );
   if (prompt === null) return replay;
-  const input = [{ type: "text", text: prompt, text_elements: [] }];
+  const input: UserInput[] = [
+    ...(prompt.text === "" && prompt.images.length > 0
+      ? []
+      : [{ type: "text", text: prompt.text, text_elements: [] }]),
+    ...prompt.images,
+  ];
   return collect(replay, renderUserInput(replay.state, input, null, at ?? 0));
 };
 
@@ -372,11 +382,14 @@ export const noteItem = (
   }
 };
 
+type Prompt = { text: string; images: UserInput[] };
+
 // A user record carrying tool results continues the turn; any other user record is a prompt, whose first text block is what was typed and whose later ones are files the bridge attached.
-const promptOf = (body: unknown): string | null => {
+// The file an attached image came from may be gone, so the image is shown from the copy Claude recorded.
+const promptOf = (body: unknown): Prompt | null => {
   if (!isObject(body)) return null;
   const { content } = body;
-  if (typeof content === "string") return content;
+  if (typeof content === "string") return { text: content, images: [] };
   if (!Array.isArray(content)) return null;
   if (
     content.some((block) => isObject(block) && block.type === "tool_result")
@@ -386,7 +399,29 @@ const promptOf = (body: unknown): string | null => {
   const typed = content.find(
     (block) => isObject(block) && block.type === "text",
   );
-  return isObject(typed) && typeof typed.text === "string" ? typed.text : "";
+  return {
+    text: isObject(typed) && typeof typed.text === "string" ? typed.text : "",
+    images: content.flatMap((block) => {
+      const url = imageUrlOf(block);
+      return url === null ? [] : [{ type: "image", url }];
+    }),
+  };
+};
+
+const imageUrlOf = (block: unknown) => {
+  if (!isObject(block) || block.type !== "image") return null;
+  const { source } = block;
+  if (!isObject(source)) return null;
+  if (
+    source.type === "base64" &&
+    typeof source.media_type === "string" &&
+    typeof source.data === "string"
+  ) {
+    return `data:${source.media_type};base64,${source.data}`;
+  }
+  return source.type === "url" && typeof source.url === "string"
+    ? source.url
+    : null;
 };
 
 // The SDK types a record's message as unknown, so only a message with the fields the renderer reads is replayed.

@@ -14,6 +14,11 @@ import {
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import { createSerialQueue } from "../runtime/serial-queue.ts";
+import {
+  type ConnectionTarget,
+  isConnectionTarget,
+  targetOf,
+} from "./claude/connection.ts";
 
 export type RewindPoint = { sessionId: string; at: string | null };
 
@@ -26,6 +31,8 @@ type ThreadMapping = {
   // The effort level the app last picked for the thread, or null to leave Claude on the user's settings.
   readonly effort: string | null;
   readonly worktree: string;
+  // The connection Claude Code confirmed for the conversation, or null until a session confirms one.
+  readonly connection: ConnectionTarget | null;
   readonly reviewerThreadIds: readonly string[];
   // Threads that sent this thread work through the app, so Claude may answer them as their reviewer.
   readonly requesterThreadIds: readonly string[];
@@ -249,6 +256,7 @@ const createThreadStore = (
               ...entry,
               effort: entry.effort ?? null,
               sessionId: null,
+              connection: null,
               reviewerThreadIds: [],
               requesterThreadIds: [],
               messageIds: [],
@@ -266,6 +274,9 @@ const createThreadStore = (
 
     setEffort: (threadId: string, effort: string | null) =>
       update(threadId, (mapping) => ({ ...mapping, effort })),
+
+    setConnection: (threadId: string, connection: ConnectionTarget | null) =>
+      update(threadId, (mapping) => ({ ...mapping, connection })),
 
     // A reviewer answers one worker only, so a reply can be traced back to that worker; a Claude thread is a worker of its own.
     addReviewer: async (threadId: string, reviewerThreadId: string) => {
@@ -509,7 +520,7 @@ const serializeState = (mappings: ReadonlyMap<string, ThreadMapping>) =>
 const readState = (value: unknown): ThreadMapping[] | null => {
   if (!isObject(value) || value.version !== STATE_VERSION) return null;
   if (!Array.isArray(value.threads)) return null;
-  // Files written before message ids, efforts or requesters were kept have none.
+  // Files written before message ids, efforts or requesters were kept have none; a conversation saved before connections were kept ran on the subscription.
   const threads = value.threads.map((thread) =>
     isObject(thread)
       ? {
@@ -517,6 +528,10 @@ const readState = (value: unknown): ThreadMapping[] | null => {
           ...(!("messageIds" in thread) && { messageIds: [] }),
           ...(!("effort" in thread) && { effort: null }),
           ...(!("requesterThreadIds" in thread) && { requesterThreadIds: [] }),
+          ...(!("connection" in thread) && {
+            connection:
+              thread.sessionId == null ? null : { provider: "subscription" },
+          }),
         }
       : thread,
   );
@@ -532,6 +547,7 @@ const pickMappingFields = (mapping: ThreadMapping): ThreadMapping => ({
   model: mapping.model,
   effort: mapping.effort,
   worktree: mapping.worktree,
+  connection: mapping.connection === null ? null : targetOf(mapping.connection),
   reviewerThreadIds: [...mapping.reviewerThreadIds],
   requesterThreadIds: [...mapping.requesterThreadIds],
   messageIds: [...mapping.messageIds],
@@ -548,6 +564,7 @@ const isThreadMapping = (value: unknown): value is ThreadMapping =>
   isNonEmptyString(value.model) &&
   (value.effort === null || isNonEmptyString(value.effort)) &&
   isNonEmptyString(value.worktree) &&
+  (value.connection === null || isConnectionTarget(value.connection)) &&
   Array.isArray(value.reviewerThreadIds) &&
   value.reviewerThreadIds.every(isNonEmptyString) &&
   Array.isArray(value.requesterThreadIds) &&

@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { checkSubscription, withoutApiBilling } from "./auth.ts";
+import {
+  checkAccount,
+  checkSettingsEnv,
+  checkSubscription,
+  connectionEnv,
+  withoutApiBilling,
+} from "./auth.ts";
+import {
+  SUBSCRIPTION_CONNECTION,
+  type VertexConnection,
+} from "./connection.ts";
 
 describe("withoutApiBilling", () => {
   test("drops API keys and provider switches and keeps the rest", () => {
@@ -40,6 +50,120 @@ describe("withoutApiBilling", () => {
     expected,
   }) => {
     expect(withoutApiBilling(env)).toEqual(expected);
+  });
+});
+
+describe("connectionEnv", () => {
+  test("sets the repository's Vertex project, region, credentials and model pins over the inherited ones", () => {
+    const env = connectionEnv(
+      {
+        ...VERTEX,
+        env: {
+          ...VERTEX.env,
+          GOOGLE_APPLICATION_CREDENTIALS: "/keys/sidework.json",
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5@20251001",
+          VERTEX_REGION_CLAUDE_HAIKU_4_5: "us-east5",
+        },
+      },
+      {
+        PATH: "/usr/bin",
+        ANTHROPIC_API_KEY: "api-key",
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        ANTHROPIC_VERTEX_PROJECT_ID: "other-project",
+        CLOUD_ML_REGION: "europe-west1",
+        ANTHROPIC_VERTEX_BASE_URL: "https://gateway.example",
+        CLAUDE_CODE_SKIP_VERTEX_AUTH: "1",
+        VERTEX_REGION_CLAUDE_5_SONNET: "europe-west1",
+        GOOGLE_APPLICATION_CREDENTIALS: "/keys/other.json",
+      },
+    );
+
+    expect(env).toEqual({
+      PATH: "/usr/bin",
+      CLAUDE_CODE_USE_VERTEX: "1",
+      ANTHROPIC_VERTEX_PROJECT_ID: "sidework-project",
+      CLOUD_ML_REGION: "global",
+      GOOGLE_APPLICATION_CREDENTIALS: "/keys/sidework.json",
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5@20251001",
+      VERTEX_REGION_CLAUDE_HAIKU_4_5: "us-east5",
+    });
+  });
+
+  test("leaves the subscription without any provider switch", () => {
+    const env = connectionEnv(SUBSCRIPTION_CONNECTION, {
+      PATH: "/usr/bin",
+      CLAUDE_CODE_USE_VERTEX: "1",
+    });
+
+    expect(env).toEqual({ PATH: "/usr/bin" });
+  });
+});
+
+describe("checkSettingsEnv", () => {
+  test.each([
+    { name: "model region", env: { VERTEX_REGION_CLAUDE_5_OPUS: "us-east5" } },
+    { name: "gateway", env: { ANTHROPIC_VERTEX_BASE_URL: "https://gw" } },
+    { name: "API key", env: { ANTHROPIC_API_KEY: "api-key" } },
+  ])("refuses Claude settings that set a Vertex $name the repository does not", ({
+    env,
+  }) => {
+    const checked = checkSettingsEnv(env, VERTEX);
+
+    expect(checked.isErr() && checked.error._tag).toBe(
+      "ClaudeSettingsOverrideAuth",
+    );
+  });
+
+  test("accepts Claude settings that repeat the repository's Vertex settings", () => {
+    const checked = checkSettingsEnv(VERTEX.env, VERTEX);
+
+    expect(checked.isOk()).toBe(true);
+  });
+
+  test("accepts Claude settings that set the connection's Vertex variables to other values, which the flag settings outrank", () => {
+    const checked = checkSettingsEnv(
+      { ANTHROPIC_VERTEX_PROJECT_ID: "shared-project", CLOUD_ML_REGION: "us" },
+      VERTEX,
+    );
+
+    expect(checked.isOk()).toBe(true);
+  });
+
+  test("accepts Vertex variables other than the provider switch on the subscription", () => {
+    const checked = checkSettingsEnv(
+      { ANTHROPIC_VERTEX_PROJECT_ID: "other-project" },
+      SUBSCRIPTION_CONNECTION,
+    );
+
+    expect(checked.isOk()).toBe(true);
+  });
+});
+
+describe("checkAccount", () => {
+  test("accepts a Vertex connection when Claude Code reports Vertex", () => {
+    expect(checkAccount({ apiProvider: "vertex" }, VERTEX).isOk()).toBe(true);
+  });
+
+  test.each([
+    {
+      name: "a subscription login",
+      account: { subscriptionType: "Claude Max", apiProvider: "firstParty" },
+    },
+    { name: "another cloud provider", account: { apiProvider: "bedrock" } },
+    { name: "no provider", account: {} },
+  ] as const)("rejects $name on a Vertex connection", ({ account }) => {
+    const checked = checkAccount(account, VERTEX);
+
+    expect(checked.isErr() && checked.error._tag).toBe("ClaudeNotVertex");
+  });
+
+  test("rejects Vertex on the subscription", () => {
+    const checked = checkAccount(
+      { apiProvider: "vertex" },
+      SUBSCRIPTION_CONNECTION,
+    );
+
+    expect(checked.isErr() && checked.error._tag).toBe("ClaudeNotSubscription");
   });
 });
 
@@ -102,3 +226,14 @@ describe("checkSubscription", () => {
     );
   });
 });
+
+const VERTEX: VertexConnection = {
+  provider: "vertex",
+  projectId: "sidework-project",
+  region: "global",
+  env: {
+    CLAUDE_CODE_USE_VERTEX: "1",
+    ANTHROPIC_VERTEX_PROJECT_ID: "sidework-project",
+    CLOUD_ML_REGION: "global",
+  },
+};

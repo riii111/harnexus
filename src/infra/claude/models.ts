@@ -29,6 +29,14 @@ export type EffortSettings = Pick<
 export const isClaudeModel = (model: unknown): model is string =>
   typeof model === "string" && model.startsWith(CLAUDE_PREFIX);
 
+// A model picked with this suffix runs the same Claude model on Google Vertex AI, so the picker shows the connection before a chat starts.
+export const vertexModelId = (model: string) => `${model}${VERTEX_SUFFIX}`;
+
+export const isVertexModel = (model: string) => model.endsWith(VERTEX_SUFFIX);
+
+export const baseModelId = (model: string) =>
+  isVertexModel(model) ? model.slice(0, -VERTEX_SUFFIX.length) : model;
+
 // A level of some Claude model, which a thread keeps even while its current model cannot run it.
 export const isClaudeEffort = (effort: unknown): effort is EffortLevel =>
   (EFFORT_ORDER as readonly unknown[]).includes(effort);
@@ -53,11 +61,15 @@ export const createModelCatalog = () => {
             ),
           },
     // A model neither list names, such as one only Claude Code's unread list has, is given every level, so a saved pick is not lost; the SDK ran xhigh as high on Opus 4.6 and ignored a level on Haiku 4.5 (SDK 0.3.284).
-    effortsOf: (model: string): readonly EffortLevel[] =>
-      (
-        listed?.find(({ id }) => id === model) ??
-        BUILT_IN_MODELS.find(({ id }) => id === model)
-      )?.efforts ?? EFFORT_ORDER,
+    effortsOf: (picked: string): readonly EffortLevel[] => {
+      const model = baseModelId(picked);
+      return (
+        (
+          listed?.find(({ id }) => id === model) ??
+          BUILT_IN_MODELS.find(({ id }) => id === model)
+        )?.efforts ?? EFFORT_ORDER
+      );
+    },
   };
 };
 
@@ -91,7 +103,8 @@ export const effortRule =
     settings: EffortSettings,
     effortsOf: (model: string) => readonly EffortLevel[],
   ): EffortRule =>
-  (model, picked) => {
+  (pickedModel, picked) => {
+    const model = baseModelId(pickedModel);
     const efforts = effortsOf(model);
     if (efforts.length === 0) return null;
     // modelSettings is keyed by the canonical name, which an id such as claude-fable-5-1[1m] extends with its context suffix.
@@ -145,6 +158,8 @@ const compareVersions = (
 const VERSION = /(?:^|\s)(\d+(?:\.\d+)*)(?=\s|$)/;
 
 const CLAUDE_PREFIX = "claude-";
+
+const VERTEX_SUFFIX = "~vertex";
 
 const CONTEXT_SUFFIX = /\[[^\]]*\]$/;
 

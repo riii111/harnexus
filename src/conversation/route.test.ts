@@ -202,7 +202,7 @@ describe("Codex CLI version", () => {
       name: "an unverified version unless asked to pause",
       agent: UNVERIFIED_AGENT,
       policy: "warn",
-      expected: { models: 4, unchanged: false },
+      expected: { models: 7, unchanged: false },
     },
     {
       name: "an unverified version when asked to pause",
@@ -214,7 +214,7 @@ describe("Codex CLI version", () => {
       name: "a verified version even when asked to pause",
       agent: VERIFIED_AGENT,
       policy: "pause",
-      expected: { models: 4, unchanged: false },
+      expected: { models: 7, unchanged: false },
     },
   ])("appends the Claude models to model/list only as allowed on $name", async ({
     agent,
@@ -322,7 +322,15 @@ describe("model/list", () => {
       "claude-opus-5-5",
       "claude-sonnet-5",
       "claude-haiku-4-5",
+      "claude-opus-5-5~vertex",
+      "claude-sonnet-5~vertex",
+      "claude-haiku-4-5~vertex",
     ]);
+    expect(out.result.data[4]).toMatchObject({
+      model: "claude-opus-5-5~vertex",
+      displayName: "Claude Opus 5.5 · Vertex AI",
+      hidden: true,
+    });
     expect(out.result.data[1]).toMatchObject({
       model: "claude-opus-5-5",
       hidden: false,
@@ -332,6 +340,30 @@ describe("model/list", () => {
       id: "gpt-fixture",
       supportedReasoningEfforts: levels,
     });
+  });
+
+  test("lists every Claude model as taking images, so the app lets the user attach them", async () => {
+    const { router } = setup();
+
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    const out = parse(
+      await router.fromServer(
+        encode({ id: 2, result: { data: [], nextCursor: null } }),
+      ),
+    );
+
+    expect(
+      out.result.data.map(
+        (model: { inputModalities: string[] }) => model.inputModalities,
+      ),
+    ).toEqual([
+      ["text", "image"],
+      ["text", "image"],
+      ["text", "image"],
+      ["text", "image"],
+      ["text", "image"],
+      ["text", "image"],
+    ]);
   });
 
   test.each([
@@ -368,6 +400,26 @@ describe("model/list", () => {
     }).toEqual(expected);
   });
 
+  test("shows the Vertex AI models in the picker only when they are switched on", async () => {
+    const { router } = setup([], {}, "warn", false, true);
+
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    const out = parse(await router.fromServer(modelList(2, null)));
+
+    expect(
+      out.result.data
+        .filter((model: { id: string }) => model.id.endsWith("~vertex"))
+        .map((model: { displayName: string; hidden: boolean }) => [
+          model.displayName,
+          model.hidden,
+        ]),
+    ).toEqual([
+      ["Claude Opus 5.5 · Vertex AI", false],
+      ["Claude Sonnet 5 · Vertex AI", false],
+      ["Claude Haiku 4.5 · Vertex AI", false],
+    ]);
+  });
+
   test("lists the models Claude Code offers once read and a dropped built-in model as hidden", async () => {
     const { router, catalog } = setup();
     catalog.replace([
@@ -393,6 +445,10 @@ describe("model/list", () => {
       ["claude-opus-5-5", true],
       ["claude-sonnet-5", true],
       ["claude-haiku-4-5", true],
+      ["claude-sonnet-5-5~vertex", true],
+      ["claude-opus-5-5~vertex", true],
+      ["claude-sonnet-5~vertex", true],
+      ["claude-haiku-4-5~vertex", true],
     ]);
     expect(out.result.data[1]).toMatchObject({
       displayName: "Claude Sonnet 5.5",
@@ -1851,6 +1907,7 @@ const setup = (
   records: Record<string, SessionMessage[] | "unreadable"> = {},
   unverifiedCodex: "warn" | "pause" = "warn",
   holdForks = false,
+  vertex = false,
 ) => {
   const calls: unknown[][] = [];
   const events: RouteEvent[] = [];
@@ -1961,7 +2018,7 @@ const setup = (
     (event) => events.push(event),
     (source, threadId) => calls.push(["delegated", source, threadId]),
     history,
-    catalog.models,
+    () => ({ ...catalog.models(), vertex }),
     unverifiedCodex,
     subagentRequests,
   );

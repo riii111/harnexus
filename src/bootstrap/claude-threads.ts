@@ -16,6 +16,7 @@ import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
 import { buildHistory, replayHistory } from "../presentation/history.ts";
+import { resizeImage } from "../runtime/image.boundary.ts";
 
 type Runtime = Parameters<typeof createClaudeRuntime>[0];
 
@@ -27,6 +28,7 @@ export const connectClaudeThreads = ({
   findSession,
   listConversations,
   lastRecordOf,
+  resolveConnection,
   readSession,
   readSubagents,
   effortRule,
@@ -42,6 +44,7 @@ export const connectClaudeThreads = ({
   findSession: Runtime["findSession"];
   listConversations: Runtime["listConversations"];
   lastRecordOf: Runtime["lastRecordOf"];
+  resolveConnection: Runtime["resolveConnection"];
   readSession: Parameters<typeof createHistoryRequests>[0]["readSession"];
   readSubagents: (sessionId: string) => ReturnType<typeof readClaudeSubagents>;
   effortRule: Runtime["effortRule"];
@@ -66,6 +69,7 @@ export const connectClaudeThreads = ({
     findSession,
     listConversations,
     lastRecordOf,
+    resolveConnection,
     readHistory: async (threadId, sessionId, cwd) => {
       const read = await readSession(sessionId);
       if (read.isErr()) {
@@ -96,6 +100,7 @@ export const connectClaudeThreads = ({
     log,
     effortRule,
     subagents,
+    resizeImage,
   });
   const turns = createTurnController({
     store,

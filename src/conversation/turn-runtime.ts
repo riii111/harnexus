@@ -1,5 +1,6 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import type { InferErr } from "better-result";
+import type { ImageSource } from "../infra/claude/images.ts";
 import type { createCodexLink } from "../infra/codex/codex-link.ts";
 import type { delegatedMessage } from "../infra/codex/delegations.ts";
 import type { ThreadRecord } from "../infra/thread-store.ts";
@@ -36,7 +37,11 @@ export type TurnRuntime<Tag extends string> = {
   closeSession: (threadId: string) => void;
   recordOf: (threadId: string, turnId: string) => string | null;
   run: (turn: RunningTurn<Tag>) => Promise<void>;
-  steer: (turn: RunningTurn<Tag>, text: string) => Refusal | null;
+  // Settles once the steer reaches the agent or is refused, which for an attached image waits for the image to be read.
+  steer: (
+    turn: RunningTurn<Tag>,
+    input: Pick<MessageInput, "text" | "images">,
+  ) => Promise<Refusal | null>;
   interrupt: (turn: RunningTurn<Tag>, repeated: boolean) => void;
   dropSession: (threadId: string, link: TurnLink) => void;
   // Called when a thread forked from another is adopted, and settles once the fork is pinned to where the source stood.
@@ -53,10 +58,12 @@ export type TurnLink = Pick<
   "hasUnsettledWrite" | "stopWrites"
 >;
 
-export type TextInput = {
+// items are what the app shows as the user's message; text and images are what the agent is sent.
+export type MessageInput = {
   items: UserInput[];
   toolOutput: ToolOutput | null;
   text: string;
+  images: ImageSource[];
 };
 
 export type ToolOutput = NonNullable<
@@ -65,7 +72,7 @@ export type ToolOutput = NonNullable<
 
 // effort is the thread's level when the turn was accepted, so a change made while it waits or runs applies to the next turn.
 // requester is the thread that delegated this turn's message, saved before the turn runs so Claude can answer it; startedBy says whether the app or the agent itself started the turn.
-export type TurnInput = TextInput & {
+export type TurnInput = MessageInput & {
   permissionMode: Mode;
   effort: EffortLevel | null;
   requester: string | null;

@@ -34,6 +34,7 @@ type ResolveSettings = (options: {
     Settings,
     "env" | "effortLevel" | "maxEffortLevel" | "modelSettings"
   >;
+  sources?: { source: string }[];
 }>;
 
 type GetSessionMessages = (sessionId: string) => Promise<SessionMessage[]>;
@@ -109,6 +110,28 @@ export const readSettings = (
 ) =>
   Result.tryPromise({
     try: async () => (await resolve({ cwd, settingSources })).effective,
+    catch: (cause) =>
+      new ClaudeSettingsUnavailable({
+        cause,
+        message: "cannot read the Claude settings",
+      }),
+  });
+
+// The SDK leaves out of its sources a settings file it refuses as a whole, such as one with a value of the wrong type, so loaded is false for a file it dropped.
+export const readSettingsLayer = (
+  resolve: ResolveSettings,
+  cwd: string,
+  source: SettingSource,
+) =>
+  Result.tryPromise({
+    try: async () => {
+      const resolved = await resolve({ cwd, settingSources: [source] });
+      return {
+        env: resolved.effective.env ?? {},
+        loaded:
+          resolved.sources?.some((entry) => entry.source === source) ?? true,
+      };
+    },
     catch: (cause) =>
       new ClaudeSettingsUnavailable({
         cause,

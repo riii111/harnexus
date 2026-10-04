@@ -108,7 +108,7 @@ async function loginCheck(): Promise<Check> {
     : {
         status: "fail",
         name: "Claude login",
-        detail: `${login.error._tag}: ${login.error.message}`,
+        detail: `${login.error._tag}: ${login.error.message}; chats in repositories whose Claude Code settings choose Google Vertex AI do not need it`,
       };
 }
 

@@ -1,4 +1,8 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+import {
+  type ConnectionTarget,
+  sameTarget,
+} from "../infra/claude/connection.ts";
 import { isClaudeEffort } from "../infra/claude/models.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
 import type { Thread } from "./thread-request.ts";
@@ -12,7 +16,11 @@ export type ThreadValueEvent =
   | { event: "claude_turn"; step: "effort_changed"; effort: EffortLevel }
   | {
       event: "claude_turn";
-      step: "session_not_saved" | "model_not_saved" | "effort_not_saved";
+      step:
+        | "session_not_saved"
+        | "model_not_saved"
+        | "effort_not_saved"
+        | "connection_not_saved";
       error: StoreTag;
     };
 
@@ -24,6 +32,7 @@ export type StoreTag =
   | ErrorTag<ReturnType<ThreadStore["addRequester"]>>
   | ErrorTag<ReturnType<ThreadStore["setModel"]>>
   | ErrorTag<ReturnType<ThreadStore["setEffort"]>>
+  | ErrorTag<ReturnType<ThreadStore["setConnection"]>>
   | "ThreadNotFound"
   | "WriteOutcomeUnknown"
   | "WriteNotStarted"
@@ -66,6 +75,9 @@ export const createThreadValues = (
     sessionIds.has(threadId)
       ? (sessionIds.get(threadId) ?? null)
       : (store.get(threadId)?.sessionId ?? null);
+
+  const connectionOf = (threadId: string) =>
+    store.get(threadId)?.connection ?? null;
 
   const adopt = (threadId: string, thread: Thread) => {
     if (store.get(threadId) === undefined) adopted.set(threadId, thread);
@@ -151,6 +163,25 @@ export const createThreadValues = (
     }
   };
 
+  // Unlike a session id, a connection applies only once the store holds it, so a restart never resumes a conversation on a connection nobody confirmed; a save whose sync failed already holds it.
+  const setConnection = async (
+    threadId: string,
+    connection: ConnectionTarget | null,
+  ) => {
+    const saved = await store.setConnection(threadId, connection);
+    if (saved.isErr()) {
+      log({
+        event: "claude_turn",
+        step: "connection_not_saved",
+        error: saved.error._tag,
+      });
+    }
+    const held = connectionOf(threadId);
+    return connection === null || held === null
+      ? held === connection
+      : sameTarget(held, connection);
+  };
+
   const saveModel = (threadId: string, model: string) => {
     void store.setModel(threadId, model).then((saved) => {
       if (saved.isErr()) {
@@ -182,6 +213,7 @@ export const createThreadValues = (
     threadOf,
     pickedEffortOf,
     sessionIdOf,
+    connectionOf,
     takePicked,
     rewindOf: (threadId: string) => store.get(threadId)?.rewind,
     adopt,
@@ -193,5 +225,6 @@ export const createThreadValues = (
     changeModel,
     changeEffort,
     setSessionId,
+    setConnection,
   };
 };
