@@ -90,47 +90,28 @@ HARNEXUS_UNVERIFIED_CODEX=pause bun run open-app
 
 ## Use Google Vertex AI for a repository
 
-Open the app with `HARNEXUS_VERTEX=on bun run open-app` to list each Claude model a second time, marked `· Vertex AI`, such as `Claude Opus 5.5 · Vertex AI`. A `· Vertex AI` model runs in repositories whose own Claude Code settings choose Vertex AI. If `claude` in a terminal already runs on Vertex AI in a repository through its `.claude/settings.local.json` or `.claude/settings.json`, that is all it needs:
+Chats use your Claude subscription. To run a repository's chats on Claude through Google Vertex AI instead:
 
-```json
-{
-  "env": {
-    "CLAUDE_CODE_USE_VERTEX": "1",
-    "ANTHROPIC_VERTEX_PROJECT_ID": "sidework-project",
-    "CLOUD_ML_REGION": "global"
-  }
-}
-```
+1. Set up Vertex AI in the repository's `.claude/settings.local.json`, as for `claude` in a terminal. If `claude` already runs on Vertex AI there, skip this step.
 
-- Chats in the worktrees Codex creates for the repository use the same connection, even though they do not carry a copy of `settings.local.json`.
-- Other repositories stay on your subscription, and chats on different connections can run at the same time.
-- Model pins such as `ANTHROPIC_DEFAULT_HAIKU_MODEL`, region overrides such as `VERTEX_REGION_CLAUDE_HAIKU_4_5`, and `GOOGLE_APPLICATION_CREDENTIALS` in the same settings apply too. A change applies from your next message.
-- Vertex settings in your user settings (`~/.claude/settings.json`) would apply to every repository, so harnexus does not start Claude while they are there. Put them in each repository's settings instead.
+   ```json
+   {
+     "env": {
+       "CLAUDE_CODE_USE_VERTEX": "1",
+       "ANTHROPIC_VERTEX_PROJECT_ID": "your-project",
+       "CLOUD_ML_REGION": "global"
+     }
+   }
+   ```
 
-For the Google Cloud side, follow [Claude Code on Google Vertex AI](https://code.claude.com/docs/en/google-vertex-ai): enable the Vertex AI API, enable the Claude models you want in Model Garden, and sign in with `gcloud auth application-default login`. Google Cloud handles authentication and billing.
+2. Open the app with `HARNEXUS_VERTEX=on bun run open-app`.
+3. In a chat in that repository, pick a model marked `· Vertex AI`, such as `Claude Opus 5.5 · Vertex AI`.
 
-### In a chat
+Before Claude's first reply, the chat shows the Google Cloud project and region it runs on. Send `/session` to see them again. Other repositories stay on your subscription.
 
-- **First reply**: Before Claude's first reply, harnexus shows the provider Claude Code reported and the Google Cloud project and region from the repository's settings. Claude Code reports the provider without contacting Google Cloud, so the note does not confirm your credentials or the billing account. Chats on your subscription show no note.
-- **`/session`**: Shows the connection again, with a terminal command that resumes the conversation on the same project and region.
-- **Changed settings**: A chat keeps the provider, project and region it started on. If the repository's settings change them later, harnexus stops before sending your next message and tells you what changed. Restore the setting to continue as before, or send `/switch-connection` to move the chat.
-- **Picking a model**: In a repository whose settings choose Vertex AI, pick a `· Vertex AI` model that is enabled in your project; elsewhere, pick one without the mark. A mismatch stops before anything is sent and says which to pick.
+For the Google Cloud side, see [Claude Code on Google Vertex AI](https://code.claude.com/docs/en/google-vertex-ai). Keep Vertex AI settings out of `~/.claude/settings.json`, since they would apply to every repository.
 
-### When something fails
-
-harnexus never falls back to your subscription or another billing route. The failure appears in the chat:
-
-| Message | What to do |
-| --- | --- |
-| `Could not load Google Cloud credentials` | Run `gcloud auth application-default login`, or check `GOOGLE_APPLICATION_CREDENTIALS`. |
-| `model not found` (404) | Enable the model in Model Garden, check that it is offered in your region, or pin another model. |
-| `429` or a quota error | Request more quota in the Google Cloud console, or try the `global` region. |
-| `harnexus cannot read the Claude Code settings in …` | Fix the JSON in the file it names. |
-| `… choose Google Vertex AI without …` | Add the named variable to the repository's Claude Code settings. |
-| `… which harnexus does not support` | Remove the gateway variable it names; Vertex AI gateways are not supported. |
-| `Claude Code user settings must not set …` | Remove the named variables from `~/.claude/settings.json`; keep Vertex settings in each repository's settings. |
-| `Claude settings must not set …` | Remove the named variables from the Claude Code settings that set them. |
-| `Claude Code did not report Google Vertex AI …` | Check that no other provider variable reaches Claude Code, then send the message again. |
+harnexus never falls back to your subscription. Errors from Google Cloud, such as missing credentials or a model not enabled in your project, appear in the chat; the guide above covers them.
 
 ## Optional Settings
 
