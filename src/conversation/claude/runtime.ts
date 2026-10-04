@@ -46,6 +46,11 @@ import {
 import type { TokenUsageBreakdown } from "../../presentation/protocol.ts";
 import { RECOVERY_CONTEXT } from "../../presentation/recovery.ts";
 import {
+  type PickerPage,
+  pickerPrompt,
+  searchPrompt,
+} from "../../presentation/session-picker.ts";
+import {
   RECORD_ADVANCED,
   sessionReplyText,
 } from "../../presentation/session-reply.ts";
@@ -82,6 +87,7 @@ import {
   type ResolveConnection,
   type SessionCommand,
   type SessionEvent,
+  sessionCommandOf,
 } from "./session-commands.ts";
 import { readSkills } from "./skill-attachments.ts";
 
@@ -205,9 +211,9 @@ type SessionSlot = {
 
 // Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken; sends holds the uuid of every message the turn sent Claude.
 // steering settles once the last steer accepted has been sent or refused, so a steer still reading its images keeps the ones after it waiting.
-// command marks a turn the bridge answers itself, such as /session, own one Claude started on its own, holdsApprovals one opened only to show approvals no other turn could, and completed one Claude ended with a successful result.
+// command is set on a turn the bridge answers itself, such as /session, and closes the question the turn asks; own marks one Claude started on its own, holdsApprovals one opened only to show approvals no other turn could, and completed one Claude ended with a successful result.
 type ClaudeTurn = {
-  command: boolean;
+  command: AbortController | null;
   own: boolean;
   holdsApprovals: boolean;
   completed: boolean;
@@ -389,13 +395,12 @@ export const createClaudeRuntime = ({
   };
 
   const run = async (turn: Turn) => {
-    // A turn of Claude's own leaves a /resume listing for the user's pick that follows.
     const command =
       turn.input.startedBy === "claude"
         ? null
-        : commands.take(turn.threadId, typedText(turn.input));
+        : sessionCommandOf(typedText(turn.input));
     const claude: ClaudeTurn = {
-      command: command !== null,
+      command: command === null ? null : new AbortController(),
       own: false,
       holdsApprovals: false,
       completed: false,
@@ -407,8 +412,8 @@ export const createClaudeRuntime = ({
       steering: Promise.resolve(),
     };
     turns.set(turn, claude);
-    if (command !== null) {
-      await answerCommand(turn, command);
+    if (command !== null && claude.command !== null) {
+      await answerCommand(turn, command, claude.command);
       return;
     }
     // Approvals open their turn only on a thread with no other turn accepted, so a turn of Claude's own starting while they wait for it is that one.
@@ -441,20 +446,27 @@ export const createClaudeRuntime = ({
   };
 
   // The turn shows what the user typed and the bridge's reply, and nothing reaches Claude or its record.
-  const answerCommand = async (turn: Turn, command: SessionCommand) => {
+  const answerCommand = async (
+    turn: Turn,
+    command: SessionCommand,
+    stop: AbortController,
+  ) => {
     if (turn.state().interrupting) {
       turn.finish({ status: "interrupted" }, null);
       return;
     }
+    let asked = 0;
+    const nextItemId = () => `${turn.turnId}-resume-${++asked}`;
     const reply = await commands.answer(
       turn.threadId,
       turn.record.worktree,
       command,
+      (page) => askPick(turn, page, nextItemId, stop),
     );
     turn.apply(
       renderNotice(
         turn.state(),
-        sessionReplyText(reply, now()),
+        sessionReplyText(reply),
         "final_answer",
         now(),
       ),
@@ -468,6 +480,29 @@ export const createClaudeRuntime = ({
     if (reply.kind !== "selected") return;
     if (reply.name !== null) void nameThread(turn.threadId, reply.name);
     await showPicked(turn);
+  };
+
+  // The questions belong to no item of the turn, so each one carries an id of its own.
+  const askPick = async (
+    turn: Turn,
+    page: PickerPage,
+    nextItemId: () => string,
+    stop: AbortController,
+  ) => {
+    const target = () => ({
+      threadId: turn.threadId,
+      turnId: turn.turnId,
+      itemId: nextItemId(),
+    });
+    const listed = pickerPrompt(target(), page, now());
+    const picked = listed.answerOf(
+      await turn.ask(listed.method, listed.params, stop.signal),
+    );
+    if (picked.kind !== "searching") return picked;
+    const search = searchPrompt(target());
+    return search.answerOf(
+      await turn.ask(search.method, search.params, stop.signal),
+    );
   };
 
   // Not awaited, since the thread's next message waits for this turn and the name only changes what the app shows; a failed rename leaves the name as it was and the pick still stands.
@@ -1135,7 +1170,8 @@ export const createClaudeRuntime = ({
   ): Promise<Refusal | null> => {
     const claude = turns.get(turn);
     if (claude === undefined) return Promise.resolve("no_running_turn");
-    if (claude.command) return Promise.resolve("command_not_steerable");
+    if (claude.command !== null)
+      return Promise.resolve("command_not_steerable");
     if (claude.holdsApprovals) {
       return Promise.resolve("approvals_not_steerable");
     }
@@ -1189,8 +1225,14 @@ export const createClaudeRuntime = ({
   };
 
   // A turn holding approvals has nothing of Claude's to stop, and an interrupt could close the session its agents run in; the stop closed its prompts, so it ends once each is declined.
+  // A command's turn has nothing of Claude's to stop either; the stop closed its open question, and the abort keeps it from asking another.
   const interrupt = (turn: Turn, repeated: boolean) => {
-    if (turns.get(turn)?.holdsApprovals === true) return;
+    const claude = turns.get(turn);
+    if (claude?.holdsApprovals === true) return;
+    if (claude?.command != null) {
+      claude.command.abort();
+      return;
+    }
     const threadId = turn.threadId;
     const startup = startingSessions.get(threadId);
     const stoppingStartup = startup?.turn === turn;

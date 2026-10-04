@@ -80,8 +80,11 @@ describe("connectClaudeThreads", () => {
       threads.router.fromApp(Buffer.from(`${JSON.stringify(message)}\n`));
 
     fromApp(turnOf(1, "/resume"));
-    await until(() => completions(sent) === 1);
-    fromApp(turnOf(2, "1"));
+    await until(() => question(sent) !== undefined);
+    fromApp({
+      id: question(sent).id,
+      result: { answers: { conversation: { answers: ["Fixture title"] } } },
+    });
     await until(() => requests.some((r) => r.method === "thread/name/set"));
     threads.closeAll();
 
@@ -123,8 +126,8 @@ const connectWith = async (
   });
 };
 
-const completions = (sent: Sent[]) =>
-  sent.filter((message) => message.method === "turn/completed").length;
+const question = (sent: Sent[]) =>
+  sent.find((message) => message.method === "item/tool/requestUserInput");
 
 const turnOf = (id: number, text: string) => ({
   id,
