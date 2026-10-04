@@ -246,7 +246,8 @@ export const createTurnController = <Tag extends string>({
   // Claude starts turns of its own, such as when a background task reports back, and the app is shown each as a turn nobody typed, behind any turn already accepted.
   const startOwnTurn = (threadId: string) => {
     const thread = threads.threadOf(threadId);
-    if (thread === undefined || closed) return false;
+    if (thread === undefined || closed || changingConversations.has(threadId))
+      return false;
     const turn: TurnInput = {
       items: [],
       toolOutput: null,

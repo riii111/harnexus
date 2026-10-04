@@ -256,10 +256,7 @@ const createThreadStore = (
       ),
 
     setSessionId: (threadId: string, sessionId: string | null) =>
-      update(threadId, (mapping) => {
-        const { rewind: _rewind, ...retained } = mapping;
-        return { ...retained, sessionId };
-      }),
+      update(threadId, (mapping) => withSession(mapping, sessionId)),
 
     setRewind: (threadId: string, rewind: RewindPoint) =>
       update(threadId, (mapping) => ({ ...mapping, rewind })),
@@ -334,7 +331,7 @@ const createThreadStore = (
         if (mapping === undefined) return Result.err(notFound(threadId));
         const owner = ownerOfSession(current, sessionId);
         return owner === undefined || owner === threadId
-          ? Result.ok({ ...mapping, sessionId })
+          ? Result.ok(withSession(mapping, sessionId))
           : Result.err(
               new SessionTaken({
                 threadId,
@@ -568,3 +565,11 @@ const MARKER_SUFFIX = ".running";
 const MESSAGE_ID_LIMIT = 64;
 
 const REQUESTER_LIMIT = 64;
+
+const withSession = (
+  mapping: ThreadMapping,
+  sessionId: string | null,
+): ThreadMapping => {
+  const { rewind: _rewind, ...retained } = mapping;
+  return { ...retained, sessionId };
+};

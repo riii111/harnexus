@@ -6,7 +6,11 @@ import { Result } from "better-result";
 import { readClaudeSession } from "../infra/claude/session.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import { conversation } from "../presentation/testing/session-record.ts";
-import { FileWriteFailed, writeFileAtomic } from "../runtime/fs.boundary.ts";
+import {
+  FileSyncFailed,
+  FileWriteFailed,
+  writeFileAtomic,
+} from "../runtime/fs.boundary.ts";
 import { createHistoryRequests } from "./history-request.ts";
 import { createRevertRequests } from "./revert-request.ts";
 import type { Sent } from "./testing/harness.ts";
@@ -106,6 +110,25 @@ describe("Claude conversation rewind", () => {
     expect(sent[0]).toMatchObject({ id: 1, error: { code: -32600 } });
   });
 
+  test("closes the old session when the rewind was renamed but its sync failed", async () => {
+    const { revert, store, closed, sent } = await setup({ failSync: true });
+    await revert("thread/revert", {
+      id: 1,
+      params: { threadId: THREAD, beforeTurnId: "harnexus-history-u2" },
+    });
+    expect(store.get(THREAD)?.rewind).toEqual({ sessionId: "se-1", at: "a3" });
+    expect(closed).toEqual([THREAD]);
+    expect(sent[0]).toMatchObject({
+      id: 1,
+      error: {
+        message:
+          "the rewind was written but could not be confirmed; reopen the thread to check its retained history",
+      },
+    });
+    const bound = await store.bindSession(THREAD, "se-2");
+    expect(bound.isOk() && store.get(THREAD)?.rewind).toBeUndefined();
+  });
+
   test("keeps the old conversation and session open when saving the rewind fails", async () => {
     const { revert, store, closed, sent } = await setup({ failSave: true });
     await revert("thread/revert", {
@@ -124,22 +147,36 @@ const statePath = () => join(directory, "threads.json");
 const messages = conversation();
 const readSession: typeof readClaudeSession = (sessionId) =>
   readClaudeSession(sessionId, { read: async () => messages });
-const setup = async ({ busy = false, failSave = false } = {}) => {
+const setup = async ({
+  busy = false,
+  failSave = false,
+  failSync = false,
+} = {}) => {
   let fail = false;
   const opened = await openThreadStore(
     statePath(),
-    failSave
+    failSave || failSync
       ? {
-          writeState: async (path, content) =>
-            fail
+          writeState: async (path, content) => {
+            if (fail && failSave)
+              return Result.err(
+                new FileWriteFailed({
+                  path,
+                  cause: null,
+                  message: "disk full",
+                }),
+              );
+            const written = await writeFileAtomic(path, content);
+            return fail && failSync && written.isOk()
               ? Result.err(
-                  new FileWriteFailed({
+                  new FileSyncFailed({
                     path,
                     cause: null,
-                    message: "disk full",
+                    message: "sync failed",
                   }),
                 )
-              : writeFileAtomic(path, content),
+              : written;
+          },
         }
       : {},
   );
@@ -151,7 +188,7 @@ const setup = async ({ busy = false, failSave = false } = {}) => {
     worktree: directory,
   });
   await store.setSessionId(THREAD, "se-1");
-  fail = failSave;
+  fail = failSave || failSync;
   const threads = createThreadValues(store, () => {});
   const sent: Sent[] = [];
   const closed: string[] = [];
