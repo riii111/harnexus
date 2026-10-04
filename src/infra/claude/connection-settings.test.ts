@@ -153,6 +153,30 @@ describe("createConnectionResolver", () => {
     );
   });
 
+  test("takes Vertex from the local settings beside an empty shared settings file", async () => {
+    await mkdir(join(dir, ".claude"), { recursive: true });
+    await writeFile(join(dir, ".claude", "settings.json"), "{}");
+    await writeSettings(dir, "settings.local.json", { env: VERTEX_ENV });
+    const resolve = createConnectionResolver({ repositoryOf: noRepository });
+
+    const connection = await resolve(dir);
+
+    expect(connection.isOk() && connection.value).toEqual(VERTEX);
+  });
+
+  test("leaves a repository with empty settings files on the subscription", async () => {
+    await mkdir(join(dir, ".claude"), { recursive: true });
+    await writeFile(join(dir, ".claude", "settings.json"), "{}");
+    await writeFile(join(dir, ".claude", "settings.local.json"), "{}");
+    const resolve = createConnectionResolver({ repositoryOf: noRepository });
+
+    const connection = await resolve(dir);
+
+    expect(connection.isOk() && connection.value).toEqual({
+      provider: "subscription",
+    });
+  });
+
   test("reads an edited settings file on the next call", async () => {
     const resolve = createConnectionResolver({ repositoryOf: noRepository });
     const before = await resolve(dir);

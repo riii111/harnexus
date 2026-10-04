@@ -100,10 +100,7 @@ const readLayer = async (
   if (text.isErr()) return Result.err(unreadable(path));
   const layer = await readSettingsLayer(resolve, dir, source);
   if (layer.isErr()) return Result.err(layer.error);
-  if (
-    text.value !== null &&
-    (!isSettingsText(text.value) || !layer.value.loaded)
-  ) {
+  if (text.value !== null && !acceptedAs(text.value, layer.value.loaded)) {
     return Result.err(unreadable(path));
   }
   return Result.ok(layer.value.env);
@@ -153,9 +150,14 @@ const vertexFrom = (
   });
 };
 
-const isSettingsText = (text: string) => {
+// The SDK lists no source for an empty settings file either, which holds nothing it could have dropped.
+const acceptedAs = (text: string, loaded: boolean) => {
   const parsed = parseJson(text);
-  return parsed.isOk() && isObject(parsed.value);
+  return (
+    parsed.isOk() &&
+    isObject(parsed.value) &&
+    (loaded || Object.keys(parsed.value).length === 0)
+  );
 };
 
 const choosesVertex = (env: Record<string, string>) =>
