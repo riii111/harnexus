@@ -4,6 +4,7 @@ import {
 } from "../conversation/claude/runtime.ts";
 import { createTurnController } from "../conversation/controller.ts";
 import { createHistoryRequests } from "../conversation/history-request.ts";
+import { createRevertRequests } from "../conversation/revert-request.ts";
 import { createRouter, type RouteEvent } from "../conversation/route.ts";
 import { createSubagentRequests } from "../conversation/subagent-requests.ts";
 import { createSubagentRestore } from "../conversation/subagent-restore.ts";
@@ -142,6 +143,15 @@ export const connectClaudeThreads = ({
     claudeModels,
     unverifiedCodex,
     subagentRequests,
+    createRevertRequests({
+      store,
+      threads,
+      turns,
+      runtime,
+      readSession,
+      request,
+      send,
+    }),
   );
   return { router, closeAll: turns.closeAll };
 };

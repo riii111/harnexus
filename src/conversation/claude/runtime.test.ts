@@ -17,7 +17,11 @@ import { createModelCatalog, effortRule } from "../../infra/claude/models.ts";
 import { startClaudeSession } from "../../infra/claude/session.ts";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
 import { pngBytes } from "../../infra/claude/testing/image-files.ts";
-import { createEmptyFile, writeFileAtomic } from "../../runtime/fs.boundary.ts";
+import {
+  createEmptyFile,
+  FileSyncFailed,
+  writeFileAtomic,
+} from "../../runtime/fs.boundary.ts";
 import type { createTurnController } from "../controller.ts";
 import {
   ALLOWED_TOOLS,
@@ -1237,6 +1241,193 @@ describe("canceling Claude session startup", () => {
 });
 
 describe("session ids", () => {
+  test("recovers an unsaved session id from the same process after an unsettled write", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    let unsettled = true;
+    const started = await harness([first, second], {
+      unsettledWrite: () => unsettled,
+      files: {
+        writeState: (path, content) =>
+          content.includes('"se-1"')
+            ? diskFull(path)
+            : writeFileAtomic(path, content),
+      },
+    });
+    await completeTurn(started.turns, started.sent, first, 10);
+    await until(() => started.store.get(THREAD)?.runState === "outcomeUnknown");
+    unsettled = false;
+    await completeTurn(started.turns, started.sent, second, 11, "fresh-input");
+    await until(() => started.store.get(THREAD)?.runState === "idle");
+    expect(started.settings[1]).toMatchObject({ resume: "se-1" });
+    expect(completedTurns(started.sent)[1]?.status).toBe("completed");
+    expect(started.store.get(THREAD)?.runState).toBe("idle");
+  });
+
+  test("keeps an unknown turn blocked after its initial session id was not saved and the App restarted", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const before = await harness([first], {
+      unsettledWrite: () => true,
+      files: {
+        writeState: (path, content) =>
+          content.includes('"se-1"')
+            ? diskFull(path)
+            : writeFileAtomic(path, content),
+      },
+    });
+    await completeTurn(before.turns, before.sent, first, 10);
+    await until(() => before.store.get(THREAD)?.runState === "outcomeUnknown");
+    expect(before.events).toContainEqual({
+      event: "claude_turn",
+      step: "session_not_saved",
+      error: "StatePersistFailed",
+    });
+
+    const second = fakeClaude(SUBSCRIPTION);
+    const after = await harness([second]);
+    expect(after.store.get(THREAD)?.sessionId).toBeNull();
+    const retry = turnStart(11, "continue");
+    after.turns.startTurn(
+      { ...retry, params: { ...retry.params, clientUserMessageId: "new-id" } },
+      undefined,
+    );
+    await until(() => completedTurnStatuses(after.sent).length === 1);
+    await until(() => after.store.get(THREAD)?.runState === "outcomeUnknown");
+    expect(completedTurns(after.sent)[0]?.error?.message).toContain(
+      "previous Claude conversation could not be restored; use /resume",
+    );
+    expect(second.started()).toBe(false);
+    expect(after.settings).toHaveLength(0);
+    const reloaded = await harness([]);
+    expect(reloaded.store.get(THREAD)).toMatchObject({
+      sessionId: null,
+      runState: "outcomeUnknown",
+    });
+  });
+
+  test("keeps validating a missing rewind source when clearing its saved session id fails", async () => {
+    const source = fakeClaude(SUBSCRIPTION);
+    const before = await harness([source]);
+    await completeTurn(before.turns, before.sent, source, 10);
+    await until(() => before.store.get(THREAD)?.runState === "idle");
+    const saved = await before.store.setRewind(THREAD, {
+      sessionId: "se-1",
+      at: "kept-record",
+    });
+    expect(saved.isOk()).toBe(true);
+    const claude = fakeClaude(SUBSCRIPTION);
+    const lookedUp: string[] = [];
+    const after = await harness([claude], {
+      lookupSession: async (id) => {
+        lookedUp.push(id);
+        return Result.ok(false);
+      },
+      files: {
+        writeState: (path, content) =>
+          /"sessionId":\s*null/.test(content)
+            ? diskFull(path)
+            : writeFileAtomic(path, content),
+      },
+    });
+    after.turns.startTurn(turnStart(11, "continue"), undefined);
+    await until(() => completedTurnStatuses(after.sent).length === 1);
+    await until(() => after.store.get(THREAD)?.runState === "outcomeUnknown");
+    const retry = turnStart(12, "check again");
+    after.turns.startTurn(
+      { ...retry, params: { ...retry.params, clientUserMessageId: "new-id" } },
+      undefined,
+    );
+    await until(() => completedTurnStatuses(after.sent).length === 2);
+    expect(
+      completedTurns(after.sent).map((turn) => turn.error?.message),
+    ).toEqual([
+      expect.stringContaining(
+        "missing Claude conversation could not be cleared",
+      ),
+      expect.stringContaining(
+        "missing Claude conversation could not be cleared",
+      ),
+    ]);
+    expect(lookedUp).toEqual(["se-1", "se-1"]);
+    expect(claude.started()).toBe(false);
+    await until(() => after.store.get(THREAD)?.runState === "outcomeUnknown");
+    const reloaded = await harness([]);
+    expect(reloaded.store.get(THREAD)).toMatchObject({
+      runState: "outcomeUnknown",
+      sessionId: "se-1",
+      rewind: { sessionId: "se-1", at: "kept-record" },
+    });
+  });
+
+  test.each([
+    { name: "a write failure before rename", synced: false },
+    { name: "a directory sync failure after rename", synced: true },
+  ])("fails a rewind fork and keeps its durable unknown marker after $name", async ({
+    synced,
+  }) => {
+    const source = fakeClaude(SUBSCRIPTION);
+    const before = await harness([source]);
+    await completeTurn(before.turns, before.sent, source, 10);
+    await until(() => before.store.get(THREAD)?.runState === "idle");
+    const rewind = await before.store.setRewind(THREAD, {
+      sessionId: "se-1",
+      at: "kept-record",
+    });
+    expect(rewind.isOk()).toBe(true);
+    const fork = fakeClaude(SUBSCRIPTION);
+    const after = await harness([fork], {
+      files: {
+        writeState: async (path, content) => {
+          if (!content.includes('"se-rewound"'))
+            return writeFileAtomic(path, content);
+          if (!synced) return diskFull(path);
+          const written = await writeFileAtomic(path, content);
+          return written.isErr()
+            ? written
+            : Result.err(
+                new FileSyncFailed({
+                  path,
+                  cause: null,
+                  message: "sync failed",
+                }),
+              );
+        },
+      },
+    });
+    after.turns.startTurn(turnStart(11, "continue from the rewind"), undefined);
+    await until(() => fork.prompted());
+    expect(after.settings[0]).toMatchObject({
+      resume: "se-1",
+      forkSession: true,
+      resumeAt: "kept-record",
+    });
+    fork.emit(
+      sdk({ ...answer("fork-answer", "partial"), session_id: "se-rewound" }),
+    );
+    fork.emit(sdk({ ...success(), session_id: "se-rewound" }));
+    await until(() => after.store.get(THREAD)?.runState === "outcomeUnknown");
+    expect(turnCompleted(after.sent)).toMatchObject({
+      status: "failed",
+      error: {
+        message: expect.stringContaining("conversation could not be saved"),
+      },
+    });
+    expect(fork.closes()).toBe(1);
+    expect(after.events).toContainEqual({
+      event: "claude_turn",
+      step: "session_not_saved",
+      error: "StatePersistFailed",
+    });
+    const reloaded = await harness([]);
+    expect(reloaded.store.get(THREAD)?.runState).toBe("outcomeUnknown");
+    expect(reloaded.store.get(THREAD)?.sessionId).toBe(
+      synced ? "se-rewound" : "se-1",
+    );
+    expect(reloaded.store.get(THREAD)?.rewind).toEqual(
+      synced ? undefined : { sessionId: "se-1", at: "kept-record" },
+    );
+  });
+
   test("resumes from the session id Claude reported even when saving it failed", async () => {
     const first = fakeClaude(SUBSCRIPTION);
     const second = fakeClaude(SUBSCRIPTION);
@@ -1865,6 +2056,50 @@ describe("Claude's own turns", () => {
 });
 
 describe("subagent threads", () => {
+  test.each([
+    false,
+    true,
+  ])("holds child output during rewind and applies it only when rewind fails (applied=$applied)", async (applied) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, store, runtime, subagents } = await harness([claude]);
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.prompted());
+    claude.emit(sdk(taskStarted("toolu-agent", 1)));
+    claude.emit(sdk(success()));
+    await until(() => store.get(THREAD)?.runState === "idle");
+    await settle();
+    const child = subagents.childrenOf(THREAD)[0];
+    if (child === undefined) return expect.unreachable("child did not start");
+    const gate = createGate();
+    const changing = turns.changeConversation(THREAD, async () => {
+      await gate.promise;
+      if (applied) runtime.closeSession(THREAD);
+      return applied;
+    });
+    claude.emit(
+      sdk({
+        ...answer("msg-child", "held child output"),
+        parent_tool_use_id: "toolu-agent",
+      }),
+    );
+    claude.emit(sdk(taskNotification("toolu-agent")));
+    await settle();
+    expect(child.active).toBe(true);
+    expect(JSON.stringify(subagents.historyOf(child.id))).not.toContain(
+      "held child output",
+    );
+    gate.open();
+    expect(await changing).toBe(applied);
+    await until(() => subagents.childrenOf(THREAD)[0]?.active === false);
+    const history = subagents.historyOf(child.id);
+    expect(history?.[0]?.turn.status).toBe(
+      applied ? "interrupted" : "completed",
+    );
+    if (applied)
+      expect(JSON.stringify(history)).not.toContain("held child output");
+    else expect(JSON.stringify(history)).toContain("held child output");
+  });
+
   test("shows an agent Claude starts as a thread under the turn's thread until it completes", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, subagents } = await harness([claude]);
@@ -2029,6 +2264,56 @@ describe("subagent threads", () => {
 });
 
 describe("turns Claude starts between app turns", () => {
+  test("keeps background output that arrives while a rejected rewind is being checked", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+    await until(() => store.get(THREAD)?.runState === "idle");
+    await settle();
+    const gate = createGate();
+    const changing = turns.changeConversation(THREAD, async () => {
+      await gate.promise;
+      return false;
+    });
+    claude.emit(sdk(INIT));
+    claude.emit(sdk(answer("msg-2", "the agent finished")));
+    claude.emit(sdk(ownResult()));
+    await Bun.sleep(5);
+    expect(completedTurnStatuses(sent)).toHaveLength(1);
+    gate.open();
+    expect(await changing).toBe(false);
+    await until(() => completedTurnStatuses(sent).length === 2);
+    expect(completedTurns(sent)[1]).toMatchObject({
+      status: "completed",
+      items: [{ type: "agentMessage", text: "the agent finished" }],
+    });
+  });
+
+  test("keeps a background approval pending until a rejected rewind releases the chat", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+    await until(() => store.get(THREAD)?.runState === "idle");
+    await settle();
+    const gate = createGate();
+    const changing = turns.changeConversation(THREAD, async () => {
+      await gate.promise;
+      return false;
+    });
+    const decision = askTool(
+      claude,
+      "Bash",
+      { command: "ls" },
+      { agentID: "agent-1" },
+    );
+    await Bun.sleep(5);
+    gate.open();
+    await changing;
+    const request = await appRequest(sent);
+    turns.answerRequest({ id: request.id, result: ALLOWED });
+    expect(await decision).toEqual({ behavior: "allow" });
+  });
+
   test("shows a turn Claude started on its own as a turn nobody typed", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, events } = await harness([claude]);

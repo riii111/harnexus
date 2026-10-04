@@ -655,6 +655,39 @@ describe("ThreadStore.runWrite", () => {
     expect(resumed.isOk() && resumed.value).toBe("sent");
   });
 
+  test("continues an unknown write without removing its marker until the replacement operation settles", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    const lost = await store.runWrite(
+      "thread-1",
+      async () => Result.err(new SendUncertain({ message: "lost" })),
+      isSendUncertain,
+    );
+    expect(lost.isErr() && lost.error._tag).toBe("SendUncertain");
+    const started = deferred();
+    const blocker = deferred();
+    const continued = store.runWrite(
+      "thread-1",
+      async (_record, recovered) => {
+        expect(recovered).toBe(true);
+        started.resolve();
+        await blocker.promise;
+        return Result.ok("continued");
+      },
+      neverUnknown,
+      () => true,
+    );
+    await started.promise;
+    expect((await openStore()).get("thread-1")?.runState).toBe(
+      "outcomeUnknown",
+    );
+    expect(store.get("thread-1")?.runState).toBe("running");
+    blocker.resolve();
+    const result = await continued;
+    expect(result.isOk() && result.value).toBe("continued");
+    expect((await openStore()).get("thread-1")?.runState).toBe("idle");
+  });
+
   test.each([
     { name: "cannot be created", createMarker: failingCreate },
     { name: "is created without a sync", createMarker: createThenFailSync },

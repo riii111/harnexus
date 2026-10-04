@@ -11,9 +11,11 @@ import type {
   Turn,
   UserInput,
 } from "./protocol.ts";
+import { RECOVERY_CONTEXT, RECOVERY_NOTICE } from "./recovery.ts";
 import {
   closeTurn,
   type Rendered,
+  renderNotice,
   renderSdkMessage,
   renderTurnStarted,
   renderUserInput,
@@ -312,7 +314,16 @@ const start = (
       : [{ type: "text", text: prompt.text, text_elements: [] }]),
     ...prompt.images,
   ];
-  return collect(replay, renderUserInput(replay.state, input, null, at ?? 0));
+  const shown = collect(
+    replay,
+    renderUserInput(replay.state, input, null, at ?? 0),
+  );
+  return prompt.recovering
+    ? collect(
+        shown,
+        renderNotice(shown.state, RECOVERY_NOTICE, "commentary", at ?? 0),
+      )
+    : shown;
 };
 
 const feed = (
@@ -382,7 +393,7 @@ export const noteItem = (
   }
 };
 
-type Prompt = { text: string; images: UserInput[] };
+type Prompt = { text: string; images: UserInput[]; recovering?: boolean };
 
 // A user record carrying tool results continues the turn; any other user record is a prompt, whose first text block is what was typed and whose later ones are files the bridge attached.
 // The file an attached image came from may be gone, so the image is shown from the copy Claude recorded.
@@ -397,10 +408,19 @@ const promptOf = (body: unknown): Prompt | null => {
     return null;
   }
   const typed = content.find(
-    (block) => isObject(block) && block.type === "text",
+    (block) =>
+      isObject(block) &&
+      block.type === "text" &&
+      block.text !== RECOVERY_CONTEXT,
   );
   return {
     text: isObject(typed) && typeof typed.text === "string" ? typed.text : "",
+    recovering: content.some(
+      (block) =>
+        isObject(block) &&
+        block.type === "text" &&
+        block.text === RECOVERY_CONTEXT,
+    ),
     images: content.flatMap((block) => {
       const url = imageUrlOf(block);
       return url === null ? [] : [{ type: "image", url }];

@@ -25,6 +25,45 @@ import { createSubagentRequests } from "./subagent-requests.ts";
 import { createSubagents } from "./subagents.ts";
 import type { AppRequest, Mode } from "./thread-request.ts";
 
+describe("Claude conversation rewind routing", () => {
+  test.each([
+    { method: "thread/revert" },
+    { method: "thread/rollback" },
+  ])("keeps $method away from the Codex conversation", ({ method }) => {
+    const { router, calls } = setup(["th-claude"]);
+    const claude = encode({
+      id: 5,
+      method,
+      params: {
+        threadId: "th-claude",
+        beforeTurnId: "harnexus-history-u1",
+        numTurns: 1,
+      },
+    });
+    expect(router.fromApp(claude)).toBeNull();
+    expect(calls).toEqual([
+      [
+        "reject",
+        {
+          id: 5,
+          params: {
+            threadId: "th-claude",
+            beforeTurnId: "harnexus-history-u1",
+            numTurns: 1,
+          },
+        },
+        "rewinding this Claude conversation is unavailable",
+      ],
+    ]);
+    const codex = encode({
+      id: 6,
+      method,
+      params: { threadId: "codex", numTurns: 1 },
+    });
+    expect(router.fromApp(codex)).toEqual(codex);
+  });
+});
+
 describe("Codex threads", () => {
   // The lines of one session are replayed in order, so the loop inside is a scenario rather than a table.
   test.each<{ file: string; expected: number[] }>([

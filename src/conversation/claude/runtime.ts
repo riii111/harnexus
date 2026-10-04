@@ -44,6 +44,7 @@ import {
   type ThreadPlan,
 } from "../../presentation/plan.ts";
 import type { TokenUsageBreakdown } from "../../presentation/protocol.ts";
+import { RECOVERY_CONTEXT } from "../../presentation/recovery.ts";
 import {
   type PickerPage,
   pickerPrompt,
@@ -136,6 +137,7 @@ type ClaudeFailureTag =
   | BridgeClosing["_tag"]
   | StreamEnded["_tag"]
   | SessionMissing["_tag"]
+  | SessionNotSaved["_tag"]
   | ForkNotSeparate["_tag"]
   | ForkPointUnknown["_tag"]
   | ImageFailureTag
@@ -239,6 +241,10 @@ class BridgeClosing extends TaggedError("BridgeClosing")<{
   message: string;
 }> {}
 
+class SessionNotSaved extends TaggedError("SessionNotSaved")<{
+  message: string;
+}> {}
+
 class SessionStartCancelled extends TaggedError("SessionStartCancelled")<{
   message: string;
 }> {}
@@ -319,6 +325,7 @@ export const createClaudeRuntime = ({
   type Turn = RunningTurn<ClaudeFailureTag>;
 
   const sessions = new Map<string, SessionSlot>();
+  const turnRecords = new Map<string, Map<string, string>>();
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const usages = new Map<string, ThreadUsage>();
   const plans = new Map<string, ThreadPlan>();
@@ -326,6 +333,10 @@ export const createClaudeRuntime = ({
   const runningTurns = new Map<string, Turn>();
   const startingSessions = new Map<string, SessionStartup>();
   const busyThreads = new Set<string>();
+  const pausedMessages = new Map<
+    string,
+    ReturnType<typeof Promise.withResolvers<void>>
+  >();
   const commands = createSessionCommands({
     threads,
     listConversations,
@@ -408,6 +419,20 @@ export const createClaudeRuntime = ({
     turns.set(turn, claude);
     if (command !== null && claude.command !== null) {
       await answerCommand(turn, command, claude.command);
+      return;
+    }
+    if (
+      turn.recovering &&
+      turn.record.sessionId === null &&
+      threads.sessionIdOf(turn.threadId) === null &&
+      turn.record.rewind === undefined
+    ) {
+      turn.fail(
+        new SessionMissing({
+          message:
+            "the previous Claude conversation could not be restored; use /resume to select it or repair the saved state before continuing",
+        }),
+      );
       return;
     }
     // Approvals open their turn only on a thread with no other turn accepted, so a turn of Claude's own starting while they wait for it is that one.
@@ -699,13 +724,19 @@ export const createClaudeRuntime = ({
     const sent = slot.session.send({
       text: turn.input.text,
       images,
-      attachments: fresh.map(({ block }) => block),
+      attachments: [
+        ...(turn.recovering ? [RECOVERY_CONTEXT] : []),
+        ...fresh.map(({ block }) => block),
+      ],
     });
     if (sent.isErr()) {
       dropSession(turn.threadId, slot);
       turn.fail(sent.error);
       return false;
     }
+    const records = turnRecords.get(turn.threadId) ?? new Map<string, string>();
+    records.set(turn.turnId, sent.value);
+    turnRecords.set(turn.threadId, records);
     claude.sends.add(sent.value);
     for (const { path, body } of fresh) slot.attachedSkills.set(path, body);
     claude.slot = slot;
@@ -872,7 +903,8 @@ export const createClaudeRuntime = ({
     const { threadId, model } = turn;
     let firstMessageMs: number | null = null;
     let sessionId = threads.sessionIdOf(threadId);
-    const forkedFrom = threads.forkSourceOf(threadId);
+    const forkedFrom =
+      threads.rewindOf(threadId)?.sessionId ?? threads.forkSourceOf(threadId);
     while (!turn.state().finished) {
       const next = await inbox.take();
       const received =
@@ -902,7 +934,21 @@ export const createClaudeRuntime = ({
       }
       if (current !== undefined && current !== sessionId) {
         sessionId = current;
-        await threads.setSessionId(threadId, current);
+        const saved = await threads.setSessionId(threadId, current);
+        if (
+          saved.isErr() &&
+          (turn.recovering || turn.record.rewind !== undefined)
+        ) {
+          turn.markOutcomeUnknown();
+          dropSession(threadId, slot);
+          turn.fail(
+            new SessionNotSaved({
+              message:
+                "the Claude conversation could not be saved; check the state directory permissions before continuing",
+            }),
+          );
+          return;
+        }
       }
       const message = received.value;
       // Status and system messages follow the send at once, so the wait is measured to the first reply of the main conversation, not of a subagent, and a turn without one logs null.
@@ -998,6 +1044,11 @@ export const createClaudeRuntime = ({
   const pump = async (threadId: string, slot: SessionSlot) => {
     while (true) {
       const next = await slot.session.messages.next();
+      const paused = pausedMessages.get(threadId);
+      if (paused !== undefined) {
+        await paused.promise;
+        if (sessions.get(threadId) !== slot) return;
+      }
       track(threadId, slot, next);
       const inbox = route(threadId, slot, next);
       // The next message waits until the reader has handled this one, as a turn reading the session itself would.
@@ -1268,6 +1319,7 @@ export const createClaudeRuntime = ({
       | InferErr<SessionStart>
       | BridgeClosing
       | SessionMissing
+      | SessionNotSaved
       | ForkPointUnknown
       | SessionStartCancelled
     >
@@ -1287,7 +1339,13 @@ export const createClaudeRuntime = ({
     const isCurrent = () =>
       startingSessions.get(record.threadId) === pending &&
       !pending.controller.signal.aborted;
-    const resume = threads.sessionIdOf(record.threadId);
+    const rewind = threads.rewindOf(record.threadId);
+    const resume =
+      rewind === undefined
+        ? threads.sessionIdOf(record.threadId)
+        : rewind.at === null
+          ? null
+          : rewind.sessionId;
     if (resume !== null) {
       const found = await waitForAbort(
         sessionFound(resume),
@@ -1299,7 +1357,16 @@ export const createClaudeRuntime = ({
       if (!found) {
         clearSessionStart(record.threadId, pending);
         log({ event: "claude_turn", step: "session_missing" });
-        void threads.setSessionId(record.threadId, null);
+        const forgotten = await threads.setSessionId(record.threadId, null);
+        if (forgotten.isErr() && rewind !== undefined) {
+          turn.markOutcomeUnknown();
+          return Result.err(
+            new SessionNotSaved({
+              message:
+                "the missing Claude conversation could not be cleared; check the state directory permissions before continuing",
+            }),
+          );
+        }
         return Result.err(
           new SessionMissing({
             message:
@@ -1340,9 +1407,17 @@ export const createClaudeRuntime = ({
         connection,
         permissionMode:
           turn.input.permissionMode === "plan" ? "plan" : permissionMode,
-        ...(forkFound && forkFrom !== null && forkAt !== null
-          ? { resume: forkFrom, forkSession: true, resumeAt: forkAt }
-          : resumeFrom(resume)),
+        ...(rewind !== undefined
+          ? rewind.at === null
+            ? {}
+            : {
+                resume: rewind.sessionId,
+                forkSession: true,
+                resumeAt: rewind.at,
+              }
+          : forkFound && forkFrom !== null && forkAt !== null
+            ? { resume: forkFrom, forkSession: true, resumeAt: forkAt }
+            : resumeFrom(resume)),
         mcpServers: { [link.server.name]: link.server },
         allowedTools: link.allowedTools,
         canUseTool: approveTool(record.threadId),
@@ -1459,6 +1534,12 @@ export const createClaudeRuntime = ({
   const turnToAsk = async (threadId: string, approval: Approval) => {
     let waited = false;
     while (!closed && !approval.signal.aborted) {
+      const paused = pausedMessages.get(threadId);
+      if (paused !== undefined) {
+        const resumed = await waitForAbort(paused.promise, approval.signal);
+        if (resumed === ABORTED) return undefined;
+        continue;
+      }
       const turn = openTurn(threadId);
       const held = heldApprovals.get(threadId);
       if (held !== undefined && (held.turn === null || held.turn === turn)) {
@@ -1555,6 +1636,8 @@ export const createClaudeRuntime = ({
   // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
   const closeAll = () => {
     closed = true;
+    for (const paused of pausedMessages.values()) paused.resolve();
+    pausedMessages.clear();
     for (const threadId of [...idleTimers.keys()]) cancelIdleClose(threadId);
     for (const threadId of [...turnWaiters.keys()]) showTurn(threadId);
     for (const [threadId, startup] of [...startingSessions]) {
@@ -1565,6 +1648,22 @@ export const createClaudeRuntime = ({
 
   return {
     compactPrompt: COMPACT_PROMPT,
+    pauseMessages: (threadId) => {
+      const paused = Promise.withResolvers<void>();
+      pausedMessages.set(threadId, paused);
+      return () => {
+        if (pausedMessages.get(threadId) === paused)
+          pausedMessages.delete(threadId);
+        paused.resolve();
+      };
+    },
+    closeSession: (threadId) => {
+      cancelIdleClose(threadId);
+      const slot = sessions.get(threadId);
+      if (slot !== undefined) dropSession(threadId, slot);
+    },
+    recordOf: (threadId, turnId) =>
+      turnRecords.get(threadId)?.get(turnId) ?? null,
     run,
     steer,
     interrupt,

@@ -20,10 +20,13 @@ import {
   targetOf,
 } from "./claude/connection.ts";
 
+export type RewindPoint = { sessionId: string; at: string | null };
+
 // Only identifiers are kept, so the file never holds conversation text.
 type ThreadMapping = {
   readonly threadId: string;
   readonly sessionId: string | null;
+  readonly rewind?: RewindPoint;
   readonly model: string;
   // The effort level the app last picked for the thread, or null to leave Claude on the user's settings.
   readonly effort: string | null;
@@ -261,7 +264,10 @@ const createThreadStore = (
       ),
 
     setSessionId: (threadId: string, sessionId: string | null) =>
-      update(threadId, (mapping) => ({ ...mapping, sessionId })),
+      update(threadId, (mapping) => withSession(mapping, sessionId)),
+
+    setRewind: (threadId: string, rewind: RewindPoint) =>
+      update(threadId, (mapping) => ({ ...mapping, rewind })),
 
     setModel: (threadId: string, model: string) =>
       update(threadId, (mapping) => ({ ...mapping, model })),
@@ -336,7 +342,7 @@ const createThreadStore = (
         if (mapping === undefined) return Result.err(notFound(threadId));
         const owner = ownerOfSession(current, sessionId);
         return owner === undefined || owner === threadId
-          ? Result.ok({ ...mapping, sessionId })
+          ? Result.ok(withSession(mapping, sessionId))
           : Result.err(
               new SessionTaken({
                 threadId,
@@ -380,13 +386,19 @@ const createThreadStore = (
 
     runWrite: <T, E>(
       threadId: string,
-      operation: (record: ThreadRecord) => Promise<Result<T, E>>,
+      operation: (
+        record: ThreadRecord,
+        recovered: boolean,
+      ) => Promise<Result<T, E>>,
       isOutcomeUnknown: (error: E) => boolean,
+      continueUnknown: () => boolean = () => false,
     ) =>
       threadQueue.run(threadId, async () => {
         const record = get(threadId);
         if (record === undefined) return Result.err(notFound(threadId));
-        if (record.runState !== "idle") {
+        const recovered =
+          record.runState === "outcomeUnknown" && continueUnknown();
+        if (record.runState !== "idle" && !recovered) {
           return Result.err(
             new WriteOutcomeUnknown({
               threadId,
@@ -394,7 +406,10 @@ const createThreadStore = (
             }),
           );
         }
-        const marked = await files.createMarker(markerPath(threadId));
+        // Recovery keeps the old marker until the new write settles, so a crash cannot lose the unknown outcome between markers.
+        const marked = recovered
+          ? Result.ok()
+          : await files.createMarker(markerPath(threadId));
         if (marked.isErr()) {
           // A marker that exists without a confirmed sync is withdrawn, since the operation never ran.
           if (marked.error._tag === "FileSyncFailed") {
@@ -412,7 +427,10 @@ const createThreadStore = (
         runStates.set(threadId, "running");
         let outcomeKnown = false;
         try {
-          const result = await operation({ ...record, runState: "running" });
+          const result = await operation(
+            { ...record, runState: "running" },
+            recovered,
+          );
           if (result.isErr() && isOutcomeUnknown(result.error)) return result;
           outcomeKnown = true;
           const cleared = await clearMarker(threadId);
@@ -537,6 +555,7 @@ const readState = (value: unknown): ThreadMapping[] | null => {
 const pickMappingFields = (mapping: ThreadMapping): ThreadMapping => ({
   threadId: mapping.threadId,
   sessionId: mapping.sessionId,
+  ...(mapping.rewind === undefined ? {} : { rewind: { ...mapping.rewind } }),
   model: mapping.model,
   effort: mapping.effort,
   worktree: mapping.worktree,
@@ -550,6 +569,10 @@ const isThreadMapping = (value: unknown): value is ThreadMapping =>
   isObject(value) &&
   isNonEmptyString(value.threadId) &&
   (value.sessionId === null || isNonEmptyString(value.sessionId)) &&
+  (value.rewind === undefined ||
+    (isObject(value.rewind) &&
+      isNonEmptyString(value.rewind.sessionId) &&
+      (value.rewind.at === null || isNonEmptyString(value.rewind.at)))) &&
   isNonEmptyString(value.model) &&
   (value.effort === null || isNonEmptyString(value.effort)) &&
   isNonEmptyString(value.worktree) &&
@@ -571,3 +594,11 @@ const MARKER_SUFFIX = ".running";
 const MESSAGE_ID_LIMIT = 64;
 
 const REQUESTER_LIMIT = 64;
+
+const withSession = (
+  mapping: ThreadMapping,
+  sessionId: string | null,
+): ThreadMapping => {
+  const { rewind: _rewind, ...retained } = mapping;
+  return { ...retained, sessionId };
+};

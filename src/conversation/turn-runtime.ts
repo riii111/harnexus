@@ -16,11 +16,13 @@ export type RunningTurn<Tag extends string> = {
   model: string;
   input: TurnInput;
   compaction: boolean;
+  recovering?: boolean;
   startedAtMs: number;
   state: () => TurnState;
   apply: (rendered: Rendered, error?: Tag | null) => void;
   finish: (outcome: TurnOutcome, error: Tag | null) => void;
   fail: (error: { _tag: Tag; message: string }) => void;
+  markOutcomeUnknown: () => void;
   isOpen: () => boolean;
   useLink: (link: TurnLink) => void;
   ask: (
@@ -34,6 +36,9 @@ export type RunningTurn<Tag extends string> = {
 // listen takes how the runtime starts a turn its agent began on its own, such as after a background task reported back or to show an approval no turn could, which answers whether the turn will be shown.
 export type TurnRuntime<Tag extends string> = {
   compactPrompt: string;
+  closeSession: (threadId: string) => void;
+  pauseMessages: (threadId: string) => () => void;
+  recordOf: (threadId: string, turnId: string) => string | null;
   run: (turn: RunningTurn<Tag>) => Promise<void>;
   // Settles once the steer reaches the agent or is refused, which for an attached image waits for the image to be read.
   steer: (

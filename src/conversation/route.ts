@@ -107,6 +107,10 @@ export const createRouter = (
     SubagentRequests,
     "isChild" | "answer" | "withChildren" | "listedParentOf" | "remember"
   >,
+  revert?: (
+    method: "thread/revert" | "thread/rollback",
+    request: AppRequest,
+  ) => Promise<void>,
 ) => {
   const pending = new Map<AppRequest["id"], Pending>();
   // Set from the server's initialize answer; while paused the app lists no Claude model and a Claude turn is refused rather than handed to Codex, which would run it without the Claude conversation.
@@ -181,6 +185,18 @@ export const createRouter = (
       case "turn/interrupt":
         if (!turns.isClaudeThread(params.threadId)) return line;
         turns.interruptTurn(request);
+        return null;
+      case "thread/revert":
+      case "thread/rollback":
+        if (!turns.isClaudeThread(params.threadId)) return line;
+        if (revert === undefined) {
+          turns.reject(
+            request,
+            "rewinding this Claude conversation is unavailable",
+          );
+        } else {
+          void revert(message.method, request);
+        }
         return null;
       case "thread/settings/update":
         return routeSettingsUpdate(line, message, request);
