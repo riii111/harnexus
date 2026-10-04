@@ -211,6 +211,7 @@ export const harness = async (
     model = MODEL,
     files = {},
     beforeStart = Promise.resolve(),
+    beforeList = async () => {},
     onSend = () => {},
     unsettledWrite = () => false,
     idleSessionMs,
@@ -234,6 +235,7 @@ export const harness = async (
     model?: string;
     files?: Parameters<typeof openThreadStore>[1];
     beforeStart?: Promise<void>;
+    beforeList?: () => Promise<void>;
     onSend?: (message: Sent) => void;
     unsettledWrite?: () => boolean;
     idleSessionMs?: number;
@@ -285,8 +287,10 @@ export const harness = async (
         sessionLookupFails
           ? claudeSessionExists(sessionId, await unlistableConfigDir())
           : Result.ok(!missingSessions.includes(sessionId))),
-    listConversations: (cwd, since) =>
-      listClaudeConversations(cwd, { since, configDir: claudeDir() }),
+    listConversations: async (cwd, since) => {
+      await beforeList();
+      return listClaudeConversations(cwd, { since, configDir: claudeDir() });
+    },
     lastRecordOf:
       lastRecord ?? ((sessionId) => readLastRecordUuid(sessionId, claudeDir())),
     resolveConnection,
