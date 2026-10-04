@@ -1241,6 +1241,47 @@ describe("canceling Claude session startup", () => {
 });
 
 describe("session ids", () => {
+  test("keeps an unknown turn blocked after its initial session id was not saved and the App restarted", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const before = await harness([first], {
+      unsettledWrite: () => true,
+      files: {
+        writeState: (path, content) =>
+          content.includes('"se-1"')
+            ? diskFull(path)
+            : writeFileAtomic(path, content),
+      },
+    });
+    await completeTurn(before.turns, before.sent, first, 10);
+    await until(() => before.store.get(THREAD)?.runState === "outcomeUnknown");
+    expect(before.events).toContainEqual({
+      event: "claude_turn",
+      step: "session_not_saved",
+      error: "StatePersistFailed",
+    });
+
+    const second = fakeClaude(SUBSCRIPTION);
+    const after = await harness([second]);
+    expect(after.store.get(THREAD)?.sessionId).toBeNull();
+    const retry = turnStart(11, "continue");
+    after.turns.startTurn(
+      { ...retry, params: { ...retry.params, clientUserMessageId: "new-id" } },
+      undefined,
+    );
+    await until(() => completedTurnStatuses(after.sent).length === 1);
+    await until(() => after.store.get(THREAD)?.runState === "outcomeUnknown");
+    expect(completedTurns(after.sent)[0]?.error?.message).toContain(
+      "previous Claude conversation could not be restored; use /resume",
+    );
+    expect(second.started()).toBe(false);
+    expect(after.settings).toHaveLength(0);
+    const reloaded = await harness([]);
+    expect(reloaded.store.get(THREAD)).toMatchObject({
+      sessionId: null,
+      runState: "outcomeUnknown",
+    });
+  });
+
   test("keeps validating a missing rewind source when clearing its saved session id fails", async () => {
     const source = fakeClaude(SUBSCRIPTION);
     const before = await harness([source]);

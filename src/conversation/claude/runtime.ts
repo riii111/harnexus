@@ -421,6 +421,19 @@ export const createClaudeRuntime = ({
       await answerCommand(turn, command, claude.command);
       return;
     }
+    if (
+      turn.recovering &&
+      turn.record.sessionId === null &&
+      turn.record.rewind === undefined
+    ) {
+      turn.fail(
+        new SessionMissing({
+          message:
+            "the previous Claude conversation could not be restored; use /resume to select it or repair the saved state before continuing",
+        }),
+      );
+      return;
+    }
     // Approvals open their turn only on a thread with no other turn accepted, so a turn of Claude's own starting while they wait for it is that one.
     const held =
       turn.input.startedBy === "claude"
