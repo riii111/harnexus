@@ -26,6 +26,7 @@ import {
   loadShutdownGraceMs,
   loadStatePath,
   loadUnverifiedCodexPolicy,
+  loadVertexModels,
 } from "../runtime/config.ts";
 import { openServerPipes } from "../runtime/process.boundary.ts";
 import { connectClaudeThreads } from "./claude-threads.ts";
@@ -142,7 +143,10 @@ async function withClaude(relay: {
       settings.isOk() ? settings.value : {},
       catalog.effortsOf,
     ),
-    claudeModels: catalog.models,
+    claudeModels: () => ({
+      ...catalog.models(),
+      vertex: loadVertexModels(process.env),
+    }),
     unverifiedCodex: loadUnverifiedCodexPolicy(process.env),
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,

@@ -90,7 +90,7 @@ HARNEXUS_UNVERIFIED_CODEX=pause bun run open-app
 
 ## Use Google Vertex AI for a repository
 
-The model picker lists each Claude model twice: as is for your Claude subscription, and marked `· Vertex AI`, such as `Claude Opus 5.5 · Vertex AI`, for Google Vertex AI. A `· Vertex AI` model runs in repositories whose own Claude Code settings choose Vertex AI. If `claude` in a terminal already runs on Vertex AI in a repository through its `.claude/settings.local.json` or `.claude/settings.json`, that is all it needs:
+Open the app with `HARNEXUS_VERTEX=on bun run open-app` to list each Claude model a second time, marked `· Vertex AI`, such as `Claude Opus 5.5 · Vertex AI`. A `· Vertex AI` model runs in repositories whose own Claude Code settings choose Vertex AI. If `claude` in a terminal already runs on Vertex AI in a repository through its `.claude/settings.local.json` or `.claude/settings.json`, that is all it needs:
 
 ```json
 {
