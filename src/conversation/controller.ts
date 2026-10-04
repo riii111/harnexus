@@ -5,6 +5,7 @@ import { type EffortRule, isClaudeEffort } from "../infra/claude/models.ts";
 import { createAppRequests } from "../infra/codex/app-requests.ts";
 import { delegatedMessage } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
+import { isManualTurnTrigger } from "../infra/codex/turn-trigger.ts";
 import type { ThreadRecord, ThreadStore } from "../infra/thread-store.ts";
 import type { UserInput } from "../presentation/protocol.ts";
 import { RECOVERY_NOTICE } from "../presentation/recovery.ts";
@@ -88,6 +89,7 @@ type ActiveTurn<Tag extends string> = {
   state: TurnState;
   turn: RunningTurn<Tag>;
   link: TurnLink | null;
+  outcomeUnknown: boolean;
 };
 
 // answered is set when the app got the turn as soon as it was accepted, so a turn that cannot run is shown as failed rather than refused; a turn Claude started on its own answers no request.
@@ -100,11 +102,7 @@ type TurnRequest = {
   allowRecovery: boolean;
 };
 
-class LinkWriteUnsettled extends TaggedError("LinkWriteUnsettled")<{
-  message: string;
-}> {}
-
-class RecoveryNotStarted extends TaggedError("RecoveryNotStarted")<{
+class TurnOutcomeUnknown extends TaggedError("TurnOutcomeUnknown")<{
   message: string;
 }> {}
 
@@ -220,7 +218,7 @@ export const createTurnController = <Tag extends string>({
       false,
       delegated === null &&
         messageId !== null &&
-        params.turnTrigger !== "safety_buffer_retry",
+        isManualTurnTrigger(params.turnTrigger),
     );
   };
 
@@ -420,7 +418,6 @@ export const createTurnController = <Tag extends string>({
     runtime.closeAll();
   };
 
-  // A failed turn is shown to the user, who decides whether to send it again, so no turn outcome is treated as unknown here; only a crash or a thread tool write left undecided leaves the marker.
   const runTurn = async (
     request: TurnRequest,
     thread: Thread,
@@ -456,10 +453,7 @@ export const createTurnController = <Tag extends string>({
       threads.markRegistered(threadId);
     }
     let responded = false;
-    const ran = await store.runWrite<
-      void,
-      LinkWriteUnsettled | RecoveryNotStarted
-    >(
+    const ran = await store.runWrite(
       threadId,
       async (record, recovered) => {
         if (closed) {
@@ -467,7 +461,7 @@ export const createTurnController = <Tag extends string>({
           refuseTurn(request, queued, "bridge_closing");
           return recovered
             ? Result.err(
-                new RecoveryNotStarted({
+                new TurnOutcomeUnknown({
                   message: "the bridge closed before recovery started",
                 }),
               )
@@ -480,7 +474,7 @@ export const createTurnController = <Tag extends string>({
           refuseTurn(request, queued, "requester_not_saved", noted.error);
           return recovered
             ? Result.err(
-                new RecoveryNotStarted({
+                new TurnOutcomeUnknown({
                   message: "the requester could not be saved before recovery",
                 }),
               )
@@ -493,7 +487,7 @@ export const createTurnController = <Tag extends string>({
           refuseTurn(request, queued, "message_not_saved", saved.error);
           return recovered
             ? Result.err(
-                new RecoveryNotStarted({
+                new TurnOutcomeUnknown({
                   message: "the message could not be saved before recovery",
                 }),
               )
@@ -511,33 +505,36 @@ export const createTurnController = <Tag extends string>({
           recovered,
         );
         release(active);
+        const link = active.link;
+        link?.stopWrites();
+        if (active.outcomeUnknown) {
+          if (link !== null) runtime.dropSession(threadId, link);
+          return Result.err(
+            new TurnOutcomeUnknown({
+              message: "the turn could not save its Claude conversation",
+            }),
+          );
+        }
         if (recovered && runtime.recordOf(threadId, request.turnId) === null)
           return Result.err(
-            new RecoveryNotStarted({
+            new TurnOutcomeUnknown({
               message: "the recovery prompt was not sent to Claude",
             }),
           );
-        const link = active.link;
-        link?.stopWrites();
         if (link === null || !link.hasUnsettledWrite()) return Result.ok();
         // An undecided write stays on its link, so the session goes with it and the turn the user continues with starts on a new link.
         runtime.dropSession(threadId, link);
         return Result.err(
-          new LinkWriteUnsettled({
+          new TurnOutcomeUnknown({
             message: "a thread tool write has an unknown outcome",
           }),
         );
       },
-      (error) =>
-        error._tag === "LinkWriteUnsettled" ||
-        error._tag === "RecoveryNotStarted",
+      (error) => error._tag === "TurnOutcomeUnknown",
       () => request.allowRecovery && !closed && !request.stopped,
     );
     if (ran.isOk()) return;
-    if (
-      ran.error._tag === "LinkWriteUnsettled" ||
-      ran.error._tag === "RecoveryNotStarted"
-    ) {
+    if (ran.error._tag === "TurnOutcomeUnknown") {
       log({ event: "claude_turn", step: "outcome_unknown" });
       return;
     }
@@ -712,6 +709,9 @@ export const createTurnController = <Tag extends string>({
       apply: (rendered, error = null) => apply(active, rendered, error),
       finish: (outcome, error) => finish(active, outcome, error),
       fail: (error) => fail(active, error),
+      markOutcomeUnknown: () => {
+        active.outcomeUnknown = true;
+      },
       isOpen: () => activeTurns.get(record.threadId) === active,
       useLink: (link) => {
         active.link = link;
@@ -724,6 +724,7 @@ export const createTurnController = <Tag extends string>({
       state,
       turn,
       link: null,
+      outcomeUnknown: false,
     };
     return active;
   };

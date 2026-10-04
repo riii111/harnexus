@@ -22,6 +22,7 @@ export type RunningTurn<Tag extends string> = {
   apply: (rendered: Rendered, error?: Tag | null) => void;
   finish: (outcome: TurnOutcome, error: Tag | null) => void;
   fail: (error: { _tag: Tag; message: string }) => void;
+  markOutcomeUnknown: () => void;
   isOpen: () => boolean;
   useLink: (link: TurnLink) => void;
   ask: (

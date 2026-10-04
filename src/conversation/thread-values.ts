@@ -161,6 +161,7 @@ export const createThreadValues = (
         error: saved.error._tag,
       });
     }
+    return saved;
   };
 
   // Unlike a session id, a connection applies only once the store holds it, so a restart never resumes a conversation on a connection nobody confirmed; a save whose sync failed already holds it.

@@ -54,6 +54,10 @@ Claude's response and tool activity appear in the chat. Run all `bun run` comman
 
 Open an existing Claude chat to send another request. You can choose another Claude model in the same chat. To work with a Codex model, use a separate chat; a Claude chat cannot switch back to Codex.
 
+If the app closed during Claude's work, send a new message to continue. The chat shows an interruption notice, and Claude checks the current state before proceeding. Automatic retries and messages from other chats do not resume work with an unknown outcome. If recovery is unavailable with an older App/CLI pair, update the app and reopen it with harnexus.
+
+Editing or rewinding a message rewinds the conversation. Files already changed remain as they are.
+
 ### Attach images
 
 Attach or paste images to ask Claude about them, including while Claude is working. Reopened chats show the images you sent.

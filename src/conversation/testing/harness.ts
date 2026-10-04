@@ -433,6 +433,7 @@ export const turnStart = (id: number, text: string, threadId = THREAD) => ({
   id,
   params: {
     threadId,
+    turnTrigger: "composer_queue",
     input: [{ type: "text", text, text_elements: [] }],
   } as Record<string, unknown>,
 });

@@ -137,6 +137,7 @@ type ClaudeFailureTag =
   | BridgeClosing["_tag"]
   | StreamEnded["_tag"]
   | SessionMissing["_tag"]
+  | SessionNotSaved["_tag"]
   | ForkNotSeparate["_tag"]
   | ForkPointUnknown["_tag"]
   | ImageFailureTag
@@ -237,6 +238,10 @@ type HeldApprovals = {
 type Approval = { held: HeldApprovals | null; signal: AbortSignal };
 
 class BridgeClosing extends TaggedError("BridgeClosing")<{
+  message: string;
+}> {}
+
+class SessionNotSaved extends TaggedError("SessionNotSaved")<{
   message: string;
 }> {}
 
@@ -915,7 +920,21 @@ export const createClaudeRuntime = ({
       }
       if (current !== undefined && current !== sessionId) {
         sessionId = current;
-        await threads.setSessionId(threadId, current);
+        const saved = await threads.setSessionId(threadId, current);
+        if (
+          saved.isErr() &&
+          (turn.recovering || turn.record.rewind !== undefined)
+        ) {
+          turn.markOutcomeUnknown();
+          dropSession(threadId, slot);
+          turn.fail(
+            new SessionNotSaved({
+              message:
+                "the Claude conversation could not be saved; check the state directory permissions before continuing",
+            }),
+          );
+          return;
+        }
       }
       const message = received.value;
       // Status and system messages follow the send at once, so the wait is measured to the first reply of the main conversation, not of a subagent, and a turn without one logs null.
@@ -1286,6 +1305,7 @@ export const createClaudeRuntime = ({
       | InferErr<SessionStart>
       | BridgeClosing
       | SessionMissing
+      | SessionNotSaved
       | ForkPointUnknown
       | SessionStartCancelled
     >
@@ -1307,7 +1327,11 @@ export const createClaudeRuntime = ({
       !pending.controller.signal.aborted;
     const rewind = threads.rewindOf(record.threadId);
     const resume =
-      rewind?.at === null ? null : threads.sessionIdOf(record.threadId);
+      rewind === undefined
+        ? threads.sessionIdOf(record.threadId)
+        : rewind.at === null
+          ? null
+          : rewind.sessionId;
     if (resume !== null) {
       const found = await waitForAbort(
         sessionFound(resume),
@@ -1319,7 +1343,16 @@ export const createClaudeRuntime = ({
       if (!found) {
         clearSessionStart(record.threadId, pending);
         log({ event: "claude_turn", step: "session_missing" });
-        void threads.setSessionId(record.threadId, null);
+        const forgotten = await threads.setSessionId(record.threadId, null);
+        if (forgotten.isErr() && rewind !== undefined) {
+          turn.markOutcomeUnknown();
+          return Result.err(
+            new SessionNotSaved({
+              message:
+                "the missing Claude conversation could not be cleared; check the state directory permissions before continuing",
+            }),
+          );
+        }
         return Result.err(
           new SessionMissing({
             message:
