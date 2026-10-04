@@ -837,6 +837,7 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
     case "session_not_saved":
     case "model_not_saved":
     case "effort_not_saved":
+    case "connection_not_saved":
     case "run_state_not_saved":
       return { event: entry.event, step: entry.step, error: entry.error };
   }

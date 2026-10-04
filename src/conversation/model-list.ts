@@ -4,13 +4,19 @@ import {
   type EffortRule,
   isClaudeModel,
   type ModelCatalog,
+  vertexModelId,
 } from "../infra/claude/models.ts";
+
+// vertex lists the Vertex AI twins in the picker; without it they stay hidden, so a thread already on one is still named.
+export type ListedClaudeModels = ReturnType<ModelCatalog["models"]> & {
+  vertex?: boolean;
+};
 
 // Claude models join the last page only, so a paging client sees each once; a server id with the Claude prefix is reported, since requests for it go to Claude.
 // A retired model is listed hidden, so the app can still name the model of a thread already on it.
 export const withClaudeModels = (
   result: Record<string, unknown>,
-  { offered, retired }: ReturnType<ModelCatalog["models"]>,
+  { offered, retired, vertex = false }: ListedClaudeModels,
   rule: EffortRule,
 ) => {
   const data = result.data;
@@ -25,7 +31,13 @@ export const withClaudeModels = (
   const collisions = data
     .map((model) => modelId(model))
     .filter((id) => isClaudeModel(id));
-  const added = models
+  const added = [
+    ...models,
+    ...models.map(({ model, hidden }) => ({
+      model: vertexTwin(model),
+      hidden: hidden || !vertex,
+    })),
+  ]
     .filter(({ model }) => !listed.has(model.id))
     .map(({ model, hidden }) =>
       modelEntry(model, hidden, rule(model.id, null)),
@@ -79,6 +91,13 @@ const reasoningEfforts = (
         reasoningEffort: effort,
         description: EFFORT_DESCRIPTIONS[effort],
       }));
+
+const vertexTwin = (model: ClaudeModel): ClaudeModel => ({
+  ...model,
+  id: vertexModelId(model.id),
+  displayName: `${model.displayName} · Vertex AI`,
+  description: `${model.description} on Google Vertex AI`,
+});
 
 const modelId = (model: unknown) =>
   typeof model === "object" && model !== null && "id" in model

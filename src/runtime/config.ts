@@ -86,6 +86,12 @@ export const loadUnverifiedCodexPolicy = (
 ): "warn" | "pause" =>
   env[UNVERIFIED_CODEX_ENV] === "pause" ? "pause" : "warn";
 
+const VERTEX_ENV = "HARNEXUS_VERTEX";
+
+// Only "on" lists the Vertex AI models, which most users have no repository for.
+export const loadVertexModels = (env: Record<string, string | undefined>) =>
+  env[VERTEX_ENV] === "on";
+
 const DEFAULT_SHUTDOWN_GRACE_MS = 5000;
 
 const DEFAULT_STATE_PATH = ".local/state/harnexus/threads.json";

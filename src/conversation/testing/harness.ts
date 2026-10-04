@@ -12,9 +12,14 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
 import {
+  SUBSCRIPTION_CONNECTION,
+  type VertexConnection,
+} from "../../infra/claude/connection.ts";
+import {
   createModelCatalog,
   type EffortRule,
   effortRule,
+  vertexModelId,
 } from "../../infra/claude/models.ts";
 import {
   type ClaudeSessionSettings,
@@ -115,8 +120,11 @@ export const diskFull = async (target: string) =>
   );
 
 // The harness hands out fakes in the order Claude starts, so OTHER_THREAD waits until THREAD has taken the first.
-export const twoWorkers = async (fakes: ReturnType<typeof fakeClaude>[]) => {
-  const started = await harness(fakes);
+export const twoWorkers = async (
+  fakes: ReturnType<typeof fakeClaude>[],
+  options: Parameters<typeof harness>[1] = {},
+) => {
+  const started = await harness(fakes, options);
   started.turns.adopt(OTHER_THREAD, { model: MODEL, cwd: OTHER_DIR });
   started.turns.startTurn(turnStart(10, "hello"), undefined);
   await until(() => fakes[0]?.started() === true);
@@ -168,9 +176,24 @@ export const MODEL = "claude-sonnet-5";
 
 export const OTHER_MODEL = "claude-opus-5-5";
 
+export const VERTEX_MODEL = vertexModelId(MODEL);
+
 export const BUILT_IN_EFFORTS = createModelCatalog().effortsOf;
 
 export const defaultRule = effortRule({}, BUILT_IN_EFFORTS);
+
+export const VERTEX_ACCOUNT: AccountInfo = { apiProvider: "vertex" };
+
+export const VERTEX: VertexConnection = {
+  provider: "vertex",
+  projectId: "sidework-project",
+  region: "global",
+  env: {
+    CLAUDE_CODE_USE_VERTEX: "1",
+    ANTHROPIC_VERTEX_PROJECT_ID: "sidework-project",
+    CLOUD_ML_REGION: "global",
+  },
+};
 
 export const SUBSCRIPTION: AccountInfo = {
   subscriptionType: "Claude Max",
@@ -184,6 +207,7 @@ export const harness = async (
   fakes: ReturnType<typeof fakeClaude>[],
   {
     adopt = true,
+    model = MODEL,
     files = {},
     beforeStart = Promise.resolve(),
     onSend = () => {},
@@ -194,6 +218,7 @@ export const harness = async (
     sessionLookupFails = false,
     lookupSession,
     lastRecord,
+    resolveConnection = async () => Result.ok(SUBSCRIPTION_CONNECTION),
     startSession: startSessionOverride,
     materializeFailures = 0,
     renameFails = false,
@@ -204,6 +229,7 @@ export const harness = async (
     now = () => 1_700_000_000_000,
   }: {
     adopt?: boolean;
+    model?: string;
     files?: Parameters<typeof openThreadStore>[1];
     beforeStart?: Promise<void>;
     onSend?: (message: Sent) => void;
@@ -214,6 +240,9 @@ export const harness = async (
     sessionLookupFails?: boolean;
     lookupSession?: Parameters<typeof createClaudeRuntime>[0]["findSession"];
     lastRecord?: Parameters<typeof createClaudeRuntime>[0]["lastRecordOf"];
+    resolveConnection?: Parameters<
+      typeof createClaudeRuntime
+    >[0]["resolveConnection"];
     startSession?: StartSessionOverride;
     materializeFailures?: number;
     renameFails?: boolean;
@@ -257,6 +286,7 @@ export const harness = async (
       listClaudeConversations(cwd, { since, configDir: claudeDir() }),
     lastRecordOf:
       lastRecord ?? ((sessionId) => readLastRecordUuid(sessionId, claudeDir())),
+    resolveConnection,
     openLink: (threadId) => {
       links.push(threadId);
       const link =
@@ -331,7 +361,7 @@ export const harness = async (
     newTurnId: () => `turn-${++turnCount}`,
     effortRule,
   });
-  if (adopt) turns.adopt(THREAD, { model: MODEL, cwd: dir });
+  if (adopt) turns.adopt(THREAD, { model, cwd: dir });
   turnRuns.set(turns, runs);
   return {
     turns,
