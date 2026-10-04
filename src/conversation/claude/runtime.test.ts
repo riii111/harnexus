@@ -1865,6 +1865,50 @@ describe("Claude's own turns", () => {
 });
 
 describe("subagent threads", () => {
+  test.each([
+    false,
+    true,
+  ])("holds child output during rewind and applies it only when rewind fails (applied=$applied)", async (applied) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, store, runtime, subagents } = await harness([claude]);
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.prompted());
+    claude.emit(sdk(taskStarted("toolu-agent", 1)));
+    claude.emit(sdk(success()));
+    await until(() => store.get(THREAD)?.runState === "idle");
+    await settle();
+    const child = subagents.childrenOf(THREAD)[0];
+    if (child === undefined) return expect.unreachable("child did not start");
+    const gate = createGate();
+    const changing = turns.changeConversation(THREAD, async () => {
+      await gate.promise;
+      if (applied) runtime.closeSession(THREAD);
+      return applied;
+    });
+    claude.emit(
+      sdk({
+        ...answer("msg-child", "held child output"),
+        parent_tool_use_id: "toolu-agent",
+      }),
+    );
+    claude.emit(sdk(taskNotification("toolu-agent")));
+    await settle();
+    expect(child.active).toBe(true);
+    expect(JSON.stringify(subagents.historyOf(child.id))).not.toContain(
+      "held child output",
+    );
+    gate.open();
+    expect(await changing).toBe(applied);
+    await until(() => subagents.childrenOf(THREAD)[0]?.active === false);
+    const history = subagents.historyOf(child.id);
+    expect(history?.[0]?.turn.status).toBe(
+      applied ? "interrupted" : "completed",
+    );
+    if (applied)
+      expect(JSON.stringify(history)).not.toContain("held child output");
+    else expect(JSON.stringify(history)).toContain("held child output");
+  });
+
   test("shows an agent Claude starts as a thread under the turn's thread until it completes", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, subagents } = await harness([claude]);

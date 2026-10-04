@@ -974,9 +974,12 @@ export const createClaudeRuntime = ({
   const pump = async (threadId: string, slot: SessionSlot) => {
     while (true) {
       const next = await slot.session.messages.next();
-      track(threadId, slot, next);
       const paused = pausedMessages.get(threadId);
-      if (paused !== undefined) await paused.promise;
+      if (paused !== undefined) {
+        await paused.promise;
+        if (sessions.get(threadId) !== slot) return;
+      }
+      track(threadId, slot, next);
       const inbox = route(threadId, slot, next);
       // The next message waits until the reader has handled this one, as a turn reading the session itself would.
       // An approval turn never reads, so waiting would freeze agents' threads and hide Claude stopping.
