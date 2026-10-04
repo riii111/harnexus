@@ -63,6 +63,44 @@ describe("Claude conversation rewind", () => {
     expect(restarted.value.get(THREAD)?.rewind).toBeUndefined();
   });
 
+  test("clears the pending rewind when a different conversation is selected", async () => {
+    const { revert, store } = await setup();
+    await revert("thread/revert", {
+      id: 1,
+      params: { threadId: THREAD, beforeTurnId: "harnexus-history-u2" },
+    });
+    const bound = await store.bindSession(THREAD, "se-2");
+    expect(bound.isOk()).toBe(true);
+    expect(store.get(THREAD)?.sessionId).toBe("se-2");
+    expect(store.get(THREAD)?.rewind).toBeUndefined();
+  });
+
+  test("reloads an in-flight history read when the conversation is rewound", async () => {
+    const { revert, store } = await setup();
+    const first =
+      Promise.withResolvers<Awaited<ReturnType<typeof readSession>>>();
+    let reads = 0;
+    const history = createHistoryRequests({
+      threads: createThreadValues(store, () => {}),
+      readSession: (sessionId) =>
+        ++reads === 1 ? first.promise : readSession(sessionId),
+      send: () => {},
+      log: () => {},
+    });
+    const original = history.load(THREAD);
+    await revert("thread/revert", {
+      id: 1,
+      params: { threadId: THREAD, beforeTurnId: "harnexus-history-u2" },
+    });
+    const afterRewind = history.load(THREAD);
+    first.resolve(await readSession("se-1"));
+    for (const loaded of await Promise.all([original, afterRewind]))
+      expect(
+        loaded.isOk() && loaded.value.map((entry) => entry.turn.id),
+      ).toEqual(["harnexus-history-u1"]);
+    expect(reads).toBe(2);
+  });
+
   test("rewinds a live turn using the prompt UUID and supports dropping the first turn", async () => {
     const { revert, store } = await setup();
     await revert("thread/revert", {
@@ -125,8 +163,6 @@ describe("Claude conversation rewind", () => {
           "the rewind was written but could not be confirmed; reopen the thread to check its retained history",
       },
     });
-    const bound = await store.bindSession(THREAD, "se-2");
-    expect(bound.isOk() && store.get(THREAD)?.rewind).toBeUndefined();
   });
 
   test("keeps the old conversation and session open when saving the rewind fails", async () => {

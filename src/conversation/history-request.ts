@@ -58,14 +58,20 @@ export const createHistoryRequests = ({
   subagents?: SubagentsOfThread;
 }) => {
   // The app asks for a turn page and then each turn's items at once, so requests arriving while a read runs share it.
-  const reading = new Map<string, Promise<Loaded>>();
+  const reading = new Map<string, { key: string; loaded: Promise<Loaded> }>();
+  const keyOf = (threadId: string) =>
+    JSON.stringify([
+      threads.sessionIdOf(threadId),
+      threads.rewindOf?.(threadId) ?? null,
+    ]);
 
   // A thread with no session yet has an empty history.
   const load = (threadId: string): Promise<Loaded> => {
     const kept = subagentHistory(threadId);
     if (kept !== undefined) return Promise.resolve(Result.ok(kept));
+    const key = keyOf(threadId);
     const running = reading.get(threadId);
-    if (running !== undefined) return running;
+    if (running?.key === key) return running.loaded;
     const thread = threads.threadOf(threadId);
     const sessionId = threads.sessionIdOf(threadId);
     if (thread === undefined || sessionId === null) {
@@ -73,6 +79,7 @@ export const createHistoryRequests = ({
     }
     const rewind = threads.rewindOf?.(threadId);
     const loaded = readSession(sessionId).then(async (original) => {
+      if (keyOf(threadId) !== key) return load(threadId);
       const read = original.andThen((messages) => {
         if (rewind === undefined) return Result.ok(messages);
         if (rewind.at === null) return Result.ok([]);
@@ -88,7 +95,6 @@ export const createHistoryRequests = ({
             )
           : Result.ok(messages.slice(0, index + 1));
       });
-      reading.delete(threadId);
       // The app's stream waits on this history, so a fault while reading back the thread's agents leaves them out rather than failing it; the next read tries again.
       if (read.isOk()) {
         const restored = await Result.tryPromise(() =>
@@ -96,6 +102,8 @@ export const createHistoryRequests = ({
         );
         if (restored.isErr()) log({ event: "claude_subagents_unrestored" });
       }
+      if (keyOf(threadId) !== key) return load(threadId);
+      if (reading.get(threadId)?.loaded === loaded) reading.delete(threadId);
       return read
         .tapError((error) =>
           log({ event: "claude_history_unreadable", error: error._tag }),
@@ -108,7 +116,7 @@ export const createHistoryRequests = ({
           ),
         );
     });
-    reading.set(threadId, loaded);
+    reading.set(threadId, { key, loaded });
     return loaded;
   };
 
