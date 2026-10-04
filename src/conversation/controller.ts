@@ -510,8 +510,9 @@ export const createTurnController = <Tag extends string>({
         if (typedByUser) {
           const refused = refusedForUnknown.get(threadId) ?? new Set();
           refusedForUnknown.set(threadId, refused.add(messageId));
+          await runtime.noteUnsent(threadId, request.turnId);
         }
-        // RPC rejection keeps the App's draft and its client id; accepting a failed turn lets the next typed message have a new identity.
+        // Recording the warning as an accepted turn separates the next user message from retries of the refused operation.
         if (!request.answered && request.id !== null && typedByUser) {
           const started = renderTurnStarted({
             threadId,
@@ -810,10 +811,12 @@ export const createTurnController = <Tag extends string>({
     )
       return null;
     changingConversations.add(threadId);
+    const resume = runtime.pauseMessages(threadId);
     try {
       return await change();
     } finally {
       changingConversations.delete(threadId);
+      resume();
     }
   };
 

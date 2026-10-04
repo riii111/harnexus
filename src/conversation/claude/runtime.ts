@@ -72,6 +72,7 @@ import type {
   ErrorTag,
   RunningTurn,
   TurnLink,
+  TurnRecord,
   TurnRuntime,
 } from "../turn-runtime.ts";
 import { readImages } from "./image-attachments.ts";
@@ -313,7 +314,7 @@ export const createClaudeRuntime = ({
   type Turn = RunningTurn<ClaudeFailureTag>;
 
   const sessions = new Map<string, SessionSlot>();
-  const turnRecords = new Map<string, Map<string, string>>();
+  const turnRecords = new Map<string, Map<string, TurnRecord>>();
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const usages = new Map<string, ThreadUsage>();
   const plans = new Map<string, ThreadPlan>();
@@ -321,6 +322,10 @@ export const createClaudeRuntime = ({
   const runningTurns = new Map<string, Turn>();
   const startingSessions = new Map<string, SessionStartup>();
   const busyThreads = new Set<string>();
+  const pausedMessages = new Map<
+    string,
+    ReturnType<typeof Promise.withResolvers<void>>
+  >();
   const commands = createSessionCommands({
     threads,
     listConversations,
@@ -672,8 +677,9 @@ export const createClaudeRuntime = ({
       turn.fail(sent.error);
       return false;
     }
-    const records = turnRecords.get(turn.threadId) ?? new Map<string, string>();
-    records.set(turn.turnId, sent.value);
+    const records =
+      turnRecords.get(turn.threadId) ?? new Map<string, TurnRecord>();
+    records.set(turn.turnId, { before: sent.value });
     turnRecords.set(turn.threadId, records);
     claude.sends.add(sent.value);
     for (const { path, body } of fresh) slot.attachedSkills.set(path, body);
@@ -969,6 +975,8 @@ export const createClaudeRuntime = ({
     while (true) {
       const next = await slot.session.messages.next();
       track(threadId, slot, next);
+      const paused = pausedMessages.get(threadId);
+      if (paused !== undefined) await paused.promise;
       const inbox = route(threadId, slot, next);
       // The next message waits until the reader has handled this one, as a turn reading the session itself would.
       // An approval turn never reads, so waiting would freeze agents' threads and hide Claude stopping.
@@ -1432,6 +1440,12 @@ export const createClaudeRuntime = ({
   const turnToAsk = async (threadId: string, approval: Approval) => {
     let waited = false;
     while (!closed && !approval.signal.aborted) {
+      const paused = pausedMessages.get(threadId);
+      if (paused !== undefined) {
+        const resumed = await waitForAbort(paused.promise, approval.signal);
+        if (resumed === ABORTED) return undefined;
+        continue;
+      }
       const turn = openTurn(threadId);
       const held = heldApprovals.get(threadId);
       if (held !== undefined && (held.turn === null || held.turn === turn)) {
@@ -1528,6 +1542,8 @@ export const createClaudeRuntime = ({
   // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
   const closeAll = () => {
     closed = true;
+    for (const paused of pausedMessages.values()) paused.resolve();
+    pausedMessages.clear();
     for (const threadId of [...idleTimers.keys()]) cancelIdleClose(threadId);
     for (const threadId of [...turnWaiters.keys()]) showTurn(threadId);
     for (const [threadId, startup] of [...startingSessions]) {
@@ -1538,13 +1554,41 @@ export const createClaudeRuntime = ({
 
   return {
     compactPrompt: COMPACT_PROMPT,
+    pauseMessages: (threadId) => {
+      const paused = Promise.withResolvers<void>();
+      pausedMessages.set(threadId, paused);
+      return () => {
+        if (pausedMessages.get(threadId) === paused)
+          pausedMessages.delete(threadId);
+        paused.resolve();
+      };
+    },
     closeSession: (threadId) => {
       cancelIdleClose(threadId);
       const slot = sessions.get(threadId);
       if (slot !== undefined) dropSession(threadId, slot);
     },
-    recordOf: (threadId, turnId) =>
-      turnRecords.get(threadId)?.get(turnId) ?? null,
+    recordsOf: (threadId) => turnRecords.get(threadId) ?? new Map(),
+    forgetUnsent: (threadId) => {
+      const records = turnRecords.get(threadId);
+      if (records === undefined) return;
+      for (const [turnId, record] of records)
+        if ("after" in record) records.delete(turnId);
+    },
+    noteUnsent: async (threadId, turnId) => {
+      const sessionId = threads.sessionIdOf(threadId);
+      if (sessionId === null) return;
+      const rewind = threads.rewindOf(threadId);
+      const last =
+        rewind === undefined
+          ? await lastRecordOf(sessionId)
+          : Result.ok(rewind.at);
+      if (last.isErr()) return;
+      const records =
+        turnRecords.get(threadId) ?? new Map<string, TurnRecord>();
+      records.set(turnId, { after: { sessionId, at: last.value } });
+      turnRecords.set(threadId, records);
+    },
     run,
     steer,
     interrupt,

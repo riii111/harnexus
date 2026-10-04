@@ -3,16 +3,21 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { type InferErr, Result } from "better-result";
 import { SUBSCRIPTION_CONNECTION } from "../infra/claude/connection.ts";
-import type { ClaudeSessionSettings } from "../infra/claude/session.ts";
+import {
+  type ClaudeSessionSettings,
+  readClaudeSession,
+} from "../infra/claude/session.ts";
 import { fakeClaude } from "../infra/claude/testing/fake-claude.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { openThreadStore } from "../infra/thread-store.ts";
+import { conversation } from "../presentation/testing/session-record.ts";
 import {
   FileRemoveFailed,
   removeFile,
   writeFileAtomic,
 } from "../runtime/fs.boundary.ts";
 import type { createTurnController } from "./controller.ts";
+import { createRevertRequests } from "./revert-request.ts";
 import {
   answer,
   appRequest,
@@ -58,6 +63,7 @@ import {
   withEffort,
   withMessageId,
 } from "./testing/harness.ts";
+import { createThreadValues } from "./thread-values.ts";
 
 useTempDir();
 
@@ -304,6 +310,52 @@ describe("a thread whose last turn has an unknown outcome", () => {
     expect(completedTurnStatuses(after.sent)).toEqual(["failed", "completed"]);
     expect(after.settings[0]).toMatchObject({ resume: "se-1" });
     expect(completedClaudeTurnStatuses(after.sent)).toEqual(["completed"]);
+  });
+
+  test("edits the recovery warning and resumes without removing the earlier conversation", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const after = await restartedWithUnknownOutcome([claude], {
+      lastRecord: async () => Result.ok("a4"),
+    });
+    after.turns.startTurn(
+      withMessageId(turnStart(11, "again"), "m-1"),
+      undefined,
+    );
+    await until(() => completedTurnStatuses(after.sent).length === 1);
+    const warningId = responseTo(after.sent, 11).result.turn.id;
+    const revert = createRevertRequests({
+      store: after.store,
+      threads: createThreadValues(after.store, () => {}),
+      turns: after.turns,
+      runtime: after.runtime,
+      readSession: (sessionId) =>
+        readClaudeSession(sessionId, { read: async () => conversation() }),
+      request: async () => Result.ok({ thread: { id: THREAD } }),
+      send: (message) => after.sent.push(message),
+    });
+    await revert("thread/revert", {
+      id: 12,
+      params: { threadId: THREAD, beforeTurnId: warningId },
+    });
+    expect(responseTo(after.sent, 12)?.error).toBeUndefined();
+    expect(after.store.get(THREAD)?.runState).toBe("idle");
+    expect(after.store.get(THREAD)?.rewind).toEqual({
+      sessionId: "se-1",
+      at: "a4",
+    });
+    after.turns.startTurn(
+      withMessageId(turnStart(13, "edited continuation"), "m-2"),
+      undefined,
+    );
+    await until(() => claude.prompted());
+    expect(after.settings[0]).toMatchObject({
+      resume: "se-1",
+      forkSession: true,
+      resumeAt: "a4",
+    });
+    claude.emit(sdk({ ...success(), session_id: "se-2" }));
+    await until(() => after.store.get(THREAD)?.runState === "idle");
+    expect(completedTurnStatuses(after.sent)).toEqual(["failed", "completed"]);
   });
 
   test.each([

@@ -2029,6 +2029,56 @@ describe("subagent threads", () => {
 });
 
 describe("turns Claude starts between app turns", () => {
+  test("keeps background output that arrives while a rejected rewind is being checked", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+    await until(() => store.get(THREAD)?.runState === "idle");
+    await settle();
+    const gate = createGate();
+    const changing = turns.changeConversation(THREAD, async () => {
+      await gate.promise;
+      return false;
+    });
+    claude.emit(sdk(INIT));
+    claude.emit(sdk(answer("msg-2", "the agent finished")));
+    claude.emit(sdk(ownResult()));
+    await Bun.sleep(5);
+    expect(completedTurnStatuses(sent)).toHaveLength(1);
+    gate.open();
+    expect(await changing).toBe(false);
+    await until(() => completedTurnStatuses(sent).length === 2);
+    expect(completedTurns(sent)[1]).toMatchObject({
+      status: "completed",
+      items: [{ type: "agentMessage", text: "the agent finished" }],
+    });
+  });
+
+  test("keeps a background approval pending until a rejected rewind releases the chat", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+    await until(() => store.get(THREAD)?.runState === "idle");
+    await settle();
+    const gate = createGate();
+    const changing = turns.changeConversation(THREAD, async () => {
+      await gate.promise;
+      return false;
+    });
+    const decision = askTool(
+      claude,
+      "Bash",
+      { command: "ls" },
+      { agentID: "agent-1" },
+    );
+    await Bun.sleep(5);
+    gate.open();
+    await changing;
+    const request = await appRequest(sent);
+    turns.answerRequest({ id: request.id, result: ALLOWED });
+    expect(await decision).toEqual({ behavior: "allow" });
+  });
+
   test("shows a turn Claude started on its own as a turn nobody typed", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, events } = await harness([claude]);

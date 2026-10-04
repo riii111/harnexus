@@ -3,7 +3,7 @@ import type { InferErr } from "better-result";
 import type { ImageSource } from "../infra/claude/images.ts";
 import type { createCodexLink } from "../infra/codex/codex-link.ts";
 import type { delegatedMessage } from "../infra/codex/delegations.ts";
-import type { ThreadRecord } from "../infra/thread-store.ts";
+import type { RewindPoint, ThreadRecord } from "../infra/thread-store.ts";
 import type { UserInput } from "../presentation/protocol.ts";
 import type { Rendered, TurnOutcome, TurnState } from "../presentation/turn.ts";
 import type { Mode, Refusal } from "./thread-request.ts";
@@ -30,12 +30,17 @@ export type RunningTurn<Tag extends string> = {
   ) => Promise<unknown>;
 };
 
+export type TurnRecord = { before: string } | { after: RewindPoint };
+
 // run sends the turn and reports its progress until it ends; threadBusy and threadIdle mark when the thread has turns accepted and when it has none left.
 // listen takes how the runtime starts a turn its agent began on its own, such as after a background task reported back or to show an approval no turn could, which answers whether the turn will be shown.
 export type TurnRuntime<Tag extends string> = {
   compactPrompt: string;
   closeSession: (threadId: string) => void;
-  recordOf: (threadId: string, turnId: string) => string | null;
+  pauseMessages: (threadId: string) => () => void;
+  recordsOf: (threadId: string) => ReadonlyMap<string, TurnRecord>;
+  forgetUnsent: (threadId: string) => void;
+  noteUnsent: (threadId: string, turnId: string) => Promise<void>;
   run: (turn: RunningTurn<Tag>) => Promise<void>;
   // Settles once the steer reaches the agent or is refused, which for an attached image waits for the image to be read.
   steer: (
