@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { EffortLevel, ModelInfo } from "@anthropic-ai/claude-agent-sdk";
 import {
-  baseModelId,
   type ClaudeModel,
   createModelCatalog,
   type EffortSettings,
@@ -92,9 +91,6 @@ describe("createModelCatalog", () => {
     const catalog = createModelCatalog();
 
     expect(catalog.effortsOf(vertexModelId("claude-haiku-4-5"))).toEqual([]);
-    expect(baseModelId(vertexModelId("claude-haiku-4-5"))).toBe(
-      "claude-haiku-4-5",
-    );
   });
 
   test("offers the built-in models until Claude Code's list is read", () => {

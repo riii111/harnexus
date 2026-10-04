@@ -1360,6 +1360,31 @@ describe("repository connections", () => {
     });
   });
 
+  test("refuse a Vertex chat moved to the subscription in both settings and model until /switch-connection", async () => {
+    let current: Connection = VERTEX;
+    const first = fakeClaude(VERTEX_ACCOUNT);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings, events } = await harness([first, second], {
+      resolveConnection: async () => Result.ok(current),
+      model: VERTEX_MODEL,
+    });
+    await completeTurn(turns, sent, first, 10);
+    current = SUBSCRIPTION_CONNECTION;
+    turns.changeModel(THREAD, MODEL);
+
+    turns.startTurn(turnStart(11, "next"), undefined);
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    const message = completedTurns(sent).at(-1)?.error?.message;
+    expect(message).toContain("your Claude subscription");
+    expect(message).toContain("/switch-connection");
+    expect(settings).toHaveLength(1);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "connection_changed",
+    });
+  });
+
   test.each([
     {
       name: "a Vertex AI model where the repository's settings do not choose Vertex AI",
