@@ -114,7 +114,7 @@ For the Google Cloud side, follow [Claude Code on Google Vertex AI](https://code
 - **First reply**: Before Claude's first reply, harnexus shows the provider Claude Code reported and the Google Cloud project and region from the repository's settings. Claude Code reports the provider without contacting Google Cloud, so the note does not confirm your credentials or the billing account. Chats on your subscription show no note.
 - **`/session`**: Shows the connection again, with a terminal command that resumes the conversation on the same project and region.
 - **Changed settings**: A chat keeps the provider, project and region it started on. If the repository's settings change them later, harnexus stops before sending your next message and tells you what changed. Restore the setting to continue as before, or send `/switch-connection` to move the chat.
-- **Models**: The model picker lists the same Claude models for every repository. In a Vertex chat, pick a model enabled in your project.
+- **Models**: The model picker lists the same Claude models for every repository, since the app asks for one list for all of them. Once Claude Code confirms Vertex AI for a chat, the chat's model is named with `· Vertex AI`, such as `Claude Opus 5.5 · Vertex AI`; the app shows the new name when it next loads the chat. In a Vertex chat, pick a model enabled in your project.
 
 ### When something fails
 

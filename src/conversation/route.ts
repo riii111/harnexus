@@ -17,7 +17,12 @@ import {
   withResumeHistory,
   withTurns,
 } from "./history-request.ts";
-import { shownEffort, withClaudeModels } from "./model-list.ts";
+import {
+  shownEffort,
+  shownModelId,
+  withBaseModels,
+  withClaudeModels,
+} from "./model-list.ts";
 import type { SubagentRequests } from "./subagent-requests.ts";
 import type { SubagentRestoreEvent } from "./subagent-restore.ts";
 
@@ -74,6 +79,7 @@ type Turns = {
   selectEffort: (threadId: string, effort: string) => void;
   effortOf: (threadId: string) => EffortLevel | null;
   effortRule: EffortRule;
+  connectionOf: (threadId: string) => { provider: string } | null;
 };
 
 type RefusedMethod = (typeof REFUSED_METHODS)[number];
@@ -123,7 +129,9 @@ export const createRouter = (
     }
     const id = message.id;
     if (typeof id !== "string" && typeof id !== "number") return line;
-    const params = isObject(message.params) ? message.params : {};
+    const params = withBaseModels(
+      isObject(message.params) ? message.params : {},
+    );
     const request = { id, params };
     // A Claude subagent's thread exists only in the bridge.
     if (subagents.isChild(params.threadId)) {
@@ -428,8 +436,9 @@ export const createRouter = (
   ): Buffer | Promise<Buffer> => {
     const result = isObject(message.result) ? message.result : {};
     const thread = isObject(result.thread) ? result.thread : {};
-    const model = turns.threadOf(threadId)?.model;
-    if (model === undefined) return line;
+    const known = turns.threadOf(threadId)?.model;
+    if (known === undefined) return line;
+    const model = shownModelId(known, turns.connectionOf(threadId)?.provider);
     const reasoningEffort = shownEffort(turns.effortOf(threadId));
     const opened = {
       ...result,
@@ -471,8 +480,12 @@ export const createRouter = (
     const params = isObject(message.params) ? message.params : {};
     const threadId =
       typeof params.threadId === "string" ? params.threadId : undefined;
-    const model =
+    const known =
       threadId === undefined ? undefined : turns.threadOf(threadId)?.model;
+    const model =
+      threadId === undefined || known === undefined
+        ? undefined
+        : shownModelId(known, turns.connectionOf(threadId)?.provider);
     const selected =
       threadId === undefined ? undefined : turns.modeOf(threadId);
     const settings = params.threadSettings;
