@@ -56,11 +56,9 @@ Open an existing Claude chat to send another request. You can choose another Cla
 
 ### Attach images
 
-Attach or paste screenshots and other images as you would in any chat, then ask about them—for example, "What is wrong on this screen?" You can attach images to later messages in the same chat, including while Claude is working. Reopened chats show the images you sent.
+Attach or paste images to ask Claude about them, including while Claude is working. Reopened chats show the images you sent.
 
-Claude reads PNG, JPEG, GIF, and WebP images. Images longer than 2,000 pixels on a side or larger than Claude accepts are reduced before they are sent. Audio and other attachments are not supported in Claude chats.
-
-If an image cannot be sent, the chat shows why and what to do next, such as attaching the image again or converting it to a supported format.
+PNG, JPEG, GIF, and WebP are supported; large images are reduced automatically. Audio and other attachments are not supported.
 
 ### Reopen the app
 
