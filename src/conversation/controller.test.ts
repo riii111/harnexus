@@ -806,7 +806,16 @@ describe("model changes", () => {
 
 describe("refused requests", () => {
   test.each([
-    { name: "non-text input", override: { input: [{ type: "image" }] } },
+    {
+      name: "audio input",
+      override: { input: [{ type: "localAudio", path: "/tmp/note.wav" }] },
+    },
+    {
+      name: "an image held only by a server",
+      override: {
+        input: [{ type: "image", url: "https://example.com/shot.png" }],
+      },
+    },
     { name: "a Codex model", override: { model: "gpt-fixture" } },
     {
       name: "a Codex model in the collaboration mode alone",

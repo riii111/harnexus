@@ -106,6 +106,18 @@ export const readRegularTextFile = (path: string) =>
       new FileReadFailed({ path, cause, message: `cannot read ${path}` }),
   });
 
+// A file larger than limit is null rather than read whole.
+export const readRegularFileBytes = (path: string, limit: number) =>
+  Result.tryPromise({
+    try: async () => {
+      const found = await stat(path);
+      if (!found.isFile()) throw new Error(`${path} is not a regular file`);
+      return found.size > limit ? null : await readFile(path);
+    },
+    catch: (cause) =>
+      new FileReadFailed({ path, cause, message: `cannot read ${path}` }),
+  });
+
 // A file removed after its folder was listed is null, as is anything that is not a regular file.
 export const statFileIfExists = (path: string) =>
   Result.tryPromise({

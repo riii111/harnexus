@@ -15,6 +15,7 @@ import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
 import { buildHistory, replayHistory } from "../presentation/history.ts";
+import { resizeImage } from "../runtime/image.boundary.ts";
 
 type Runtime = Parameters<typeof createClaudeRuntime>[0];
 
@@ -95,6 +96,7 @@ export const connectClaudeThreads = ({
     log,
     effortRule,
     subagents,
+    resizeImage,
   });
   const turns = createTurnController({
     store,

@@ -11,6 +11,7 @@ import {
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
+import type { ResizeImage } from "../../infra/claude/images.ts";
 import {
   createModelCatalog,
   type EffortRule,
@@ -201,6 +202,7 @@ export const harness = async (
     readHistory,
     effortRule = defaultRule,
     ownTurnsShown = true,
+    resizeImage = async () => Result.err({ _tag: "ImageResizeFailed" }),
     now = () => 1_700_000_000_000,
   }: {
     adopt?: boolean;
@@ -221,6 +223,7 @@ export const harness = async (
     readHistory?: Parameters<typeof createClaudeRuntime>[0]["readHistory"];
     effortRule?: EffortRule;
     ownTurnsShown?: boolean;
+    resizeImage?: ResizeImage;
     now?: () => number;
   } = {},
 ) => {
@@ -302,6 +305,7 @@ export const harness = async (
     now,
     effortRule,
     subagents,
+    resizeImage,
     ...(idleSessionMs !== undefined && { idleSessionMs }),
     ...(permissionMode !== undefined && { permissionMode }),
   });

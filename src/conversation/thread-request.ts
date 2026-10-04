@@ -81,7 +81,16 @@ const REFUSAL_MESSAGES = {
   directory_change:
     "changing the working directory of a Claude thread is not supported",
   directory_unknown: "the working directory of this thread is unknown",
-  text_only: "Claude threads accept text input only",
+  unsupported_input:
+    "Claude threads accept text and images only; send audio and other attachments in a Codex thread",
+  image_not_local:
+    "Claude can read only images attached from this Mac; save the image as a file, then attach or paste it again",
+  image_unreadable:
+    "an attached image could not be read, possibly because it was moved or deleted; attach it again",
+  image_format:
+    "Claude reads PNG, JPEG, GIF and WebP images only; convert the image to one of these formats, then attach it again",
+  image_too_large:
+    "an attached image is too large for Claude and could not be reduced; crop it or attach a smaller image",
   reply_to_other_worker:
     "this message comes from a reviewer of another Claude thread",
   duplicate_message: "this message was already delivered to the Claude thread",

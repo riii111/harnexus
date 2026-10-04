@@ -27,7 +27,7 @@ import {
   withoutApiBilling,
 } from "./auth.ts";
 import { modelsFromSdk } from "./models.ts";
-import { createPromptQueue } from "./prompt-queue.ts";
+import { createPromptQueue, type Prompt } from "./prompt-queue.ts";
 import {
   type ClaudeQuery,
   ClaudeRecordUnreadable,
@@ -345,20 +345,22 @@ const sessionOptions = (
 
 const createSession = (
   claude: ClaudeQuery,
-  prompt: ReturnType<typeof createPromptQueue>,
+  queue: ReturnType<typeof createPromptQueue>,
 ) => {
   let closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
-    prompt.end();
+    queue.end();
     closeQuery(claude);
   };
   return {
     messages: readMessages(claude, () => closed, close),
     isClosed: () => closed,
-    send: (text: string, attachments: readonly string[] = []) => {
-      const uuid = closed ? null : prompt.push(text, attachments);
+    send: (prompt: Prompt | string) => {
+      const uuid = closed
+        ? null
+        : queue.push(typeof prompt === "string" ? { text: prompt } : prompt);
       return uuid === null ? Result.err(sessionClosed()) : Result.ok(uuid);
     },
     interrupt: async () =>
