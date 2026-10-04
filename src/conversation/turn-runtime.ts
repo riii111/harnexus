@@ -33,6 +33,8 @@ export type RunningTurn<Tag extends string> = {
 // listen takes how the runtime starts a turn its agent began on its own, such as after a background task reported back or to show an approval no turn could, which answers whether the turn will be shown.
 export type TurnRuntime<Tag extends string> = {
   compactPrompt: string;
+  closeSession: (threadId: string) => void;
+  recordOf: (threadId: string, turnId: string) => string | null;
   run: (turn: RunningTurn<Tag>) => Promise<void>;
   steer: (turn: RunningTurn<Tag>, text: string) => Refusal | null;
   interrupt: (turn: RunningTurn<Tag>, repeated: boolean) => void;

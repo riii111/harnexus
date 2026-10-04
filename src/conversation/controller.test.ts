@@ -185,6 +185,70 @@ describe("turn/start on a Claude thread", () => {
   });
 });
 
+describe("continuing a rewound conversation", () => {
+  test.each([
+    {
+      name: "a retained reply",
+      at: "kept-reply",
+      expected: { resume: "se-1", forkSession: true, resumeAt: "kept-reply" },
+    },
+    { name: "an empty history", at: null, expected: {} },
+  ])("starts a separate session after rewinding to $name", async ({
+    at,
+    expected,
+  }) => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store, settings, runtime } = await harness([
+      first,
+      second,
+    ]);
+    await completeTurn(turns, sent, first, 10);
+    const saved = await store.setRewind(THREAD, { sessionId: "se-1", at });
+    expect(saved.isOk()).toBe(true);
+    runtime.closeSession(THREAD);
+    turns.startTurn(
+      withMessageId(turnStart(11, "edited prompt"), "edited-message"),
+      undefined,
+    );
+    await until(() => second.started());
+    expect(await firstPrompt(second.prompt())).toBe("edited prompt");
+    second.emit(sdk({ ...success(), session_id: "se-2" }));
+    await until(() => store.get(THREAD)?.runState === "idle");
+    expect({
+      resume: settings[1]?.resume,
+      forkSession: settings[1]?.forkSession,
+      resumeAt: settings[1]?.resumeAt,
+    }).toEqual(
+      at === null
+        ? { resume: undefined, forkSession: undefined, resumeAt: undefined }
+        : expected,
+    );
+    expect(store.get(THREAD)?.sessionId).toBe("se-2");
+    expect(store.get(THREAD)?.rewind).toBeUndefined();
+    expect(first.closes()).toBe(1);
+  });
+
+  test("blocks new turns while a conversation change is being saved", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([first]);
+    const gate = createGate();
+    const changing = turns.changeConversation(THREAD, async () => {
+      await gate.promise;
+      return true;
+    });
+    turns.startTurn(turnStart(10, "race"), undefined);
+    expect(responseTo(sent, 10)?.error.message).toBe(
+      "the Claude thread cannot start a turn",
+    );
+    expect(first.started()).toBe(false);
+    gate.open();
+    expect(await changing).toBe(true);
+    await completeTurn(turns, sent, first, 11);
+    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
+  });
+});
+
 describe("a thread whose last turn has an unknown outcome", () => {
   test("runs a new message the user sends after the refusal and clears the unknown state", async () => {
     const first = fakeClaude(SUBSCRIPTION);
@@ -202,8 +266,11 @@ describe("a thread whose last turn has an unknown outcome", () => {
     await completeTurn(turns, sent, second, 12, "m-2");
     await until(() => store.get(THREAD)?.runState === "idle");
 
-    expect(responseTo(sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
-    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
+    expect(unknownOutcome(sent, 11)).toBe(OUTCOME_UNKNOWN);
+    expect(completedClaudeTurnStatuses(sent)).toEqual([
+      "completed",
+      "completed",
+    ]);
     expect(events).toContainEqual({
       event: "claude_turn",
       step: "outcome_unknown",
@@ -214,7 +281,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
     });
   });
 
-  test("refuses the first message after a restart without starting Claude, then resumes the conversation", async () => {
+  test("accepts the first message after a restart as a failed turn so the next submission can resume", async () => {
     const second = fakeClaude(SUBSCRIPTION);
     const after = await restartedWithUnknownOutcome([second]);
 
@@ -226,10 +293,13 @@ describe("a thread whose last turn has an unknown outcome", () => {
     const refusedStarted = second.started();
     await completeTurn(after.turns, after.sent, second, 12, "m-2");
 
-    expect(responseTo(after.sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
+    expect(unknownOutcome(after.sent, 11)).toBe(OUTCOME_UNKNOWN);
     expect(refusedStarted).toBe(false);
+    expect(responseTo(after.sent, 11)?.error).toBeUndefined();
+    expect(responseTo(after.sent, 11)?.result.turn.id).toBeDefined();
+    expect(completedTurnStatuses(after.sent)).toEqual(["failed", "completed"]);
     expect(after.settings[0]).toMatchObject({ resume: "se-1" });
-    expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
+    expect(completedClaudeTurnStatuses(after.sent)).toEqual(["completed"]);
   });
 
   test.each([
@@ -260,9 +330,9 @@ describe("a thread whose last turn has an unknown outcome", () => {
     await until(() => responseTo(after.sent, 12) !== undefined);
     await completeTurn(after.turns, after.sent, second, 13, "m-3");
 
-    expect(responseTo(after.sent, 12)?.error.message).toBe(OUTCOME_UNKNOWN);
+    expect(unknownOutcome(after.sent, 12)).toBe(OUTCOME_UNKNOWN);
     expect(after.settings).toHaveLength(1);
-    expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
+    expect(completedClaudeTurnStatuses(after.sent)).toEqual(["completed"]);
   });
 
   test("does not count another thread's message as telling the user", async () => {
@@ -280,9 +350,10 @@ describe("a thread whose last turn has an unknown outcome", () => {
     );
     await until(() => responseTo(after.sent, 12) !== undefined);
 
-    expect(
-      [11, 12].map((id) => responseTo(after.sent, id)?.error.message),
-    ).toEqual([OUTCOME_UNKNOWN, OUTCOME_UNKNOWN]);
+    expect([11, 12].map((id) => unknownOutcome(after.sent, id))).toEqual([
+      OUTCOME_UNKNOWN,
+      OUTCOME_UNKNOWN,
+    ]);
     expect(second.started()).toBe(false);
   });
 
@@ -314,11 +385,11 @@ describe("a thread whose last turn has an unknown outcome", () => {
     await until(() => second.started());
     const resent = await messageReviewer(settings[1]);
     second.emit(sdk(success()));
-    await until(() => completedTurnStatuses(sent).length === 2);
+    await until(() => completedClaudeTurnStatuses(sent).length === 2);
     await until(() => store.get(THREAD)?.runState !== "running");
 
     expect(lostSend.isError).toBe(true);
-    expect(responseTo(sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
+    expect(unknownOutcome(sent, 11)).toBe(OUTCOME_UNKNOWN);
     expect(first.closes()).toBe(1);
     expect(settings[1]).toMatchObject({ resume: "se-1" });
     expect(resent.isError).toBeFalsy();
@@ -362,15 +433,18 @@ describe("a thread whose last turn has an unknown outcome", () => {
     await waiting;
     const next = await messageReviewer(settings[1]);
     second.emit(sdk(success()));
-    await until(() => completedTurnStatuses(sent).length === 2);
+    await until(() => completedClaudeTurnStatuses(sent).length === 2);
     await until(() => store.get(THREAD)?.runState !== "running");
 
-    expect(responseTo(sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
+    expect(unknownOutcome(sent, 11)).toBe(OUTCOME_UNKNOWN);
     expect(first.closes()).toBe(1);
     expect(second.closes()).toBe(0);
     expect(next.isError).toBeFalsy();
     expect(toolCalls).toHaveLength(2);
-    expect(completedTurnStatuses(sent)).toEqual(["interrupted", "completed"]);
+    expect(completedClaudeTurnStatuses(sent)).toEqual([
+      "interrupted",
+      "completed",
+    ]);
     expect(store.get(THREAD)?.runState).toBe("idle");
   });
 
@@ -434,7 +508,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
     );
     await until(() => responseTo(after.sent, 12) !== undefined);
 
-    expect(responseTo(after.sent, 11)?.error.message).toBe(OUTCOME_UNKNOWN);
+    expect(unknownOutcome(after.sent, 11)).toBe(OUTCOME_UNKNOWN);
     expect(responseTo(after.sent, 12)?.error.message).toBe(
       "the Claude thread cannot start a turn",
     );
@@ -1578,3 +1652,17 @@ const UNANSWERED = {
   method: "mcpServer/tool/call",
   message: "the server closed before answering mcpServer/tool/call",
 } as InferErr<Awaited<ReturnType<ServerRequest>>>;
+
+const unknownOutcome = (sent: Sent[], id: number) => {
+  const response = responseTo(sent, id);
+  return (
+    response?.error?.message ??
+    completedTurns(sent).find((turn) => turn.id === response?.result?.turn.id)
+      ?.error?.message
+  );
+};
+
+const completedClaudeTurnStatuses = (sent: Sent[]) =>
+  completedTurns(sent)
+    .filter((turn) => turn.error?.message !== OUTCOME_UNKNOWN)
+    .map((turn) => turn.status);

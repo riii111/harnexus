@@ -183,6 +183,7 @@ export const createThreadValues = (
     pickedEffortOf,
     sessionIdOf,
     takePicked,
+    rewindOf: (threadId: string) => store.get(threadId)?.rewind,
     adopt,
     adoptFork,
     forkSourceOf,

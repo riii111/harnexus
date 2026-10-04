@@ -15,10 +15,13 @@ import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import { createSerialQueue } from "../runtime/serial-queue.ts";
 
+export type RewindPoint = { sessionId: string; at: string | null };
+
 // Only identifiers are kept, so the file never holds conversation text.
 type ThreadMapping = {
   readonly threadId: string;
   readonly sessionId: string | null;
+  readonly rewind?: RewindPoint;
   readonly model: string;
   // The effort level the app last picked for the thread, or null to leave Claude on the user's settings.
   readonly effort: string | null;
@@ -253,7 +256,13 @@ const createThreadStore = (
       ),
 
     setSessionId: (threadId: string, sessionId: string | null) =>
-      update(threadId, (mapping) => ({ ...mapping, sessionId })),
+      update(threadId, (mapping) => {
+        const { rewind: _rewind, ...retained } = mapping;
+        return { ...retained, sessionId };
+      }),
+
+    setRewind: (threadId: string, rewind: RewindPoint) =>
+      update(threadId, (mapping) => ({ ...mapping, rewind })),
 
     setModel: (threadId: string, model: string) =>
       update(threadId, (mapping) => ({ ...mapping, model })),
@@ -522,6 +531,7 @@ const readState = (value: unknown): ThreadMapping[] | null => {
 const pickMappingFields = (mapping: ThreadMapping): ThreadMapping => ({
   threadId: mapping.threadId,
   sessionId: mapping.sessionId,
+  ...(mapping.rewind === undefined ? {} : { rewind: { ...mapping.rewind } }),
   model: mapping.model,
   effort: mapping.effort,
   worktree: mapping.worktree,
@@ -534,6 +544,10 @@ const isThreadMapping = (value: unknown): value is ThreadMapping =>
   isObject(value) &&
   isNonEmptyString(value.threadId) &&
   (value.sessionId === null || isNonEmptyString(value.sessionId)) &&
+  (value.rewind === undefined ||
+    (isObject(value.rewind) &&
+      isNonEmptyString(value.rewind.sessionId) &&
+      (value.rewind.at === null || isNonEmptyString(value.rewind.at)))) &&
   isNonEmptyString(value.model) &&
   (value.effort === null || isNonEmptyString(value.effort)) &&
   isNonEmptyString(value.worktree) &&

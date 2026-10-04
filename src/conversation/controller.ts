@@ -129,6 +129,7 @@ export const createTurnController = <Tag extends string>({
   const materialized = new Set<string>();
   // A thread with an unknown outcome continues only on a new message the user typed after being told, so neither a resent copy of a refused message nor another thread's message counts.
   const refusedForUnknown = new Map<string, Set<string>>();
+  const changingConversations = new Set<string>();
   const waitingTurns = new Map<
     string,
     { threadId: string; request: TurnRequest }
@@ -143,6 +144,10 @@ export const createTurnController = <Tag extends string>({
     fallbackCwd: string | undefined,
   ) => {
     const threadId = params.threadId;
+    if (typeof threadId === "string" && changingConversations.has(threadId)) {
+      refuse(id, "thread_busy");
+      return;
+    }
     if (typeof threadId !== "string") {
       refuse(id, "missing_thread");
       return;
@@ -264,6 +269,11 @@ export const createTurnController = <Tag extends string>({
     messageId: string | null,
     compaction: boolean,
   ) => {
+    if (changingConversations.has(threadId)) {
+      if (id !== null) refuse(id, "thread_busy");
+      forgetMessage(threadId, messageId);
+      return;
+    }
     runtime.threadBusy(threadId);
     const inFlight = turnsInFlight.get(threadId) ?? 0;
     if (inFlight > 0) log({ event: "claude_turn", step: "queued" });
@@ -495,6 +505,17 @@ export const createTurnController = <Tag extends string>({
         if (typedByUser) {
           const refused = refusedForUnknown.get(threadId) ?? new Set();
           refusedForUnknown.set(threadId, refused.add(messageId));
+        }
+        // RPC rejection keeps the App's draft and its client id; accepting a failed turn lets the next typed message have a new identity.
+        if (!request.answered && request.id !== null && typedByUser) {
+          const started = renderTurnStarted({
+            threadId,
+            turnId: request.turnId,
+            cwd: thread.cwd,
+            now: now(),
+          });
+          send({ id: request.id, result: { turn: started.turn } });
+          request.answered = true;
         }
         refuseTurn(request, queued, "outcome_unknown", ran.error);
         return;
@@ -773,7 +794,26 @@ export const createTurnController = <Tag extends string>({
   const reject = ({ id }: Pick<AppRequest, "id">, message: string) =>
     send({ id, error: { code: INVALID_REQUEST, message } });
 
+  const changeConversation = async <T>(
+    threadId: string,
+    change: () => Promise<T>,
+  ): Promise<T | null> => {
+    if (
+      closed ||
+      changingConversations.has(threadId) ||
+      (turnsInFlight.get(threadId) ?? 0) > 0
+    )
+      return null;
+    changingConversations.add(threadId);
+    try {
+      return await change();
+    } finally {
+      changingConversations.delete(threadId);
+    }
+  };
+
   return {
+    changeConversation,
     startTurn,
     compactThread,
     steerTurn,
@@ -797,6 +837,7 @@ export const createTurnController = <Tag extends string>({
     threadOf: threads.threadOf,
     sessionIdOf: threads.sessionIdOf,
     takePicked: threads.takePicked,
+    rewindOf: threads.rewindOf,
     adopt: threads.adopt,
     adoptFork: (threadId: string, thread: Thread, sourceId: string) => {
       threads.adoptFork(threadId, thread, sourceId);

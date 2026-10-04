@@ -1,6 +1,8 @@
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { type InferErr, Result } from "better-result";
+import { ClaudeRecordUnreadable } from "../infra/claude/sdk.boundary.ts";
 import type { readClaudeSession } from "../infra/claude/session.ts";
+import type { RewindPoint } from "../infra/thread-store.ts";
 import {
   type AgentRef,
   buildHistory,
@@ -31,6 +33,7 @@ type Threads = {
   threadOf: (threadId: string) => Thread | undefined;
   sessionIdOf: (threadId: string) => string | null;
   takePicked: (threadId: string) => boolean;
+  rewindOf?: (threadId: string) => RewindPoint | undefined;
 };
 
 type ReadSession = (sessionId: string) => ReturnType<typeof readClaudeSession>;
@@ -68,7 +71,23 @@ export const createHistoryRequests = ({
     if (thread === undefined || sessionId === null) {
       return Promise.resolve(Result.ok([]));
     }
-    const loaded = readSession(sessionId).then(async (read) => {
+    const rewind = threads.rewindOf?.(threadId);
+    const loaded = readSession(sessionId).then(async (original) => {
+      const read = original.andThen((messages) => {
+        if (rewind === undefined) return Result.ok(messages);
+        if (rewind.at === null) return Result.ok([]);
+        const index = messages.findIndex(
+          (message) => message.uuid === rewind.at,
+        );
+        return index < 0
+          ? Result.err(
+              new ClaudeRecordUnreadable({
+                cause: null,
+                message: "the retained Claude record is missing",
+              }),
+            )
+          : Result.ok(messages.slice(0, index + 1));
+      });
       reading.delete(threadId);
       // The app's stream waits on this history, so a fault while reading back the thread's agents leaves them out rather than failing it; the next read tries again.
       if (read.isOk()) {
