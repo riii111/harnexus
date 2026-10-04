@@ -1,9 +1,12 @@
-import { basename, dirname } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   resolveSettings,
   type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result, TaggedError } from "better-result";
+import { readTextFileIfExists } from "../../runtime/fs.boundary.ts";
+import { parseJson } from "../../runtime/json.boundary.ts";
+import { isObject } from "../../runtime/object.ts";
 import { readCommandOutput } from "../../runtime/process.boundary.ts";
 import {
   type Connection,
@@ -11,6 +14,13 @@ import {
   VERTEX_REGION_PREFIX,
 } from "./connection.ts";
 import { type ClaudeSdk, readSettings } from "./sdk.boundary.ts";
+
+class RepositorySettingsUnreadable extends TaggedError(
+  "RepositorySettingsUnreadable",
+)<{
+  path: string;
+  message: string;
+}> {}
 
 class VertexSettingsIncomplete extends TaggedError("VertexSettingsIncomplete")<{
   name: string;
@@ -25,7 +35,7 @@ class VertexGatewayUnsupported extends TaggedError("VertexGatewayUnsupported")<{
 type RepositoryOf = (worktree: string) => Promise<string | null>;
 
 // Only a repository's own Claude Code settings choose Vertex, so a Vertex login in the user's settings never moves every repository; a setting that cannot be read stops the turn rather than falling back to the subscription.
-// Claude Code reads settings from the directory it runs in, and a worktree the app created has no copy of the untracked settings.local.json, so the repository the worktree belongs to is read next.
+// Claude Code reads settings from the directory it runs in, and a worktree the app created has no copy of the untracked settings.local.json, so the repository's settings sit under the worktree's own in the same order Claude Code ranks shared and local settings.
 export const createConnectionResolver = ({
   resolve = resolveSettings,
   repositoryOf = gitRepositoryOf,
@@ -45,21 +55,47 @@ export const createConnectionResolver = ({
 
   return (worktree: string) =>
     Result.gen(async function* () {
-      const own = yield* Result.await(
-        readSettings(resolve, worktree, REPOSITORY_SOURCES),
-      );
-      if (choosesVertex(own.env ?? {})) return vertexFrom(own.env ?? {});
       const repository = await repositoryFor(worktree);
-      if (repository === null || repository === worktree) {
-        return Result.ok<Connection>(SUBSCRIPTION_CONNECTION);
+      const env: Record<string, string> = {};
+      for (const [dir, source] of layersOf(worktree, repository)) {
+        yield* Result.await(checkReadable(dir, source));
+        const read = yield* Result.await(readSettings(resolve, dir, [source]));
+        Object.assign(env, read.env ?? {});
       }
-      const shared = yield* Result.await(
-        readSettings(resolve, repository, REPOSITORY_SOURCES),
-      );
-      return choosesVertex(shared.env ?? {})
-        ? vertexFrom(shared.env ?? {})
+      return choosesVertex(env)
+        ? vertexFrom(env)
         : Result.ok<Connection>(SUBSCRIPTION_CONNECTION);
     });
+};
+
+const layersOf = (
+  worktree: string,
+  repository: string | null,
+): [string, SettingSource][] =>
+  repository === null || repository === worktree
+    ? [
+        [worktree, "project"],
+        [worktree, "local"],
+      ]
+    : [
+        [repository, "project"],
+        [worktree, "project"],
+        [repository, "local"],
+        [worktree, "local"],
+      ];
+
+// The SDK reads a settings file it cannot parse as having no settings, which would leave a Vertex repository on the subscription.
+const checkReadable = async (dir: string, source: SettingSource) => {
+  const path = join(dir, ".claude", SETTINGS_FILES[source]);
+  const text = await readTextFileIfExists(path);
+  return text.isOk() && (text.value === null || isSettingsText(text.value))
+    ? Result.ok()
+    : Result.err(
+        new RepositorySettingsUnreadable({
+          path,
+          message: `harnexus cannot read the Claude Code settings in ${path}, so nothing was sent to Claude`,
+        }),
+      );
 };
 
 const vertexFrom = (
@@ -100,6 +136,11 @@ const vertexFrom = (
   });
 };
 
+const isSettingsText = (text: string) => {
+  const parsed = parseJson(text);
+  return parsed.isOk() && isObject(parsed.value);
+};
+
 const choosesVertex = (env: Record<string, string>) =>
   TRUTHY.has((env.CLAUDE_CODE_USE_VERTEX ?? "").toLowerCase());
 
@@ -122,7 +163,11 @@ const gitRepositoryOf: RepositoryOf = async (worktree) => {
   return basename(common) === ".git" ? dirname(common) : null;
 };
 
-const REPOSITORY_SOURCES: SettingSource[] = ["project", "local"];
+const SETTINGS_FILES: Record<SettingSource, string> = {
+  user: "settings.json",
+  project: "settings.json",
+  local: "settings.local.json",
+};
 
 const TRUTHY = new Set(["1", "true", "yes", "on"]);
 

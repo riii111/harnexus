@@ -125,9 +125,10 @@ harnexus never falls back to your subscription or another billing route. The fai
 | `Could not load Google Cloud credentials` | Run `gcloud auth application-default login`, or check `GOOGLE_APPLICATION_CREDENTIALS`. |
 | `model not found` (404) | Enable the model in Model Garden, check that it is offered in your region, or pin another model. |
 | `429` or a quota error | Request more quota in the Google Cloud console, or try the `global` region. |
+| `harnexus cannot read the Claude Code settings in …` | Fix the JSON in the file it names. |
 | `… choose Google Vertex AI without …` | Add the named variable to the repository's Claude Code settings. |
 | `… which harnexus does not support` | Remove the gateway variable it names; Vertex AI gateways are not supported. |
-| `Claude settings must not set …` | Remove the named variables from your user settings, or make them match the repository's settings. |
+| `Claude Code user settings must not set …` or `Claude settings must not set …` | Remove the named variables from `~/.claude/settings.json`, or make them match the repository's settings. |
 | `Claude Code did not report Google Vertex AI …` | Check that no other provider variable reaches Claude Code, then send the message again. |
 
 ## Optional Settings

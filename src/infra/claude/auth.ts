@@ -75,6 +75,20 @@ export const checkSettingsEnv = (
   );
 };
 
+// Vertex in the user's settings would apply to every repository, so it is refused even when a repository's settings repeat it.
+export const checkUserSettingsEnv = (env: Record<string, string>) => {
+  const names = Object.keys(env).filter(
+    (name) => API_BILLING_ENV.has(name) || isVertexEnv(name),
+  );
+  if (names.length === 0) return Result.ok();
+  return Result.err(
+    new ClaudeSettingsOverrideAuth({
+      names,
+      message: `Claude Code user settings must not set ${names.join(", ")}; set Google Vertex AI in each repository's Claude Code settings instead`,
+    }),
+  );
+};
+
 // Claude Code reports the provider from its configuration without asking Google Cloud, so this confirms where requests go, not that the credentials work.
 export const checkAccount = (account: AccountInfo, connection: Connection) => {
   if (connection.provider === "subscription") return checkSubscription(account);

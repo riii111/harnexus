@@ -24,6 +24,7 @@ import {
   checkAccount,
   checkSettingsEnv,
   checkSubscription,
+  checkUserSettingsEnv,
   connectionEnv,
   type Env,
   withoutApiBilling,
@@ -95,6 +96,12 @@ export const startClaudeSession = (
       readSettings(runtime.resolveSettings, settings.cwd, SETTING_SOURCES),
     );
     yield* checkSettingsEnv(resolved.env ?? {}, settings.connection);
+    if (settings.connection.provider === "vertex") {
+      const user = yield* Result.await(
+        readSettings(runtime.resolveSettings, settings.cwd, USER_SETTINGS),
+      );
+      yield* checkUserSettingsEnv(user.env ?? {});
+    }
     if (signal?.aborted) return Result.err(sessionStartCancelled());
     const prompt = createPromptQueue();
     const claude = yield* openQuery(

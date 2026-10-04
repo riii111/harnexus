@@ -253,6 +253,36 @@ describe("startClaudeSession Vertex connection", () => {
     expect(claude.started()).toBe(false);
   });
 
+  test("stops before starting Claude when the user's settings choose Vertex, even with the repository's values", async () => {
+    const claude = fakeClaude(
+      { apiProvider: "vertex" },
+      { settingsEnv: VERTEX.env, userSettingsEnv: VERTEX.env },
+    );
+
+    const started = await startClaudeSession(VERTEX_SETTINGS, claude.runtime);
+
+    expect(started.isErr() && started.error).toMatchObject({
+      _tag: "ClaudeSettingsOverrideAuth",
+      names: [
+        "CLAUDE_CODE_USE_VERTEX",
+        "ANTHROPIC_VERTEX_PROJECT_ID",
+        "CLOUD_ML_REGION",
+      ],
+    });
+    expect(claude.started()).toBe(false);
+  });
+
+  test("starts when only the repository's settings repeat its Vertex values", async () => {
+    const claude = fakeClaude(
+      { apiProvider: "vertex" },
+      { settingsEnv: VERTEX.env, userSettingsEnv: {} },
+    );
+
+    const started = await startClaudeSession(VERTEX_SETTINGS, claude.runtime);
+
+    expect(started.isOk()).toBe(true);
+  });
+
   test("refuses Vertex on a repository left on the subscription", async () => {
     const claude = fakeClaude({ apiProvider: "vertex" });
 

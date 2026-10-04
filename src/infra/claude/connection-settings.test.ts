@@ -84,17 +84,7 @@ describe("createConnectionResolver", () => {
     await mkdir(repository);
     for (const args of [
       ["init", "-q"],
-      [
-        "-c",
-        "user.name=t",
-        "-c",
-        "user.email=t@example.com",
-        "commit",
-        "-q",
-        "--allow-empty",
-        "-m",
-        "init",
-      ],
+      [...AUTHOR, "commit", "-q", "--allow-empty", "-m", "init"],
       ["worktree", "add", "-q", "--detach", worktree],
     ]) {
       expect(Bun.spawnSync(["git", "-C", repository, ...args]).exitCode).toBe(
@@ -107,6 +97,53 @@ describe("createConnectionResolver", () => {
     const connection = await resolve(worktree);
 
     expect(connection.isOk() && connection.value).toEqual(VERTEX);
+  });
+
+  test("completes a worktree's shared Vertex settings with the repository's local ones", async () => {
+    const repository = join(dir, "side");
+    const worktree = join(dir, "worktrees", "side");
+    await mkdir(repository);
+    await writeSettings(repository, "settings.json", {
+      env: { CLAUDE_CODE_USE_VERTEX: "1" },
+    });
+    for (const args of [
+      ["init", "-q"],
+      ["add", ".claude/settings.json"],
+      [...AUTHOR, "commit", "-q", "-m", "init"],
+      ["worktree", "add", "-q", "--detach", worktree],
+    ]) {
+      expect(Bun.spawnSync(["git", "-C", repository, ...args]).exitCode).toBe(
+        0,
+      );
+    }
+    await writeSettings(repository, "settings.local.json", {
+      env: {
+        ANTHROPIC_VERTEX_PROJECT_ID: "sidework-project",
+        CLOUD_ML_REGION: "global",
+      },
+    });
+    const resolve = createConnectionResolver();
+
+    const connection = await resolve(worktree);
+
+    expect(connection.isOk() && connection.value).toEqual(VERTEX);
+  });
+
+  test.each([
+    { name: "not JSON", content: "{" },
+    { name: "not an object", content: "[]" },
+  ])("stops on a settings file that is $name rather than using the subscription", async ({
+    content,
+  }) => {
+    await mkdir(join(dir, ".claude"), { recursive: true });
+    await writeFile(join(dir, ".claude", "settings.local.json"), content);
+    const resolve = createConnectionResolver({ repositoryOf: noRepository });
+
+    const connection = await resolve(dir);
+
+    expect(connection.isErr() && connection.error._tag).toBe(
+      "RepositorySettingsUnreadable",
+    );
   });
 
   test("reads an edited settings file on the next call", async () => {
@@ -182,6 +219,8 @@ const writeSettings = async (root: string, file: string, content: object) => {
 };
 
 const noRepository = async () => null;
+
+const AUTHOR = ["-c", "user.name=t", "-c", "user.email=t@example.com"];
 
 const VERTEX_ENV = {
   CLAUDE_CODE_USE_VERTEX: "1",
