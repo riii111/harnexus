@@ -424,6 +424,7 @@ export const createClaudeRuntime = ({
     if (
       turn.recovering &&
       turn.record.sessionId === null &&
+      threads.sessionIdOf(turn.threadId) === null &&
       turn.record.rewind === undefined
     ) {
       turn.fail(

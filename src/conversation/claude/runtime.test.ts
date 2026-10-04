@@ -1241,6 +1241,28 @@ describe("canceling Claude session startup", () => {
 });
 
 describe("session ids", () => {
+  test("recovers an unsaved session id from the same process after an unsettled write", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    let unsettled = true;
+    const started = await harness([first, second], {
+      unsettledWrite: () => unsettled,
+      files: {
+        writeState: (path, content) =>
+          content.includes('"se-1"')
+            ? diskFull(path)
+            : writeFileAtomic(path, content),
+      },
+    });
+    await completeTurn(started.turns, started.sent, first, 10);
+    await until(() => started.store.get(THREAD)?.runState === "outcomeUnknown");
+    unsettled = false;
+    await completeTurn(started.turns, started.sent, second, 11, "fresh-input");
+    expect(started.settings[1]).toMatchObject({ resume: "se-1" });
+    expect(completedTurns(started.sent)[1]?.status).toBe("completed");
+    expect(started.store.get(THREAD)?.runState).toBe("idle");
+  });
+
   test("keeps an unknown turn blocked after its initial session id was not saved and the App restarted", async () => {
     const first = fakeClaude(SUBSCRIPTION);
     const before = await harness([first], {
