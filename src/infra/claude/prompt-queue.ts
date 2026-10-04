@@ -50,7 +50,7 @@ export const createPromptQueue = () => {
 };
 
 // Images come first, as Claude reads a question best after the image it asks about; the typed text is the first text block and attachments follow it, so the record keeps the typed text apart from what the bridge added.
-// Claude refuses an empty text block, so a message of images alone carries no text; attachments come only from links in the typed text, so they never stand first.
+// Claude refuses an empty text block, so a message of images alone carries no text.
 const userMessage = ({ text, images = [], attachments = [] }: Prompt) =>
   ({
     type: "user",
