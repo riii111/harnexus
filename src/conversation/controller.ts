@@ -796,7 +796,6 @@ export const createTurnController = <Tag extends string>({
       typeof threadId === "string" && threads.threadOf(threadId) !== undefined,
     threadOf: threads.threadOf,
     sessionIdOf: threads.sessionIdOf,
-    connectionOf: threads.connectionOf,
     takePicked: threads.takePicked,
     adopt: threads.adopt,
     adoptFork: (threadId: string, thread: Thread, sourceId: string) => {

@@ -29,6 +29,7 @@ import {
   useTempDir,
   VERTEX,
   VERTEX_ACCOUNT,
+  VERTEX_MODEL,
 } from "../testing/harness.ts";
 
 useTempDir();
@@ -294,6 +295,7 @@ describe("/session", () => {
     const claude = fakeClaude(VERTEX_ACCOUNT);
     const { turns, sent } = await harness([claude], {
       resolveConnection: async () => Result.ok(VERTEX),
+      model: VERTEX_MODEL,
     });
     await completeTurn(turns, sent, claude, 10);
 
@@ -324,6 +326,7 @@ describe("/session", () => {
     const claude = fakeClaude(VERTEX_ACCOUNT);
     const { turns, sent } = await harness([claude], {
       resolveConnection: async () => Result.ok(pinned),
+      model: VERTEX_MODEL,
     });
     await completeTurn(turns, sent, claude, 10);
 
@@ -342,6 +345,7 @@ describe("/session", () => {
     const claude = fakeClaude(VERTEX_ACCOUNT);
     const { turns, sent } = await harness([claude], {
       resolveConnection: async () => Result.ok(VERTEX),
+      model: VERTEX_MODEL,
     });
 
     turns.startTurn(turnStart(10, "/session"), undefined);
@@ -360,6 +364,7 @@ describe("/session", () => {
     const claude = fakeClaude(VERTEX_ACCOUNT);
     const { turns, sent } = await harness([claude], {
       resolveConnection: async () => Result.ok(current),
+      model: VERTEX_MODEL,
     });
     await completeTurn(turns, sent, claude, 10);
     current = SUBSCRIPTION_CONNECTION;
@@ -391,6 +396,7 @@ describe("/switch-connection", () => {
     const second = fakeClaude(VERTEX_ACCOUNT);
     const { turns, sent, settings, store } = await harness([first, second], {
       resolveConnection: async () => Result.ok(current),
+      model: VERTEX_MODEL,
     });
     await completeTurn(turns, sent, first, 10);
     current = {
@@ -428,6 +434,7 @@ describe("/switch-connection", () => {
     let refuse = false;
     const { turns, sent, store } = await harness([claude], {
       resolveConnection: async () => Result.ok(current),
+      model: VERTEX_MODEL,
       files: {
         writeState: async (target, content) =>
           refuse ? diskFull(target) : writeFileAtomic(target, content),
@@ -451,6 +458,7 @@ describe("/switch-connection", () => {
     const claude = fakeClaude(VERTEX_ACCOUNT);
     const { turns, sent, store } = await harness([claude], {
       resolveConnection: async () => Result.ok(VERTEX),
+      model: VERTEX_MODEL,
     });
     await completeTurn(turns, sent, claude, 10);
 

@@ -25,6 +25,11 @@ export const connectionChangedText = (
 ) =>
   `This chat runs on ${describe(saved)}, but this repository's Claude Code settings now choose ${describe(configured)}, so nothing was sent to Claude. To keep this chat where it is, restore the setting; to move it, send /switch-connection.`;
 
+export const connectionNotPickedText = (repositoryOnVertex: boolean) =>
+  repositoryOnVertex
+    ? "This repository's Claude Code settings choose Google Vertex AI, so pick a model marked · Vertex AI. Nothing was sent to Claude."
+    : "This repository's Claude Code settings do not choose Google Vertex AI, so a model marked · Vertex AI cannot run here. Pick another model, or set Google Vertex AI in the repository's Claude Code settings. Nothing was sent to Claude.";
+
 export const switchedText = (to: ConnectionView) =>
   `This chat now follows this repository's Claude Code settings: ${describe(to)}. Your next message starts Claude there, and Claude Code confirms the provider before anything is sent.`;
 

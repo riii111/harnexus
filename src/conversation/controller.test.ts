@@ -54,6 +54,7 @@ import {
   useTempDir,
   VERTEX,
   VERTEX_ACCOUNT,
+  VERTEX_MODEL,
   withEffort,
   withMessageId,
 } from "./testing/harness.ts";
@@ -1183,6 +1184,7 @@ describe("several workers", () => {
     const { settings } = await twoWorkers([first, second], {
       resolveConnection: async (worktree) =>
         Result.ok(worktree === dir ? VERTEX : SUBSCRIPTION_CONNECTION),
+      model: VERTEX_MODEL,
     });
 
     await until(() => second.started());

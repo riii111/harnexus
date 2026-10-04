@@ -287,6 +287,11 @@ describe("model/list", () => {
       "claude-sonnet-5~vertex",
       "claude-haiku-4-5~vertex",
     ]);
+    expect(out.result.data[4]).toMatchObject({
+      model: "claude-opus-5-5~vertex",
+      displayName: "Claude Opus 5.5 · Vertex AI",
+      hidden: false,
+    });
     expect(out.result.data[1]).toMatchObject({
       model: "claude-opus-5-5",
       hidden: false,
@@ -357,7 +362,7 @@ describe("model/list", () => {
       ["claude-opus-5-5", true],
       ["claude-sonnet-5", true],
       ["claude-haiku-4-5", true],
-      ["claude-sonnet-5-5~vertex", true],
+      ["claude-sonnet-5-5~vertex", false],
       ["claude-opus-5-5~vertex", true],
       ["claude-sonnet-5~vertex", true],
       ["claude-haiku-4-5~vertex", true],
@@ -1145,89 +1150,6 @@ describe("app responses", () => {
   });
 });
 
-describe("a Claude thread on Google Vertex AI", () => {
-  test("lists a hidden twin of each Claude model named after the provider", async () => {
-    const { router } = setup();
-
-    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
-    const out = parse(await router.fromServer(modelList(2, null)));
-
-    expect(
-      out.result.data.find(
-        (model: { id: string }) => model.id === "claude-sonnet-5~vertex",
-      ),
-    ).toMatchObject({
-      model: "claude-sonnet-5~vertex",
-      displayName: "Claude Sonnet 5 · Vertex AI",
-      hidden: true,
-    });
-  });
-
-  test.each([
-    { name: "Vertex AI", provider: "vertex", expected: `${CLAUDE}~vertex` },
-    { name: "the subscription", provider: "subscription", expected: CLAUDE },
-  ])("is reopened under the model shown for $name", async ({
-    provider,
-    expected,
-  }) => {
-    const { router, connections } = setup(["th-claude"]);
-    connections.set("th-claude", { provider });
-
-    router.fromApp(
-      encode({
-        id: 4,
-        method: "thread/resume",
-        params: { threadId: "th-claude" },
-      }),
-    );
-    const out = parse(await router.fromServer(threadResponse(4, "th-claude")));
-
-    expect([out.result.model, out.result.thread.model]).toEqual([
-      expected,
-      expected,
-    ]);
-  });
-
-  test("is named under its Vertex model in the server's settings notice", async () => {
-    const { router, connections } = setup(["th-claude"]);
-    connections.set("th-claude", { provider: "vertex" });
-
-    const out = parse(await router.fromServer(settingsNotice("default")));
-
-    const settings = out.params.threadSettings;
-    expect([settings.model, settings.collaborationMode.settings.model]).toEqual(
-      [`${CLAUDE}~vertex`, `${CLAUDE}~vertex`],
-    );
-  });
-
-  test.each<{ name: string; change: object; expected: unknown[][] }>([
-    {
-      name: "keeps the model when the app sends back the one it was shown",
-      change: {
-        model: `${CLAUDE}~vertex`,
-        collaborationMode: {
-          mode: "default",
-          settings: { model: `${CLAUDE}~vertex` },
-        },
-      },
-      expected: [],
-    },
-    {
-      name: "moves to the Claude model under another shown twin",
-      change: { model: `${OTHER_CLAUDE}~vertex` },
-      expected: [["changeModel", "th-claude", OTHER_CLAUDE]],
-    },
-  ])("$name", ({ change, expected }) => {
-    const { router, calls, connections } = setup(["th-claude"]);
-    connections.set("th-claude", { provider: "vertex" });
-
-    const forwarded = router.fromApp(settingsUpdate(change));
-
-    expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
-    expect(calls.filter(([name]) => name !== "selectMode")).toEqual(expected);
-  });
-});
-
 describe("thread/settings/update", () => {
   // The app sends its previous collaboration mode along with the model just picked, as observed with App 26.924.
   test("keeps the thread's model picked again over a stale collaboration mode", () => {
@@ -1943,7 +1865,6 @@ const setup = (
     log: (event) => events.push(event),
   });
   const modes = new Map<string, Mode>();
-  const connections = new Map<string, { provider: string }>();
   const efforts = new Map<string, EffortLevel>();
   const catalog = createModelCatalog();
   const rule = effortRule({}, catalog.effortsOf);
@@ -2009,7 +1930,6 @@ const setup = (
       },
       effortOf,
       effortRule: rule,
-      connectionOf: (threadId) => connections.get(threadId) ?? null,
     },
     (event) => events.push(event),
     (source, threadId) => calls.push(["delegated", source, threadId]),
@@ -2029,7 +1949,6 @@ const setup = (
     pinFork,
     subagents,
     serverCalls,
-    connections,
   };
 };
 

@@ -19,6 +19,7 @@ import {
   createModelCatalog,
   type EffortRule,
   effortRule,
+  vertexModelId,
 } from "../../infra/claude/models.ts";
 import {
   type ClaudeSessionSettings,
@@ -175,6 +176,8 @@ export const MODEL = "claude-sonnet-5";
 
 export const OTHER_MODEL = "claude-opus-5-5";
 
+export const VERTEX_MODEL = vertexModelId(MODEL);
+
 export const BUILT_IN_EFFORTS = createModelCatalog().effortsOf;
 
 export const defaultRule = effortRule({}, BUILT_IN_EFFORTS);
@@ -204,6 +207,7 @@ export const harness = async (
   fakes: ReturnType<typeof fakeClaude>[],
   {
     adopt = true,
+    model = MODEL,
     files = {},
     beforeStart = Promise.resolve(),
     onSend = () => {},
@@ -225,6 +229,7 @@ export const harness = async (
     now = () => 1_700_000_000_000,
   }: {
     adopt?: boolean;
+    model?: string;
     files?: Parameters<typeof openThreadStore>[1];
     beforeStart?: Promise<void>;
     onSend?: (message: Sent) => void;
@@ -356,7 +361,7 @@ export const harness = async (
     newTurnId: () => `turn-${++turnCount}`,
     effortRule,
   });
-  if (adopt) turns.adopt(THREAD, { model: MODEL, cwd: dir });
+  if (adopt) turns.adopt(THREAD, { model, cwd: dir });
   turnRuns.set(turns, runs);
   return {
     turns,

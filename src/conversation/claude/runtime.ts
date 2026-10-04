@@ -17,7 +17,11 @@ import {
   sameTarget,
   targetOf,
 } from "../../infra/claude/connection.ts";
-import type { EffortRule } from "../../infra/claude/models.ts";
+import {
+  baseModelId,
+  type EffortRule,
+  isVertexModel,
+} from "../../infra/claude/models.ts";
 import type {
   ClaudeSessionSettings,
   claudeSessionExists,
@@ -29,6 +33,7 @@ import type { ThreadRecord } from "../../infra/thread-store.ts";
 import {
   connectionChangedText,
   connectionNoticeText,
+  connectionNotPickedText,
 } from "../../presentation/connection.ts";
 import { promptFor } from "../../presentation/permission.ts";
 import {
@@ -126,6 +131,7 @@ type ClaudeFailureTag =
   | ForkPointUnknown["_tag"]
   | ConnectionChanged["_tag"]
   | ConnectionNotSaved["_tag"]
+  | ConnectionNotPicked["_tag"]
   | ErrorTag<ReturnType<ResolveConnection>>
   | "SteerUnconfirmed";
 
@@ -240,6 +246,10 @@ class ForkPointUnknown extends TaggedError("ForkPointUnknown")<{
 }> {}
 
 class ConnectionChanged extends TaggedError("ConnectionChanged")<{
+  message: string;
+}> {}
+
+class ConnectionNotPicked extends TaggedError("ConnectionNotPicked")<{
   message: string;
 }> {}
 
@@ -695,11 +705,20 @@ export const createClaudeRuntime = ({
   ): Promise<
     Result<
       Connection,
-      ConnectionChanged | InferErr<Awaited<ReturnType<ResolveConnection>>>
+      | ConnectionChanged
+      | ConnectionNotPicked
+      | InferErr<Awaited<ReturnType<ResolveConnection>>>
     >
   > => {
     const configured = await resolveConnection(turn.record.worktree);
     if (configured.isErr()) return configured;
+    // The model picked says which connection the user expects, and the repository's settings must agree, so neither moves a chat to a billing route on its own.
+    const onVertex = configured.value.provider === "vertex";
+    if (isVertexModel(turn.model) !== onVertex) {
+      return Result.err(
+        new ConnectionNotPicked({ message: connectionNotPickedText(onVertex) }),
+      );
+    }
     const saved = threads.connectionOf(turn.threadId);
     const target = targetOf(configured.value);
     if (saved === null || sameTarget(saved, target)) return configured;
@@ -1219,7 +1238,7 @@ export const createClaudeRuntime = ({
     const starting = startSession(
       {
         cwd: record.worktree,
-        model,
+        model: baseModelId(model),
         connection,
         permissionMode:
           turn.input.permissionMode === "plan" ? "plan" : permissionMode,

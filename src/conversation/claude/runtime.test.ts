@@ -60,6 +60,7 @@ import {
   useTempDir,
   VERTEX,
   VERTEX_ACCOUNT,
+  VERTEX_MODEL,
   withEffort,
 } from "../testing/harness.ts";
 
@@ -1268,6 +1269,7 @@ describe("repository connections", () => {
     const claude = fakeClaude(VERTEX_ACCOUNT);
     const { turns, sent, store, settings, events } = await harness([claude], {
       resolveConnection: async () => Result.ok(VERTEX),
+      model: VERTEX_MODEL,
     });
 
     await completeTurn(turns, sent, claude, 10);
@@ -1303,6 +1305,7 @@ describe("repository connections", () => {
     const first = fakeClaude(VERTEX_ACCOUNT);
     const before = await harness([first], {
       resolveConnection: async () => Result.ok(VERTEX),
+      model: VERTEX_MODEL,
     });
     await completeTurn(before.turns, before.sent, first, 10);
     await until(() => before.store.get(THREAD)?.runState === "idle");
@@ -1310,6 +1313,7 @@ describe("repository connections", () => {
 
     const after = await harness([second], {
       resolveConnection: async () => Result.ok(VERTEX),
+      model: VERTEX_MODEL,
     });
     await completeTurn(after.turns, after.sent, second, 11);
 
@@ -1322,45 +1326,32 @@ describe("repository connections", () => {
     });
   });
 
-  test.each([
-    {
-      name: "the subscription",
-      configured: SUBSCRIPTION_CONNECTION,
-      expected: "your Claude subscription",
-    },
-    {
-      name: "another Google Cloud project",
-      configured: {
-        ...VERTEX,
-        projectId: "other-project",
-        env: { ...VERTEX.env, ANTHROPIC_VERTEX_PROJECT_ID: "other-project" },
-      },
-      expected: "project `other-project`",
-    },
-  ])("refuse a turn without reaching Claude once the repository's settings choose $name", async ({
-    configured,
-    expected,
-  }) => {
+  test("refuse a turn without reaching Claude once the repository's settings choose another Google Cloud project", async () => {
     let current: Connection = VERTEX;
     const first = fakeClaude(VERTEX_ACCOUNT);
     const second = fakeClaude(SUBSCRIPTION);
     const { turns, sent, settings, events, store } = await harness(
       [first, second],
-      { resolveConnection: async () => Result.ok(current) },
+      {
+        resolveConnection: async () => Result.ok(current),
+        model: VERTEX_MODEL,
+      },
     );
     await completeTurn(turns, sent, first, 10);
-    current = configured;
+    current = {
+      ...VERTEX,
+      projectId: "other-project",
+      env: { ...VERTEX.env, ANTHROPIC_VERTEX_PROJECT_ID: "other-project" },
+    };
 
     turns.startTurn(turnStart(11, "next"), undefined);
     await until(() => completedTurnStatuses(sent).length === 2);
     await settle();
 
-    expect(completedTurns(sent).at(-1)?.error?.message).toContain(expected);
-    expect(completedTurns(sent).at(-1)?.error?.message).toContain(
-      "/switch-connection",
-    );
+    const message = completedTurns(sent).at(-1)?.error?.message;
+    expect(message).toContain("project `other-project`");
+    expect(message).toContain("/switch-connection");
     expect(await promptsUntil(first, 1)).toEqual(["prompt 10"]);
-    expect(first.nextCalls()).toBeGreaterThan(0);
     expect(settings).toHaveLength(1);
     expect(store.get(THREAD)?.connection).toEqual(VERTEX_TARGET);
     expect(events).toContainEqual({
@@ -1369,12 +1360,57 @@ describe("repository connections", () => {
     });
   });
 
+  test.each([
+    {
+      name: "a Vertex AI model where the repository's settings do not choose Vertex AI",
+      model: VERTEX_MODEL,
+      configured: SUBSCRIPTION_CONNECTION,
+      expected: "do not choose Google Vertex AI",
+    },
+    {
+      name: "a subscription model where the repository's settings choose Vertex AI",
+      model: MODEL,
+      configured: VERTEX,
+      expected: "pick a model marked · Vertex AI",
+    },
+  ])("refuse $name without starting Claude", async ({
+    model,
+    configured,
+    expected,
+  }) => {
+    const claude = fakeClaude(VERTEX_ACCOUNT);
+    const { turns, sent, store } = await harness([claude], {
+      resolveConnection: async () => Result.ok(configured),
+      model,
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnCompleted(sent)?.error?.message).toContain(expected);
+    expect(claude.started()).toBe(false);
+    expect(store.get(THREAD)?.connection).toBeNull();
+  });
+
+  test("start Claude on the picked model without the Vertex AI mark", async () => {
+    const claude = fakeClaude(VERTEX_ACCOUNT);
+    const { turns, sent, settings } = await harness([claude], {
+      resolveConnection: async () => Result.ok(VERTEX),
+      model: VERTEX_MODEL,
+    });
+
+    await completeTurn(turns, sent, claude, 10);
+
+    expect(settings[0]?.model).toBe(MODEL);
+  });
+
   test("send nothing to Claude while the confirmed connection cannot be saved, and confirm it on the next turn", async () => {
     const first = fakeClaude(VERTEX_ACCOUNT);
     const second = fakeClaude(VERTEX_ACCOUNT);
     let refuse = true;
     const { turns, sent, store, events } = await harness([first, second], {
       resolveConnection: async () => Result.ok(VERTEX),
+      model: VERTEX_MODEL,
       files: {
         writeState: async (target, content) =>
           refuse && content.includes('"provider"')
@@ -1412,6 +1448,7 @@ describe("repository connections", () => {
     const second = fakeClaude(VERTEX_ACCOUNT);
     const { turns, sent, settings } = await harness([first, second], {
       resolveConnection: async () => Result.ok(current),
+      model: VERTEX_MODEL,
     });
     await completeTurn(turns, sent, first, 10);
     current = {
@@ -1450,6 +1487,7 @@ describe("repository connections", () => {
       resolveConnection: createConnectionResolver({
         repositoryOf: async () => null,
       }),
+      model: VERTEX_MODEL,
     });
 
     await completeTurn(turns, sent, claude, 10);
@@ -1472,6 +1510,7 @@ describe("repository connections", () => {
       resolveConnection: createConnectionResolver({
         repositoryOf: async () => null,
       }),
+      model: VERTEX_MODEL,
     });
 
     turns.startTurn(turnStart(10, "hello"), undefined);
@@ -1489,6 +1528,7 @@ describe("repository connections", () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, store } = await harness([claude], {
       resolveConnection: async () => Result.ok(VERTEX),
+      model: VERTEX_MODEL,
     });
 
     turns.startTurn(turnStart(10, "hello"), undefined);

@@ -90,7 +90,7 @@ HARNEXUS_UNVERIFIED_CODEX=pause bun run open-app
 
 ## Use Google Vertex AI for a repository
 
-Chats use your Claude subscription unless a repository's own Claude Code settings choose Google Vertex AI. If `claude` in a terminal already runs on Vertex AI in that repository through its `.claude/settings.local.json` or `.claude/settings.json`, harnexus does the same with no extra setup:
+The model picker lists each Claude model twice: as is for your Claude subscription, and marked `· Vertex AI`, such as `Claude Opus 5.5 · Vertex AI`, for Google Vertex AI. A `· Vertex AI` model runs in repositories whose own Claude Code settings choose Vertex AI. If `claude` in a terminal already runs on Vertex AI in a repository through its `.claude/settings.local.json` or `.claude/settings.json`, that is all it needs:
 
 ```json
 {
@@ -114,7 +114,7 @@ For the Google Cloud side, follow [Claude Code on Google Vertex AI](https://code
 - **First reply**: Before Claude's first reply, harnexus shows the provider Claude Code reported and the Google Cloud project and region from the repository's settings. Claude Code reports the provider without contacting Google Cloud, so the note does not confirm your credentials or the billing account. Chats on your subscription show no note.
 - **`/session`**: Shows the connection again, with a terminal command that resumes the conversation on the same project and region.
 - **Changed settings**: A chat keeps the provider, project and region it started on. If the repository's settings change them later, harnexus stops before sending your next message and tells you what changed. Restore the setting to continue as before, or send `/switch-connection` to move the chat.
-- **Models**: The model picker lists the same Claude models for every repository, since the app asks for one list for all of them. Once Claude Code confirms Vertex AI for a chat, the chat's model is named with `· Vertex AI`, such as `Claude Opus 5.5 · Vertex AI`; the app shows the new name when it next loads the chat. In a Vertex chat, pick a model enabled in your project.
+- **Picking a model**: In a repository whose settings choose Vertex AI, pick a `· Vertex AI` model that is enabled in your project; elsewhere, pick one without the mark. A mismatch stops before anything is sent and says which to pick.
 
 ### When something fails
 
