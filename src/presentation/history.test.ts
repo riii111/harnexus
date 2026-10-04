@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { buildHistory, replayHistory } from "./history.ts";
 import type { ThreadItem } from "./protocol.ts";
+import { RECOVERY_CONTEXT, RECOVERY_NOTICE } from "./recovery.ts";
 import {
   conversation,
   prompt,
@@ -12,6 +13,57 @@ import {
 } from "./testing/session-record.ts";
 
 describe("buildHistory", () => {
+  test.each([
+    {
+      name: "typed text",
+      content: [text("continue")],
+      expected: [{ type: "text", text: "continue", text_elements: [] }],
+    },
+    {
+      name: "an image alone",
+      content: [
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: "iVBORw0KGgo=",
+          },
+        },
+      ],
+      expected: [{ type: "image", url: "data:image/png;base64,iVBORw0KGgo=" }],
+    },
+  ])("restores a recovery notice while keeping $name separate from the recovery instructions", ({
+    content,
+    expected,
+  }) => {
+    const [turn] = build([
+      {
+        ...prompt("recovery", ""),
+        message: {
+          role: "user",
+          content: [...content, text(RECOVERY_CONTEXT)],
+        },
+      },
+      reply("answer", "msg", text("done"), "end_turn"),
+      prompt("normal", "next"),
+    ]);
+    expect(turn?.items.map(({ item }) => item.type)).toEqual([
+      "userMessage",
+      "agentMessage",
+      "agentMessage",
+    ]);
+    expect(turn?.items[0]?.item).toMatchObject({ content: expected });
+    expect(turn?.items[1]?.item).toMatchObject({
+      text: RECOVERY_NOTICE,
+      phase: "commentary",
+    });
+    expect(turn?.items[2]?.item).toMatchObject({
+      text: "done",
+      phase: "final_answer",
+    });
+  });
+
   test("replays the items a live turn shows, in the order Claude produced them", () => {
     const [first] = build(conversation());
 

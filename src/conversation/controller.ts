@@ -7,9 +7,11 @@ import { delegatedMessage } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { ThreadRecord, ThreadStore } from "../infra/thread-store.ts";
 import type { UserInput } from "../presentation/protocol.ts";
+import { RECOVERY_NOTICE } from "../presentation/recovery.ts";
 import {
   markInterrupting,
   type Rendered,
+  renderNotice,
   renderToolOutput,
   renderTurnCompleted,
   renderTurnStarted,
@@ -95,9 +97,14 @@ type TurnRequest = {
   answered: boolean;
   stopped: boolean;
   compaction: boolean;
+  allowRecovery: boolean;
 };
 
 class LinkWriteUnsettled extends TaggedError("LinkWriteUnsettled")<{
+  message: string;
+}> {}
+
+class RecoveryNotStarted extends TaggedError("RecoveryNotStarted")<{
   message: string;
 }> {}
 
@@ -129,8 +136,6 @@ export const createTurnController = <Tag extends string>({
   // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
   const modes = new Map<string, Mode>();
   const materialized = new Set<string>();
-  // A thread with an unknown outcome continues only on a new message the user typed after being told, so neither a resent copy of a refused message nor another thread's message counts.
-  const refusedForUnknown = new Map<string, Set<string>>();
   const changingConversations = new Set<string>();
   const waitingTurns = new Map<
     string,
@@ -206,7 +211,17 @@ export const createTurnController = <Tag extends string>({
       ),
       startedBy: "app" as const,
     };
-    acceptTurn(id, threadId, checked.thread, turn, messageId, false);
+    acceptTurn(
+      id,
+      threadId,
+      checked.thread,
+      turn,
+      messageId,
+      false,
+      delegated === null &&
+        messageId !== null &&
+        params.turnTrigger !== "safety_buffer_retry",
+    );
   };
 
   // A compaction runs as a turn whose prompt is Claude's /compact, so it waits behind a running turn and meets the same stops and unknown outcomes; the app's empty answer comes on acceptance and the turn's notifications show the rest.
@@ -273,6 +288,7 @@ export const createTurnController = <Tag extends string>({
     turn: TurnInput,
     messageId: string | null,
     compaction: boolean,
+    allowRecovery = false,
   ) => {
     if (changingConversations.has(threadId)) {
       if (id !== null) refuse(id, "thread_busy");
@@ -289,6 +305,7 @@ export const createTurnController = <Tag extends string>({
       answered: compaction || inFlight > 0 || id === null,
       stopped: false,
       compaction,
+      allowRecovery,
     };
     if (inFlight > 0) waitingTurns.set(request.turnId, { threadId, request });
     if (compaction) {
@@ -438,44 +455,52 @@ export const createTurnController = <Tag extends string>({
       }
       threads.markRegistered(threadId);
     }
-    const typedByUser = input.toolOutput === null && messageId !== null;
-    if (
-      typedByUser &&
-      refusedForUnknown.get(threadId)?.has(messageId) === false
-    ) {
-      const cleared = await store.resolveOutcomeUnknown(threadId);
-      if (cleared.isErr()) {
-        forgetMessage(threadId, messageId);
-        refuseTurn(request, queued, "thread_busy", cleared.error);
-        return;
-      }
-      refusedForUnknown.delete(threadId);
-      log({ event: "claude_turn", step: "outcome_cleared" });
-    }
     let responded = false;
-    const ran = await store.runWrite(
+    const ran = await store.runWrite<
+      void,
+      LinkWriteUnsettled | RecoveryNotStarted
+    >(
       threadId,
-      async (record) => {
+      async (record, recovered) => {
         if (closed) {
           forgetMessage(threadId, messageId);
           refuseTurn(request, queued, "bridge_closing");
-          return Result.ok();
+          return recovered
+            ? Result.err(
+                new RecoveryNotStarted({
+                  message: "the bridge closed before recovery started",
+                }),
+              )
+            : Result.ok();
         }
         // Claude could not answer an unsaved requester, and the message id is saved after it so a refused message may be sent again.
         const noted = await recordRequester(threadId, input.requester);
         if (noted.isErr()) {
           forgetMessage(threadId, messageId);
           refuseTurn(request, queued, "requester_not_saved", noted.error);
-          return Result.ok();
+          return recovered
+            ? Result.err(
+                new RecoveryNotStarted({
+                  message: "the requester could not be saved before recovery",
+                }),
+              )
+            : Result.ok();
         }
         // Without the saved id a restart could run the same message again, so the turn does not start.
         const saved = await recordMessage(threadId, messageId);
         if (saved.isErr()) {
           forgetMessage(threadId, messageId);
           refuseTurn(request, queued, "message_not_saved", saved.error);
-          return Result.ok();
+          return recovered
+            ? Result.err(
+                new RecoveryNotStarted({
+                  message: "the message could not be saved before recovery",
+                }),
+              )
+            : Result.ok();
         }
         responded = true;
+        if (recovered) log({ event: "claude_turn", step: "outcome_cleared" });
         materialize(threadId);
         const active = await streamTurn(
           request,
@@ -483,8 +508,15 @@ export const createTurnController = <Tag extends string>({
           thread.model,
           input,
           messageId,
+          recovered,
         );
         release(active);
+        if (recovered && runtime.recordOf(threadId, request.turnId) === null)
+          return Result.err(
+            new RecoveryNotStarted({
+              message: "the recovery prompt was not sent to Claude",
+            }),
+          );
         const link = active.link;
         link?.stopWrites();
         if (link === null || !link.hasUnsettledWrite()) return Result.ok();
@@ -496,33 +528,22 @@ export const createTurnController = <Tag extends string>({
           }),
         );
       },
-      (error) => error._tag === "LinkWriteUnsettled",
+      (error) =>
+        error._tag === "LinkWriteUnsettled" ||
+        error._tag === "RecoveryNotStarted",
+      () => request.allowRecovery && !closed && !request.stopped,
     );
     if (ran.isOk()) return;
-    if (ran.error._tag === "LinkWriteUnsettled") {
+    if (
+      ran.error._tag === "LinkWriteUnsettled" ||
+      ran.error._tag === "RecoveryNotStarted"
+    ) {
       log({ event: "claude_turn", step: "outcome_unknown" });
       return;
     }
     if (!responded) {
       forgetMessage(threadId, messageId);
-      // Re-running could repeat a write that already landed, so the user decides by sending again after being told.
       if (ran.error._tag === "WriteOutcomeUnknown") {
-        if (typedByUser) {
-          const refused = refusedForUnknown.get(threadId) ?? new Set();
-          refusedForUnknown.set(threadId, refused.add(messageId));
-          await runtime.noteUnsent(threadId, request.turnId);
-        }
-        // Recording the warning as an accepted turn separates the next user message from retries of the refused operation.
-        if (!request.answered && request.id !== null && typedByUser) {
-          const started = renderTurnStarted({
-            threadId,
-            turnId: request.turnId,
-            cwd: thread.cwd,
-            now: now(),
-          });
-          send({ id: request.id, result: { turn: started.turn } });
-          request.answered = true;
-        }
         refuseTurn(request, queued, "outcome_unknown", ran.error);
         return;
       }
@@ -632,6 +653,7 @@ export const createTurnController = <Tag extends string>({
     model: string,
     input: TurnInput,
     messageId: string | null,
+    recovered = false,
   ): Promise<ActiveTurn<Tag>> => {
     const threadId = record.threadId;
     const turnStartedAt = now();
@@ -650,12 +672,18 @@ export const createTurnController = <Tag extends string>({
       turnStartedAt,
       started.state,
     );
+    active.turn.recovering = recovered;
     activeTurns.set(threadId, active);
     apply(active, started);
     if (!request.answered)
       send({ id: request.id, result: { turn: started.turn } });
     log({ event: "claude_turn", step: "started" });
     apply(active, renderInput(started.state, input, messageId));
+    if (recovered)
+      apply(
+        active,
+        renderNotice(active.state, RECOVERY_NOTICE, "commentary", now()),
+      );
     waitingTurns.delete(request.turnId);
     if (request.stopped) {
       active.state = markInterrupting(active.state);

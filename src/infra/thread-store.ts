@@ -386,13 +386,19 @@ const createThreadStore = (
 
     runWrite: <T, E>(
       threadId: string,
-      operation: (record: ThreadRecord) => Promise<Result<T, E>>,
+      operation: (
+        record: ThreadRecord,
+        recovered: boolean,
+      ) => Promise<Result<T, E>>,
       isOutcomeUnknown: (error: E) => boolean,
+      continueUnknown: () => boolean = () => false,
     ) =>
       threadQueue.run(threadId, async () => {
         const record = get(threadId);
         if (record === undefined) return Result.err(notFound(threadId));
-        if (record.runState !== "idle") {
+        const recovered =
+          record.runState === "outcomeUnknown" && continueUnknown();
+        if (record.runState !== "idle" && !recovered) {
           return Result.err(
             new WriteOutcomeUnknown({
               threadId,
@@ -400,7 +406,10 @@ const createThreadStore = (
             }),
           );
         }
-        const marked = await files.createMarker(markerPath(threadId));
+        // Recovery keeps the old marker until the new write settles, so a crash cannot lose the unknown outcome between markers.
+        const marked = recovered
+          ? Result.ok()
+          : await files.createMarker(markerPath(threadId));
         if (marked.isErr()) {
           // A marker that exists without a confirmed sync is withdrawn, since the operation never ran.
           if (marked.error._tag === "FileSyncFailed") {
@@ -418,7 +427,10 @@ const createThreadStore = (
         runStates.set(threadId, "running");
         let outcomeKnown = false;
         try {
-          const result = await operation({ ...record, runState: "running" });
+          const result = await operation(
+            { ...record, runState: "running" },
+            recovered,
+          );
           if (result.isErr() && isOutcomeUnknown(result.error)) return result;
           outcomeKnown = true;
           const cleared = await clearMarker(threadId);

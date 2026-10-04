@@ -1,6 +1,6 @@
 import type { readClaudeSession } from "../infra/claude/session.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
-import type { RewindPoint, ThreadStore } from "../infra/thread-store.ts";
+import type { ThreadStore } from "../infra/thread-store.ts";
 import { buildHistory } from "../presentation/history.ts";
 import { resumeCursors } from "../presentation/history-page.ts";
 import { isObject } from "../runtime/object.ts";
@@ -22,10 +22,7 @@ export const createRevertRequests =
     store: ThreadStore;
     threads: ThreadValues;
     turns: Pick<ReturnType<typeof createTurnController>, "changeConversation">;
-    runtime: Pick<
-      TurnRuntime<string>,
-      "closeSession" | "recordsOf" | "forgetUnsent"
-    >;
+    runtime: Pick<TurnRuntime<string>, "closeSession" | "recordOf">;
     readSession: typeof readClaudeSession;
     request: ServerRequest;
     send: (message: object) => void;
@@ -62,65 +59,36 @@ export const createRevertRequests =
       const messages = read.value.slice(0, end);
       const history = buildHistory(messages, { threadId, cwd: thread.cwd });
       let target: string | null = null;
-      let after: RewindPoint | null = null;
       if (method === "thread/revert") {
         const id = app.params.beforeTurnId;
         if (typeof id === "string") {
           if (id.startsWith("harnexus-history-")) {
             target = id.slice("harnexus-history-".length);
           } else {
-            const record = runtime.recordsOf(threadId).get(id) ?? null;
-            if (record !== null) {
-              if ("before" in record) target = record.before;
-              else after = record.after;
-            }
+            target = runtime.recordOf(threadId, id);
           }
         }
       } else {
-        const positions = history.map((entry) => ({
-          index: messages.findIndex(
-            (message) => entry.turn.id === `harnexus-history-${message.uuid}`,
-          ),
-          target: entry.turn.id.slice("harnexus-history-".length) as
-            | string
-            | null,
-          after: null as RewindPoint | null,
-        }));
-        for (const record of runtime.recordsOf(threadId).values()) {
-          if (!("after" in record)) continue;
-          const index = indexAfter(record.after, sessionId, messages);
-          if (index >= 0)
-            positions.push({ index, target: null, after: record.after });
-        }
-        positions.sort(
-          (left, right) =>
-            left.index - right.index ||
-            Number(right.after !== null) - Number(left.after !== null),
-        );
         const count = app.params.numTurns;
         if (
           typeof count === "number" &&
           Number.isInteger(count) &&
           count > 0 &&
-          count <= positions.length
+          count <= history.length
         ) {
-          const selected = positions[positions.length - count];
-          target = selected?.target ?? null;
-          after = selected?.after ?? null;
+          target =
+            history[history.length - count]?.turn.id.slice(
+              "harnexus-history-".length,
+            ) ?? null;
         }
       }
       const index =
-        after !== null
-          ? indexAfter(after, sessionId, messages)
-          : target === null
-            ? -1
-            : messages.findIndex((entry) => entry.uuid === target);
+        target === null
+          ? -1
+          : messages.findIndex((entry) => entry.uuid === target);
       if (
         index < 0 ||
-        (after === null &&
-          !history.some(
-            (entry) => entry.turn.id === `harnexus-history-${target}`,
-          ))
+        !history.some((entry) => entry.turn.id === `harnexus-history-${target}`)
       ) {
         reject("the turn to rewind was not found in this Claude conversation");
         return false;
@@ -151,7 +119,6 @@ export const createRevertRequests =
         held.at === (kept.at(-1)?.uuid ?? null);
       if (applied) {
         runtime.closeSession(threadId);
-        runtime.forgetUnsent(threadId);
       }
       if (saved.isErr()) {
         reject(
@@ -186,13 +153,3 @@ export const createRevertRequests =
     if (changed === null)
       reject("stop the running Claude turn before rewinding the conversation");
   };
-
-const indexAfter = (
-  point: RewindPoint,
-  sessionId: string,
-  messages: readonly { uuid: string }[],
-): number => {
-  if (point.at === null) return point.sessionId === sessionId ? 0 : -1;
-  const index = messages.findIndex((message) => message.uuid === point.at);
-  return index < 0 ? -1 : index + 1;
-};

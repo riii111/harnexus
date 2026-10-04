@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result } from "better-result";
 import { readClaudeSession } from "../infra/claude/session.ts";
-import { openThreadStore, type RewindPoint } from "../infra/thread-store.ts";
+import { openThreadStore } from "../infra/thread-store.ts";
 import { conversation } from "../presentation/testing/session-record.ts";
 import {
   FileSyncFailed,
@@ -110,50 +110,6 @@ describe("Claude conversation rewind", () => {
     expect(store.get(THREAD)?.rewind).toEqual({ sessionId: "se-1", at: null });
   });
 
-  test.each([
-    { at: "a4", retained: ["harnexus-history-u1", "harnexus-history-u2"] },
-    { at: "a3", retained: ["harnexus-history-u1"] },
-    { at: null, retained: [] },
-  ])("rewinds an unsent recovery warning at $at without dropping earlier conversation", async ({
-    at,
-    retained,
-  }) => {
-    const { revert, store, sent } = await setup({
-      warningPoint: { sessionId: "se-1", at },
-    });
-    await revert("thread/revert", {
-      id: 1,
-      params: { threadId: THREAD, beforeTurnId: "warning-turn" },
-    });
-    expect(sent[0]).toMatchObject({ id: 1, result: { thread: { turns: [] } } });
-    const history = createHistoryRequests({
-      threads: createThreadValues(store, () => {}),
-      readSession,
-      send: () => {},
-      log: () => {},
-    });
-    const loaded = await history.load(THREAD);
-    expect(loaded.isOk() && loaded.value.map((entry) => entry.turn.id)).toEqual(
-      [...retained],
-    );
-  });
-
-  test("counts the unsent warning in rollback and preserves its preceding Claude turn", async () => {
-    const { revert, store } = await setup({
-      warningPoint: { sessionId: "se-1", at: "a4" },
-    });
-    await revert("thread/rollback", {
-      id: 1,
-      params: { threadId: THREAD, numTurns: 1 },
-    });
-    expect(store.get(THREAD)?.rewind?.at).toBe("a4");
-    await revert("thread/rollback", {
-      id: 2,
-      params: { threadId: THREAD, numTurns: 1 },
-    });
-    expect(store.get(THREAD)?.rewind?.at).toBe("a3");
-  });
-
   test("rolls back from the already rewound conversation rather than its discarded tail", async () => {
     const { revert, store, sent } = await setup();
     await revert("thread/revert", {
@@ -231,12 +187,10 @@ const setup = async ({
   busy = false,
   failSave = false,
   failSync = false,
-  warningPoint,
 }: {
   busy?: boolean;
   failSave?: boolean;
   failSync?: boolean;
-  warningPoint?: RewindPoint;
 } = {}) => {
   let fail = false;
   const opened = await openThreadStore(
@@ -278,11 +232,6 @@ const setup = async ({
   const threads = createThreadValues(store, () => {});
   const sent: Sent[] = [];
   const closed: string[] = [];
-  const records = new Map<string, import("./turn-runtime.ts").TurnRecord>([
-    ["live-turn-1", { before: "u1" }],
-  ]);
-  if (warningPoint !== undefined)
-    records.set("warning-turn", { after: warningPoint });
   const revert = createRevertRequests({
     store,
     threads,
@@ -291,8 +240,7 @@ const setup = async ({
     },
     runtime: {
       closeSession: (id) => closed.push(id),
-      recordsOf: () => records,
-      forgetUnsent: () => records.delete("warning-turn"),
+      recordOf: (_threadId, turnId) => (turnId === "live-turn-1" ? "u1" : null),
     },
     readSession,
     request: async () => Result.ok({ thread: { id: THREAD, cwd: directory } }),

@@ -44,6 +44,7 @@ import {
   type ThreadPlan,
 } from "../../presentation/plan.ts";
 import type { TokenUsageBreakdown } from "../../presentation/protocol.ts";
+import { RECOVERY_CONTEXT } from "../../presentation/recovery.ts";
 import {
   RECORD_ADVANCED,
   sessionReplyText,
@@ -72,7 +73,6 @@ import type {
   ErrorTag,
   RunningTurn,
   TurnLink,
-  TurnRecord,
   TurnRuntime,
 } from "../turn-runtime.ts";
 import { readImages } from "./image-attachments.ts";
@@ -314,7 +314,7 @@ export const createClaudeRuntime = ({
   type Turn = RunningTurn<ClaudeFailureTag>;
 
   const sessions = new Map<string, SessionSlot>();
-  const turnRecords = new Map<string, Map<string, TurnRecord>>();
+  const turnRecords = new Map<string, Map<string, string>>();
   const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const usages = new Map<string, ThreadUsage>();
   const plans = new Map<string, ThreadPlan>();
@@ -670,16 +670,18 @@ export const createClaudeRuntime = ({
     const sent = slot.session.send({
       text: turn.input.text,
       images,
-      attachments: fresh.map(({ block }) => block),
+      attachments: [
+        ...(turn.recovering ? [RECOVERY_CONTEXT] : []),
+        ...fresh.map(({ block }) => block),
+      ],
     });
     if (sent.isErr()) {
       dropSession(turn.threadId, slot);
       turn.fail(sent.error);
       return false;
     }
-    const records =
-      turnRecords.get(turn.threadId) ?? new Map<string, TurnRecord>();
-    records.set(turn.turnId, { before: sent.value });
+    const records = turnRecords.get(turn.threadId) ?? new Map<string, string>();
+    records.set(turn.turnId, sent.value);
     turnRecords.set(turn.threadId, records);
     claude.sends.add(sent.value);
     for (const { path, body } of fresh) slot.attachedSkills.set(path, body);
@@ -1571,27 +1573,8 @@ export const createClaudeRuntime = ({
       const slot = sessions.get(threadId);
       if (slot !== undefined) dropSession(threadId, slot);
     },
-    recordsOf: (threadId) => turnRecords.get(threadId) ?? new Map(),
-    forgetUnsent: (threadId) => {
-      const records = turnRecords.get(threadId);
-      if (records === undefined) return;
-      for (const [turnId, record] of records)
-        if ("after" in record) records.delete(turnId);
-    },
-    noteUnsent: async (threadId, turnId) => {
-      const sessionId = threads.sessionIdOf(threadId);
-      if (sessionId === null) return;
-      const rewind = threads.rewindOf(threadId);
-      const last =
-        rewind === undefined
-          ? await lastRecordOf(sessionId)
-          : Result.ok(rewind.at);
-      if (last.isErr()) return;
-      const records =
-        turnRecords.get(threadId) ?? new Map<string, TurnRecord>();
-      records.set(turnId, { after: { sessionId, at: last.value } });
-      turnRecords.set(threadId, records);
-    },
+    recordOf: (threadId, turnId) =>
+      turnRecords.get(threadId)?.get(turnId) ?? null,
     run,
     steer,
     interrupt,

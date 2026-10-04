@@ -3,21 +3,16 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { type InferErr, Result } from "better-result";
 import { SUBSCRIPTION_CONNECTION } from "../infra/claude/connection.ts";
-import {
-  type ClaudeSessionSettings,
-  readClaudeSession,
-} from "../infra/claude/session.ts";
+import type { ClaudeSessionSettings } from "../infra/claude/session.ts";
 import { fakeClaude } from "../infra/claude/testing/fake-claude.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { openThreadStore } from "../infra/thread-store.ts";
-import { conversation } from "../presentation/testing/session-record.ts";
 import {
   FileRemoveFailed,
   removeFile,
   writeFileAtomic,
 } from "../runtime/fs.boundary.ts";
 import type { createTurnController } from "./controller.ts";
-import { createRevertRequests } from "./revert-request.ts";
 import {
   answer,
   appRequest,
@@ -63,7 +58,6 @@ import {
   withEffort,
   withMessageId,
 } from "./testing/harness.ts";
-import { createThreadValues } from "./thread-values.ts";
 
 useTempDir();
 
@@ -260,7 +254,7 @@ describe("continuing a rewound conversation", () => {
 });
 
 describe("a thread whose last turn has an unknown outcome", () => {
-  test("runs a new message the user sends after the refusal and clears the unknown state", async () => {
+  test("shows the unknown outcome and runs the first new user message while checking the current state", async () => {
     const first = fakeClaude(SUBSCRIPTION);
     const second = fakeClaude(SUBSCRIPTION);
     let undecided = true;
@@ -271,12 +265,31 @@ describe("a thread whose last turn has an unknown outcome", () => {
     await until(() => store.get(THREAD)?.runState === "outcomeUnknown");
     undecided = false;
 
-    turns.startTurn(withMessageId(turnStart(11, "again"), "m-1"), undefined);
-    await until(() => responseTo(sent, 11) !== undefined);
-    await completeTurn(turns, sent, second, 12, "m-2");
+    turns.startTurn(withMessageId(turnStart(11, "go on"), "m-1"), undefined);
+    await until(() => second.prompted());
+    const prompt = await firstPrompt(second.prompt());
+    expect(prompt).toEqual([
+      { type: "text", text: "go on" },
+      { type: "text", text: expect.stringContaining("<harnexus_recovery>") },
+    ]);
+    expect(completedItems(sent).at(-1)).toMatchObject({
+      type: "agentMessage",
+      phase: "commentary",
+      text: expect.stringContaining(
+        "Changes or messages may already have been applied",
+      ),
+    });
+    expect(
+      completedItems(sent)
+        .filter((item) => item.type === "userMessage")
+        .at(-1),
+    ).toMatchObject({
+      content: [{ type: "text", text: "go on", text_elements: [] }],
+    });
+    second.emit(sdk(success()));
     await until(() => store.get(THREAD)?.runState === "idle");
 
-    expect(unknownOutcome(sent, 11)).toBe(OUTCOME_UNKNOWN);
+    expect(responseTo(sent, 11)?.error).toBeUndefined();
     expect(completedClaudeTurnStatuses(sent)).toEqual([
       "completed",
       "completed",
@@ -291,71 +304,17 @@ describe("a thread whose last turn has an unknown outcome", () => {
     });
   });
 
-  test("accepts the first message after a restart as a failed turn so the next submission can resume", async () => {
+  test("resumes the saved Claude conversation on the first new message after a restart", async () => {
     const second = fakeClaude(SUBSCRIPTION);
     const after = await restartedWithUnknownOutcome([second]);
 
-    after.turns.startTurn(
-      withMessageId(turnStart(11, "again"), "m-1"),
-      undefined,
-    );
-    await until(() => responseTo(after.sent, 11) !== undefined);
-    const refusedStarted = second.started();
-    await completeTurn(after.turns, after.sent, second, 12, "m-2");
+    await completeTurn(after.turns, after.sent, second, 11, "m-1");
 
-    expect(unknownOutcome(after.sent, 11)).toBe(OUTCOME_UNKNOWN);
-    expect(refusedStarted).toBe(false);
     expect(responseTo(after.sent, 11)?.error).toBeUndefined();
     expect(responseTo(after.sent, 11)?.result.turn.id).toBeDefined();
-    expect(completedTurnStatuses(after.sent)).toEqual(["failed", "completed"]);
+    expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
     expect(after.settings[0]).toMatchObject({ resume: "se-1" });
     expect(completedClaudeTurnStatuses(after.sent)).toEqual(["completed"]);
-  });
-
-  test("edits the recovery warning and resumes without removing the earlier conversation", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const after = await restartedWithUnknownOutcome([claude], {
-      lastRecord: async () => Result.ok("a4"),
-    });
-    after.turns.startTurn(
-      withMessageId(turnStart(11, "again"), "m-1"),
-      undefined,
-    );
-    await until(() => completedTurnStatuses(after.sent).length === 1);
-    const warningId = responseTo(after.sent, 11).result.turn.id;
-    const revert = createRevertRequests({
-      store: after.store,
-      threads: createThreadValues(after.store, () => {}),
-      turns: after.turns,
-      runtime: after.runtime,
-      readSession: (sessionId) =>
-        readClaudeSession(sessionId, { read: async () => conversation() }),
-      request: async () => Result.ok({ thread: { id: THREAD } }),
-      send: (message) => after.sent.push(message),
-    });
-    await revert("thread/revert", {
-      id: 12,
-      params: { threadId: THREAD, beforeTurnId: warningId },
-    });
-    expect(responseTo(after.sent, 12)?.error).toBeUndefined();
-    expect(after.store.get(THREAD)?.runState).toBe("idle");
-    expect(after.store.get(THREAD)?.rewind).toEqual({
-      sessionId: "se-1",
-      at: "a4",
-    });
-    after.turns.startTurn(
-      withMessageId(turnStart(13, "edited continuation"), "m-2"),
-      undefined,
-    );
-    await until(() => claude.prompted());
-    expect(after.settings[0]).toMatchObject({
-      resume: "se-1",
-      forkSession: true,
-      resumeAt: "a4",
-    });
-    claude.emit(sdk({ ...success(), session_id: "se-2" }));
-    await until(() => after.store.get(THREAD)?.runState === "idle");
-    expect(completedTurnStatuses(after.sent)).toEqual(["failed", "completed"]);
   });
 
   test.each([
@@ -364,8 +323,14 @@ describe("a thread whose last turn has an unknown outcome", () => {
       request: () => withMessageId(reply(12, THREAD, NEW_REVIEWER), "m-2"),
     },
     {
-      name: "the refused message sent again",
-      request: () => withMessageId(turnStart(12, "again"), "m-1"),
+      name: "an automatic safety-buffer retry with a fresh client id",
+      request: () => {
+        const retry = withMessageId(turnStart(12, "again"), "m-2");
+        return {
+          ...retry,
+          params: { ...retry.params, turnTrigger: "safety_buffer_retry" },
+        };
+      },
     },
     {
       name: "a message without a client message id",
@@ -376,14 +341,10 @@ describe("a thread whose last turn has an unknown outcome", () => {
   }) => {
     const second = fakeClaude(SUBSCRIPTION);
     const after = await restartedWithUnknownOutcome([second]);
-    after.turns.startTurn(
-      withMessageId(turnStart(11, "again"), "m-1"),
-      undefined,
-    );
-    await until(() => responseTo(after.sent, 11) !== undefined);
-
     after.turns.startTurn(request(), undefined);
     await until(() => responseTo(after.sent, 12) !== undefined);
+    expect(after.store.get(THREAD)?.runState).toBe("outcomeUnknown");
+    expect(second.started()).toBe(false);
     await completeTurn(after.turns, after.sent, second, 13, "m-3");
 
     expect(unknownOutcome(after.sent, 12)).toBe(OUTCOME_UNKNOWN);
@@ -391,26 +352,38 @@ describe("a thread whose last turn has an unknown outcome", () => {
     expect(completedClaudeTurnStatuses(after.sent)).toEqual(["completed"]);
   });
 
-  test("does not count another thread's message as telling the user", async () => {
+  test("refuses an already delivered user message after the interrupted conversation is reloaded", async () => {
     const second = fakeClaude(SUBSCRIPTION);
     const after = await restartedWithUnknownOutcome([second]);
 
+    await completeTurn(after.turns, after.sent, second, 11, "m-1");
+    await until(() => after.store.get(THREAD)?.runState === "idle");
+    const reloaded = await harness([]);
+    reloaded.turns.startTurn(
+      withMessageId(turnStart(12, "again"), "m-1"),
+      undefined,
+    );
+    expect(responseTo(reloaded.sent, 12)).toEqual(DUPLICATE(12));
+    expect(reloaded.settings).toHaveLength(0);
+  });
+
+  test("blocks a retry of the original interrupted message and accepts a new instruction", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const before = await harness([first], { unsettledWrite: () => true });
+    await completeTurn(before.turns, before.sent, first, 10, "original-id");
+    await until(() => before.store.get(THREAD)?.runState === "outcomeUnknown");
+    const second = fakeClaude(SUBSCRIPTION);
+    const after = await harness([second]);
     after.turns.startTurn(
-      withMessageId(reply(11, THREAD, NEW_REVIEWER), "m-0"),
+      withMessageId(turnStart(11, "again"), "original-id"),
       undefined,
     );
     await until(() => responseTo(after.sent, 11) !== undefined);
-    after.turns.startTurn(
-      withMessageId(turnStart(12, "what happened?"), "m-1"),
-      undefined,
-    );
-    await until(() => responseTo(after.sent, 12) !== undefined);
-
-    expect([11, 12].map((id) => unknownOutcome(after.sent, id))).toEqual([
-      OUTCOME_UNKNOWN,
-      OUTCOME_UNKNOWN,
-    ]);
+    expect(responseTo(after.sent, 11)).toEqual(DUPLICATE(11));
     expect(second.started()).toBe(false);
+    expect(after.store.get(THREAD)?.runState).toBe("outcomeUnknown");
+    await completeTurn(after.turns, after.sent, second, 12, "new-id");
+    expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
   });
 
   test("continues on a new Claude session whose thread tools write again after a write whose answer was lost", async () => {
@@ -436,8 +409,6 @@ describe("a thread whose last turn has an unknown outcome", () => {
       withMessageId(turnStart(11, "what happened?"), "m-1"),
       undefined,
     );
-    await until(() => responseTo(sent, 11) !== undefined);
-    turns.startTurn(withMessageId(turnStart(12, "go on"), "m-2"), undefined);
     await until(() => second.started());
     const resent = await messageReviewer(settings[1]);
     second.emit(sdk(success()));
@@ -445,7 +416,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
     await until(() => store.get(THREAD)?.runState !== "running");
 
     expect(lostSend.isError).toBe(true);
-    expect(unknownOutcome(sent, 11)).toBe(OUTCOME_UNKNOWN);
+    expect(responseTo(sent, 11)?.error).toBeUndefined();
     expect(first.closes()).toBe(1);
     expect(settings[1]).toMatchObject({ resume: "se-1" });
     expect(resent.isError).toBeFalsy();
@@ -482,8 +453,6 @@ describe("a thread whose last turn has an unknown outcome", () => {
       withMessageId(turnStart(11, "what happened?"), "m-1"),
       undefined,
     );
-    await until(() => responseTo(sent, 11) !== undefined);
-    turns.startTurn(withMessageId(turnStart(12, "go on"), "m-2"), undefined);
     await until(() => second.started());
     late.open();
     await waiting;
@@ -492,7 +461,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
     await until(() => completedClaudeTurnStatuses(sent).length === 2);
     await until(() => store.get(THREAD)?.runState !== "running");
 
-    expect(unknownOutcome(sent, 11)).toBe(OUTCOME_UNKNOWN);
+    expect(responseTo(sent, 11)?.error).toBeUndefined();
     expect(first.closes()).toBe(1);
     expect(second.closes()).toBe(0);
     expect(next.isError).toBeFalsy();
@@ -504,7 +473,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
     expect(store.get(THREAD)?.runState).toBe("idle");
   });
 
-  test("fails an answered waiting turn it cannot run and continues on the user's next new message", async () => {
+  test("recovers a queued user instruction after the preceding turn leaves an unknown outcome", async () => {
     const first = fakeClaude(SUBSCRIPTION);
     const second = fakeClaude(SUBSCRIPTION);
     let undecided = true;
@@ -516,25 +485,17 @@ describe("a thread whose last turn has an unknown outcome", () => {
     turns.startTurn(withMessageId(turnStart(11, "reply"), "m-1"), undefined);
     await until(() => responseTo(sent, 11) !== undefined);
     first.emit(sdk(success()));
-    await until(() => completedTurnStatuses(sent).length === 2);
-    const failedStarted = second.started();
+    await until(() => second.prompted());
     undecided = false;
-
-    await completeTurn(turns, sent, second, 12, "m-2");
+    second.emit(sdk(success()));
     await until(() => store.get(THREAD)?.runState === "idle");
 
     expect(responseTo(sent, 11)?.result.turn).toMatchObject({ id: "turn-2" });
     expect(completedTurns(sent)[1]).toMatchObject({
       id: "turn-2",
-      status: "failed",
-      error: { message: OUTCOME_UNKNOWN },
+      status: "completed",
     });
-    expect(failedStarted).toBe(false);
-    expect(completedTurnStatuses(sent)).toEqual([
-      "completed",
-      "failed",
-      "completed",
-    ]);
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
     expect(
       sent
         .filter((m) => m.method === "thread/status/changed")
@@ -542,7 +503,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
     ).toEqual(["active", "idle", "active", "idle"]);
   });
 
-  test("keeps refusing while the unknown state cannot be cleared", async () => {
+  test("keeps the durable unknown outcome if the resumed turn completes but its marker cannot be removed", async () => {
     const second = fakeClaude(SUBSCRIPTION);
     const after = await restartedWithUnknownOutcome([second], {
       files: {
@@ -553,23 +514,73 @@ describe("a thread whose last turn has an unknown outcome", () => {
       },
     });
 
+    await completeTurn(after.turns, after.sent, second, 11, "m-1");
+    await until(() => after.store.get(THREAD)?.runState === "outcomeUnknown");
+    expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
+    expect(after.events).toContainEqual({
+      event: "claude_turn",
+      step: "run_state_not_saved",
+      error: "RunStateNotSaved",
+    });
+    expect(after.store.get(THREAD)?.runState).toBe("outcomeUnknown");
+    const reloaded = await harness([]);
+    expect(reloaded.store.get(THREAD)?.runState).toBe("outcomeUnknown");
+  });
+
+  test("keeps the recovery context across a message-save failure and continues when the same input can be saved", async () => {
+    const second = fakeClaude(SUBSCRIPTION);
+    let fail = true;
+    const after = await restartedWithUnknownOutcome([second], {
+      files: {
+        writeState: (path, content) =>
+          fail ? diskFull(path) : writeFileAtomic(path, content),
+      },
+    });
     after.turns.startTurn(
-      withMessageId(turnStart(11, "again"), "m-1"),
+      withMessageId(turnStart(11, "go on"), "m-1"),
       undefined,
     );
     await until(() => responseTo(after.sent, 11) !== undefined);
-    after.turns.startTurn(
-      withMessageId(turnStart(12, "and again"), "m-2"),
-      undefined,
-    );
-    await until(() => responseTo(after.sent, 12) !== undefined);
-
-    expect(unknownOutcome(after.sent, 11)).toBe(OUTCOME_UNKNOWN);
-    expect(responseTo(after.sent, 12)?.error.message).toBe(
-      "the Claude thread cannot start a turn",
+    expect(responseTo(after.sent, 11)?.error.message).toBe(
+      "the message id could not be saved, so the message was not run to avoid running it twice",
     );
     expect(second.started()).toBe(false);
-    expect(after.store.get(THREAD)?.runState).toBe("outcomeUnknown");
+    await until(() => after.store.get(THREAD)?.runState === "outcomeUnknown");
+    expect((await harness([])).store.get(THREAD)?.runState).toBe(
+      "outcomeUnknown",
+    );
+    fail = false;
+    await completeTurn(after.turns, after.sent, second, 12, "m-1");
+    await until(() => after.store.get(THREAD)?.runState === "idle");
+    expect(await firstPrompt(second.prompt())).toEqual([
+      { type: "text", text: "prompt 12" },
+      { type: "text", text: expect.stringContaining("<harnexus_recovery>") },
+    ]);
+  });
+
+  test("keeps the unknown outcome when a queued user instruction is stopped before it starts", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store } = await harness([first, second], {
+      unsettledWrite: () => true,
+    });
+    turns.startTurn(turnStart(10, "work"), undefined);
+    await until(() => first.prompted());
+    turns.startTurn(
+      withMessageId(turnStart(11, "go on"), "queued-id"),
+      undefined,
+    );
+    const turnId = responseTo(sent, 11).result.turn.id;
+    turns.interruptTurn(interrupt(20, turnId));
+    expect(responseTo(sent, 20)?.result).toEqual({});
+    first.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 2);
+    expect(store.get(THREAD)?.runState).toBe("outcomeUnknown");
+    expect(second.started()).toBe(false);
+    expect(completedTurns(sent)[1]).toMatchObject({
+      status: "failed",
+      error: { message: OUTCOME_UNKNOWN },
+    });
   });
 });
 
