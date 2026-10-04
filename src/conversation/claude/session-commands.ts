@@ -14,14 +14,20 @@ import type {
   readLastRecordUuid,
 } from "../../infra/claude/transcripts.ts";
 import type { SessionConnection } from "../../presentation/connection.ts";
+import type {
+  PickerAnswer,
+  PickerPage,
+} from "../../presentation/session-picker.ts";
 import type { SessionReply } from "../../presentation/session-reply.ts";
 import type { ThreadValues } from "../thread-values.ts";
 
 export type SessionCommand =
-  | { kind: "list" }
+  | { kind: "resume"; search: string | null }
   | { kind: "session" }
-  | { kind: "switchConnection" }
-  | { kind: "select"; picked: number; listing: readonly ClaudeConversation[] };
+  | { kind: "switchConnection" };
+
+// Asks the user to pick from a page of the list; it answers none once the turn is stopped.
+export type AskPick = (page: PickerPage) => Promise<PickerAnswer>;
 
 // Only the command, the reply's kind and error tags are logged, never a title or a session id.
 export type SessionEvent =
@@ -85,22 +91,15 @@ export const createSessionCommands = ({
   log: (event: SessionEvent) => void;
   now: () => number;
 }) => {
-  const listings = new Map<string, readonly ClaudeConversation[]>();
   const lastRecords = new Map<string, string>();
-
-  // Every turn takes the thread's list, so a number picks from it only in the turn right after it; typed is null for a turn the user did not type.
-  const take = (threadId: string, typed: string | null) => {
-    const listing = listings.get(threadId);
-    listings.delete(threadId);
-    return typed === null ? null : commandOf(typed.trim(), listing);
-  };
 
   const answer = async (
     threadId: string,
     cwd: string,
     command: SessionCommand,
+    ask: AskPick,
   ): Promise<SessionReply> => {
-    const { reply, error } = await run(threadId, cwd, command);
+    const { reply, error } = await run(threadId, cwd, command, ask);
     log({
       event: "claude_turn",
       step: "session_command",
@@ -115,16 +114,15 @@ export const createSessionCommands = ({
     threadId: string,
     cwd: string,
     command: SessionCommand,
+    ask: AskPick,
   ): Promise<{ reply: SessionReply; error: SessionErrorTag | null }> => {
     switch (command.kind) {
       case "session":
         return session(threadId, cwd);
       case "switchConnection":
         return switchConnection(threadId, cwd);
-      case "list":
-        return list(threadId, cwd);
-      case "select":
-        return select(threadId, command.picked, command.listing);
+      case "resume":
+        return resume(threadId, cwd, command.search, ask);
     }
   };
 
@@ -173,7 +171,12 @@ export const createSessionCommands = ({
   };
 
   // A thread with a conversation would lose it, so only an empty thread lists others.
-  const list = async (threadId: string, cwd: string) => {
+  const resume = async (
+    threadId: string,
+    cwd: string,
+    search: string | null,
+    ask: AskPick,
+  ) => {
     if (threads.sessionIdOf(threadId) !== null) {
       return answered({ kind: "hasConversation" });
     }
@@ -184,32 +187,63 @@ export const createSessionCommands = ({
         error: found.error._tag,
       };
     }
-    // A conversation another thread continues stays listed so it is not mistaken for a missing one.
-    const recent = found.value.slice(0, LIST_LIMIT);
-    if (recent.length > 0) listings.set(threadId, recent);
-    return answered({
-      kind: "listed",
+    if (found.value.length === 0) {
+      return answered({ kind: "noneFound", cwd, maxAgeDays: MAX_AGE_DAYS });
+    }
+    return pick(
+      threadId,
+      cwd,
+      ask,
+      found.value,
+      searched(found.value, search),
+      0,
+    );
+  };
+
+  // A conversation another thread continues stays listed so it is not mistaken for a missing one.
+  const pick = async (
+    threadId: string,
+    cwd: string,
+    ask: AskPick,
+    all: readonly ClaudeConversation[],
+    view: SearchedList,
+    offset: number,
+  ): Promise<{ reply: SessionReply; error: SessionErrorTag | null }> => {
+    const shown = view.matches.slice(offset, offset + PAGE_SIZE);
+    const answer = await ask({
       cwd,
       maxAgeDays: MAX_AGE_DAYS,
-      conversations: recent.map((conversation) => ({
+      conversations: shown.map((conversation) => ({
         ...conversation,
         continued: threads.isBound(conversation.sessionId),
       })),
+      offset,
+      total: view.matches.length,
+      search: view.search,
+      unmatched: view.unmatched,
     });
+    switch (answer.kind) {
+      case "none":
+        return answered({ kind: "notPicked" });
+      case "newer":
+        return pick(threadId, cwd, ask, all, view, offset - PAGE_SIZE);
+      case "older":
+        return pick(threadId, cwd, ask, all, view, offset + PAGE_SIZE);
+      case "search":
+        return pick(threadId, cwd, ask, all, searched(all, answer.text), 0);
+      case "picked": {
+        const chosen = shown[answer.index];
+        return chosen === undefined
+          ? answered({ kind: "notPicked" })
+          : select(threadId, chosen);
+      }
+    }
   };
 
   // Another thread may have taken the conversation, or Claude may have lost its record, since the list was shown.
-  const select = async (
-    threadId: string,
-    picked: number,
-    listing: readonly ClaudeConversation[],
-  ) => {
+  const select = async (threadId: string, chosen: ClaudeConversation) => {
     if (threads.sessionIdOf(threadId) !== null) {
       return answered({ kind: "hasConversation" });
-    }
-    const chosen = picked >= 1 ? listing[picked - 1] : undefined;
-    if (chosen === undefined) {
-      return answered({ kind: "noSuchNumber", picked, count: listing.length });
     }
     if (threads.isBound(chosen.sessionId)) return answered({ kind: "taken" });
     const found = await findSession(chosen.sessionId);
@@ -266,19 +300,44 @@ export const createSessionCommands = ({
     return null;
   };
 
-  return { take, answer, remember, forget, advanced };
+  return { answer, remember, forget, advanced };
 };
 
-const commandOf = (
-  typed: string,
-  listing: readonly ClaudeConversation[] | undefined,
+export const sessionCommandOf = (
+  typed: string | null,
 ): SessionCommand | null => {
-  if (typed === "/resume") return { kind: "list" };
-  if (typed === "/session") return { kind: "session" };
-  if (typed === "/switch-connection") return { kind: "switchConnection" };
-  return listing !== undefined && /^\d+$/.test(typed)
-    ? { kind: "select", picked: Number(typed), listing }
-    : null;
+  const command = typed?.trim() ?? "";
+  if (command === "/session") return { kind: "session" };
+  if (command === "/switch-connection") return { kind: "switchConnection" };
+  const resume = command.match(RESUME);
+  if (resume === null) return null;
+  return { kind: "resume", search: resume[1]?.trim() || null };
+};
+
+type SearchedList = {
+  matches: readonly ClaudeConversation[];
+  search: string | null;
+  unmatched: string | null;
+};
+
+// A session id finds its own conversation, and words find those whose title or name holds them all in any case; finding none lists every conversation again.
+const searched = (
+  all: readonly ClaudeConversation[],
+  text: string | null,
+): SearchedList => {
+  if (text === null) return { matches: all, search: null, unmatched: null };
+  const byId = all.filter(({ sessionId }) => sessionId === text);
+  const words = text.toLowerCase().split(/\s+/);
+  const matches =
+    byId.length > 0
+      ? byId
+      : all.filter(({ title, name }) => {
+          const held = `${title}\n${name ?? ""}`.toLowerCase();
+          return words.every((word) => held.includes(word));
+        });
+  return matches.length > 0
+    ? { matches, search: text, unmatched: null }
+    : { matches: all, search: null, unmatched: text };
 };
 
 const compared = (
@@ -324,4 +383,7 @@ const MAX_AGE_DAYS = 14;
 
 const MAX_AGE_MS = MAX_AGE_DAYS * 24 * 60 * 60_000;
 
-const LIST_LIMIT = 10;
+// Six conversations, the ways to newer and older ones and searching keep a page to nine choices.
+const PAGE_SIZE = 6;
+
+const RESUME = /^\/resume(?:\s+(.*))?$/s;
