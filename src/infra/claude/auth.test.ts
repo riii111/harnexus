@@ -58,9 +58,12 @@ describe("connectionEnv", () => {
     const env = connectionEnv(
       {
         ...VERTEX,
-        credentialsFile: "/keys/sidework.json",
-        models: { haiku: "claude-haiku-4-5@20251001" },
-        modelRegions: { VERTEX_REGION_CLAUDE_HAIKU_4_5: "us-east5" },
+        env: {
+          ...VERTEX.env,
+          GOOGLE_APPLICATION_CREDENTIALS: "/keys/sidework.json",
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5@20251001",
+          VERTEX_REGION_CLAUDE_HAIKU_4_5: "us-east5",
+        },
       },
       {
         PATH: "/usr/bin",
@@ -102,8 +105,8 @@ describe("checkSettingsEnv", () => {
     { name: "region", env: { CLOUD_ML_REGION: "us-east5" } },
     { name: "model region", env: { VERTEX_REGION_CLAUDE_5_OPUS: "us-east5" } },
     { name: "gateway", env: { ANTHROPIC_VERTEX_BASE_URL: "https://gw" } },
-    { name: "provider switch", env: { CLAUDE_CODE_USE_VERTEX: "1" } },
-  ])("refuses Claude settings that set the Vertex $name", ({ env }) => {
+    { name: "API key", env: { ANTHROPIC_API_KEY: "api-key" } },
+  ])("refuses Claude settings that set another Vertex $name", ({ env }) => {
     const checked = checkSettingsEnv(env, VERTEX);
 
     expect(checked.isErr() && checked.error._tag).toBe(
@@ -111,10 +114,19 @@ describe("checkSettingsEnv", () => {
     );
   });
 
-  test("refuses a model pin in Claude settings only when the repository's connection pins it too", () => {
+  test("accepts Claude settings that repeat the repository's Vertex settings", () => {
+    const checked = checkSettingsEnv(VERTEX.env, VERTEX);
+
+    expect(checked.isOk()).toBe(true);
+  });
+
+  test("refuses a model pin in Claude settings only when the repository's connection pins it differently", () => {
     const pinned = checkSettingsEnv(
       { ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-4-8" },
-      { ...VERTEX, models: { opus: "claude-opus-5-5" } },
+      {
+        ...VERTEX,
+        env: { ...VERTEX.env, ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5" },
+      },
     );
     const unpinned = checkSettingsEnv(
       { ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-4-8" },
@@ -229,7 +241,9 @@ const VERTEX: VertexConnection = {
   provider: "vertex",
   projectId: "sidework-project",
   region: "global",
-  credentialsFile: null,
-  models: {},
-  modelRegions: {},
+  env: {
+    CLAUDE_CODE_USE_VERTEX: "1",
+    ANTHROPIC_VERTEX_PROJECT_ID: "sidework-project",
+    CLOUD_ML_REGION: "global",
+  },
 };

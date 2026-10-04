@@ -16,7 +16,6 @@ import {
 } from "../infra/codex/observe.ts";
 import type { openThreadStore } from "../infra/thread-store.ts";
 import {
-  type loadConnectionsPath,
   loadLogPath,
   type loadPermissionMode,
   type loadStatePath,
@@ -51,7 +50,6 @@ type LogFileFailure = "LogPathNotAbsolute" | "LogFileOpenFailed";
 type ClaudeUnavailable =
   | InferErr<ReturnType<typeof loadPermissionMode>>["_tag"]
   | InferErr<ReturnType<typeof loadStatePath>>["_tag"]
-  | InferErr<ReturnType<typeof loadConnectionsPath>>["_tag"]
   | InferErr<Awaited<ReturnType<typeof openThreadStore>>>["_tag"];
 
 type EffortSettingsFailure = InferErr<

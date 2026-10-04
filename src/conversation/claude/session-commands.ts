@@ -1,5 +1,5 @@
 import type { InferErr } from "better-result";
-import { terminalEnv } from "../../infra/claude/auth.ts";
+import { CREDENTIALS_ENV, terminalEnv } from "../../infra/claude/auth.ts";
 import {
   type Connection,
   type ConnectionTarget,
@@ -296,7 +296,7 @@ const compared = (
     ...(saved?.provider === "vertex" && configured.provider === "vertex"
       ? {
           resumeEnv: terminalEnv(configured),
-          credentialsFile: configured.credentialsFile !== null,
+          credentialsFile: CREDENTIALS_ENV in configured.env,
         }
       : resumeOn(saved)),
   };
@@ -308,9 +308,11 @@ const resumeOn = (saved: ConnectionTarget | null) => ({
     saved?.provider === "vertex"
       ? terminalEnv({
           ...saved,
-          credentialsFile: null,
-          models: {},
-          modelRegions: {},
+          env: {
+            CLAUDE_CODE_USE_VERTEX: "1",
+            ANTHROPIC_VERTEX_PROJECT_ID: saved.projectId,
+            CLOUD_ML_REGION: saved.region,
+          },
         })
       : [],
   credentialsFile: false,

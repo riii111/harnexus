@@ -67,34 +67,6 @@ export const loadStatePath = (
   return Result.ok(path);
 };
 
-class ConnectionsPathNotAbsolute extends TaggedError(
-  "ConnectionsPathNotAbsolute",
-)<{
-  path: string;
-  message: string;
-}> {}
-
-const CONNECTIONS_PATH_ENV = "HARNEXUS_CONNECTIONS_PATH";
-
-export const loadConnectionsPath = (
-  env: Record<string, string | undefined>,
-  home: () => string = homedir,
-) => {
-  const path = env[CONNECTIONS_PATH_ENV];
-  if (path === undefined || path === "") {
-    return Result.ok(join(home(), DEFAULT_CONNECTIONS_PATH));
-  }
-  if (!isAbsolute(path)) {
-    return Result.err(
-      new ConnectionsPathNotAbsolute({
-        path,
-        message: `${CONNECTIONS_PATH_ENV} must be an absolute path`,
-      }),
-    );
-  }
-  return Result.ok(path);
-};
-
 const SHUTDOWN_GRACE_ENV = "HARNEXUS_SHUTDOWN_GRACE_MS";
 
 export const loadShutdownGraceMs = (
@@ -117,5 +89,3 @@ export const loadUnverifiedCodexPolicy = (
 const DEFAULT_SHUTDOWN_GRACE_MS = 5000;
 
 const DEFAULT_STATE_PATH = ".local/state/harnexus/threads.json";
-
-const DEFAULT_CONNECTIONS_PATH = ".config/harnexus/connections.json";

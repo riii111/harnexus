@@ -46,26 +46,22 @@ export const connectionEnv = (connection: Connection, env: Env): Env => {
     ...Object.fromEntries(
       Object.entries(kept).filter(([name]) => !isVertexEnv(name)),
     ),
-    ...vertexEnv(connection),
+    ...connection.env,
   };
 };
 
 // The CLI copies the settings env into its own environment after launch, so a billing variable or an auth header found there is refused rather than removed; accountInfo does not report a header that replaces the OAuth token.
-// On Vertex a variable harnexus sets would be overridden the same way, so the project shown to the user could differ from the one Claude Code uses.
+// On Vertex the repository's own settings repeat what harnexus passes, so only a value that differs from it is refused, as it would change the project shown to the user.
 export const checkSettingsEnv = (
   env: Record<string, string>,
   connection: Connection = SUBSCRIPTION_CONNECTION,
 ) => {
-  const owned =
-    connection.provider === "vertex"
-      ? new Set(Object.keys(vertexEnv(connection)))
-      : new Set<string>();
-  const names = Object.keys(env).filter(
-    (name) =>
-      API_BILLING_ENV.has(name) ||
-      (name === CUSTOM_HEADERS_ENV && hasAuthHeader(env[name] ?? "")) ||
-      (connection.provider === "vertex" &&
-        (isVertexEnv(name) || owned.has(name))),
+  const names = Object.keys(env).filter((name) =>
+    connection.provider === "vertex" && name in connection.env
+      ? env[name] !== connection.env[name]
+      : API_BILLING_ENV.has(name) ||
+        (name === CUSTOM_HEADERS_ENV && hasAuthHeader(env[name] ?? "")) ||
+        (connection.provider === "vertex" && isVertexEnv(name)),
   );
   if (names.length === 0) return Result.ok();
   return Result.err(
@@ -74,7 +70,7 @@ export const checkSettingsEnv = (
       message:
         connection.provider === "subscription"
           ? `Claude settings must not set ${names.join(", ")}, which would bypass the subscription login`
-          : `Claude settings must not set ${names.join(", ")}, which would override the Google Vertex AI connection harnexus sets for this repository`,
+          : `Claude settings must not set ${names.join(", ")} differently from this repository's Claude Code settings, which choose Google Vertex AI`,
     }),
   );
 };
@@ -117,27 +113,9 @@ export const checkSubscription = (account: AccountInfo) => {
 
 // The credentials file stays out, since the command is shown in the chat.
 export const terminalEnv = (connection: VertexConnection) =>
-  Object.entries(vertexEnv(connection)).flatMap(([name, value]) =>
-    name === "GOOGLE_APPLICATION_CREDENTIALS" || value === undefined
-      ? []
-      : [[name, value] as [string, string]],
-  );
+  Object.entries(connection.env).filter(([name]) => name !== CREDENTIALS_ENV);
 
-const vertexEnv = (connection: VertexConnection): Env => ({
-  CLAUDE_CODE_USE_VERTEX: "1",
-  ANTHROPIC_VERTEX_PROJECT_ID: connection.projectId,
-  CLOUD_ML_REGION: connection.region,
-  ...(connection.credentialsFile !== null && {
-    GOOGLE_APPLICATION_CREDENTIALS: connection.credentialsFile,
-  }),
-  ...Object.fromEntries(
-    Object.entries(connection.models).map(([alias, model]) => [
-      `ANTHROPIC_DEFAULT_${alias.toUpperCase()}_MODEL`,
-      model,
-    ]),
-  ),
-  ...connection.modelRegions,
-});
+export const CREDENTIALS_ENV = "GOOGLE_APPLICATION_CREDENTIALS";
 
 const isVertexEnv = (name: string) =>
   VERTEX_ENV.has(name) || name.startsWith(VERTEX_REGION_PREFIX);

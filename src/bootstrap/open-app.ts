@@ -1,6 +1,5 @@
 import { isAbsolute, join, resolve } from "node:path";
 import {
-  loadConnectionsPath,
   loadLogPath,
   loadPermissionMode,
   loadStatePath,
@@ -67,8 +66,6 @@ async function findProblem() {
   if (log.isErr()) return log.error.message;
   const state = loadStatePath(process.env);
   if (state.isErr()) return state.error.message;
-  const connections = loadConnectionsPath(process.env);
-  if (connections.isErr()) return connections.error.message;
   if (!isAbsolute(paths.codex)) {
     return "HARNEXUS_CODEX_PATH must be an absolute path";
   }

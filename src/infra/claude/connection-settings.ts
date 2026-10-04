@@ -1,42 +1,38 @@
-import { basename, dirname, isAbsolute, resolve, sep } from "node:path";
+import { basename, dirname } from "node:path";
+import {
+  resolveSettings,
+  type SettingSource,
+} from "@anthropic-ai/claude-agent-sdk";
 import { Result, TaggedError } from "better-result";
-import { readTextFileIfExists } from "../../runtime/fs.boundary.ts";
-import { parseJson } from "../../runtime/json.boundary.ts";
-import { isObject } from "../../runtime/object.ts";
 import { readCommandOutput } from "../../runtime/process.boundary.ts";
 import {
   type Connection,
-  type ModelAlias,
   SUBSCRIPTION_CONNECTION,
   VERTEX_REGION_PREFIX,
 } from "./connection.ts";
+import { type ClaudeSdk, readSettings } from "./sdk.boundary.ts";
 
-class ConnectionSettingsUnreadable extends TaggedError(
-  "ConnectionSettingsUnreadable",
-)<{
-  path: string;
-  cause: unknown;
+class VertexSettingsIncomplete extends TaggedError("VertexSettingsIncomplete")<{
+  name: string;
   message: string;
 }> {}
 
-class ConnectionSettingsInvalid extends TaggedError(
-  "ConnectionSettingsInvalid",
-)<{
-  path: string;
+class VertexGatewayUnsupported extends TaggedError("VertexGatewayUnsupported")<{
+  name: string;
   message: string;
 }> {}
 
 type RepositoryOf = (worktree: string) => Promise<string | null>;
 
-// Read for every turn so an edit applies from the next message; an unreadable file stops the turn rather than falling back to the subscription.
-// A worktree the app created outside the repository still takes the repository's setting.
+// Only a repository's own Claude Code settings choose Vertex, so a Vertex login in the user's settings never moves every repository; a setting that cannot be read stops the turn rather than falling back to the subscription.
+// Claude Code reads settings from the directory it runs in, and a worktree the app created has no copy of the untracked settings.local.json, so the repository the worktree belongs to is read next.
 export const createConnectionResolver = ({
-  path,
+  resolve = resolveSettings,
   repositoryOf = gitRepositoryOf,
 }: {
-  path: string;
+  resolve?: ClaudeSdk["resolveSettings"];
   repositoryOf?: RepositoryOf;
-}) => {
+} = {}) => {
   const repositories = new Map<string, string>();
 
   const repositoryFor = async (worktree: string) => {
@@ -49,61 +45,69 @@ export const createConnectionResolver = ({
 
   return (worktree: string) =>
     Result.gen(async function* () {
-      const settings = yield* Result.await(readConnectionSettings(path));
-      if (settings.size === 0) return Result.ok(SUBSCRIPTION_CONNECTION);
-      const repository = await repositoryFor(worktree);
-      return Result.ok(
-        matchConnection(settings, [
-          worktree,
-          ...(repository === null ? [] : [repository]),
-        ]),
+      const own = yield* Result.await(
+        readSettings(resolve, worktree, REPOSITORY_SOURCES),
       );
+      if (choosesVertex(own.env ?? {})) return vertexFrom(own.env ?? {});
+      const repository = await repositoryFor(worktree);
+      if (repository === null || repository === worktree) {
+        return Result.ok<Connection>(SUBSCRIPTION_CONNECTION);
+      }
+      const shared = yield* Result.await(
+        readSettings(resolve, repository, REPOSITORY_SOURCES),
+      );
+      return choosesVertex(shared.env ?? {})
+        ? vertexFrom(shared.env ?? {})
+        : Result.ok<Connection>(SUBSCRIPTION_CONNECTION);
     });
 };
 
-export const readConnectionSettings = async (
-  path: string,
-): Promise<
-  Result<
-    Map<string, Connection>,
-    ConnectionSettingsUnreadable | ConnectionSettingsInvalid
-  >
-> => {
-  const read = await readTextFileIfExists(path);
-  if (read.isErr()) {
+const vertexFrom = (
+  env: Record<string, string>,
+): Result<Connection, VertexSettingsIncomplete | VertexGatewayUnsupported> => {
+  const gateway = GATEWAY_ENV.find((name) => env[name] !== undefined);
+  if (gateway !== undefined) {
     return Result.err(
-      new ConnectionSettingsUnreadable({
-        path,
-        cause: read.error,
-        message: `harnexus cannot read its connection settings in ${path}`,
+      new VertexGatewayUnsupported({
+        name: gateway,
+        message: `this repository's Claude Code settings set ${gateway}, which harnexus does not support, so nothing was sent to Claude`,
       }),
     );
   }
-  if (read.value === null) return Result.ok(new Map<string, Connection>());
-  const parsed = parseJson(read.value);
-  if (parsed.isErr()) return Result.err(invalid(path, "not valid JSON"));
-  return parseSettings(parsed.value).mapError((problem) =>
-    invalid(path, problem),
-  );
+  const projectId = env.ANTHROPIC_VERTEX_PROJECT_ID ?? "";
+  const region = env.CLOUD_ML_REGION ?? "";
+  const missing =
+    projectId === ""
+      ? "ANTHROPIC_VERTEX_PROJECT_ID"
+      : region === ""
+        ? "CLOUD_ML_REGION"
+        : null;
+  if (missing !== null) {
+    return Result.err(
+      new VertexSettingsIncomplete({
+        name: missing,
+        message: `this repository's Claude Code settings choose Google Vertex AI without ${missing}, so nothing was sent to Claude`,
+      }),
+    );
+  }
+  return Result.ok({
+    provider: "vertex",
+    projectId,
+    region,
+    env: Object.fromEntries(
+      Object.entries(env).filter(([name]) => isPassedToClaude(name)),
+    ),
+  });
 };
 
-// A folder inside a repository can keep a setting of its own.
-const matchConnection = (
-  settings: ReadonlyMap<string, Connection>,
-  paths: readonly string[],
-) => {
-  let matched: { path: string; connection: Connection } | null = null;
-  for (const [path, connection] of settings) {
-    const inside = paths.some(
-      (candidate) =>
-        candidate === path || candidate.startsWith(`${path}${sep}`),
-    );
-    if (inside && (matched === null || path.length > matched.path.length)) {
-      matched = { path, connection };
-    }
-  }
-  return matched?.connection ?? SUBSCRIPTION_CONNECTION;
-};
+const choosesVertex = (env: Record<string, string>) =>
+  TRUTHY.has((env.CLAUDE_CODE_USE_VERTEX ?? "").toLowerCase());
+
+// Other variables in the settings, such as another tool's API key, stay where Claude Code itself would read them.
+const isPassedToClaude = (name: string) =>
+  VERTEX_PASSED_ENV.has(name) ||
+  name.startsWith(VERTEX_REGION_PREFIX) ||
+  MODEL_PIN.test(name);
 
 const gitRepositoryOf: RepositoryOf = async (worktree) => {
   const read = await readCommandOutput("git", [
@@ -118,132 +122,20 @@ const gitRepositoryOf: RepositoryOf = async (worktree) => {
   return basename(common) === ".git" ? dirname(common) : null;
 };
 
-const parseSettings = (
-  value: unknown,
-): Result<Map<string, Connection>, string> => {
-  if (!isObject(value)) return Result.err("must be a JSON object");
-  const unknown = unknownKey(value, ["repositories"], "");
-  if (unknown !== null) return Result.err(unknown);
-  const repositories = value.repositories ?? {};
-  if (!isObject(repositories)) {
-    return Result.err("repositories must be an object");
-  }
-  const settings = new Map<string, Connection>();
-  for (const [path, entry] of Object.entries(repositories)) {
-    if (!isAbsolute(path)) {
-      return Result.err(`repository ${path} must be an absolute path`);
-    }
-    const connection = parseConnection(entry, `repository ${path}`);
-    if (connection.isErr()) return Result.err(connection.error);
-    settings.set(resolve(path), connection.value);
-  }
-  return Result.ok(settings);
-};
+const REPOSITORY_SOURCES: SettingSource[] = ["project", "local"];
 
-const parseConnection = (
-  entry: unknown,
-  at: string,
-): Result<Connection, string> => {
-  if (!isObject(entry)) return Result.err(`${at} must be an object`);
-  if (entry.provider === "subscription") {
-    const unknown = unknownKey(entry, ["provider"], at);
-    return unknown === null
-      ? Result.ok(SUBSCRIPTION_CONNECTION)
-      : Result.err(unknown);
-  }
-  if (entry.provider !== "vertex") {
-    return Result.err(`${at} must set provider to "vertex" or "subscription"`);
-  }
-  const unknown = unknownKey(entry, VERTEX_KEYS, at);
-  if (unknown !== null) return Result.err(unknown);
-  if (!isText(entry.projectId, PROJECT_ID)) {
-    return Result.err(`${at} must set projectId to a Google Cloud project ID`);
-  }
-  if (!isText(entry.region, REGION)) {
-    return Result.err(`${at} must set region, such as global or us-east5`);
-  }
-  const credentialsFile = entry.credentialsFile ?? null;
-  if (
-    credentialsFile !== null &&
-    !(typeof credentialsFile === "string" && isAbsolute(credentialsFile))
-  ) {
-    return Result.err(`${at} credentialsFile must be an absolute path`);
-  }
-  const models = entry.models ?? {};
-  if (!isModels(models)) {
-    return Result.err(
-      `${at} models must map opus, sonnet or haiku to a model ID`,
-    );
-  }
-  const modelRegions = entry.modelRegions ?? {};
-  if (!isModelRegions(modelRegions)) {
-    return Result.err(
-      `${at} modelRegions must map ${VERTEX_REGION_PREFIX}* variables to regions`,
-    );
-  }
-  return Result.ok({
-    provider: "vertex",
-    projectId: entry.projectId,
-    region: entry.region,
-    credentialsFile,
-    models,
-    modelRegions,
-  });
-};
+const TRUTHY = new Set(["1", "true", "yes", "on"]);
 
-// An unknown key is refused, since a misspelt one would otherwise be ignored without notice.
-const unknownKey = (
-  value: Record<string, unknown>,
-  allowed: readonly string[],
-  at: string,
-) => {
-  const unknown = Object.keys(value).find((key) => !allowed.includes(key));
-  return unknown === undefined
-    ? null
-    : `${at === "" ? "" : `${at} `}has an unknown key ${unknown}`;
-};
+const VERTEX_PASSED_ENV = new Set([
+  "CLAUDE_CODE_USE_VERTEX",
+  "ANTHROPIC_VERTEX_PROJECT_ID",
+  "CLOUD_ML_REGION",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+]);
 
-const isModels = (
-  value: unknown,
-): value is Partial<Record<ModelAlias, string>> =>
-  isObject(value) &&
-  Object.entries(value).every(
-    ([alias, model]) =>
-      (MODEL_ALIASES as readonly string[]).includes(alias) &&
-      isText(model, MODEL_ID),
-  );
+const MODEL_PIN = /^ANTHROPIC_DEFAULT_[A-Z]+_MODEL$/;
 
-const isModelRegions = (value: unknown): value is Record<string, string> =>
-  isObject(value) &&
-  Object.entries(value).every(
-    ([name, region]) => REGION_VARIABLE.test(name) && isText(region, REGION),
-  );
-
-const invalid = (path: string, problem: string) =>
-  new ConnectionSettingsInvalid({
-    path,
-    message: `harnexus connection settings in ${path}: ${problem}`,
-  });
-
-const isText = (value: unknown, pattern: RegExp): value is string =>
-  typeof value === "string" && pattern.test(value);
-
-const VERTEX_KEYS = [
-  "provider",
-  "projectId",
-  "region",
-  "credentialsFile",
-  "models",
-  "modelRegions",
+const GATEWAY_ENV = [
+  "ANTHROPIC_VERTEX_BASE_URL",
+  "CLAUDE_CODE_SKIP_VERTEX_AUTH",
 ];
-
-const MODEL_ALIASES: readonly ModelAlias[] = ["opus", "sonnet", "haiku"];
-
-// Domain-scoped projects such as example.com:project contain a dot and a colon.
-const PROJECT_ID = /^[a-z0-9][a-z0-9.:-]*$/;
-
-const REGION = /^[a-z0-9-]+$/;
-
-const MODEL_ID = /^\S+$/;
-
-const REGION_VARIABLE = new RegExp(`^${VERTEX_REGION_PREFIX}[A-Z0-9_]+$`);

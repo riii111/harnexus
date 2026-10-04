@@ -1,12 +1,11 @@
 import { isObject } from "../../runtime/object.ts";
 
+// env holds the Vertex variables the repository's Claude Code settings set, which a worktree without those settings files still needs.
 export type VertexConnection = {
   provider: "vertex";
   projectId: string;
   region: string;
-  credentialsFile: string | null;
-  models: Readonly<Partial<Record<ModelAlias, string>>>;
-  modelRegions: Readonly<Record<string, string>>;
+  env: Readonly<Record<string, string>>;
 };
 
 export type Connection = { provider: "subscription" } | VertexConnection;
@@ -15,8 +14,6 @@ export type Connection = { provider: "subscription" } | VertexConnection;
 export type ConnectionTarget =
   | { provider: "subscription" }
   | { provider: "vertex"; projectId: string; region: string };
-
-export type ModelAlias = "opus" | "sonnet" | "haiku";
 
 export const VERTEX_REGION_PREFIX = "VERTEX_REGION_CLAUDE_";
 
@@ -57,10 +54,5 @@ const settingsKey = (connection: Connection) =>
     : JSON.stringify([
         connection.projectId,
         connection.region,
-        connection.credentialsFile,
-        sortedEntries(connection.models),
-        sortedEntries(connection.modelRegions),
+        Object.entries(connection.env).sort(([a], [b]) => a.localeCompare(b)),
       ]);
-
-const sortedEntries = (record: Readonly<Record<string, string>>) =>
-  Object.entries(record).sort(([a], [b]) => a.localeCompare(b));

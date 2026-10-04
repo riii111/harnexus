@@ -286,7 +286,7 @@ describe("/session", () => {
 
     const reply = agentTexts(sent).at(-1) ?? "";
     expect(reply).toContain(`cd '${dir}' && claude --resume 'se-1'`);
-    expect(reply).not.toContain("harnexus settings");
+    expect(reply).not.toContain("Claude Code settings");
     expect(await promptsUntil(claude, 1)).toEqual(["prompt 10"]);
   });
 
@@ -305,7 +305,7 @@ describe("/session", () => {
       "- Provider: Google Vertex AI (confirmed by Claude Code when this chat's Claude session started)",
     );
     expect(reply).toContain(
-      "- Google Cloud project: `sidework-project` (from harnexus settings)",
+      "- Google Cloud project: `sidework-project` (from this repository's Claude Code settings)",
     );
     expect(reply).toContain(
       `cd '${dir}' && CLAUDE_CODE_USE_VERTEX='1' ANTHROPIC_VERTEX_PROJECT_ID='sidework-project' CLOUD_ML_REGION='global' claude --resume 'se-1'`,
@@ -315,8 +315,11 @@ describe("/session", () => {
   test("answers a terminal command with the repository's model settings and asks for its credentials file without showing its path", async () => {
     const pinned = {
       ...VERTEX,
-      credentialsFile: "/keys/sidework.json",
-      models: { haiku: "claude-haiku-4-5@20251001" },
+      env: {
+        ...VERTEX.env,
+        GOOGLE_APPLICATION_CREDENTIALS: "/keys/sidework.json",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5@20251001",
+      },
     };
     const claude = fakeClaude(VERTEX_ACCOUNT);
     const { turns, sent } = await harness([claude], {
@@ -347,7 +350,7 @@ describe("/session", () => {
     const reply = agentTexts(sent).at(-1) ?? "";
     expect(reply).toContain("no Claude conversation yet");
     expect(reply).toContain(
-      "harnexus settings choose Google Vertex AI (project `sidework-project`, region `global`)",
+      "This repository's Claude Code settings choose Google Vertex AI (project `sidework-project`, region `global`)",
     );
     expect(claude.started()).toBe(false);
   });
@@ -365,7 +368,7 @@ describe("/session", () => {
     await until(() => completedTurnStatuses(sent).length === 2);
 
     expect(agentTexts(sent).at(-1)).toContain(
-      "harnexus settings now choose your Claude subscription for this repository. Send /switch-connection",
+      "This repository's Claude Code settings now choose your Claude subscription. Send /switch-connection",
     );
   });
 
@@ -390,21 +393,27 @@ describe("/switch-connection", () => {
       resolveConnection: async () => Result.ok(current),
     });
     await completeTurn(turns, sent, first, 10);
-    current = { ...VERTEX, projectId: "next-project" };
+    current = {
+      ...VERTEX,
+      projectId: "next-project",
+      env: { ...VERTEX.env, ANTHROPIC_VERTEX_PROJECT_ID: "next-project" },
+    };
 
     turns.startTurn(turnStart(11, "/switch-connection"), undefined);
     await until(() => completedTurnStatuses(sent).length === 2);
     const switched = agentTexts(sent).at(-1);
     await completeTurn(turns, sent, second, 12);
 
-    expect(switched).toContain("now follows harnexus settings");
+    expect(switched).toContain(
+      "now follows this repository's Claude Code settings",
+    );
     expect(first.closes()).toBe(1);
     expect(settings[1]).toMatchObject({
       resume: "se-1",
       connection: { projectId: "next-project" },
     });
     expect(agentTexts(sent).at(-2)).toContain(
-      "- Google Cloud project: `next-project` (from harnexus settings)",
+      "- Google Cloud project: `next-project` (from this repository's Claude Code settings)",
     );
     expect(store.get(THREAD)?.connection).toEqual({
       provider: "vertex",

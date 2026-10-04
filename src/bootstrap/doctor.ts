@@ -1,9 +1,8 @@
 import { dirname, join } from "node:path";
-import { readConnectionSettings } from "../infra/claude/connection-settings.ts";
 import { readClaudeLogin } from "../infra/claude/session.ts";
 import { isVerifiedCodex } from "../infra/codex/versions.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
-import { loadConnectionsPath, loadStatePath } from "../runtime/config.ts";
+import { loadStatePath } from "../runtime/config.ts";
 import { checkAccess, readTextFileIfExists } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
@@ -20,14 +19,12 @@ import {
 const REPO = join(import.meta.dir, "..", "..");
 const APP = process.env.HARNEXUS_APP_PATH || "/Applications/ChatGPT.app";
 
-const connections = await connectionsCheck();
 const checks: Check[] = [
   await appCheck(),
   await codexCheck(),
   await sdkCheck(),
   await bunCheck(),
-  connections.check,
-  await loginCheck(connections.vertexRepositories),
+  await loginCheck(),
   ...(await stateChecks()),
   await launcherCheck(),
   ...(await processesChecks()),
@@ -104,59 +101,15 @@ async function bunCheck(): Promise<Check> {
       };
 }
 
-// Neither the project nor the credentials are tried against Google Cloud, since that would need a request to Vertex AI.
-async function connectionsCheck(): Promise<{
-  check: Check;
-  vertexRepositories: number;
-}> {
-  const path = loadConnectionsPath(process.env);
-  if (path.isErr()) {
-    return {
-      check: {
-        status: "fail",
-        name: "Connections",
-        detail: path.error.message,
-      },
-      vertexRepositories: 0,
-    };
-  }
-  const settings = await readConnectionSettings(path.value);
-  if (settings.isErr()) {
-    return {
-      check: {
-        status: "fail",
-        name: "Connections",
-        detail: settings.error.message,
-      },
-      vertexRepositories: 0,
-    };
-  }
-  const vertex = [...settings.value.values()].filter(
-    (connection) => connection.provider === "vertex",
-  );
-  return {
-    check: {
-      status: "ok",
-      name: "Connections",
-      detail:
-        vertex.length === 0
-          ? "every repository uses the Claude subscription"
-          : `${vertex.length} ${vertex.length === 1 ? "repository uses" : "repositories use"} Google Vertex AI as set in ${path.value}`,
-    },
-    vertexRepositories: vertex.length,
-  };
-}
-
-async function loginCheck(vertexRepositories: number): Promise<Check> {
+async function loginCheck(): Promise<Check> {
   const login = await readClaudeLogin();
-  if (login.isOk()) {
-    return { status: "ok", name: "Claude login", detail: login.value };
-  }
-  return {
-    status: vertexRepositories > 0 ? "warn" : "fail",
-    name: "Claude login",
-    detail: `${login.error._tag}: ${login.error.message}${vertexRepositories > 0 ? "; only repositories on the Claude subscription need it" : ""}`,
-  };
+  return login.isOk()
+    ? { status: "ok", name: "Claude login", detail: login.value }
+    : {
+        status: "fail",
+        name: "Claude login",
+        detail: `${login.error._tag}: ${login.error.message}; chats in repositories whose Claude Code settings choose Google Vertex AI do not need it`,
+      };
 }
 
 async function stateChecks(): Promise<Check[]> {

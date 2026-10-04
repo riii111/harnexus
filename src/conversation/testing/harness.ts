@@ -185,9 +185,11 @@ export const VERTEX: VertexConnection = {
   provider: "vertex",
   projectId: "sidework-project",
   region: "global",
-  credentialsFile: null,
-  models: {},
-  modelRegions: {},
+  env: {
+    CLAUDE_CODE_USE_VERTEX: "1",
+    ANTHROPIC_VERTEX_PROJECT_ID: "sidework-project",
+    CLOUD_ML_REGION: "global",
+  },
 };
 
 export const SUBSCRIPTION: AccountInfo = {

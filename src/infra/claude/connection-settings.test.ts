@@ -2,17 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  createConnectionResolver,
-  readConnectionSettings,
-} from "./connection-settings.ts";
+import { createConnectionResolver } from "./connection-settings.ts";
 
 let dir: string;
-let path: string;
 
 beforeEach(async () => {
   dir = await realpath(await mkdtemp(join(tmpdir(), "harnexus-connections-")));
-  path = join(dir, "connections.json");
 });
 
 afterEach(async () => {
@@ -20,13 +15,11 @@ afterEach(async () => {
 });
 
 describe("createConnectionResolver", () => {
-  test("leaves every repository on the subscription without a settings file", async () => {
-    const resolve = createConnectionResolver({
-      path,
-      repositoryOf: noRepository,
-    });
+  test("leaves a repository without Vertex in its Claude Code settings on the subscription", async () => {
+    await writeSettings(dir, "settings.json", { env: { FOO: "bar" } });
+    const resolve = createConnectionResolver({ repositoryOf: noRepository });
 
-    const connection = await resolve("/work/side");
+    const connection = await resolve(dir);
 
     expect(connection.isOk() && connection.value).toEqual({
       provider: "subscription",
@@ -34,78 +27,58 @@ describe("createConnectionResolver", () => {
   });
 
   test.each([
-    { name: "the repository itself", worktree: "/work/side" },
-    { name: "a folder inside it", worktree: "/work/side/packages/app" },
-  ])("gives $name the repository's Vertex connection", async ({ worktree }) => {
-    await writeSettings({ "/work/side": VERTEX_ENTRY });
-    const resolve = createConnectionResolver({
-      path,
-      repositoryOf: noRepository,
-    });
+    { name: "local", file: "settings.local.json" },
+    { name: "shared", file: "settings.json" },
+  ])("takes Vertex from the repository's $name Claude Code settings", async ({
+    file,
+  }) => {
+    await writeSettings(dir, file, { env: VERTEX_ENV });
+    const resolve = createConnectionResolver({ repositoryOf: noRepository });
 
-    const connection = await resolve(worktree);
+    const connection = await resolve(dir);
 
     expect(connection.isOk() && connection.value).toEqual(VERTEX);
   });
 
-  test("leaves a repository whose path only starts like a configured one on the subscription", async () => {
-    await writeSettings({ "/work/side": VERTEX_ENTRY });
-    const resolve = createConnectionResolver({
-      path,
-      repositoryOf: noRepository,
+  test("passes Claude only the Vertex variables, model pins and credentials file of the settings", async () => {
+    await writeSettings(dir, "settings.local.json", {
+      env: {
+        ...VERTEX_ENV,
+        GOOGLE_APPLICATION_CREDENTIALS: "/keys/sidework.json",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5@20251001",
+        VERTEX_REGION_CLAUDE_HAIKU_4_5: "us-east5",
+        LINEAR_API_KEY: "fixture-key",
+      },
     });
+    const resolve = createConnectionResolver({ repositoryOf: noRepository });
 
-    const connection = await resolve("/work/side-other");
+    const connection = await resolve(dir);
+
+    expect(connection.isOk() && connection.value).toEqual({
+      ...VERTEX,
+      env: {
+        ...VERTEX_ENV,
+        GOOGLE_APPLICATION_CREDENTIALS: "/keys/sidework.json",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5@20251001",
+        VERTEX_REGION_CLAUDE_HAIKU_4_5: "us-east5",
+      },
+    });
+  });
+
+  test("leaves a repository whose settings turn Vertex off on the subscription", async () => {
+    await writeSettings(dir, "settings.local.json", {
+      env: { ...VERTEX_ENV, CLAUDE_CODE_USE_VERTEX: "0" },
+    });
+    const resolve = createConnectionResolver({ repositoryOf: noRepository });
+
+    const connection = await resolve(dir);
 
     expect(connection.isOk() && connection.value).toEqual({
       provider: "subscription",
     });
   });
 
-  test("gives a worktree outside the repository the repository's connection", async () => {
-    await writeSettings({ "/work/side": VERTEX_ENTRY });
-    const resolve = createConnectionResolver({
-      path,
-      repositoryOf: async () => "/work/side",
-    });
-
-    const connection = await resolve("/codex/worktrees/b378/side");
-
-    expect(connection.isOk() && connection.value).toEqual(VERTEX);
-  });
-
-  test("lets a folder inside a Vertex repository keep the subscription", async () => {
-    await writeSettings({
-      "/work/side": VERTEX_ENTRY,
-      "/work/side/docs": { provider: "subscription" },
-    });
-    const resolve = createConnectionResolver({
-      path,
-      repositoryOf: noRepository,
-    });
-
-    const connection = await resolve("/work/side/docs");
-
-    expect(connection.isOk() && connection.value).toEqual({
-      provider: "subscription",
-    });
-  });
-
-  test("reads an edited file on the next call", async () => {
-    const resolve = createConnectionResolver({
-      path,
-      repositoryOf: noRepository,
-    });
-    const before = await resolve("/work/side");
-
-    await writeSettings({ "/work/side": VERTEX_ENTRY });
-    const after = await resolve("/work/side");
-
-    expect(before.isOk() && before.value.provider).toBe("subscription");
-    expect(after.isOk() && after.value.provider).toBe("vertex");
-  });
-
-  test("finds the repository a git worktree belongs to", async () => {
+  test("gives a git worktree without the untracked settings its repository's connection", async () => {
     const repository = join(dir, "side");
     const worktree = join(dir, "worktrees", "side");
     await mkdir(repository);
@@ -128,149 +101,97 @@ describe("createConnectionResolver", () => {
         0,
       );
     }
-    await writeSettings({ [repository]: VERTEX_ENTRY });
-    const resolve = createConnectionResolver({ path });
+    await writeSettings(repository, "settings.local.json", { env: VERTEX_ENV });
+    const resolve = createConnectionResolver();
 
     const connection = await resolve(worktree);
 
     expect(connection.isOk() && connection.value).toEqual(VERTEX);
   });
 
-  test("stops on settings it cannot understand rather than using the subscription", async () => {
-    await writeFile(path, "{");
-    const resolve = createConnectionResolver({
-      path,
-      repositoryOf: noRepository,
-    });
+  test("reads an edited settings file on the next call", async () => {
+    const resolve = createConnectionResolver({ repositoryOf: noRepository });
+    const before = await resolve(dir);
 
-    const connection = await resolve("/work/side");
+    await writeSettings(dir, "settings.local.json", { env: VERTEX_ENV });
+    const after = await resolve(dir);
 
-    expect(connection.isErr() && connection.error._tag).toBe(
-      "ConnectionSettingsInvalid",
-    );
-  });
-});
-
-describe("readConnectionSettings", () => {
-  test("reads a Vertex entry with its credentials file, model pins and model regions", async () => {
-    await writeSettings({
-      "/work/side/": {
-        ...VERTEX_ENTRY,
-        credentialsFile: "/keys/sidework.json",
-        models: { opus: "claude-opus-5-5", haiku: "claude-haiku-4-5@20251001" },
-        modelRegions: { VERTEX_REGION_CLAUDE_HAIKU_4_5: "us-east5" },
-      },
-    });
-
-    const settings = await readConnectionSettings(path);
-
-    expect(settings.isOk() && settings.value.get("/work/side")).toEqual({
-      ...VERTEX,
-      credentialsFile: "/keys/sidework.json",
-      models: { opus: "claude-opus-5-5", haiku: "claude-haiku-4-5@20251001" },
-      modelRegions: { VERTEX_REGION_CLAUDE_HAIKU_4_5: "us-east5" },
-    });
+    expect(before.isOk() && before.value.provider).toBe("subscription");
+    expect(after.isOk() && after.value.provider).toBe("vertex");
   });
 
   test.each([
-    { name: "is not JSON", content: "{", expected: "not valid JSON" },
     {
-      name: "has a relative repository path",
-      content: { repositories: { "work/side": VERTEX_ENTRY } },
-      expected: "must be an absolute path",
+      name: "a project",
+      env: { CLAUDE_CODE_USE_VERTEX: "1", CLOUD_ML_REGION: "global" },
+      expected: "VertexSettingsIncomplete",
     },
     {
-      name: "has a misspelt key",
-      content: {
-        repositories: { "/work/side": { ...VERTEX_ENTRY, projectID: "x" } },
+      name: "a region",
+      env: {
+        CLAUDE_CODE_USE_VERTEX: "1",
+        ANTHROPIC_VERTEX_PROJECT_ID: "sidework-project",
       },
-      expected: "unknown key projectID",
+      expected: "VertexSettingsIncomplete",
     },
-    {
-      name: "has no project",
-      content: {
-        repositories: {
-          "/work/side": { provider: "vertex", region: "global" },
-        },
-      },
-      expected: "must set projectId",
-    },
-    {
-      name: "has an unknown provider",
-      content: { repositories: { "/work/side": { provider: "bedrock" } } },
-      expected: 'provider to "vertex" or "subscription"',
-    },
-    {
-      name: "pins an unknown alias",
-      content: {
-        repositories: {
-          "/work/side": { ...VERTEX_ENTRY, models: { fable: "x" } },
-        },
-      },
-      expected: "models must map opus, sonnet or haiku",
-    },
-    {
-      name: "sets a region through another variable",
-      content: {
-        repositories: {
-          "/work/side": {
-            ...VERTEX_ENTRY,
-            modelRegions: { CLOUD_ML_REGION: "us" },
-          },
-        },
-      },
-      expected: "modelRegions must map VERTEX_REGION_CLAUDE_*",
-    },
-    {
-      name: "has a relative credentials file",
-      content: {
-        repositories: {
-          "/work/side": { ...VERTEX_ENTRY, credentialsFile: "key.json" },
-        },
-      },
-      expected: "credentialsFile must be an absolute path",
-    },
-  ])("refuses a file that $name", async ({ content, expected }) => {
-    await writeFile(
-      path,
-      typeof content === "string" ? content : JSON.stringify(content),
-    );
+  ])("stops on Vertex settings without $name rather than using the subscription", async ({
+    env,
+    expected,
+  }) => {
+    await writeSettings(dir, "settings.local.json", { env });
+    const resolve = createConnectionResolver({ repositoryOf: noRepository });
 
-    const settings = await readConnectionSettings(path);
+    const connection = await resolve(dir);
 
-    expect(settings.isErr() && settings.error._tag).toBe(
-      "ConnectionSettingsInvalid",
-    );
-    expect(settings.isErr() && settings.error.message).toContain(expected);
+    expect(connection.isErr() && connection.error._tag).toBe(expected);
   });
 
-  test("reports a settings path it cannot read", async () => {
-    await mkdir(path);
+  test("stops on Vertex settings that route through a gateway", async () => {
+    await writeSettings(dir, "settings.local.json", {
+      env: { ...VERTEX_ENV, ANTHROPIC_VERTEX_BASE_URL: "https://gw.example" },
+    });
+    const resolve = createConnectionResolver({ repositoryOf: noRepository });
 
-    const settings = await readConnectionSettings(path);
+    const connection = await resolve(dir);
 
-    expect(settings.isErr() && settings.error._tag).toBe(
-      "ConnectionSettingsUnreadable",
+    expect(connection.isErr() && connection.error._tag).toBe(
+      "VertexGatewayUnsupported",
+    );
+  });
+
+  test("stops when the settings cannot be read rather than using the subscription", async () => {
+    const resolve = createConnectionResolver({
+      resolve: async () => {
+        // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
+        throw new Error("unreadable");
+      },
+      repositoryOf: noRepository,
+    });
+
+    const connection = await resolve(dir);
+
+    expect(connection.isErr() && connection.error._tag).toBe(
+      "ClaudeSettingsUnavailable",
     );
   });
 });
 
-const writeSettings = (repositories: Record<string, unknown>) =>
-  writeFile(path, JSON.stringify({ repositories }));
+const writeSettings = async (root: string, file: string, content: object) => {
+  await mkdir(join(root, ".claude"), { recursive: true });
+  await writeFile(join(root, ".claude", file), JSON.stringify(content));
+};
 
 const noRepository = async () => null;
 
-const VERTEX_ENTRY = {
-  provider: "vertex",
-  projectId: "sidework-project",
-  region: "global",
-} as const;
+const VERTEX_ENV = {
+  CLAUDE_CODE_USE_VERTEX: "1",
+  ANTHROPIC_VERTEX_PROJECT_ID: "sidework-project",
+  CLOUD_ML_REGION: "global",
+};
 
 const VERTEX = {
   provider: "vertex",
   projectId: "sidework-project",
   region: "global",
-  credentialsFile: null,
-  models: {},
-  modelRegions: {},
+  env: VERTEX_ENV,
 } as const;

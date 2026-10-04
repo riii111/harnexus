@@ -1330,7 +1330,11 @@ describe("repository connections", () => {
     },
     {
       name: "another Google Cloud project",
-      configured: { ...VERTEX, projectId: "other-project" },
+      configured: {
+        ...VERTEX,
+        projectId: "other-project",
+        env: { ...VERTEX.env, ANTHROPIC_VERTEX_PROJECT_ID: "other-project" },
+      },
       expected: "project `other-project`",
     },
   ])("refuse a turn without reaching Claude once the repository's settings choose $name", async ({
@@ -1412,8 +1416,11 @@ describe("repository connections", () => {
     await completeTurn(turns, sent, first, 10);
     current = {
       ...VERTEX,
-      credentialsFile: "/keys/sidework.json",
-      models: { haiku: "claude-haiku-4-5@20251001" },
+      env: {
+        ...VERTEX.env,
+        GOOGLE_APPLICATION_CREDENTIALS: "/keys/sidework.json",
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-4-5@20251001",
+      },
     };
 
     await completeTurn(turns, sent, second, 11);
@@ -1432,13 +1439,37 @@ describe("repository connections", () => {
     ]);
   });
 
-  test("refuse a turn without starting Claude when the connection settings cannot be read", async () => {
-    const path = join(dir, "connections.json");
-    await writeFile(path, '{"repositories": {"relative": {}}}');
+  test("start Claude on Vertex from the repository's own Claude Code settings", async () => {
+    await mkdir(join(dir, ".claude"), { recursive: true });
+    await writeFile(
+      join(dir, ".claude", "settings.local.json"),
+      JSON.stringify({ env: VERTEX.env }),
+    );
+    const claude = fakeClaude(VERTEX_ACCOUNT);
+    const { turns, sent, settings } = await harness([claude], {
+      resolveConnection: createConnectionResolver({
+        repositoryOf: async () => null,
+      }),
+    });
+
+    await completeTurn(turns, sent, claude, 10);
+
+    expect(settings[0]?.connection).toEqual(VERTEX);
+    expect(agentMessages(sent)[0]).toEqual({
+      phase: "commentary",
+      text: VERTEX_NOTICE,
+    });
+  });
+
+  test("refuse a turn without starting Claude when the repository's Vertex settings are incomplete", async () => {
+    await mkdir(join(dir, ".claude"), { recursive: true });
+    await writeFile(
+      join(dir, ".claude", "settings.local.json"),
+      JSON.stringify({ env: { CLAUDE_CODE_USE_VERTEX: "1" } }),
+    );
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, store } = await harness([claude], {
       resolveConnection: createConnectionResolver({
-        path,
         repositoryOf: async () => null,
       }),
     });
@@ -1447,7 +1478,9 @@ describe("repository connections", () => {
     await until(() => turnCompleted(sent) !== undefined);
 
     expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
-    expect(turnCompleted(sent)?.error?.message).toContain(path);
+    expect(turnCompleted(sent)?.error?.message).toContain(
+      "ANTHROPIC_VERTEX_PROJECT_ID",
+    );
     expect(claude.started()).toBe(false);
     expect(store.get(THREAD)?.connection).toBeNull();
   });
@@ -3880,6 +3913,6 @@ const VERTEX_NOTICE = [
   "Harnexus connection",
   "",
   "- Provider: Google Vertex AI (confirmed by Claude Code)",
-  "- Google Cloud project: `sidework-project` (from harnexus settings)",
-  "- Region: `global` (from harnexus settings)",
+  "- Google Cloud project: `sidework-project` (from this repository's Claude Code settings)",
+  "- Region: `global` (from this repository's Claude Code settings)",
 ].join("\n");

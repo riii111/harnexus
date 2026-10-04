@@ -22,7 +22,6 @@ import { type RelayObserver, relayStreams } from "../infra/codex/relay.ts";
 import { attachServerRequests } from "../infra/codex/server-requests.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import {
-  loadConnectionsPath,
   loadPermissionMode,
   loadShutdownGraceMs,
   loadStatePath,
@@ -95,14 +94,6 @@ async function withClaude(relay: {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
     return plain;
   }
-  const connections = loadConnectionsPath(process.env);
-  if (connections.isErr()) {
-    logger.log({
-      event: "claude_unavailable",
-      reason: connections.error._tag,
-    });
-    return plain;
-  }
   const permissionMode = loadPermissionMode(process.env);
   if (permissionMode.isErr()) {
     logger.log({
@@ -143,7 +134,7 @@ async function withClaude(relay: {
     findSession: claudeSessionExists,
     listConversations: (cwd, since) => listClaudeConversations(cwd, { since }),
     lastRecordOf: (sessionId) => readLastRecordUuid(sessionId),
-    resolveConnection: createConnectionResolver({ path: connections.value }),
+    resolveConnection: createConnectionResolver(),
     readSession: (sessionId) => readClaudeSession(sessionId),
     readSubagents: (sessionId) => readClaudeSubagents(sessionId),
     // Unreadable settings leave threads with none picked on the model default, which is still the level the app shows.

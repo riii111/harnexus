@@ -69,7 +69,7 @@ export const sessionReplyText = (reply: SessionReply, now: number): string => {
     case "connectionSwitched":
       return switchedText(reply.to);
     case "connectionUnchanged":
-      return "This chat already uses the connection harnexus settings choose for this repository, so nothing changed.";
+      return "This chat already uses the connection this repository's Claude Code settings choose, so nothing changed.";
     case "connectionNotSaved":
       return "Harnexus could not save the change, so this chat stays on its connection. Send /switch-connection again to retry.";
     case "connectionUnreadable":
@@ -135,7 +135,7 @@ const sessionText = ({
     ...(connection.credentialsFile
       ? [
           "",
-          "Also set GOOGLE_APPLICATION_CREDENTIALS to the credentialsFile in your harnexus settings.",
+          "Also set GOOGLE_APPLICATION_CREDENTIALS as this repository's Claude Code settings do.",
         ]
       : []),
   ].join("\n");

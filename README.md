@@ -24,7 +24,7 @@ You need:
 
 - macOS with Codex available in the ChatGPT app at `/Applications/ChatGPT.app`.
 - Bun installed. This project pins Bun 1.3.13.
-- Claude Code signed in with your Claude subscription, or [Google Vertex AI](#use-google-vertex-ai-for-a-repository) set up for the repositories that should use it. API keys and other cloud providers are not supported.
+- Claude Code signed in with your Claude subscription, or [Google Vertex AI](#use-google-vertex-ai-for-a-repository) set in the Claude Code settings of the repositories that should use it. API keys and other cloud providers are not supported.
 
 ### Install and open
 
@@ -78,7 +78,7 @@ First, make sure you quit the app before opening it with `bun run open-app`. The
 bun run doctor
 ```
 
-The report checks installed versions, your connection settings, your Claude login, saved state, the launcher, and any bridge or Claude processes left running. It prints no conversation text or credentials.
+The report checks installed versions, your Claude login, saved state, the launcher, and any bridge or Claude processes left running. It prints no conversation text or credentials.
 
 ### After an app update
 
@@ -90,45 +90,30 @@ HARNEXUS_UNVERIFIED_CODEX=pause bun run open-app
 
 ## Use Google Vertex AI for a repository
 
-Every chat uses your Claude subscription unless you choose otherwise. To run the chats of a repository on Claude through Google Vertex AI instead, for example a side project billed to its own Google Cloud project, list the repository in `~/.config/harnexus/connections.json`:
+Chats use your Claude subscription unless a repository's own Claude Code settings choose Google Vertex AI. If `claude` in a terminal already runs on Vertex AI in that repository through its `.claude/settings.local.json` or `.claude/settings.json`, harnexus does the same with no extra setup:
 
 ```json
 {
-  "repositories": {
-    "/Users/you/src/side-project": {
-      "provider": "vertex",
-      "projectId": "sidework-project",
-      "region": "global"
-    }
+  "env": {
+    "CLAUDE_CODE_USE_VERTEX": "1",
+    "ANTHROPIC_VERTEX_PROJECT_ID": "sidework-project",
+    "CLOUD_ML_REGION": "global"
   }
 }
 ```
 
-- Use the repository's absolute path. Folders inside it and the worktrees Codex creates for it use the same connection.
+- Chats in the worktrees Codex creates for the repository use the same connection, even though they do not carry a copy of `settings.local.json`.
 - Other repositories stay on your subscription, and chats on different connections can run at the same time.
-- harnexus reads the file for each message, so a change applies without restarting the app.
+- Model pins such as `ANTHROPIC_DEFAULT_HAIKU_MODEL`, region overrides such as `VERTEX_REGION_CLAUDE_HAIKU_4_5`, and `GOOGLE_APPLICATION_CREDENTIALS` in the same settings apply too. A change applies from your next message.
+- Vertex settings in your user settings (`~/.claude/settings.json`) would apply to every repository, so harnexus does not start Claude while they are there. Put them in each repository's settings instead.
 
-### Set up Google Cloud
-
-Follow [Claude Code on Google Vertex AI](https://code.claude.com/docs/en/google-vertex-ai) for the Google Cloud side: enable the Vertex AI API in the project, enable the Claude models you want in Model Garden, and sign in with `gcloud auth application-default login`. harnexus passes the project and region to Claude Code; Google Cloud handles authentication and billing.
-
-Keep the Vertex setup in this file only. If Claude Code's own settings set variables such as `CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_PROJECT_ID` or `CLOUD_ML_REGION`, for example in the `env` block that `/setup-vertex` writes to `~/.claude/settings.json`, remove them: harnexus refuses to start Claude when they would override the repository's connection or bypass the subscription.
-
-### Optional keys
-
-| Key | Use |
-| --- | --- |
-| `credentialsFile` | Absolute path to a service account key or credential configuration file to use instead of your Application Default Credentials. Keep the file outside your repositories. |
-| `models` | Pins Claude Code's `opus`, `sonnet` and `haiku` aliases to model IDs enabled in your project, such as `{ "haiku": "claude-haiku-4-5@20251001" }`. Subagents and background tasks use these aliases. |
-| `modelRegions` | Sets the region for a model not offered in `region`, such as `{ "VERTEX_REGION_CLAUDE_HAIKU_4_5": "us-east5" }`. |
-
-To keep a folder inside a Vertex repository on your subscription, list that folder with `{ "provider": "subscription" }`. To use another file, set `HARNEXUS_CONNECTIONS_PATH` to its absolute path before `bun run open-app`.
+For the Google Cloud side, follow [Claude Code on Google Vertex AI](https://code.claude.com/docs/en/google-vertex-ai): enable the Vertex AI API, enable the Claude models you want in Model Garden, and sign in with `gcloud auth application-default login`. Google Cloud handles authentication and billing.
 
 ### In a chat
 
-- **First reply**: Before Claude's first reply, harnexus shows the provider Claude Code reported and the Google Cloud project and region from your settings. Claude Code reports the provider without contacting Google Cloud, so the note does not confirm your credentials or the billing account. Chats on your subscription show no note.
+- **First reply**: Before Claude's first reply, harnexus shows the provider Claude Code reported and the Google Cloud project and region from the repository's settings. Claude Code reports the provider without contacting Google Cloud, so the note does not confirm your credentials or the billing account. Chats on your subscription show no note.
 - **`/session`**: Shows the connection again, with a terminal command that resumes the conversation on the same project and region.
-- **Changed settings**: A chat keeps the connection it started on. If you change the repository's setting later, harnexus stops before sending your next message and tells you what changed. Restore the setting to continue as before, or send `/switch-connection` to move the chat to the new connection.
+- **Changed settings**: A chat keeps the provider, project and region it started on. If the repository's settings change them later, harnexus stops before sending your next message and tells you what changed. Restore the setting to continue as before, or send `/switch-connection` to move the chat.
 - **Models**: The model picker lists the same Claude models for every repository. In a Vertex chat, pick a model enabled in your project.
 
 ### When something fails
@@ -137,11 +122,12 @@ harnexus never falls back to your subscription or another billing route. The fai
 
 | Message | What to do |
 | --- | --- |
-| `Could not load Google Cloud credentials` | Run `gcloud auth application-default login`, or check the path in `credentialsFile`. |
-| `model not found` (404) | Enable the model in Model Garden, check that it is offered in your region, or set `models` or `modelRegions`. |
+| `Could not load Google Cloud credentials` | Run `gcloud auth application-default login`, or check `GOOGLE_APPLICATION_CREDENTIALS`. |
+| `model not found` (404) | Enable the model in Model Garden, check that it is offered in your region, or pin another model. |
 | `429` or a quota error | Request more quota in the Google Cloud console, or try the `global` region. |
-| `harnexus connection settings in …` or `harnexus cannot read its connection settings …` | Fix the file named in the message. `bun run doctor` reports the same problem. |
-| `Claude settings must not set …` | Remove the named variables from the `env` block of Claude Code's settings. |
+| `… choose Google Vertex AI without …` | Add the named variable to the repository's Claude Code settings. |
+| `… which harnexus does not support` | Remove the gateway variable it names; Vertex AI gateways are not supported. |
+| `Claude settings must not set …` | Remove the named variables from your user settings, or make them match the repository's settings. |
 | `Claude Code did not report Google Vertex AI …` | Check that no other provider variable reaches Claude Code, then send the message again. |
 
 ## Optional Settings
