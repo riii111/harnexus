@@ -47,6 +47,7 @@ import type { TokenUsageBreakdown } from "../../presentation/protocol.ts";
 import {
   type PickerPage,
   pickerPrompt,
+  searchPrompt,
 } from "../../presentation/session-picker.ts";
 import {
   RECORD_ADVANCED,
@@ -449,11 +450,12 @@ export const createClaudeRuntime = ({
       return;
     }
     let asked = 0;
+    const nextItemId = () => `${turn.turnId}-resume-${++asked}`;
     const reply = await commands.answer(
       turn.threadId,
       turn.record.worktree,
       command,
-      (page) => askPick(turn, page, `${turn.turnId}-resume-${++asked}`, stop),
+      (page) => askPick(turn, page, nextItemId, stop),
     );
     turn.apply(
       renderNotice(
@@ -474,20 +476,26 @@ export const createClaudeRuntime = ({
     await showPicked(turn);
   };
 
-  // The question belongs to no item of the turn, so each one carries an id of its own.
+  // The questions belong to no item of the turn, so each one carries an id of its own.
   const askPick = async (
     turn: Turn,
     page: PickerPage,
-    itemId: string,
+    nextItemId: () => string,
     stop: AbortController,
   ) => {
-    const prompt = pickerPrompt(
-      { threadId: turn.threadId, turnId: turn.turnId, itemId },
-      page,
-      now(),
+    const target = () => ({
+      threadId: turn.threadId,
+      turnId: turn.turnId,
+      itemId: nextItemId(),
+    });
+    const listed = pickerPrompt(target(), page, now());
+    const picked = listed.answerOf(
+      await turn.ask(listed.method, listed.params, stop.signal),
     );
-    return prompt.answerOf(
-      await turn.ask(prompt.method, prompt.params, stop.signal),
+    if (picked.kind !== "searching") return picked;
+    const search = searchPrompt(target());
+    return search.answerOf(
+      await turn.ask(search.method, search.params, stop.signal),
     );
   };
 

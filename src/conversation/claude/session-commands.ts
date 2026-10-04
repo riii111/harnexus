@@ -301,7 +301,6 @@ export const createSessionCommands = ({
   return { answer, remember, forget, advanced };
 };
 
-// typed is null for a turn the user did not type.
 export const sessionCommandOf = (
   typed: string | null,
 ): SessionCommand | null => {
@@ -382,7 +381,7 @@ const MAX_AGE_DAYS = 14;
 
 const MAX_AGE_MS = MAX_AGE_DAYS * 24 * 60 * 60_000;
 
-// Eight conversations and the way to older ones keep a page to nine choices.
-const PAGE_SIZE = 8;
+// Seven conversations, the way to older ones and searching keep a page to nine choices.
+const PAGE_SIZE = 7;
 
 const RESUME = /^\/resume(?:\s+(.*))?$/s;

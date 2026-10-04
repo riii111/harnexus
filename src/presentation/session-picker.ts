@@ -25,52 +25,68 @@ export type PickerAnswer =
   | { kind: "search"; text: string }
   | { kind: "none" };
 
-// The app keys a choice by its label and returns it, or the text typed instead, so every label on a page differs.
+type PromptTarget = { threadId: string; turnId: string; itemId: string };
+
+// The app returns a choice's label and typed text alike, so a page offers only choices, each label distinct, and searching asks for the words in a question of its own.
 export const pickerPrompt = (
-  target: { threadId: string; turnId: string; itemId: string },
+  target: PromptTarget,
   page: PickerPage,
   now: number,
 ) => {
   const more = page.total - page.offset - page.conversations.length;
   const labels = distinctLabels(
     page.conversations.map(({ title }) => shortTitle(title)),
-    more > 0 ? [OLDER] : [],
+    [SEARCH, ...(more > 0 ? [OLDER] : [])],
   );
-  const options = [
-    ...page.conversations.map((conversation, index) => ({
-      label: labels[index] ?? "",
-      description: detailsOf(conversation, now),
-    })),
-    ...(more > 0 ? [{ label: OLDER, description: `${more} more` }] : []),
-  ];
   return {
     method: REQUEST_USER_INPUT,
-    params: {
-      ...target,
-      questions: [
+    params: userInputParams(target, {
+      id: PICK_QUESTION,
+      header: "Resume",
+      question: questionOf(page),
+      isOther: false,
+      isSecret: false,
+      options: [
+        ...page.conversations.map((conversation, index) => ({
+          label: labels[index] ?? "",
+          description: detailsOf(conversation, now),
+        })),
+        ...(more > 0 ? [{ label: OLDER, description: `${more} more` }] : []),
         {
-          id: QUESTION_ID,
-          header: "Resume",
-          question: questionOf(page),
-          isOther: true,
-          isSecret: false,
-          options,
+          label: SEARCH,
+          description:
+            "Find conversations by words from a title or a session id",
         },
       ],
-      isBlocking: true,
-      autoResolutionMs: null,
-    },
-    answerOf: (answer: unknown): PickerAnswer => {
-      const typed = answerTo(answer);
-      if (typed === null) return { kind: "none" };
-      if (more > 0 && typed === OLDER) return { kind: "older" };
-      const index = labels.indexOf(typed);
-      return index >= 0
-        ? { kind: "picked", index }
-        : { kind: "search", text: typed };
+    }),
+    answerOf: (
+      answer: unknown,
+    ): Exclude<PickerAnswer, { kind: "search" }> | { kind: "searching" } => {
+      const chosen = answerTo(answer, PICK_QUESTION);
+      if (chosen === SEARCH) return { kind: "searching" };
+      if (more > 0 && chosen === OLDER) return { kind: "older" };
+      const index = chosen === null ? -1 : labels.indexOf(chosen);
+      return index >= 0 ? { kind: "picked", index } : { kind: "none" };
     },
   };
 };
+
+export const searchPrompt = (target: PromptTarget) => ({
+  method: REQUEST_USER_INPUT,
+  params: userInputParams(target, {
+    id: SEARCH_QUESTION,
+    header: "Resume",
+    question:
+      "Type words from a conversation's title, or its session id, to list the conversations that match.",
+    isOther: true,
+    isSecret: false,
+    options: null,
+  }),
+  answerOf: (answer: unknown): PickerAnswer => {
+    const typed = answerTo(answer, SEARCH_QUESTION);
+    return typed === null ? { kind: "none" } : { kind: "search", text: typed };
+  },
+});
 
 export const shortTitle = (title: string) => {
   const line = title.replace(/\s+/g, " ").trim();
@@ -97,7 +113,6 @@ const questionOf = ({
     ...(total > conversations.length
       ? [`Showing ${offset + 1}–${offset + conversations.length} of ${total}.`]
       : []),
-    "To search, type words from a title or a session id.",
   ].join(" ");
 
 const detailsOf = (conversation: ListedConversation, now: number) =>
@@ -110,7 +125,6 @@ const detailsOf = (conversation: ListedConversation, now: number) =>
     ...(conversation.continued ? ["continued in another thread"] : []),
   ].join(" · ");
 
-// A label already taken gets the first number that makes it distinct.
 const distinctLabels = (labels: string[], reserved: string[]) => {
   const taken = new Set(reserved);
   return labels.map((label) => {
@@ -123,9 +137,19 @@ const distinctLabels = (labels: string[], reserved: string[]) => {
   });
 };
 
-const answerTo = (answer: unknown) => {
+const userInputParams = <Q extends object>(
+  target: PromptTarget,
+  question: Q,
+) => ({
+  ...target,
+  questions: [question],
+  isBlocking: true,
+  autoResolutionMs: null,
+});
+
+const answerTo = (answer: unknown, id: string) => {
   if (!isObject(answer) || !isObject(answer.answers)) return null;
-  const entry = answer.answers[QUESTION_ID];
+  const entry = answer.answers[id];
   if (!isObject(entry) || !Array.isArray(entry.answers)) return null;
   const [first] = entry.answers;
   const typed = typeof first === "string" ? first.trim() : "";
@@ -146,9 +170,13 @@ const originOf = (entrypoint: string | null) =>
 
 const REQUEST_USER_INPUT = "item/tool/requestUserInput";
 
-const QUESTION_ID = "conversation";
+const PICK_QUESTION = "conversation";
+
+const SEARCH_QUESTION = "search";
 
 const OLDER = "Older conversations";
+
+const SEARCH = "Search";
 
 const TITLE_LIMIT = 80;
 

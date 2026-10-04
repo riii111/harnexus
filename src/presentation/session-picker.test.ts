@@ -3,6 +3,7 @@ import {
   type ListedConversation,
   type PickerPage,
   pickerPrompt,
+  searchPrompt,
 } from "./session-picker.ts";
 
 describe("pickerPrompt", () => {
@@ -17,14 +18,22 @@ describe("pickerPrompt", () => {
       "same ask",
       "same ask (2)",
       "same ask (2) (2)",
+      "Search",
     ]);
-    expect(prompt.answerOf(answer("same ask (2)"))).toEqual({
+    expect(prompt.answerOf(picked("same ask (2)"))).toEqual({
       kind: "picked",
       index: 1,
     });
   });
 
-  test("offers older conversations as its own choice only while the list continues past the page", () => {
+  test("offers only choices, leaving searching to a choice of its own", () => {
+    const prompt = pickerPrompt(TARGET, page([listed("ask")]), NOW);
+
+    expect(prompt.params.questions[0]?.isOther).toBe(false);
+    expect(prompt.answerOf(picked("Search"))).toEqual({ kind: "searching" });
+  });
+
+  test("offers older conversations only while the list continues past the page", () => {
     const continued = pickerPrompt(
       TARGET,
       page([listed("ask")], { total: 3 }),
@@ -36,43 +45,40 @@ describe("pickerPrompt", () => {
       NOW,
     );
 
-    expect(labelsOf(continued)).toEqual(["ask", "Older conversations"]);
-    expect(continued.answerOf(answer("Older conversations"))).toEqual({
+    expect(labelsOf(continued)).toEqual([
+      "ask",
+      "Older conversations",
+      "Search",
+    ]);
+    expect(continued.answerOf(picked("Older conversations"))).toEqual({
       kind: "older",
     });
-    expect(labelsOf(last)).toEqual(["ask"]);
-    expect(last.answerOf(answer("Older conversations"))).toEqual({
-      kind: "search",
-      text: "Older conversations",
+    expect(labelsOf(last)).toEqual(["ask", "Search"]);
+    expect(last.answerOf(picked("Older conversations"))).toEqual({
+      kind: "none",
     });
   });
 
-  test("keeps a title that reads like older conversations apart from that choice", () => {
+  test("keeps titles that read like its own choices apart from them", () => {
     const prompt = pickerPrompt(
       TARGET,
-      page([listed("Older conversations")], { total: 2 }),
+      page([listed("Older conversations"), listed("Search")], { total: 3 }),
       NOW,
     );
 
     expect(labelsOf(prompt)).toEqual([
       "Older conversations (2)",
+      "Search (2)",
       "Older conversations",
+      "Search",
     ]);
-  });
-
-  test("answers typed text that is no label as a search", () => {
-    const prompt = pickerPrompt(TARGET, page([listed("ask")]), NOW);
-
-    expect(prompt.answerOf(answer("  login bug "))).toEqual({
-      kind: "search",
-      text: "login bug",
-    });
   });
 
   test.each<{ name: string; result: unknown }>([
     { name: "no result", result: null },
     { name: "no answers", result: { answers: {} } },
-    { name: "a blank answer", result: answer("   ") },
+    { name: "a blank answer", result: picked("   ") },
+    { name: "an answer that is no choice", result: picked("login bug") },
   ])("answers none for $name", ({ result }) => {
     const prompt = pickerPrompt(TARGET, page([listed("ask")]), NOW);
 
@@ -100,6 +106,28 @@ describe("pickerPrompt", () => {
   });
 });
 
+describe("searchPrompt", () => {
+  test("asks for the words as free text and answers them as a search, even when they equal a listed title", () => {
+    const prompt = searchPrompt(TARGET);
+
+    expect(prompt.params.questions[0]).toMatchObject({
+      isOther: true,
+      options: null,
+    });
+    expect(prompt.answerOf(typed("  ask "))).toEqual({
+      kind: "search",
+      text: "ask",
+    });
+  });
+
+  test.each<{ name: string; result: unknown }>([
+    { name: "no result", result: null },
+    { name: "a blank answer", result: typed("   ") },
+  ])("answers none for $name", ({ result }) => {
+    expect(searchPrompt(TARGET).answerOf(result)).toEqual({ kind: "none" });
+  });
+});
+
 const page = (
   conversations: ListedConversation[],
   {
@@ -124,8 +152,12 @@ const listed = (title: string): ListedConversation => ({
   continued: false,
 });
 
-const answer = (typed: string) => ({
-  answers: { conversation: { answers: [typed] } },
+const picked = (label: string) => ({
+  answers: { conversation: { answers: [label] } },
+});
+
+const typed = (text: string) => ({
+  answers: { search: { answers: [text] } },
 });
 
 const labelsOf = (prompt: ReturnType<typeof pickerPrompt>) =>

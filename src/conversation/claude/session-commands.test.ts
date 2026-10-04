@@ -54,13 +54,14 @@ describe("/resume", () => {
     expect(responseTo(sent, 10)?.result.turn).toMatchObject({ id: "turn-1" });
     expect(question.method).toBe("item/tool/requestUserInput");
     expect(question.params.questions[0]).toMatchObject({
-      isOther: true,
+      isOther: false,
       options: [
         { label: "fixture ask", description: expect.stringMatching(/ · CLI$/) },
         {
           label: "other fixture ask",
           description: expect.stringMatching(/ · continued in another thread$/),
         },
+        { label: "Search" },
       ],
     });
     expect(claude.started()).toBe(false);
@@ -119,16 +120,25 @@ describe("/resume", () => {
 
     expect(optionLabels(first)).toEqual([
       ...["ask 1", "ask 2", "ask 3", "ask 4", "ask 5", "ask 6", "ask 7"],
-      "ask 8",
       "Older conversations",
+      "Search",
     ]);
-    expect(optionLabels(second)).toEqual(["ask 9", "ask 10"]);
-    expect(questionText(second)).toContain("Showing 9–10 of 10.");
+    expect(optionLabels(second)).toEqual([
+      "ask 8",
+      "ask 9",
+      "ask 10",
+      "Search",
+    ]);
+    expect(questionText(second)).toContain("Showing 8–10 of 10.");
     expect(store.get(THREAD)?.sessionId).toBe("se-10");
   });
 
   test.each<{ name: string; command: string; typed: string | null }>([
-    { name: "typed in the question", command: "/resume", typed: "LOGIN fix" },
+    {
+      name: "typed after picking Search",
+      command: "/resume",
+      typed: "LOGIN fix",
+    },
     { name: "sent with /resume", command: "/resume login  fix", typed: null },
   ])("narrows the list to the conversations whose title holds every word $name", async ({
     command,
@@ -140,7 +150,7 @@ describe("/resume", () => {
 
     const asked = await askedAfter(turns, sent, typed);
 
-    expect(optionLabels(asked)).toEqual(["fix the login bug"]);
+    expect(optionLabels(asked)).toEqual(["fix the login bug", "Search"]);
     expect(questionText(asked)).toMatch(/Only those matching ".+" are listed/);
   });
 
@@ -151,7 +161,24 @@ describe("/resume", () => {
 
     const asked = await askedAfter(turns, sent, "se-b");
 
-    expect(optionLabels(asked)).toEqual(["add the login page"]);
+    expect(optionLabels(asked)).toEqual(["add the login page", "Search"]);
+  });
+
+  test("searches typed words that equal a listed title instead of picking that conversation", async () => {
+    const { turns, sent, store } = await harness([]);
+    await writeClaudeRecord("se-a", conversationRecords("fix login"), 1);
+    await writeClaudeRecord("se-b", conversationRecords("fix login bug"), 2);
+    await writeClaudeRecord("se-c", conversationRecords("add a page"), 3);
+    turns.startTurn(turnStart(10, "/resume"), undefined);
+
+    const asked = await askedAfter(turns, sent, "fix login");
+
+    expect(optionLabels(asked)).toEqual([
+      "fix login",
+      "fix login bug",
+      "Search",
+    ]);
+    expect(store.get(THREAD)?.sessionId ?? null).toBeNull();
   });
 
   test("lists every conversation again when nothing matches the typed words", async () => {
@@ -161,7 +188,12 @@ describe("/resume", () => {
 
     const asked = await askedAfter(turns, sent, "nothing like it");
 
-    expect(optionLabels(asked)).toHaveLength(3);
+    expect(optionLabels(asked)).toEqual([
+      "fix the login bug",
+      "add the login page",
+      "fix a flaky test",
+      "Search",
+    ]);
     expect(questionText(asked)).toContain(
       'No conversation matches "nothing like it", so all are listed.',
     );
@@ -685,7 +717,7 @@ const answerPick = (
     },
   });
 
-// Typing nothing keeps the first question, as /resume with words narrows it already.
+// Searching picks Search and types the words in the question that follows; no words keeps the first list, as /resume with words narrows it already.
 const askedAfter = async (
   turns: Awaited<ReturnType<typeof harness>>["turns"],
   sent: Sent[],
@@ -693,8 +725,11 @@ const askedAfter = async (
 ) => {
   const first = await pickQuestion(sent, 1);
   if (typed === null) return first;
-  answerPick(turns, first, typed);
-  return pickQuestion(sent, 2);
+  answerPick(turns, first, "Search");
+  const search = await pickQuestion(sent, 2);
+  expect(search.params.questions[0].options).toBeNull();
+  answerPick(turns, search, typed);
+  return pickQuestion(sent, 3);
 };
 
 const optionLabels = (question: Sent): string[] =>
