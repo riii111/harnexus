@@ -295,6 +295,27 @@ describe("model/list", () => {
     });
   });
 
+  test("lists every Claude model as taking images, so the app lets the user attach them", async () => {
+    const { router } = setup();
+
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    const out = parse(
+      await router.fromServer(
+        encode({ id: 2, result: { data: [], nextCursor: null } }),
+      ),
+    );
+
+    expect(
+      out.result.data.map(
+        (model: { inputModalities: string[] }) => model.inputModalities,
+      ),
+    ).toEqual([
+      ["text", "image"],
+      ["text", "image"],
+      ["text", "image"],
+    ]);
+  });
+
   test.each([
     {
       name: "with effort",
