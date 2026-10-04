@@ -189,6 +189,37 @@ describe("buildHistory", () => {
     });
   });
 
+  test.each([
+    {
+      name: "with the typed text",
+      content: [
+        IMAGE_BLOCK,
+        { type: "text", text: "what is wrong here" } as const,
+      ],
+      expected: [
+        { type: "text", text: "what is wrong here", text_elements: [] },
+        { type: "image", url: "data:image/png;base64,iVBORw0KGgo=" },
+      ],
+    },
+    {
+      name: "alone",
+      content: [IMAGE_BLOCK],
+      expected: [{ type: "image", url: "data:image/png;base64,iVBORw0KGgo=" }],
+    },
+  ])("shows an image Claude recorded in a prompt $name from the recorded copy", ({
+    content,
+    expected,
+  }) => {
+    const [turn] = build([
+      { ...prompt("u1", ""), message: { role: "user", content } },
+    ]);
+
+    expect(turn?.items[0]?.item).toMatchObject({
+      type: "userMessage",
+      content: expected,
+    });
+  });
+
   test("returns no turns for an empty record", () => {
     expect(build([])).toEqual([]);
   });
@@ -219,6 +250,11 @@ describe("replayHistory", () => {
     });
   });
 });
+
+const IMAGE_BLOCK = {
+  type: "image",
+  source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" },
+} as const;
 
 const build = (messages: SessionMessage[]) =>
   buildHistory(messages, { threadId: "th-claude", cwd: "/fixture/work" });

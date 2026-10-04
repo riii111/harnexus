@@ -17,11 +17,13 @@ import {
   sameTarget,
   targetOf,
 } from "../../infra/claude/connection.ts";
+import type { ImageBlock, ResizeImage } from "../../infra/claude/images.ts";
 import {
   baseModelId,
   type EffortRule,
   isVertexModel,
 } from "../../infra/claude/models.ts";
+import type { Prompt } from "../../infra/claude/prompt-queue.ts";
 import type {
   ClaudeSessionSettings,
   claudeSessionExists,
@@ -72,6 +74,7 @@ import type {
   TurnLink,
   TurnRuntime,
 } from "../turn-runtime.ts";
+import { readImages } from "./image-attachments.ts";
 import { createInbox, type Inbox } from "./inbox.ts";
 import {
   createSessionCommands,
@@ -129,11 +132,14 @@ type ClaudeFailureTag =
   | SessionMissing["_tag"]
   | ForkNotSeparate["_tag"]
   | ForkPointUnknown["_tag"]
+  | ImageFailureTag
   | ConnectionChanged["_tag"]
   | ConnectionNotSaved["_tag"]
   | ConnectionNotPicked["_tag"]
   | ErrorTag<ReturnType<ResolveConnection>>
   | "SteerUnconfirmed";
+
+type ImageFailureTag = InferErr<Awaited<ReturnType<typeof readImages>>>["_tag"];
 
 type SessionStartup = {
   turn: RunningTurn<ClaudeFailureTag>;
@@ -197,6 +203,7 @@ type SessionSlot = {
 };
 
 // Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken; sends holds the uuid of every message the turn sent Claude.
+// steering settles once the last steer accepted has been sent or refused, so a steer still reading its images keeps the ones after it waiting.
 // command marks a turn the bridge answers itself, such as /session, own one Claude started on its own, holdsApprovals one opened only to show approvals no other turn could, and completed one Claude ended with a successful result.
 type ClaudeTurn = {
   command: boolean;
@@ -204,10 +211,11 @@ type ClaudeTurn = {
   holdsApprovals: boolean;
   completed: boolean;
   slot: SessionSlot | null;
-  unsentSteers: string[];
+  unsentSteers: Prompt[];
   pendingSteers: Set<string>;
   sends: Set<string>;
   steers: number;
+  steering: Promise<unknown>;
 };
 
 // turn stays null until the app is shown the holding turn, and ended declines every approval in it once its Claude is gone.
@@ -275,6 +283,7 @@ export const createClaudeRuntime = ({
   permissionMode = "auto",
   effortRule,
   subagents,
+  resizeImage,
 }: {
   threads: ThreadValues;
   startSession: StartSession;
@@ -299,6 +308,7 @@ export const createClaudeRuntime = ({
     Subagents,
     "start" | "message" | "decline" | "complete" | "settle"
   >;
+  resizeImage: ResizeImage;
 }): TurnRuntime<ClaudeFailureTag> => {
   type Turn = RunningTurn<ClaudeFailureTag>;
 
@@ -388,6 +398,7 @@ export const createClaudeRuntime = ({
       pendingSteers: new Set(),
       sends: new Set(),
       steers: 0,
+      steering: Promise.resolve(),
     };
     turns.set(turn, claude);
     if (command !== null) {
@@ -486,6 +497,14 @@ export const createClaudeRuntime = ({
     const skills = await readSkills(input.text);
     if (skills.unreadable.length > 0) {
       log({ event: "claude_turn", step: "skill_unreadable" });
+    }
+    const images = await readImages(input.images, resizeImage);
+    if (images.isErr()) {
+      turn.fail({
+        _tag: images.error._tag,
+        message: refusalMessage(images.error.refusal),
+      });
+      return;
     }
     await waitForPendingInterrupt(threadId);
     if (turn.state().interrupting) {
@@ -622,7 +641,7 @@ export const createClaudeRuntime = ({
     }
     const inbox = claimReader(slot.value);
     try {
-      if (sendPrompt(turn, claude, slot.value, fresh)) {
+      if (sendPrompt(turn, claude, slot.value, images.value, fresh)) {
         await read(turn, claude, slot.value, inbox, {
           effort,
           sessionStartMs,
@@ -639,12 +658,14 @@ export const createClaudeRuntime = ({
     turn: Turn,
     claude: ClaudeTurn,
     slot: SessionSlot,
+    images: readonly ImageBlock[],
     fresh: Awaited<ReturnType<typeof readSkills>>["skills"],
   ) => {
-    const sent = slot.session.send(
-      turn.input.text,
-      fresh.map(({ block }) => block),
-    );
+    const sent = slot.session.send({
+      text: turn.input.text,
+      images,
+      attachments: fresh.map(({ block }) => block),
+    });
     if (sent.isErr()) {
       dropSession(turn.threadId, slot);
       turn.fail(sent.error);
@@ -1090,23 +1111,58 @@ export const createClaudeRuntime = ({
     cancelIdleClose(threadId);
   };
 
-  const steer = (turn: Turn, text: string): Refusal | null => {
+  const steer = (
+    turn: Turn,
+    input: Pick<Turn["input"], "text" | "images">,
+  ): Promise<Refusal | null> => {
     const claude = turns.get(turn);
-    if (claude === undefined) return "no_running_turn";
-    if (claude.command) return "command_not_steerable";
-    if (claude.holdsApprovals) return "approvals_not_steerable";
-    if (claude.steers >= MAX_STEERS_PER_TURN) return "too_many_steers";
-    if (claude.slot === null) {
-      claude.unsentSteers.push(text);
-    } else if (sendSteer(claude, claude.slot, text).isErr()) {
-      return "steer_not_sent";
+    if (claude === undefined) return Promise.resolve("no_running_turn");
+    if (claude.command) return Promise.resolve("command_not_steerable");
+    if (claude.holdsApprovals) {
+      return Promise.resolve("approvals_not_steerable");
+    }
+    if (claude.steers >= MAX_STEERS_PER_TURN) {
+      return Promise.resolve("too_many_steers");
     }
     claude.steers += 1;
-    return null;
+    const previous = claude.steering;
+    const steered = (async () => {
+      const images = await readImages(input.images, resizeImage);
+      await previous;
+      const refusal = images.isErr()
+        ? images.error.refusal
+        : sendOrQueueSteer(turn, claude, {
+            text: input.text,
+            images: images.value,
+          });
+      if (refusal !== null) claude.steers -= 1;
+      return refusal;
+    })();
+    claude.steering = steered;
+    return steered;
   };
 
-  const sendSteer = (claude: ClaudeTurn, slot: SessionSlot, text: string) => {
-    const sent = slot.session.send(text);
+  // A steer whose images were read after its turn ended or was stopped has nothing to join.
+  const sendOrQueueSteer = (
+    turn: Turn,
+    claude: ClaudeTurn,
+    prompt: Prompt,
+  ): Refusal | null => {
+    const state = turn.state();
+    if (turns.get(turn) !== claude || state.finished || state.interrupting) {
+      return "steer_not_sent";
+    }
+    if (claude.slot === null) {
+      claude.unsentSteers.push(prompt);
+      return null;
+    }
+    return sendSteer(claude, claude.slot, prompt).isErr()
+      ? "steer_not_sent"
+      : null;
+  };
+
+  const sendSteer = (claude: ClaudeTurn, slot: SessionSlot, prompt: Prompt) => {
+    const sent = slot.session.send(prompt);
     if (sent.isOk()) {
       claude.pendingSteers.add(sent.value);
       claude.sends.add(sent.value);

@@ -16,6 +16,7 @@ import { createConnectionResolver } from "../../infra/claude/connection-settings
 import { createModelCatalog, effortRule } from "../../infra/claude/models.ts";
 import { startClaudeSession } from "../../infra/claude/session.ts";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
+import { pngBytes } from "../../infra/claude/testing/image-files.ts";
 import { createEmptyFile, writeFileAtomic } from "../../runtime/fs.boundary.ts";
 import type { createTurnController } from "../controller.ts";
 import {
@@ -2870,7 +2871,7 @@ describe("approvals no turn could show", () => {
 
     agentAsks(claude, "tool-1");
     await appRequest(sent);
-    turns.steerTurn(steer(30, "turn-2", "also this"));
+    await turns.steerTurn(steer(30, "turn-2", "also this"));
 
     expect(responseTo(sent, 30)).toEqual(REFUSED(30));
   });
@@ -3184,10 +3185,12 @@ describe("turn/steer", () => {
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => claude.started());
     // Steers are sent one after another into the same turn, so this loop is a scenario rather than a table.
+    const steered: Promise<void>[] = [];
     for (let id = 100; id < 162; id += 1) {
-      turns.steerTurn(steer(id, "turn-1", `steer ${id}`));
+      steered.push(turns.steerTurn(steer(id, "turn-1", `steer ${id}`)));
     }
-    turns.steerTurn(steer(162, "turn-1", "one too many"));
+    steered.push(turns.steerTurn(steer(162, "turn-1", "one too many")));
+    await Promise.all(steered);
 
     expect(responseTo(sent, 161)?.result).toEqual({ turnId: "turn-1" });
     expect(responseTo(sent, 162)).toEqual(REFUSED(162));
@@ -3274,13 +3277,13 @@ describe("turn/steer", () => {
   test.each([
     { name: "another turn id", request: steer(30, "turn-9", "also this") },
     {
-      name: "non-text input",
+      name: "audio input",
       request: {
         ...steer(30, "turn-1", "also this"),
         params: {
           threadId: THREAD,
           expectedTurnId: "turn-1",
-          input: [{ type: "image" }],
+          input: [{ type: "localAudio", path: "/tmp/note.wav" }],
         },
       },
     },
@@ -3442,6 +3445,178 @@ describe("skill links in Claude input", () => {
       event: "claude_turn",
       step: "skill_unreadable",
     });
+  });
+});
+
+describe("images in Claude input", () => {
+  test("sends an attached image ahead of the typed text while the turn shows the input as the app sent it", async () => {
+    const bytes = pngBytes(40, 30);
+    const path = await writeImage("shot.png", bytes);
+    const input = [
+      { type: "text", text: "what is wrong here", text_elements: [] },
+      { type: "localImage", path },
+    ];
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(withInput(turnStart(10, ""), input), undefined);
+    await until(() => claude.started());
+    const [prompt] = await readPrompts(claude, 1);
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(prompt?.message.content).toEqual([
+      pngBlock(bytes),
+      { type: "text", text: "what is wrong here" },
+    ]);
+    expect(
+      completedItems(sent).filter((item) => item.type === "userMessage"),
+    ).toMatchObject([{ content: input }]);
+  });
+
+  test("sends an image attached without text as the image alone", async () => {
+    const bytes = pngBytes(40, 30);
+    const path = await writeImage("alone.png", bytes);
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude]);
+
+    turns.startTurn(
+      withInput(turnStart(10, ""), [{ type: "localImage", path }]),
+      undefined,
+    );
+
+    expect(await firstPrompt(await promptOf(claude))).toEqual([
+      pngBlock(bytes),
+    ]);
+  });
+
+  test("fails the turn with what the user can do before starting Claude when an image cannot be read", async () => {
+    const path = join(dir, "images", "gone.png");
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, events } = await harness([claude]);
+
+    turns.startTurn(
+      withInput(turnStart(10, ""), [{ type: "localImage", path }]),
+      undefined,
+    );
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(turnCompleted(sent)).toMatchObject({
+      status: "failed",
+      error: { message: expect.stringContaining("attach it again") },
+    });
+    expect(claude.started()).toBe(false);
+    expect(events).toContainEqual(
+      expect.objectContaining({ step: "finished", error: "ImageUnreadable" }),
+    );
+  });
+
+  test("passes a steer's image to Claude ahead of a text steer sent while the image is read", async () => {
+    const bytes = pngBytes(40, 30);
+    const path = await writeImage("steer.png", bytes);
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    const withImage = turns.steerTurn(
+      withInput(steer(30, "turn-1", ""), [
+        { type: "text", text: "and this", text_elements: [] },
+        { type: "localImage", path },
+      ]),
+    );
+    const textOnly = turns.steerTurn(steer(31, "turn-1", "then this"));
+    await Promise.all([withImage, textOnly]);
+    const [, first, second] = await readPrompts(claude, 3);
+
+    expect([responseTo(sent, 30), responseTo(sent, 31)]).toEqual([
+      { id: 30, result: { turnId: "turn-1" } },
+      { id: 31, result: { turnId: "turn-1" } },
+    ]);
+    expect(first?.message.content).toEqual([
+      pngBlock(bytes),
+      { type: "text", text: "and this" },
+    ]);
+    expect(second?.message.content).toBe("then this");
+  });
+
+  test("refuses a steer whose image was still being shrunk when the turn was stopped", async () => {
+    const path = await writeImage("wide.png", pngBytes(4000, 3000));
+    const shrunk = createGate();
+    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
+    const { turns, sent } = await harness([claude], {
+      resizeImage: async () => {
+        await shrunk.promise;
+        return Result.ok(pngBytes(2000, 1500));
+      },
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    const steered = turns.steerTurn(
+      withInput(steer(30, "turn-1", ""), [{ type: "localImage", path }]),
+    );
+    turns.interruptTurn(interrupt(20, "turn-1"));
+    shrunk.open();
+    await steered;
+
+    expect(responseTo(sent, 20)).toEqual({ id: 20, result: {} });
+    expect(responseTo(sent, 30)).toEqual(REFUSED(30));
+  });
+
+  test("refuses a steer whose image was still being shrunk when the turn ended, without sending it to Claude", async () => {
+    const path = await writeImage("late.png", pngBytes(4000, 3000));
+    const shrunk = createGate();
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude], {
+      resizeImage: async () => {
+        await shrunk.promise;
+        return Result.ok(pngBytes(2000, 1500));
+      },
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    const [prompt] = await readPrompts(claude, 1);
+    const steered = turns.steerTurn(
+      withInput(steer(30, "turn-1", ""), [{ type: "localImage", path }]),
+    );
+    claude.emit(sdk(success([prompt?.uuid])));
+    await until(() => turnCompleted(sent) !== undefined);
+    shrunk.open();
+    await steered;
+    turns.startTurn(turnStart(11, "next"), undefined);
+    const [following] = await readPrompts(claude, 1);
+
+    expect(turnCompleted(sent)?.status).toBe("completed");
+    expect(responseTo(sent, 30)).toEqual(REFUSED(30));
+    expect(following?.message.content).toBe("next");
+  });
+
+  test("refuses a steer whose image Claude cannot read and leaves the turn running", async () => {
+    const path = await writeImage(
+      "note.txt",
+      Buffer.from("plain text, no image"),
+    );
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    await turns.steerTurn(
+      withInput(steer(30, "turn-1", ""), [{ type: "localImage", path }]),
+    );
+    await turns.steerTurn(steer(31, "turn-1", "after it"));
+    const [, steered] = await readPrompts(claude, 2);
+
+    expect(responseTo(sent, 30)).toEqual({
+      id: 30,
+      error: {
+        code: -32600,
+        message: expect.stringContaining("PNG, JPEG, GIF and WebP"),
+      },
+    });
+    expect(steered?.message.content).toBe("after it");
   });
 });
 
@@ -3853,6 +4028,33 @@ const ownResult = (fields: object = {}) =>
     origin: { kind: "task-notification" },
     ...fields,
   });
+
+const writeImage = async (name: string, bytes: Uint8Array) => {
+  const path = join(dir, "images", name);
+  await mkdir(join(dir, "images"), { recursive: true });
+  await writeFile(path, bytes);
+  return path;
+};
+
+const withInput = <T extends { params: Record<string, unknown> }>(
+  request: T,
+  input: object[],
+) => ({ ...request, params: { ...request.params, input } });
+
+const pngBlock = (bytes: Buffer) =>
+  ({
+    type: "image",
+    source: {
+      type: "base64",
+      media_type: "image/png",
+      data: bytes.toString("base64"),
+    },
+  }) as const;
+
+const promptOf = async (claude: ReturnType<typeof fakeClaude>) => {
+  await until(() => claude.started());
+  return claude.prompt();
+};
 
 const writeSkill = async (name: string, body: string) => {
   const path = join(dir, "skills", name, "SKILL.md");

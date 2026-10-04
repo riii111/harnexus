@@ -54,7 +54,11 @@ Claude's response and tool activity appear in the chat. Run all `bun run` comman
 
 Open an existing Claude chat to send another request. You can choose another Claude model in the same chat. To work with a Codex model, use a separate chat; a Claude chat cannot switch back to Codex.
 
-Claude chats currently accept text input only.
+### Attach images
+
+Attach or paste images to ask Claude about them, including while Claude is working. Reopened chats show the images you sent.
+
+PNG, JPEG, GIF, and WebP are supported; large images are reduced automatically. Audio and other attachments are not supported.
 
 ### Reopen the app
 

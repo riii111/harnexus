@@ -65,7 +65,8 @@ const modelEntry = (
   hidden,
   supportedReasoningEfforts: reasoningEfforts(displayName, efforts),
   defaultReasoningEffort: shownEffort(defaultEffort),
-  inputModalities: ["text"],
+  // The app lets the user attach images only to a model that lists them; every Claude model reads images.
+  inputModalities: ["text", "image"],
   supportsPersonality: false,
   multiAgentVersion: null,
   additionalSpeedTiers: [],

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Result, TaggedError } from "better-result";
+import type { ImageSource } from "../infra/claude/images.ts";
 import { type EffortRule, isClaudeEffort } from "../infra/claude/models.ts";
 import { createAppRequests } from "../infra/codex/app-requests.ts";
 import { delegatedMessage } from "../infra/codex/delegations.ts";
@@ -16,6 +17,7 @@ import {
   type TurnOutcome,
   type TurnState,
 } from "../presentation/turn.ts";
+import { isObject } from "../runtime/object.ts";
 import {
   type AppRequest,
   checkThread,
@@ -34,8 +36,8 @@ import type {
 } from "./thread-values.ts";
 import type {
   ErrorTag,
+  MessageInput,
   RunningTurn,
-  TextInput,
   ToolOutput,
   TurnInput,
   TurnLink,
@@ -165,9 +167,9 @@ export const createTurnController = <Tag extends string>({
       refuse(id, "reply_to_other_worker");
       return;
     }
-    const input = textInput(params.input, delegated);
-    if (input === null) {
-      refuse(id, "text_only");
+    const input = messageInput(params.input, delegated);
+    if (typeof input === "string") {
+      refuse(id, input);
       return;
     }
     if (closed) {
@@ -230,6 +232,7 @@ export const createTurnController = <Tag extends string>({
       items: [],
       toolOutput: null,
       text: runtime.compactPrompt,
+      images: [],
       permissionMode: modes.get(threadId) ?? "default",
       effort: threads.pickedEffortOf(threadId),
       requester: null,
@@ -246,6 +249,7 @@ export const createTurnController = <Tag extends string>({
       items: [],
       toolOutput: null,
       text: "",
+      images: [],
       permissionMode: modes.get(threadId) ?? "default",
       effort: threads.pickedEffortOf(threadId),
       requester: null,
@@ -299,7 +303,7 @@ export const createTurnController = <Tag extends string>({
   };
 
   // Claude takes a steer at its next tool boundary, or runs it as its next turn when the running one has ended, and either way the app turn stays open until Claude has taken it.
-  const steerTurn = ({ id, params }: AppRequest) => {
+  const steerTurn = async ({ id, params }: AppRequest) => {
     const active = activeTurns.get(String(params.threadId));
     if (
       active === undefined ||
@@ -316,19 +320,19 @@ export const createTurnController = <Tag extends string>({
       refuse(id, "compaction_not_steerable");
       return;
     }
-    const input = textInput(params.input, null);
-    if (input === null) {
-      refuse(id, "text_only");
+    const input = messageInput(params.input, null);
+    if (typeof input === "string") {
+      refuse(id, input);
       return;
     }
-    const refusal = runtime.steer(active.turn, input.text);
+    const refusal = await runtime.steer(active.turn, input);
     if (refusal !== null) {
       refuse(id, refusal);
       return;
     }
     send({ id, result: { turnId: state.turnId } });
     log({ event: "claude_turn", step: "steered" });
-    apply(active, renderUserInput(state, input.items, null, now()));
+    apply(active, renderUserInput(active.state, input.items, null, now()));
   };
 
   // The reply comes first so the app sees it before the interrupted turn completes; a failed interrupt stops Claude by closing the session.
@@ -533,7 +537,7 @@ export const createTurnController = <Tag extends string>({
     }: {
       threadId: string;
       thread: Thread;
-      input: TextInput;
+      input: MessageInput;
       messageId: string | null;
     },
     reason: Refusal,
@@ -675,7 +679,7 @@ export const createTurnController = <Tag extends string>({
 
   const renderInput = (
     state: TurnState,
-    input: TextInput,
+    input: MessageInput,
     messageId: string | null,
   ): Rendered => {
     const delegated =
@@ -863,30 +867,36 @@ const clientMessageId = (params: Record<string, unknown>) =>
     ? params.clientUserMessageId
     : null;
 
-const textInput = (
+// The app names a pasted or picked image by the file it saved; an image held only by a server, such as a URL or an uploaded file id, cannot be read here.
+const messageInput = (
   value: unknown,
   delegated: { text: string; toolOutput: ToolOutput } | null,
-): TextInput | null => {
+): MessageInput | Refusal => {
   const items = Array.isArray(value) ? value : [];
-  if (items.length === 0 && delegated === null) return null;
+  if (items.length === 0 && delegated === null) return "unsupported_input";
   const texts = delegated === null ? [] : [delegated.text];
+  const images: ImageSource[] = [];
   for (const item of items) {
-    if (!isTextItem(item)) return null;
-    texts.push(item.text);
+    if (!isObject(item)) return "unsupported_input";
+    if (item.type === "text" && typeof item.text === "string") {
+      texts.push(item.text);
+    } else if (item.type === "localImage" && typeof item.path === "string") {
+      images.push({ path: item.path });
+    } else if (item.type === "image") {
+      if (typeof item.url !== "string" || !item.url.startsWith("data:")) {
+        return "image_not_local";
+      }
+      images.push({ dataUrl: item.url });
+    } else {
+      return "unsupported_input";
+    }
   }
   return {
     items: items as UserInput[],
     toolOutput: delegated?.toolOutput ?? null,
     text: texts.join("\n"),
+    images,
   };
 };
-
-const isTextItem = (item: unknown): item is { type: "text"; text: string } =>
-  typeof item === "object" &&
-  item !== null &&
-  "type" in item &&
-  item.type === "text" &&
-  "text" in item &&
-  typeof item.text === "string";
 
 const INVALID_REQUEST = -32600;
