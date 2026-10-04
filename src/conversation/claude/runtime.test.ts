@@ -3253,6 +3253,35 @@ describe("images in Claude input", () => {
     expect(responseTo(sent, 30)).toEqual(REFUSED(30));
   });
 
+  test("refuses a steer whose image was still being shrunk when the turn ended, without sending it to Claude", async () => {
+    const path = await writeImage("late.png", pngBytes(4000, 3000));
+    const shrunk = createGate();
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude], {
+      resizeImage: async () => {
+        await shrunk.promise;
+        return Result.ok(pngBytes(2000, 1500));
+      },
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    const [prompt] = await readPrompts(claude, 1);
+    const steered = turns.steerTurn(
+      withInput(steer(30, "turn-1", ""), [{ type: "localImage", path }]),
+    );
+    claude.emit(sdk(success([prompt?.uuid])));
+    await until(() => turnCompleted(sent) !== undefined);
+    shrunk.open();
+    await steered;
+    turns.startTurn(turnStart(11, "next"), undefined);
+    const [following] = await readPrompts(claude, 1);
+
+    expect(turnCompleted(sent)?.status).toBe("completed");
+    expect(responseTo(sent, 30)).toEqual(REFUSED(30));
+    expect(following?.message.content).toBe("next");
+  });
+
   test("refuses a steer whose image Claude cannot read and leaves the turn running", async () => {
     const path = await writeImage(
       "note.txt",

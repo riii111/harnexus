@@ -1026,7 +1026,8 @@ export const createClaudeRuntime = ({
     claude: ClaudeTurn,
     prompt: Prompt,
   ): Refusal | null => {
-    if (turns.get(turn) !== claude || turn.state().interrupting) {
+    const state = turn.state();
+    if (turns.get(turn) !== claude || state.finished || state.interrupting) {
       return "steer_not_sent";
     }
     if (claude.slot === null) {
