@@ -219,7 +219,7 @@ describe("agents read back after a restart", () => {
     expect(appliedPaths(firstHistory)).toEqual([["/fixture/work/fix.ts"]]);
   });
 
-  test("shows an agent's edit in each turn that led to it when two agents resumed each other, under an id of its own where it passed back", async () => {
+  test("shows an agent's edit in each turn that led to it when two agents resumed each other, under one id per turn", async () => {
     const { history, subagents } = setup(() => Result.ok(RESUMING_EACH_OTHER), {
       parent: PARENT_OF_TWO,
     });
@@ -227,19 +227,18 @@ describe("agents read back after a restart", () => {
     const parentHistory = (await history.load(THREAD)).unwrap();
 
     const [first, second] = subagents.childrenOf(THREAD);
-    expect(appliedPaths(parentHistory)).toEqual([["/fixture/work/fix.ts"]]);
-    expect(
-      appliedPaths((await history.load(second?.id ?? "")).unwrap()),
-    ).toEqual([[], ["/fixture/work/fix.ts"]]);
     const firstHistory = (await history.load(first?.id ?? "")).unwrap();
-    expect(appliedPaths(firstHistory)).toEqual([
-      ["/fixture/work/fix.ts"],
-      ["/fixture/work/fix.ts"],
-    ]);
-    const ids = firstHistory.flatMap((turn) =>
-      turn.items.map(({ item }) => item.id),
-    );
-    expect(new Set(ids).size).toBe(ids.length);
+    const secondHistory = (await history.load(second?.id ?? "")).unwrap();
+    const fix = "/fixture/work/fix.ts";
+    expect(appliedPaths(parentHistory)).toEqual([[fix]]);
+    expect(appliedPaths(firstHistory)).toEqual([[fix], [fix], [fix]]);
+    expect(appliedPaths(secondHistory)).toEqual([[], [fix], [fix]]);
+    for (const thread of [firstHistory, secondHistory]) {
+      const ids = thread.flatMap((turn) =>
+        turn.items.map(({ item }) => item.id),
+      );
+      expect(new Set(ids).size).toBe(ids.length);
+    }
   });
 
   test("shows the thread's history without its agents after a fault reading them back, and reads them again on the next load", async () => {
@@ -627,29 +626,41 @@ const PARENT_OF_TWO: SessionMessage[] = [
   toolResult("p5", "toolu-b", "checked"),
 ];
 
-// The first agent resumes the second, which resumes the first, and only that last run edits.
+// A SendMessage call that resumes an agent, Claude's answer and the reply closing the run, recorded under the uuid that follows the last.
+const wake = (
+  uuid: string,
+  toolUseId: string,
+  agentId: string,
+  at: string,
+): SessionMessage[] => [
+  reply(
+    uuid,
+    `m-${toolUseId}`,
+    toolUse(toolUseId, "SendMessage", { to: agentId, message: "go" }),
+    "tool_use",
+    at,
+  ),
+  toolResult(
+    `${uuid}-result`,
+    toolUseId,
+    answer({ message: `Resuming agent ${agentId}`, resumedAgentId: agentId }),
+  ),
+  reply(`${uuid}-done`, `m-${toolUseId}-done`, text("asked"), "end_turn"),
+];
+
+// The two agents resume each other twice in turn, and only the first agent's last run edits.
 const RESUMING_EACH_OTHER: SubagentRecord[] = [
   {
     ...(AGENTS[1] as SubagentRecord),
     messages: underAgent(
       [
         prompt("o1", "fix it", STARTED),
-        reply(
-          "o2",
-          "m2",
-          toolUse("toolu-wake-b", "SendMessage", { to: "b1", message: "go" }),
-          "tool_use",
-          "2026-09-27T00:00:10.000Z",
-        ),
-        toolResult(
-          "o3",
-          "toolu-wake-b",
-          answer({ message: "Resuming agent b1", resumedAgentId: "b1" }),
-        ),
-        reply("o4", "m3", text("asked"), "end_turn"),
-        prompt("o5", "fix", "2026-09-27T00:00:21.000Z"),
-        ...edit("o6", "toolu-fix", "/fixture/work/fix.ts"),
-        reply("o8", "m4", text("fixed"), "end_turn"),
+        ...wake("o2", "toolu-wake-b1", "b1", "2026-09-27T00:00:10.000Z"),
+        prompt("o5", "again", "2026-09-27T00:00:21.000Z"),
+        ...wake("o6", "toolu-wake-b2", "b1", "2026-09-27T00:00:30.000Z"),
+        prompt("o9", "fix", "2026-09-27T00:00:41.000Z"),
+        ...edit("o10", "toolu-fix", "/fixture/work/fix.ts"),
+        reply("o12", "m4", text("fixed"), "end_turn"),
       ],
       "toolu-1",
       null,
@@ -665,19 +676,9 @@ const RESUMING_EACH_OTHER: SubagentRecord[] = [
         prompt("b1", "check", "2026-09-27T00:00:05.000Z"),
         reply("b2", "m5", text("checked"), "end_turn"),
         prompt("b3", "go", "2026-09-27T00:00:11.000Z"),
-        reply(
-          "b4",
-          "m6",
-          toolUse("toolu-wake-a", "SendMessage", { to: "a1", message: "fix" }),
-          "tool_use",
-          "2026-09-27T00:00:20.000Z",
-        ),
-        toolResult(
-          "b5",
-          "toolu-wake-a",
-          answer({ message: "Resuming agent a1", resumedAgentId: "a1" }),
-        ),
-        reply("b6", "m7", text("done"), "end_turn"),
+        ...wake("b4", "toolu-wake-a1", "a1", "2026-09-27T00:00:20.000Z"),
+        prompt("b7", "go again", "2026-09-27T00:00:31.000Z"),
+        ...wake("b8", "toolu-wake-a2", "a1", "2026-09-27T00:00:40.000Z"),
       ],
       "toolu-b",
       null,

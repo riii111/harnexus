@@ -1,11 +1,10 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { isObject } from "../runtime/object.ts";
 import {
-  type DelegatedEdit,
+  delegatedEditIn,
   type HistoryItem,
   type HistoryTurn,
   noteItem,
-  shownEdit,
 } from "./history.ts";
 import type {
   AppNotification,
@@ -64,12 +63,12 @@ export const renderSubagentActivity = (
   return shownAt(item, { threadId: child.parentThreadId, turnId }, now);
 };
 
-// The app sums a turn's changes from the file changes the turn holds, so an edit an agent applied is also shown in the turn that started the agent; it keeps the agent's item id, which no other item of that thread has.
+// The app sums a turn's changes from the file changes the turn holds, so an edit an agent applied is also shown in the turn that started the agent.
 export const renderDelegatedEdit = (
-  edit: DelegatedEdit,
+  edit: FileChangeItem,
   ref: { threadId: string; turnId: string },
   now: number,
-): AppNotification[] => shownAt(shownEdit(edit, ref.threadId), ref, now);
+): AppNotification[] => shownAt(delegatedEditIn(edit, ref.turnId), ref, now);
 
 // A failed, refused or unfinished edit changed no file, so only a completed one is carried to the turn that started the agent.
 export const appliedEdits = (

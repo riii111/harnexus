@@ -2,11 +2,13 @@ import { createHash } from "node:crypto";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   type AgentRef,
-  type DelegatedEdit,
   type HistoryTurn,
   noteItem,
 } from "../presentation/history.ts";
-import type { AppNotification } from "../presentation/protocol.ts";
+import type {
+  AppNotification,
+  FileChangeItem,
+} from "../presentation/protocol.ts";
 import {
   appliedEdits,
   closeSubagentTurn,
@@ -138,17 +140,14 @@ export const createSubagents = ({
     running.set(child.id, rendered.turn);
     sendAll(rendered.notifications);
     for (const item of appliedEdits(rendered.notifications)) {
-      delegateEdit(child.toolUseId, { agentThreadId: child.id, item }, at);
+      delegateEdit(child.toolUseId, item, at);
     }
   };
 
   // An edit an agent applied also shows in the turn that made its call, even once later turns ran, since the app sums a turn's changes from that turn alone; under another agent it also passes up through that agent's run, so the thread the work came from shows it too.
-  const delegateEdit = (call: string, edit: DelegatedEdit, at: number) => {
+  const delegateEdit = (call: string, edit: FileChangeItem, at: number) => {
     const run = runs.get(call);
-    if (
-      run === undefined ||
-      run.edits.some((known) => known.item.id === edit.item.id)
-    ) {
+    if (run === undefined || run.edits.some((known) => known.id === edit.id)) {
       return;
     }
     runs.set(call, { ...run, edits: [...run.edits, edit] });
@@ -266,7 +265,7 @@ export const createSubagents = ({
     agents: readonly {
       thread: SubagentThread;
       history: HistoryTurn[];
-      edits: ReadonlyMap<string, readonly DelegatedEdit[]>;
+      edits: ReadonlyMap<string, readonly FileChangeItem[]>;
     }[],
   ) => {
     for (const { thread, history, edits } of agents) {
@@ -369,7 +368,7 @@ type Run = {
   threadId: string;
   turnId: string | null;
   ownTurnId: string | null;
-  edits: DelegatedEdit[];
+  edits: FileChangeItem[];
 };
 
 // Shaped as a UUID, as the app's own thread ids are.

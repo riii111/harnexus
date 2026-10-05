@@ -524,10 +524,7 @@ test("shows an edit an agent applied in the turn that started it, leaving out fa
     },
   ]);
   expect(subagents.agentRefOf("th-1")("toolu-1")?.edits).toMatchObject([
-    {
-      agentThreadId: child?.id,
-      item: { changes: [{ path: "/fixture/work/a.ts" }] },
-    },
+    { changes: [{ path: "/fixture/work/a.ts" }] },
   ]);
   expect(
     subagents
@@ -601,7 +598,7 @@ test("passes a nested agent's edit up to the agent that started it and to the th
   const refOf = subagents.agentRefOf("th-1");
   expect(
     [refOf("toolu-1"), refOf("toolu-inner")].map((ref) =>
-      ref?.edits.map((edit) => edit.item.changes[0]?.path),
+      ref?.edits.map((edit) => edit.changes[0]?.path),
     ),
   ).toEqual([["/fixture/work/a.ts"], ["/fixture/work/a.ts"]]);
 });
@@ -694,7 +691,7 @@ test("shows an edit an agent made once another agent resumed it in the turn of t
   expect(
     subagents
       .agentRefOf("th-1")("toolu-a")
-      ?.edits.map((edit) => edit.item.changes[0]?.path),
+      ?.edits.map((edit) => edit.changes[0]?.path),
   ).toEqual(["/fixture/work/a.ts"]);
 });
 
