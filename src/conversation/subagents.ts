@@ -143,7 +143,7 @@ export const createSubagents = ({
     }
   };
 
-  // An edit an agent applied also shows where its call was made: in a Claude thread, in the turn that made the call even once later turns ran; under another agent, where that agent's other activity goes, and up through that agent's run, so the thread the work came from shows it too.
+  // An edit an agent applied also shows in the turn that made its call, even once later turns ran, since the app sums a turn's changes from that turn alone; under another agent it also passes up through that agent's run, so the thread the work came from shows it too.
   const delegateEdit = (call: string, edit: FileChangeItem, at: number) => {
     const run = runs.get(call);
     if (run === undefined || run.edits.some((known) => known.id === edit.id)) {
@@ -152,10 +152,14 @@ export const createSubagents = ({
     runs.set(call, { ...run, edits: [...run.edits, edit] });
     const agent = children.get(run.agentId);
     if (agent === undefined) return;
-    const shown = (turnId: string) =>
-      renderDelegatedEdit(edit, { threadId: agent.parentThreadId, turnId }, at);
-    if (!showInAgentTurn(agent.parentThreadId, shown) && run.turnId !== null) {
-      sendAll(shown(run.turnId));
+    if (run.turnId !== null) {
+      const notifications = renderDelegatedEdit(
+        edit,
+        { threadId: agent.parentThreadId, turnId: run.turnId },
+        at,
+      );
+      sendAll(notifications);
+      keepInTurn(agent.parentThreadId, run.turnId, notifications);
     }
     const parentCall = [...runs].find(
       ([, other]) =>
@@ -194,41 +198,42 @@ export const createSubagents = ({
     sendActivity(done, "completed", at);
   };
 
+  // An agent's activity under another agent goes to that agent's newest turn, running or ended; the app pages a timeline back by position, so an item added to an earlier turn would move entries a cursor it already holds has passed.
   const sendActivity = (
     child: SubagentThread,
     kind: "started" | "completed",
     at: number,
   ) => {
-    const shown = (turnId: string | null) =>
-      renderSubagentActivity(child, kind, at, turnId);
-    if (!showInAgentTurn(child.parentThreadId, shown)) {
-      sendAll(shown(child.turnId));
-    }
+    const turnId =
+      running.get(child.parentThreadId)?.turn.id ??
+      histories.get(child.parentThreadId)?.at(-1)?.turn.id ??
+      child.turnId;
+    const notifications = renderSubagentActivity(child, kind, at, turnId);
+    sendAll(notifications);
+    if (turnId !== null)
+      keepInTurn(child.parentThreadId, turnId, notifications);
   };
 
-  // What is shown under an agent goes to that agent's newest turn, running or ended, and is kept there for a later read; the app pages a timeline back by position, so an item added to an earlier turn would move entries a cursor it already holds has passed.
-  // False for a thread that is no agent's, whose turns are rebuilt from its record instead.
-  const showInAgentTurn = (
+  // What is shown in an agent's turn, running or ended, is kept with that turn for a later read; a Claude thread's turns are rebuilt from its record instead.
+  const keepInTurn = (
     agentId: string,
-    render: (turnId: string) => AppNotification[],
+    turnId: string,
+    notifications: readonly AppNotification[],
   ) => {
     const turn = running.get(agentId);
-    if (turn !== undefined) {
-      const notifications = render(turn.turn.id);
-      sendAll(notifications);
+    if (turn?.turn.id === turnId) {
       for (const notification of notifications) {
         noteItem(turn.items, notification);
       }
-      return true;
+      return;
     }
-    const kept = histories.get(agentId)?.at(-1);
-    if (kept === undefined) return false;
-    const notifications = render(kept.turn.id);
-    sendAll(notifications);
+    const kept = histories
+      .get(agentId)
+      ?.find((entry) => entry.turn.id === turnId);
+    if (kept === undefined) return;
     const items = new Map(kept.items.map((entry) => [entry.item.id, entry]));
     for (const notification of notifications) noteItem(items, notification);
     kept.items = [...items.values()];
-    return true;
   };
 
   // A session that closes stops the agents running in it, the deepest first so each closes before the thread it is listed under.

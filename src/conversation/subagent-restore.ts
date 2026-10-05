@@ -14,6 +14,7 @@ import {
   isAppliedEdit,
   type SubagentThread,
 } from "../presentation/subagent.ts";
+import { isObject } from "../runtime/object.ts";
 import {
   agentNickname,
   childThreadId,
@@ -158,14 +159,22 @@ const rebuild = (
           edits: edits.get(toolUseId) ?? [],
         };
   };
-  // An agent's history shows the edits of the agents it started, so the deepest agents are built first.
+  // An agent's history shows the edits of the agents it started or resumed, so those agents are built first; a cycle of resumes builds with what is known so far.
   const histories = new Map<string, HistoryTurn[]>();
-  const deepestFirst = [...threads.values()].sort((a, b) => b.depth - a.depth);
-  for (const thread of deepestFirst) {
+  const building = new Set<string>();
+  const build = (thread: SubagentThread) => {
+    if (histories.has(thread.taskId) || building.has(thread.taskId)) return;
+    building.add(thread.taskId);
     const record = started.find(
       (entry) => entry.record.agentId === thread.taskId,
     )?.record;
-    if (record === undefined) continue;
+    if (record === undefined) return;
+    for (const call of callsIn(record.messages)) {
+      const callee = [...threads.values()].find(
+        (other) => other !== thread && other.calls.includes(call),
+      );
+      if (callee !== undefined) build(callee);
+    }
     const history = buildSubagentHistory(
       record.messages,
       { threadId: thread.id, cwd },
@@ -175,7 +184,8 @@ const rebuild = (
     for (const [call, applied] of editsByRun(history, thread.calls, madeAt)) {
       edits.set(call, applied);
     }
-  }
+  };
+  for (const thread of threads.values()) build(thread);
   return started.flatMap(({ record }) => {
     const thread = threads.get(record.agentId);
     const history = histories.get(record.agentId);
@@ -218,6 +228,20 @@ const editsByRun = (
   }
   return byCall;
 };
+
+const callsIn = (messages: readonly SessionMessage[]) =>
+  messages.flatMap((message) => {
+    const body = message.message;
+    if (message.type !== "assistant" || !isObject(body)) return [];
+    const content = Array.isArray(body.content) ? body.content : [];
+    return content.flatMap((block) =>
+      isObject(block) &&
+      block.type === "tool_use" &&
+      typeof block.id === "string"
+        ? [block.id]
+        : [],
+    );
+  });
 
 const usable = <T extends { record: SubagentRecord }>(
   started: readonly T[],

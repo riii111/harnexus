@@ -206,6 +206,35 @@ describe("agents read back after a restart", () => {
     ]);
   });
 
+  test("shows the edits an agent made once another agent resumed it in that agent's history and the turn that started it", async () => {
+    const { history, subagents } = setup(() => Result.ok(RESUMED_BY_AGENT), {
+      parent: [
+        prompt("p1", "fix and check", "2026-09-27T00:00:00.000Z"),
+        reply(
+          "p2",
+          "m1",
+          toolUse("toolu-1", "Agent", { prompt: "fix" }),
+          "tool_use",
+        ),
+        reply(
+          "p3",
+          "m1",
+          toolUse("toolu-b", "Agent", { prompt: "check" }),
+          "tool_use",
+        ),
+        toolResult("p4", "toolu-1", "fixed"),
+        toolResult("p5", "toolu-b", "checked"),
+      ],
+    });
+
+    const parentHistory = (await history.load(THREAD)).unwrap();
+
+    const [first] = subagents.childrenOf(THREAD);
+    const firstHistory = (await history.load(first?.id ?? "")).unwrap();
+    expect(appliedPaths(parentHistory)).toEqual([["/fixture/work/fix.ts"]]);
+    expect(appliedPaths(firstHistory)).toEqual([["/fixture/work/fix.ts"]]);
+  });
+
   test("shows the thread's history without its agents after a fault reading them back, and reads them again on the next load", async () => {
     let faults = 1;
     const { history, subagents, events } = setup(() => Result.ok(AGENTS), {
@@ -532,3 +561,47 @@ const RESUMED_AGENT: SubagentRecord = {
     null,
   ),
 };
+
+// The first agent, started before the second, resumes it, and only the resumed run edits.
+const RESUMED_BY_AGENT: SubagentRecord[] = [
+  {
+    ...(AGENTS[1] as SubagentRecord),
+    messages: underAgent(
+      [
+        prompt("o1", "fix it", STARTED),
+        reply(
+          "o2",
+          "m2",
+          toolUse("toolu-wake", "SendMessage", { to: "b1", message: "fix" }),
+          "tool_use",
+          "2026-09-27T00:00:10.000Z",
+        ),
+        toolResult(
+          "o3",
+          "toolu-wake",
+          answer({ message: "Resuming agent b1", resumedAgentId: "b1" }),
+        ),
+        reply("o4", "m3", text("fixed"), "end_turn"),
+      ],
+      "toolu-1",
+      null,
+    ),
+  },
+  {
+    ...(AGENTS[1] as SubagentRecord),
+    agentId: "b1",
+    toolUseId: "toolu-b",
+    name: null,
+    messages: underAgent(
+      [
+        prompt("b1", "check", "2026-09-27T00:00:05.000Z"),
+        reply("b2", "m4", text("checked"), "end_turn"),
+        prompt("b3", "fix", "2026-09-27T00:00:11.000Z"),
+        ...edit("b4", "toolu-fix", "/fixture/work/fix.ts"),
+        reply("b6", "m5", text("fixed"), "end_turn"),
+      ],
+      "toolu-b",
+      null,
+    ),
+  },
+];

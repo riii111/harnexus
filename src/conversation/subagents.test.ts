@@ -603,6 +603,46 @@ test("passes a nested agent's edit up to the agent that started it and to the th
   ).toEqual([["/fixture/work/a.ts"], ["/fixture/work/a.ts"]]);
 });
 
+test("keeps a nested agent's edit in the turn of its parent agent that started it after that agent was resumed", () => {
+  const sent: Notification[] = [];
+  const subagents = createSubagents({
+    send: (m) => sent.push(m as Notification),
+  });
+
+  subagents.start(agent("th-1", "toolu-1"));
+  const [outer] = subagents.childrenOf("th-1");
+  subagents.message("th-1", agentCall("toolu-1", "toolu-inner"));
+  subagents.start({ ...agent("th-1", "toolu-inner"), depth: 2 });
+  subagents.complete("th-1", "task-toolu-1", DONE);
+  subagents.start({
+    ...agent("th-1", "toolu-2"),
+    turnId: "turn-2",
+    taskId: "task-toolu-1",
+  });
+  for (const m of editBy("toolu-inner", "toolu-edit", "/fixture/work/a.ts")) {
+    subagents.message("th-1", m);
+  }
+
+  expect(
+    subagents
+      .historyOf(outer?.id ?? "")
+      ?.map(
+        (entry) =>
+          entry.items.filter((kept) => kept.item.type === "fileChange").length,
+      ),
+  ).toEqual([1, 0]);
+  expect(
+    sent
+      .filter(
+        (m) =>
+          m.method === "item/completed" &&
+          m.params.item?.type === "fileChange" &&
+          m.params.threadId !== subagents.childrenOf(outer?.id ?? "")[0]?.id,
+      )
+      .map((m) => m.params.turnId),
+  ).toEqual([`${outer?.id}-turn-1`, "turn-1"]);
+});
+
 test("shows in the parent's history an agent's edits in the turn whose call started it, once per read", () => {
   const subagents = createSubagents({ send: () => {} });
   subagents.start(agent("th-1", "toolu-1"));
