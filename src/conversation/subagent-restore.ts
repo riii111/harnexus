@@ -159,7 +159,7 @@ const rebuild = (
           edits: edits.get(toolUseId) ?? [],
         };
   };
-  // An agent's history shows the edits of the runs it started or resumed, which may belong to an agent built after it, as when two agents resume each other; each pass carries edits one call further up, so the histories are rebuilt until no run gains an edit.
+  // Agents that resume each other each need the other's edits first, so the histories are rebuilt until no run gains an edit.
   const histories = new Map<string, HistoryTurn[]>();
   const runCount = [...threads.values()].reduce(
     (count, thread) => count + thread.calls.length,
@@ -203,8 +203,7 @@ const rebuild = (
   });
 };
 
-// A record does not say which call each of an agent's turns ran under, so a turn is taken as run by the last call made before it started, and by the starting call when no resume came before it.
-// An edit passed on to a turn is one of the edits the history was built with, which the run takes as it was applied, and any other is the agent's own.
+// A record does not say which call a turn ran under, so it is taken as the last call made before the turn started.
 const editsByRun = (
   history: readonly HistoryTurn[],
   { calls }: SubagentThread,

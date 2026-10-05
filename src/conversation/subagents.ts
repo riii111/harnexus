@@ -144,7 +144,7 @@ export const createSubagents = ({
     }
   };
 
-  // An edit an agent applied also shows in the turn that made its call, even once later turns ran, since the app sums a turn's changes from that turn alone; under another agent it also passes up through that agent's run, so the thread the work came from shows it too.
+  // The app sums only a turn's own file changes, so an agent's edit is also shown in the turn that made its call, and passed up through the caller's own run.
   const delegateEdit = (call: string, edit: FileChangeItem, at: number) => {
     const run = runs.get(call);
     if (run === undefined || run.edits.some((known) => known.id === edit.id)) {
@@ -214,7 +214,6 @@ export const createSubagents = ({
       keepInTurn(child.parentThreadId, turnId, notifications);
   };
 
-  // What is shown in an agent's turn, running or ended, is kept with that turn for a later read; a Claude thread's turns are rebuilt from its record instead.
   const keepInTurn = (
     agentId: string,
     turnId: string,
@@ -362,7 +361,7 @@ export const createSubagents = ({
 
 export type Subagents = ReturnType<typeof createSubagents>;
 
-// Each call that started or resumed an agent is one run of it: threadId and turnId are the thread and turn that made the call, which for a resume may be another agent than the one that started it, ownTurnId the agent's own turn for the run, and edits what the run and the agents it started applied.
+// One run per call that started or resumed an agent; threadId is the caller, which for a resume may differ from the agent's parent.
 type Run = {
   agentId: string;
   threadId: string;

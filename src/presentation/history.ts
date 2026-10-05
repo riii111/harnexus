@@ -143,7 +143,7 @@ export const buildSubagentHistory = (
     agentThreadOf,
   );
 
-// active marks an agent still running under this call, which has not completed where the call was made; edits are the ones the agent and the agents it started applied while running under the call.
+// active marks an agent still running under this call, which has not completed where the call was made.
 export type AgentRef = {
   threadId: string;
   path: string;
@@ -151,7 +151,7 @@ export type AgentRef = {
   edits: readonly FileChangeItem[];
 };
 
-// An edit passed on to a turn takes an id of that turn, since agents that resume each other can pass one edit to several turns of a thread, including the thread of the agent that applied it, and the app pages a thread's items by id.
+// Agents that resume each other can pass one edit to several turns of a thread, and the app pages items by id.
 export const delegatedEditIn = (
   edit: FileChangeItem,
   turnId: string,
