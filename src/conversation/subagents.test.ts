@@ -414,10 +414,15 @@ test("places a read-back agent under its parent's path as the parent ended up", 
   const subagents = createSubagents({ send: () => {} });
   subagents.start(agent("th-1", "toolu-live"));
   subagents.restore([
-    { thread: restoredAgent("old", "th-1", "/root/explore_1"), history: [] },
+    {
+      thread: restoredAgent("old", "th-1", "/root/explore_1"),
+      history: [],
+      edits: new Map(),
+    },
     {
       thread: restoredAgent("old-child", "old", "/root/explore_1/explore_1"),
       history: [],
+      edits: new Map(),
     },
   ]);
 
@@ -448,10 +453,16 @@ test("names in a read-back agent's history the path its nested agent holds after
           ),
         ],
         { threadId: "old", cwd: "/fixture/work" },
-        () => ({ threadId: nested.id, path: nested.path, active: false }),
+        () => ({
+          threadId: nested.id,
+          path: nested.path,
+          active: false,
+          edits: [],
+        }),
       ),
+      edits: new Map(),
     },
-    { thread: nested, history: [] },
+    { thread: nested, history: [], edits: new Map() },
   ]);
 
   const activity = subagents
@@ -460,6 +471,175 @@ test("names in a read-back agent's history the path its nested agent holds after
     .find((entry) => entry.item.type === "subAgentActivity")?.item;
   expect(subagents.get("old-child")?.path).toBe("/root/explore_2/explore_1");
   expect(activity).toMatchObject({ agentPath: "/root/explore_2/explore_1" });
+});
+
+test("shows an edit an agent applied in the turn that started it, leaving out failed and declined ones", () => {
+  const sent: Notification[] = [];
+  const subagents = createSubagents({
+    send: (m) => sent.push(m as Notification),
+  });
+
+  subagents.start(agent("th-1", "toolu-1"));
+  const [child] = subagents.childrenOf("th-1");
+  for (const m of editBy("toolu-1", "toolu-ok", "/fixture/work/a.ts")) {
+    subagents.message("th-1", m);
+  }
+  const [failedCall, failedResult] = editBy(
+    "toolu-1",
+    "toolu-failed",
+    "/fixture/work/b.ts",
+    true,
+  );
+  subagents.message("th-1", failedCall as SDKMessage);
+  subagents.message("th-1", failedResult as SDKMessage);
+  const [refusedCall, refusedResult] = editBy(
+    "toolu-1",
+    "toolu-refused",
+    "/fixture/work/c.ts",
+    true,
+  );
+  subagents.message("th-1", refusedCall as SDKMessage);
+  subagents.decline("th-1", "toolu-refused");
+  subagents.message("th-1", refusedResult as SDKMessage);
+
+  expect(
+    sent.filter(
+      (m) =>
+        m.params.threadId === "th-1" && m.params.item?.type === "fileChange",
+    ),
+  ).toMatchObject([
+    {
+      method: "item/started",
+      params: { turnId: "turn-1", item: { status: "completed" } },
+    },
+    {
+      method: "item/completed",
+      params: {
+        turnId: "turn-1",
+        item: {
+          status: "completed",
+          changes: [{ path: "/fixture/work/a.ts" }],
+        },
+      },
+    },
+  ]);
+  expect(subagents.agentRefOf("th-1")("toolu-1")?.edits).toMatchObject([
+    { changes: [{ path: "/fixture/work/a.ts" }] },
+  ]);
+  expect(
+    subagents
+      .historyOf(child?.id ?? "")?.[0]
+      ?.items.filter((entry) => entry.item.type === "fileChange")
+      .map((entry) => entry.item),
+  ).toMatchObject([
+    { status: "completed" },
+    { status: "failed" },
+    { status: "declined" },
+  ]);
+});
+
+test("keeps an edit a background agent applied after a later turn started in the turn that started the agent", () => {
+  const sent: Notification[] = [];
+  const subagents = createSubagents({
+    send: (m) => sent.push(m as Notification),
+  });
+
+  subagents.start(agent("th-1", "toolu-1"));
+  subagents.start({ ...agent("th-1", "toolu-2"), turnId: "turn-2" });
+  for (const m of editBy("toolu-1", "toolu-edit", "/fixture/work/a.ts")) {
+    subagents.message("th-1", m);
+  }
+
+  expect(
+    sent
+      .filter(
+        (m) =>
+          m.method === "item/completed" &&
+          m.params.threadId === "th-1" &&
+          m.params.item?.type === "fileChange",
+      )
+      .map((m) => m.params.turnId),
+  ).toEqual(["turn-1"]);
+  expect(subagents.agentRefOf("th-1")("toolu-2")?.edits).toEqual([]);
+});
+
+test("passes a nested agent's edit up to the agent that started it and to the thread the work came from", () => {
+  const sent: Notification[] = [];
+  const subagents = createSubagents({
+    send: (m) => sent.push(m as Notification),
+  });
+
+  subagents.start(agent("th-1", "toolu-1"));
+  const [outer] = subagents.childrenOf("th-1");
+  subagents.message("th-1", agentCall("toolu-1", "toolu-inner"));
+  subagents.start({ ...agent("th-1", "toolu-inner"), depth: 2 });
+  const [inner] = subagents.childrenOf(outer?.id ?? "");
+  for (const m of editBy("toolu-inner", "toolu-edit", "/fixture/work/a.ts")) {
+    subagents.message("th-1", m);
+  }
+
+  expect(
+    sent
+      .filter(
+        (m) =>
+          m.method === "item/completed" && m.params.item?.type === "fileChange",
+      )
+      .map((m) => `${m.params.threadId} ${m.params.turnId}`),
+  ).toEqual([
+    `${inner?.id} ${inner?.id}-turn-1`,
+    `${outer?.id} ${outer?.id}-turn-1`,
+    "th-1 turn-1",
+  ]);
+  expect(
+    subagents
+      .historyOf(outer?.id ?? "")?.[0]
+      ?.items.filter((entry) => entry.item.type === "fileChange"),
+  ).toHaveLength(1);
+  const refOf = subagents.agentRefOf("th-1");
+  expect(
+    [refOf("toolu-1"), refOf("toolu-inner")].map((ref) =>
+      ref?.edits.map((edit) => edit.changes[0]?.path),
+    ),
+  ).toEqual([["/fixture/work/a.ts"], ["/fixture/work/a.ts"]]);
+});
+
+test("shows in the parent's history an agent's edits in the turn whose call started it, once per read", () => {
+  const subagents = createSubagents({ send: () => {} });
+  subagents.start(agent("th-1", "toolu-1"));
+  for (const m of editBy("toolu-1", "toolu-edit", "/fixture/work/a.ts")) {
+    subagents.message("th-1", m);
+  }
+  subagents.complete("th-1", "task-toolu-1", DONE);
+  const record = [
+    prompt("p1", "look around"),
+    reply(
+      "p2",
+      "m1",
+      toolUse("toolu-1", "Agent", { prompt: "look", run_in_background: true }),
+      "tool_use",
+    ),
+    toolResult("p3", "toolu-1", "started in the background"),
+    prompt("p4", "something else"),
+    reply("p5", "m2", { type: "text", text: "sure" }, "end_turn"),
+  ];
+
+  const read = () =>
+    buildHistory(
+      record,
+      { threadId: "th-1", cwd: "/fixture/work" },
+      subagents.agentRefOf("th-1"),
+    ).map((turn) =>
+      turn.items.flatMap(({ item }) =>
+        item.type === "subAgentActivity"
+          ? [item.kind]
+          : item.type === "fileChange"
+            ? [item.changes[0]?.path]
+            : [],
+      ),
+    );
+
+  expect(read()).toEqual([["started", "/fixture/work/a.ts", "completed"], []]);
+  expect(read()).toEqual(read());
 });
 
 test("ends every running agent of a thread whose session closed", () => {
@@ -542,6 +722,60 @@ const streamEvent = (parentToolUseId: string, event: object) =>
     event,
     parent_tool_use_id: parentToolUseId,
   }) as unknown as SDKMessage;
+
+// An agent's Edit call and Claude's answer to it, which carries the applied hunks only when the edit succeeded.
+const editBy = (
+  parentToolUseId: string,
+  toolUseId: string,
+  path: string,
+  failed = false,
+): SDKMessage[] => [
+  {
+    type: "assistant",
+    message: {
+      id: `msg-${toolUseId}`,
+      content: [
+        {
+          type: "tool_use",
+          id: toolUseId,
+          name: "Edit",
+          input: { file_path: path, old_string: "a", new_string: "b" },
+        },
+      ],
+      stop_reason: null,
+    },
+    parent_tool_use_id: parentToolUseId,
+  } as unknown as SDKMessage,
+  {
+    type: "user",
+    message: {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: toolUseId,
+          content: failed ? "String to replace not found" : "updated",
+          is_error: failed,
+        },
+      ],
+    },
+    parent_tool_use_id: parentToolUseId,
+    tool_use_result: failed
+      ? undefined
+      : {
+          filePath: path,
+          structuredPatch: [
+            {
+              oldStart: 3,
+              oldLines: 1,
+              newStart: 3,
+              newLines: 1,
+              lines: ["-a", "+b"],
+            },
+          ],
+        },
+  } as unknown as SDKMessage,
+];
 
 // A message of the agent whose call started this one, carrying the Agent call that starts another.
 const agentCall = (parentToolUseId: string, toolUseId: string) =>

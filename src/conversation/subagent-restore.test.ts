@@ -156,6 +156,56 @@ describe("agents read back after a restart", () => {
     ]);
   });
 
+  test("shows the edits an agent and the agents it started applied in the turn whose call started it, leaving out failed ones", async () => {
+    const { history, subagents } = setup(() => Result.ok(EDITING_AGENTS));
+
+    const parentHistory = (await history.load(THREAD)).unwrap();
+
+    const [outer] = subagents.childrenOf(THREAD);
+    const outerHistory = (await history.load(outer?.id ?? "")).unwrap();
+    expect(
+      parentHistory.map((turn) =>
+        turn.items.flatMap(({ item }) =>
+          item.type === "fileChange" ? [item.changes[0]?.path] : [],
+        ),
+      ),
+    ).toEqual([["/fixture/work/count.ts", "/fixture/work/README.md"]]);
+    expect(appliedPaths(outerHistory)).toEqual([
+      ["/fixture/work/count.ts", "/fixture/work/README.md"],
+    ]);
+  });
+
+  test("shows a resumed agent's edits in the turn whose call resumed it", async () => {
+    const { history } = setup(
+      () =>
+        Result.ok([
+          {
+            ...RESUMED_AGENT,
+            messages: underAgent(
+              [
+                prompt("o1", "read the README and summarize it", STARTED),
+                ...edit("o2", "toolu-readme", "/fixture/work/README.md"),
+                reply("o2b", "m6", text("a summary"), "end_turn"),
+                prompt("o3", "license", "2026-09-27T00:01:02.000Z"),
+                ...edit("o4", "toolu-license", "/fixture/work/LICENSE"),
+                reply("o6", "m7", text("MIT"), "end_turn"),
+              ],
+              "toolu-1",
+              null,
+            ),
+          },
+        ]),
+      { parent: RESUMING_PARENT },
+    );
+
+    const parentHistory = (await history.load(THREAD)).unwrap();
+
+    expect(appliedPaths(parentHistory)).toEqual([
+      ["/fixture/work/README.md"],
+      ["/fixture/work/LICENSE"],
+    ]);
+  });
+
   test("shows the thread's history without its agents after a fault reading them back, and reads them again on the next load", async () => {
     let faults = 1;
     const { history, subagents, events } = setup(() => Result.ok(AGENTS), {
@@ -319,6 +369,77 @@ const AGENTS: SubagentRecord[] = [
     ),
   },
 ];
+
+// An Edit call and Claude's answer, each recorded under the uuid that follows the last.
+const edit = (
+  uuid: string,
+  toolUseId: string,
+  path: string,
+  failed = false,
+): SessionMessage[] => [
+  reply(
+    uuid,
+    `m-${toolUseId}`,
+    toolUse(toolUseId, "Edit", {
+      file_path: path,
+      old_string: "a",
+      new_string: "b",
+    }),
+    "tool_use",
+  ),
+  toolResult(
+    `${uuid}-result`,
+    toolUseId,
+    failed ? "String to replace not found" : "updated",
+    failed,
+  ),
+];
+
+// The nested agent's edit applies, and of the outer agent's own edits only the second does.
+const EDITING_AGENTS: SubagentRecord[] = [
+  {
+    ...(AGENTS[0] as SubagentRecord),
+    messages: underAgent(
+      [
+        prompt("i1", "count the lines", "2026-09-27T00:00:02.000Z"),
+        ...edit("i2", "toolu-count", "/fixture/work/count.ts"),
+        reply("i4", "m4", text("12"), "end_turn"),
+      ],
+      "toolu-2",
+      "a1",
+    ),
+  },
+  {
+    ...(AGENTS[1] as SubagentRecord),
+    messages: underAgent(
+      [
+        prompt("o1", "read the README and summarize it", STARTED),
+        reply(
+          "o2",
+          "m3",
+          toolUse("toolu-2", "Agent", { prompt: "count" }),
+          "tool_use",
+        ),
+        toolResult("o3", "toolu-2", "12"),
+        ...edit("o4", "toolu-missed", "/fixture/work/CHANGELOG.md", true),
+        ...edit("o6", "toolu-readme", "/fixture/work/README.md"),
+        reply("o8", "m5", text("a summary"), "end_turn"),
+      ],
+      "toolu-1",
+      null,
+    ),
+  },
+];
+
+// The paths the app sums into each turn's changes, from the edits that completed.
+const appliedPaths = (history: readonly HistoryTurn[]) =>
+  history.map((turn) =>
+    turn.items.flatMap(({ item }) =>
+      item.type === "fileChange" && item.status === "completed"
+        ? item.changes.map((change) => change.path)
+        : [],
+    ),
+  );
 
 const activityIds = (history: readonly HistoryTurn[]) =>
   history

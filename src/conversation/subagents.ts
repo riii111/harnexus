@@ -5,10 +5,16 @@ import {
   type HistoryTurn,
   noteItem,
 } from "../presentation/history.ts";
+import type {
+  AppNotification,
+  FileChangeItem,
+} from "../presentation/protocol.ts";
 import {
+  appliedEdits,
   closeSubagentTurn,
   declineSubagentTool,
   openSubagentTurn,
+  renderDelegatedEdit,
   renderSubagentActivity,
   renderSubagentMessage,
   runningSubagentTurn,
@@ -30,6 +36,7 @@ export const createSubagents = ({
   const children = new Map<string, SubagentThread>();
   const running = new Map<string, SubagentTurn>();
   const histories = new Map<string, HistoryTurn[]>();
+  const runs = new Map<string, Run>();
 
   // threadId is the Claude thread whose session runs the agent; an agent another agent started goes under the thread of the agent whose call started it.
   const start = ({
@@ -96,6 +103,12 @@ export const createSubagents = ({
     children.set(id, child);
     const opened = openSubagentTurn(child, { cwd, prompt }, at);
     running.set(id, opened.turn);
+    runs.set(toolUseId, {
+      agentId: id,
+      turnId: startedIn,
+      ownTurnId: opened.turn.turn.id,
+      edits: [],
+    });
     sendActivity(child, "started", at);
     sendAll(opened.notifications);
   };
@@ -121,9 +134,35 @@ export const createSubagents = ({
     );
     const turn = child === undefined ? undefined : running.get(child.id);
     if (child === undefined || turn === undefined) return;
-    const rendered = renderSubagentMessage(turn, sdkMessage, now());
+    const at = now();
+    const rendered = renderSubagentMessage(turn, sdkMessage, at);
     running.set(child.id, rendered.turn);
     sendAll(rendered.notifications);
+    for (const edit of appliedEdits(rendered.notifications)) {
+      delegateEdit(child.toolUseId, edit, at);
+    }
+  };
+
+  // An edit an agent applied also shows where its call was made: in a Claude thread, in the turn that made the call even once later turns ran; under another agent, where that agent's other activity goes, and up through that agent's run, so the thread the work came from shows it too.
+  const delegateEdit = (call: string, edit: FileChangeItem, at: number) => {
+    const run = runs.get(call);
+    if (run === undefined || run.edits.some((known) => known.id === edit.id)) {
+      return;
+    }
+    runs.set(call, { ...run, edits: [...run.edits, edit] });
+    const agent = children.get(run.agentId);
+    if (agent === undefined) return;
+    const shown = (turnId: string) =>
+      renderDelegatedEdit(edit, { threadId: agent.parentThreadId, turnId }, at);
+    if (!showInAgentTurn(agent.parentThreadId, shown) && run.turnId !== null) {
+      sendAll(shown(run.turnId));
+    }
+    const parentCall = [...runs].find(
+      ([, other]) =>
+        other.agentId === agent.parentThreadId &&
+        other.ownTurnId === run.turnId,
+    )?.[0];
+    if (parentCall !== undefined) delegateEdit(parentCall, edit, at);
   };
 
   // The prompt asking about an agent's call does not say which agent made it, and only the agent that did holds the call.
@@ -155,38 +194,41 @@ export const createSubagents = ({
     sendActivity(done, "completed", at);
   };
 
-  // An agent's activity under another agent goes to that agent's newest turn, running or ended, and is kept there for a later read; the app pages a timeline back by position, so an item added to an earlier turn would move entries a cursor it already holds has passed.
   const sendActivity = (
     child: SubagentThread,
     kind: "started" | "completed",
     at: number,
   ) => {
-    const parentTurn = running.get(child.parentThreadId);
-    if (parentTurn !== undefined) {
-      const notifications = renderSubagentActivity(
-        child,
-        kind,
-        at,
-        parentTurn.turn.id,
-      );
+    const shown = (turnId: string | null) =>
+      renderSubagentActivity(child, kind, at, turnId);
+    if (!showInAgentTurn(child.parentThreadId, shown)) {
+      sendAll(shown(child.turnId));
+    }
+  };
+
+  // What is shown under an agent goes to that agent's newest turn, running or ended, and is kept there for a later read; the app pages a timeline back by position, so an item added to an earlier turn would move entries a cursor it already holds has passed.
+  // False for a thread that is no agent's, whose turns are rebuilt from its record instead.
+  const showInAgentTurn = (
+    agentId: string,
+    render: (turnId: string) => AppNotification[],
+  ) => {
+    const turn = running.get(agentId);
+    if (turn !== undefined) {
+      const notifications = render(turn.turn.id);
       sendAll(notifications);
       for (const notification of notifications) {
-        noteItem(parentTurn.items, notification);
+        noteItem(turn.items, notification);
       }
-      return;
+      return true;
     }
-    const kept = histories.get(child.parentThreadId)?.at(-1);
-    const notifications = renderSubagentActivity(
-      child,
-      kind,
-      at,
-      kept?.turn.id ?? child.turnId,
-    );
+    const kept = histories.get(agentId)?.at(-1);
+    if (kept === undefined) return false;
+    const notifications = render(kept.turn.id);
     sendAll(notifications);
-    if (kept === undefined) return;
     const items = new Map(kept.items.map((entry) => [entry.item.id, entry]));
     for (const notification of notifications) noteItem(items, notification);
     kept.items = [...items.values()];
+    return true;
   };
 
   // A session that closes stops the agents running in it, the deepest first so each closes before the thread it is listed under.
@@ -215,10 +257,23 @@ export const createSubagents = ({
   // Agents read back from Claude's records after a restart join as ended, keeping any the bridge already knows; one whose path an agent already holds takes the next free one, and the agents under it follow.
   // A parent comes before the agents it started, so each agent is placed under its parent's path as the parent ended up.
   const restore = (
-    agents: readonly { thread: SubagentThread; history: HistoryTurn[] }[],
+    agents: readonly {
+      thread: SubagentThread;
+      history: HistoryTurn[];
+      edits: ReadonlyMap<string, readonly FileChangeItem[]>;
+    }[],
   ) => {
-    for (const { thread, history } of agents) {
+    for (const { thread, history, edits } of agents) {
       if (children.has(thread.id)) continue;
+      for (const call of thread.calls) {
+        if (runs.has(call)) continue;
+        runs.set(call, {
+          agentId: thread.id,
+          turnId: null,
+          ownTurnId: null,
+          edits: [...(edits.get(call) ?? [])],
+        });
+      }
       const parent = children.get(thread.parentThreadId);
       const siblings = childrenOf(thread.parentThreadId);
       const placed =
@@ -249,6 +304,7 @@ export const createSubagents = ({
             threadId: child.id,
             path: child.path,
             active: child.active && child.toolUseId === toolUseId,
+            edits: runs.get(toolUseId)?.edits ?? [],
           };
     };
 
@@ -299,6 +355,14 @@ export const createSubagents = ({
 };
 
 export type Subagents = ReturnType<typeof createSubagents>;
+
+// Each call that started or resumed an agent is one run of it: turnId is the turn of the thread above that made the call, ownTurnId the agent's own turn for the run, and edits what the run and the agents it started applied.
+type Run = {
+  agentId: string;
+  turnId: string | null;
+  ownTurnId: string | null;
+  edits: FileChangeItem[];
+};
 
 // Shaped as a UUID, as the app's own thread ids are.
 export const childThreadId = (parentThreadId: string, taskId: string) => {

@@ -9,7 +9,11 @@ import {
   type HistoryTurn,
   startOfRecord,
 } from "../presentation/history.ts";
-import type { SubagentThread } from "../presentation/subagent.ts";
+import type { FileChangeItem } from "../presentation/protocol.ts";
+import {
+  isAppliedEdit,
+  type SubagentThread,
+} from "../presentation/subagent.ts";
 import {
   agentNickname,
   childThreadId,
@@ -75,14 +79,18 @@ export type SubagentRestore<E extends { _tag: string }> = ReturnType<
 
 // Agents are numbered under their parent in the order they started, as they were while they ran; an agent another agent started names it in its records, and one that does not, though Claude noted it as nested, is left out.
 // Records Claude kept may disagree with each other, so an agent whose id or starting call an earlier agent already has is left out.
-// Each agent's runs are its starting call and then each call that resumed it, in the order they were made, so the history of whichever conversation made a call shows the agent's activity there.
+// Each agent's runs are its starting call and then each call that resumed it, in the order they were made, so the history of whichever conversation made a call shows the agent's activity and edits there.
 const rebuild = (
   threadId: string,
   cwd: string,
   records: readonly SubagentRecord[],
   messages: readonly SessionMessage[],
   at: number,
-): { thread: SubagentThread; history: HistoryTurn[] }[] => {
+): {
+  thread: SubagentThread;
+  history: HistoryTurn[];
+  edits: ReadonlyMap<string, readonly FileChangeItem[]>;
+}[] => {
   const started = usable(
     records
       .map((record) => ({
@@ -124,36 +132,91 @@ const rebuild = (
     [messages, ...started.map(({ record }) => record.messages)],
     started.map(({ record }) => record),
   );
+  const madeAt = new Map<string, number | null>();
   for (const [agentId, calls] of resumes) {
     const thread = threads.get(agentId);
     if (thread === undefined) continue;
-    const all = [...thread.calls, ...calls];
+    for (const call of calls) madeAt.set(call.toolUseId, call.at);
+    const all = [...thread.calls, ...calls.map((call) => call.toolUseId)];
     threads.set(agentId, {
       ...thread,
       calls: all,
       toolUseId: all.at(-1) ?? thread.toolUseId,
     });
   }
+  const edits = new Map<string, FileChangeItem[]>();
   const refOf = (toolUseId: string): AgentRef | undefined => {
     const agent = [...threads.values()].find((thread) =>
       thread.calls.includes(toolUseId),
     );
     return agent === undefined
       ? undefined
-      : { threadId: agent.id, path: agent.path, active: false };
+      : {
+          threadId: agent.id,
+          path: agent.path,
+          active: false,
+          edits: edits.get(toolUseId) ?? [],
+        };
   };
-  return started.flatMap(({ record }) => {
-    const thread = threads.get(record.agentId);
-    if (thread === undefined) return [];
+  // An agent's history shows the edits of the agents it started, so the deepest agents are built first.
+  const histories = new Map<string, HistoryTurn[]>();
+  const deepestFirst = [...threads.values()].sort((a, b) => b.depth - a.depth);
+  for (const thread of deepestFirst) {
+    const record = started.find(
+      (entry) => entry.record.agentId === thread.taskId,
+    )?.record;
+    if (record === undefined) continue;
     const history = buildSubagentHistory(
       record.messages,
       { threadId: thread.id, cwd },
       refOf,
     );
+    histories.set(thread.taskId, history);
+    for (const [call, applied] of editsByRun(history, thread.calls, madeAt)) {
+      edits.set(call, applied);
+    }
+  }
+  return started.flatMap(({ record }) => {
+    const thread = threads.get(record.agentId);
+    const history = histories.get(record.agentId);
+    if (thread === undefined || history === undefined) return [];
     return [
-      { thread: { ...thread, runs: Math.max(history.length, 1) }, history },
+      {
+        thread: { ...thread, runs: Math.max(history.length, 1) },
+        history,
+        edits: new Map(
+          thread.calls.map((call) => [call, edits.get(call) ?? []]),
+        ),
+      },
     ];
   });
+};
+
+// A record does not say which call each of an agent's turns ran under, so a turn is taken as run by the last call made before it started, and by the starting call when no resume came before it.
+const editsByRun = (
+  history: readonly HistoryTurn[],
+  calls: readonly string[],
+  madeAt: ReadonlyMap<string, number | null>,
+) => {
+  const byCall = new Map<string, FileChangeItem[]>(
+    calls.map((call) => [call, []]),
+  );
+  for (const { items } of history) {
+    const startedAt = items[0]?.startedAtMs ?? null;
+    const call = [...calls]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate === calls[0] ||
+          (startedAt !== null &&
+            (madeAt.get(candidate) ?? Number.POSITIVE_INFINITY) <= startedAt),
+      );
+    if (call === undefined) continue;
+    byCall
+      .get(call)
+      ?.push(...items.map((entry) => entry.item).filter(isAppliedEdit));
+  }
+  return byCall;
 };
 
 const usable = <T extends { record: SubagentRecord }>(
@@ -183,7 +246,7 @@ const resumesOf = (
     }
   }
   for (const record of records) byAddress.set(record.agentId, record.agentId);
-  const resumed = new Map<string, string[]>();
+  const resumed = new Map<string, AgentResume[]>();
   const found: AgentResume[] = conversations
     .flatMap((messages) => findAgentResumes(messages))
     .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
@@ -192,7 +255,7 @@ const resumesOf = (
       resume.resumedAgentId ??
       byAddress.get(resume.recipient.replace(APPENDED_REFERENCE, ""));
     if (agentId === undefined) continue;
-    resumed.set(agentId, [...(resumed.get(agentId) ?? []), resume.toolUseId]);
+    resumed.set(agentId, [...(resumed.get(agentId) ?? []), resume]);
   }
   return resumed;
 };

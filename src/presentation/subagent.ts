@@ -3,6 +3,7 @@ import { isObject } from "../runtime/object.ts";
 import { type HistoryItem, type HistoryTurn, noteItem } from "./history.ts";
 import type {
   AppNotification,
+  FileChangeItem,
   SubAgentActivityItem,
   ThreadItem,
   Turn,
@@ -54,20 +55,46 @@ export const renderSubagentActivity = (
     agentThreadId: child.id,
     agentPath: child.path,
   };
-  const ref = { threadId: child.parentThreadId, turnId };
-  return [
-    {
-      method: "item/started",
-      params: { item, ...ref, startedAtMs: now },
-      emittedAtMs: now,
-    },
-    {
-      method: "item/completed",
-      params: { item, ...ref, completedAtMs: now },
-      emittedAtMs: now,
-    },
-  ];
+  return shownAt(item, { threadId: child.parentThreadId, turnId }, now);
 };
+
+// The app sums a turn's changes from the file changes the turn holds, so an edit an agent applied is also shown in the turn that started the agent; it keeps the agent's item id, which no item of that thread has.
+export const renderDelegatedEdit = (
+  edit: FileChangeItem,
+  ref: { threadId: string; turnId: string },
+  now: number,
+): AppNotification[] => shownAt(edit, ref, now);
+
+// A failed, refused or unfinished edit changed no file, so only a completed one is carried to the turn that started the agent.
+export const appliedEdits = (
+  notifications: readonly AppNotification[],
+): FileChangeItem[] =>
+  notifications.flatMap((notification) =>
+    notification.method === "item/completed" &&
+    isAppliedEdit(notification.params.item)
+      ? [notification.params.item]
+      : [],
+  );
+
+export const isAppliedEdit = (item: ThreadItem): item is FileChangeItem =>
+  item.type === "fileChange" && item.status === "completed";
+
+const shownAt = (
+  item: ThreadItem,
+  ref: { threadId: string; turnId: string },
+  now: number,
+): AppNotification[] => [
+  {
+    method: "item/started",
+    params: { item, ...ref, startedAtMs: now },
+    emittedAtMs: now,
+  },
+  {
+    method: "item/completed",
+    params: { item, ...ref, completedAtMs: now },
+    emittedAtMs: now,
+  },
+];
 
 // The parent's own thread, as the server reports it, gives the fields only the server knows, such as its directory and environment, which the agent shares.
 export const childThreadView = (

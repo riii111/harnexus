@@ -7,6 +7,7 @@ import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import type {
   AppNotification,
+  FileChangeItem,
   ThreadItem,
   Turn,
   UserInput,
@@ -34,7 +35,7 @@ export type HistoryItem = {
 
 // The record is replayed through the live turn renderer, so a reopened thread shows the same items the turn showed while it ran, except the tools a subagent called, which Claude records apart from the conversation.
 // Each prompt opens a turn, so a steer taken mid-turn appears as a turn of its own, and a record keeps no bridge turn ids, so turn ids are made from the prompt's record uuid.
-// An agent the conversation started or resumed shows where each of its calls was made, as the activity a live turn gave it; agentThreadOf names the agent's thread for a call, if the bridge knows it.
+// An agent the conversation started or resumed shows where each of its calls was made, as the activity and edits a live turn gave it; agentThreadOf names the agent's thread for a call, if the bridge knows it.
 export const buildHistory = (
   messages: readonly SessionMessage[],
   thread: { threadId: string; cwd: string },
@@ -142,8 +143,13 @@ export const buildSubagentHistory = (
     agentThreadOf,
   );
 
-// active marks an agent still running under this call, which has not completed where the call was made.
-export type AgentRef = { threadId: string; path: string; active: boolean };
+// active marks an agent still running under this call, which has not completed where the call was made; edits are the ones the agent and the agents it started applied while running under the call.
+export type AgentRef = {
+  threadId: string;
+  path: string;
+  active: boolean;
+  edits: readonly FileChangeItem[];
+};
 
 const noteAgents = (
   replay: Replay,
@@ -160,17 +166,19 @@ const noteAgents = (
     }
     const agent = agentThreadOf(block.id);
     if (agent === undefined) continue;
-    const kinds = agent.active
-      ? (["started"] as const)
-      : (["started", "completed"] as const);
-    for (const kind of kinds) {
-      const item: ThreadItem = {
-        type: "subAgentActivity",
-        id: `${agent.threadId}-${kind}-${block.id}`,
-        kind,
-        agentThreadId: agent.threadId,
-        agentPath: agent.path,
-      };
+    const activity = (kind: "started" | "completed"): ThreadItem => ({
+      type: "subAgentActivity",
+      id: `${agent.threadId}-${kind}-${block.id}`,
+      kind,
+      agentThreadId: agent.threadId,
+      agentPath: agent.path,
+    });
+    const items = [
+      activity("started"),
+      ...agent.edits,
+      ...(agent.active ? [] : [activity("completed")]),
+    ];
+    for (const item of items) {
       replay.items.set(item.id, {
         turnId: replay.state.turnId,
         item,
