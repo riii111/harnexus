@@ -524,7 +524,10 @@ test("shows an edit an agent applied in the turn that started it, leaving out fa
     },
   ]);
   expect(subagents.agentRefOf("th-1")("toolu-1")?.edits).toMatchObject([
-    { changes: [{ path: "/fixture/work/a.ts" }] },
+    {
+      agentThreadId: child?.id,
+      item: { changes: [{ path: "/fixture/work/a.ts" }] },
+    },
   ]);
   expect(
     subagents
@@ -598,7 +601,7 @@ test("passes a nested agent's edit up to the agent that started it and to the th
   const refOf = subagents.agentRefOf("th-1");
   expect(
     [refOf("toolu-1"), refOf("toolu-inner")].map((ref) =>
-      ref?.edits.map((edit) => edit.changes[0]?.path),
+      ref?.edits.map((edit) => edit.item.changes[0]?.path),
     ),
   ).toEqual([["/fixture/work/a.ts"], ["/fixture/work/a.ts"]]);
 });
@@ -641,6 +644,58 @@ test("keeps a nested agent's edit in the turn of its parent agent that started i
       )
       .map((m) => m.params.turnId),
   ).toEqual([`${outer?.id}-turn-1`, "turn-1"]);
+});
+
+test("shows an edit an agent made once another agent resumed it in the turn of the agent that resumed it", () => {
+  const sent: Notification[] = [];
+  const subagents = createSubagents({
+    send: (m) => sent.push(m as Notification),
+  });
+
+  subagents.start(agent("th-1", "toolu-a"));
+  subagents.start(agent("th-1", "toolu-b"));
+  const [first, second] = subagents.childrenOf("th-1");
+  subagents.complete("th-1", "task-toolu-b", DONE);
+  subagents.message("th-1", {
+    type: "assistant",
+    message: {
+      id: "msg-wake",
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu-wake",
+          name: "SendMessage",
+          input: { to: "task-toolu-b", message: "fix it" },
+        },
+      ],
+      stop_reason: null,
+    },
+    parent_tool_use_id: "toolu-a",
+  } as unknown as SDKMessage);
+  subagents.start({
+    ...agent("th-1", "toolu-wake"),
+    taskId: "task-toolu-b",
+    depth: 2,
+  });
+  for (const m of editBy("toolu-wake", "toolu-edit", "/fixture/work/a.ts")) {
+    subagents.message("th-1", m);
+  }
+
+  expect(
+    sent
+      .filter(
+        (m) =>
+          m.method === "item/completed" &&
+          m.params.item?.type === "fileChange" &&
+          m.params.threadId !== second?.id,
+      )
+      .map((m) => `${m.params.threadId} ${m.params.turnId}`),
+  ).toEqual([`${first?.id} ${first?.id}-turn-1`, "th-1 turn-1"]);
+  expect(
+    subagents
+      .agentRefOf("th-1")("toolu-a")
+      ?.edits.map((edit) => edit.item.changes[0]?.path),
+  ).toEqual(["/fixture/work/a.ts"]);
 });
 
 test("shows in the parent's history an agent's edits in the turn whose call started it, once per read", () => {

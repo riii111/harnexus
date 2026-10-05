@@ -2,13 +2,11 @@ import { createHash } from "node:crypto";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   type AgentRef,
+  type DelegatedEdit,
   type HistoryTurn,
   noteItem,
 } from "../presentation/history.ts";
-import type {
-  AppNotification,
-  FileChangeItem,
-} from "../presentation/protocol.ts";
+import type { AppNotification } from "../presentation/protocol.ts";
 import {
   appliedEdits,
   closeSubagentTurn,
@@ -105,6 +103,7 @@ export const createSubagents = ({
     running.set(id, opened.turn);
     runs.set(toolUseId, {
       agentId: id,
+      threadId: parent?.id ?? threadId,
       turnId: startedIn,
       ownTurnId: opened.turn.turn.id,
       edits: [],
@@ -138,32 +137,34 @@ export const createSubagents = ({
     const rendered = renderSubagentMessage(turn, sdkMessage, at);
     running.set(child.id, rendered.turn);
     sendAll(rendered.notifications);
-    for (const edit of appliedEdits(rendered.notifications)) {
-      delegateEdit(child.toolUseId, edit, at);
+    for (const item of appliedEdits(rendered.notifications)) {
+      delegateEdit(child.toolUseId, { agentThreadId: child.id, item }, at);
     }
   };
 
   // An edit an agent applied also shows in the turn that made its call, even once later turns ran, since the app sums a turn's changes from that turn alone; under another agent it also passes up through that agent's run, so the thread the work came from shows it too.
-  const delegateEdit = (call: string, edit: FileChangeItem, at: number) => {
+  const delegateEdit = (call: string, edit: DelegatedEdit, at: number) => {
     const run = runs.get(call);
-    if (run === undefined || run.edits.some((known) => known.id === edit.id)) {
+    if (
+      run === undefined ||
+      run.edits.some((known) => known.item.id === edit.item.id)
+    ) {
       return;
     }
     runs.set(call, { ...run, edits: [...run.edits, edit] });
-    const agent = children.get(run.agentId);
-    if (agent === undefined) return;
     if (run.turnId !== null) {
       const notifications = renderDelegatedEdit(
         edit,
-        { threadId: agent.parentThreadId, turnId: run.turnId },
+        { threadId: run.threadId, turnId: run.turnId },
         at,
       );
       sendAll(notifications);
-      keepInTurn(agent.parentThreadId, run.turnId, notifications);
+      keepInTurn(run.threadId, run.turnId, notifications);
     }
     const parentCall = [...runs].find(
       ([, other]) =>
-        other.agentId === agent.parentThreadId &&
+        run.turnId !== null &&
+        other.agentId === run.threadId &&
         other.ownTurnId === run.turnId,
     )?.[0];
     if (parentCall !== undefined) delegateEdit(parentCall, edit, at);
@@ -265,7 +266,7 @@ export const createSubagents = ({
     agents: readonly {
       thread: SubagentThread;
       history: HistoryTurn[];
-      edits: ReadonlyMap<string, readonly FileChangeItem[]>;
+      edits: ReadonlyMap<string, readonly DelegatedEdit[]>;
     }[],
   ) => {
     for (const { thread, history, edits } of agents) {
@@ -274,6 +275,7 @@ export const createSubagents = ({
         if (runs.has(call)) continue;
         runs.set(call, {
           agentId: thread.id,
+          threadId: thread.parentThreadId,
           turnId: null,
           ownTurnId: null,
           edits: [...(edits.get(call) ?? [])],
@@ -361,12 +363,13 @@ export const createSubagents = ({
 
 export type Subagents = ReturnType<typeof createSubagents>;
 
-// Each call that started or resumed an agent is one run of it: turnId is the turn of the thread above that made the call, ownTurnId the agent's own turn for the run, and edits what the run and the agents it started applied.
+// Each call that started or resumed an agent is one run of it: threadId and turnId are the thread and turn that made the call, which for a resume may be another agent than the one that started it, ownTurnId the agent's own turn for the run, and edits what the run and the agents it started applied.
 type Run = {
   agentId: string;
+  threadId: string;
   turnId: string | null;
   ownTurnId: string | null;
-  edits: FileChangeItem[];
+  edits: DelegatedEdit[];
 };
 
 // Shaped as a UUID, as the app's own thread ids are.

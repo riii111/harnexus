@@ -5,16 +5,16 @@ import {
   type AgentRef,
   type AgentResume,
   buildSubagentHistory,
+  type DelegatedEdit,
   findAgentResumes,
   type HistoryTurn,
+  shownEdit,
   startOfRecord,
 } from "../presentation/history.ts";
-import type { FileChangeItem } from "../presentation/protocol.ts";
 import {
   isAppliedEdit,
   type SubagentThread,
 } from "../presentation/subagent.ts";
-import { isObject } from "../runtime/object.ts";
 import {
   agentNickname,
   childThreadId,
@@ -90,7 +90,7 @@ const rebuild = (
 ): {
   thread: SubagentThread;
   history: HistoryTurn[];
-  edits: ReadonlyMap<string, readonly FileChangeItem[]>;
+  edits: ReadonlyMap<string, readonly DelegatedEdit[]>;
 }[] => {
   const started = usable(
     records
@@ -145,7 +145,7 @@ const rebuild = (
       toolUseId: all.at(-1) ?? thread.toolUseId,
     });
   }
-  const edits = new Map<string, FileChangeItem[]>();
+  const edits = new Map<string, DelegatedEdit[]>();
   const refOf = (toolUseId: string): AgentRef | undefined => {
     const agent = [...threads.values()].find((thread) =>
       thread.calls.includes(toolUseId),
@@ -159,33 +159,34 @@ const rebuild = (
           edits: edits.get(toolUseId) ?? [],
         };
   };
-  // An agent's history shows the edits of the agents it started or resumed, so those agents are built first; a cycle of resumes builds with what is known so far.
+  // An agent's history shows the edits of the runs it started or resumed, which may belong to an agent built after it, as when two agents resume each other; each pass carries edits one call further up, so the histories are rebuilt until no run gains an edit.
   const histories = new Map<string, HistoryTurn[]>();
-  const building = new Set<string>();
-  const build = (thread: SubagentThread) => {
-    if (histories.has(thread.taskId) || building.has(thread.taskId)) return;
-    building.add(thread.taskId);
-    const record = started.find(
-      (entry) => entry.record.agentId === thread.taskId,
-    )?.record;
-    if (record === undefined) return;
-    for (const call of callsIn(record.messages)) {
-      const callee = [...threads.values()].find(
-        (other) => other !== thread && other.calls.includes(call),
+  const runCount = [...threads.values()].reduce(
+    (count, thread) => count + thread.calls.length,
+    0,
+  );
+  for (let pass = 0; pass <= runCount; pass += 1) {
+    const before = editIds(edits);
+    for (const { record } of started) {
+      const thread = threads.get(record.agentId);
+      if (thread === undefined) continue;
+      const history = buildSubagentHistory(
+        record.messages,
+        { threadId: thread.id, cwd },
+        refOf,
       );
-      if (callee !== undefined) build(callee);
+      histories.set(record.agentId, history);
+      for (const [call, applied] of editsByRun(
+        history,
+        thread,
+        madeAt,
+        [...edits.values()].flat(),
+      )) {
+        edits.set(call, applied);
+      }
     }
-    const history = buildSubagentHistory(
-      record.messages,
-      { threadId: thread.id, cwd },
-      refOf,
-    );
-    histories.set(thread.taskId, history);
-    for (const [call, applied] of editsByRun(history, thread.calls, madeAt)) {
-      edits.set(call, applied);
-    }
-  };
-  for (const thread of threads.values()) build(thread);
+    if (editIds(edits) === before) break;
+  }
   return started.flatMap(({ record }) => {
     const thread = threads.get(record.agentId);
     const history = histories.get(record.agentId);
@@ -203,12 +204,14 @@ const rebuild = (
 };
 
 // A record does not say which call each of an agent's turns ran under, so a turn is taken as run by the last call made before it started, and by the starting call when no resume came before it.
+// An edit shown as passed on is one of the delegated edits the history was built with, and any other is the agent's own.
 const editsByRun = (
   history: readonly HistoryTurn[],
-  calls: readonly string[],
+  { id, calls }: SubagentThread,
   madeAt: ReadonlyMap<string, number | null>,
+  delegated: readonly DelegatedEdit[],
 ) => {
-  const byCall = new Map<string, FileChangeItem[]>(
+  const byCall = new Map<string, DelegatedEdit[]>(
     calls.map((call) => [call, []]),
   );
   for (const { items } of history) {
@@ -222,26 +225,25 @@ const editsByRun = (
             (madeAt.get(candidate) ?? Number.POSITIVE_INFINITY) <= startedAt),
       );
     if (call === undefined) continue;
-    byCall
-      .get(call)
-      ?.push(...items.map((entry) => entry.item).filter(isAppliedEdit));
+    for (const item of items.map((entry) => entry.item).filter(isAppliedEdit)) {
+      byCall.get(call)?.push(
+        delegated.find((edit) => shownEdit(edit, id).id === item.id) ?? {
+          agentThreadId: id,
+          item,
+        },
+      );
+    }
   }
   return byCall;
 };
 
-const callsIn = (messages: readonly SessionMessage[]) =>
-  messages.flatMap((message) => {
-    const body = message.message;
-    if (message.type !== "assistant" || !isObject(body)) return [];
-    const content = Array.isArray(body.content) ? body.content : [];
-    return content.flatMap((block) =>
-      isObject(block) &&
-      block.type === "tool_use" &&
-      typeof block.id === "string"
-        ? [block.id]
-        : [],
-    );
-  });
+const editIds = (edits: ReadonlyMap<string, readonly DelegatedEdit[]>) =>
+  JSON.stringify(
+    [...edits].map(([call, applied]) => [
+      call,
+      applied.map((edit) => edit.item.id),
+    ]),
+  );
 
 const usable = <T extends { record: SubagentRecord }>(
   started: readonly T[],

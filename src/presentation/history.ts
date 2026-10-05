@@ -148,8 +148,19 @@ export type AgentRef = {
   threadId: string;
   path: string;
   active: boolean;
-  edits: readonly FileChangeItem[];
+  edits: readonly DelegatedEdit[];
 };
+
+// An edit names the agent that applied it, since agents that resume each other can pass an agent's edit back to its own thread, where the edit already shows under its id.
+export type DelegatedEdit = { agentThreadId: string; item: FileChangeItem };
+
+export const shownEdit = (
+  edit: DelegatedEdit,
+  threadId: string,
+): FileChangeItem =>
+  edit.agentThreadId === threadId
+    ? { ...edit.item, id: `${edit.item.id}-passed-back` }
+    : edit.item;
 
 const noteAgents = (
   replay: Replay,
@@ -175,7 +186,7 @@ const noteAgents = (
     });
     const items = [
       activity("started"),
-      ...agent.edits,
+      ...agent.edits.map((edit) => shownEdit(edit, replay.state.threadId)),
       ...(agent.active ? [] : [activity("completed")]),
     ];
     for (const item of items) {
