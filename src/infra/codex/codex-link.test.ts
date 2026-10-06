@@ -652,6 +652,264 @@ describe("createCodexLink call", () => {
   });
 });
 
+describe("createCodexLink createChecked", () => {
+  test.each([
+    {
+      name: "a first turn on the sent model and effort",
+      actual: { model: "gpt-fixture", effort: "low" },
+      refused: false,
+    },
+    {
+      name: "a first turn on another model",
+      actual: { model: "gpt-other", effort: "low" },
+      refused: true,
+    },
+    {
+      name: "a first turn that names neither",
+      actual: { model: null, effort: null },
+      refused: false,
+    },
+  ])("records the reviewer and reports $name", async ({ actual, refused }) => {
+    const delegations = createDelegationWatch(() => {});
+    const runs: boolean[] = [];
+    const { link, store } = await connect({
+      delegations,
+      answer: () => {
+        runs.push(delegations.observe(CALLER, REVIEWER, actual));
+        return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
+      },
+    });
+
+    const created = await link.createChecked({
+      prompt: "review",
+      target: TARGET,
+      thinking: "low",
+    });
+
+    expect(runs).toEqual([!refused]);
+    expect(created.firstTurn).toEqual({
+      threadId: REVIEWER,
+      expected: { model: "gpt-fixture", effort: "low" },
+      actual,
+      refused,
+    });
+    expect(created.result.isError === true).toBe(refused);
+    expect(created.unknown).toBe(false);
+    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
+  });
+
+  test("reports a seen thread as unknown with its id when saving the reviewer fails", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const { link } = await connect({
+      delegations,
+      addReviewerFails: true,
+      answer: () => {
+        delegations.observe(CALLER, REVIEWER, { model: null, effort: null });
+        return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
+      },
+    });
+
+    const created = await link.createChecked({
+      prompt: "review",
+      target: TARGET,
+    });
+
+    expect(created.unknown).toBe(true);
+    expect(created.threadId).toBe(REVIEWER);
+  });
+
+  test("reports the real id the app named as unknown while its first turn is unseen", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const { link } = await connect({
+      delegations,
+      answer: () =>
+        Result.ok(textAnswer(JSON.stringify({ threadId: REVIEWER }))),
+    });
+
+    const created = await link.createChecked({
+      prompt: "review",
+      target: TARGET,
+    });
+
+    expect(created.unknown).toBe(true);
+    expect(created.threadId).toBe(REVIEWER);
+  });
+
+  test("keeps the check armed when the first turn is not seen in time", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const { link } = await connect({
+      delegations,
+      answer: () => Result.ok(textAnswer(JSON.stringify(PROVISIONAL))),
+    });
+
+    const created = await link.createChecked({
+      prompt: "review",
+      target: TARGET,
+      model: "gpt-worker",
+    });
+
+    expect(created.unknown).toBe(true);
+    expect(
+      delegations.observe(CALLER, REVIEWER, {
+        model: "gpt-other",
+        effort: null,
+      }),
+    ).toBe(false);
+  });
+
+  test("reports a refused first turn even when the app then answers with an error", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const { link } = await connect({
+      delegations,
+      answer: () => {
+        delegations.observe(CALLER, REVIEWER, {
+          model: "gpt-other",
+          effort: null,
+        });
+        return Result.ok({ ...textAnswer("first turn failed"), isError: true });
+      },
+    });
+
+    const created = await link.createChecked({
+      prompt: "review",
+      target: TARGET,
+    });
+
+    expect(created.firstTurn?.refused).toBe(true);
+    expect(created.unknown).toBe(false);
+  });
+
+  test("checks the first turn of a thread the app's answer named", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const { link } = await connect({
+      delegations,
+      answer: () => {
+        setTimeout(
+          () =>
+            delegations.observe(CALLER, REVIEWER, {
+              model: "gpt-other",
+              effort: null,
+            }),
+          5,
+        );
+        return Result.ok(textAnswer(JSON.stringify({ threadId: REVIEWER })));
+      },
+    });
+
+    const created = await link.createChecked({
+      prompt: "review",
+      target: TARGET,
+    });
+
+    expect(created.firstTurn?.refused).toBe(true);
+  });
+});
+
+describe("createCodexLink creates of one caller from two links", () => {
+  test("refuses an in-chat create while a socket create of the same thread is unconfirmed", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const answered = deferred();
+    const socket = await connect({
+      delegations,
+      answer: async () => {
+        await answered.promise;
+        return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
+      },
+    });
+    const chat = await connect({ delegations });
+
+    const socketCreate = socket.link.createChecked({
+      prompt: "work",
+      target: TARGET,
+      model: "gpt-worker",
+    });
+    await waitUntil(() => socket.requests.length === 1);
+    const inChat = await chat.client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review", target: TARGET },
+    });
+    const runs = delegations.observe(CALLER, REVIEWER, {
+      model: "gpt-other",
+      effort: null,
+    });
+    answered.resolve();
+
+    expect(inChat.isError).toBe(true);
+    expect(chat.requests).toEqual([]);
+    expect(runs).toBe(false);
+    expect((await socketCreate).firstTurn?.refused).toBe(true);
+  });
+
+  test("sends no socket create while an in-chat create of the same thread is unconfirmed", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const answered = deferred();
+    const chat = await connect({
+      delegations,
+      answer: async () => {
+        await answered.promise;
+        return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
+      },
+    });
+    const socket = await connect({ delegations });
+
+    const inChat = chat.client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review", target: TARGET },
+    });
+    await waitUntil(() => chat.requests.length === 1);
+    const socketCreate = await socket.link.createChecked({
+      prompt: "work",
+      target: TARGET,
+      model: "gpt-worker",
+    });
+    const runs = delegations.observe(CALLER, REVIEWER, {
+      model: "gpt-other",
+      effort: null,
+    });
+    answered.resolve();
+
+    expect(socketCreate.busy).toBe(true);
+    expect(socket.requests).toEqual([]);
+    expect(runs).toBe(true);
+    expect((await inChat).structuredContent).toEqual({ threadId: REVIEWER });
+    expect(chat.store.reviewers(CALLER)).toEqual([REVIEWER]);
+  });
+
+  test("keeps the check of a thread named by an error answer", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const { link } = await connect({
+      delegations,
+      answer: () =>
+        Result.ok({
+          ...textAnswer(JSON.stringify({ threadId: REVIEWER })),
+          isError: true,
+        }),
+    });
+
+    const created = await link.createChecked({
+      prompt: "work",
+      target: TARGET,
+      model: "gpt-worker",
+    });
+
+    expect(created).toMatchObject({ threadId: REVIEWER, unknown: true });
+    expect(
+      delegations.observe(CALLER, REVIEWER, {
+        model: "gpt-other",
+        effort: null,
+      }),
+    ).toBe(false);
+  });
+});
+
+const deferred = () => {
+  let resolve: () => void = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+};
+
 const connect = async ({
   caller = CALLER,
   reviewers = {},
@@ -699,6 +957,7 @@ const connect = async ({
     request,
     delegations,
     createdThreadWaitMs: 20,
+    firstTurnWaitMs: 20,
   });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();

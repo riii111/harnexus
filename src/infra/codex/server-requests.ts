@@ -21,7 +21,7 @@ class ServerRequestRejected extends TaggedError("ServerRequestRejected")<{
   message: string;
 }> {}
 
-type ServerRequestError =
+export type ServerRequestError =
   | ServerRequestNotSent
   | ServerRequestUnanswered
   | ServerRequestRejected;

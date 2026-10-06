@@ -1,63 +1,157 @@
+import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 
 export type DelegationWatch = ReturnType<typeof createDelegationWatch>;
 
-// The app answers create_thread with a provisional id only; the real thread id first appears in the turn/start the app sends to the new thread, whose tool output names the thread that asked for it.
-// claim runs as a thread is handed to its caller, before the caller's wait resumes, so the thread is known as that caller's from the moment it is seen.
+// null where the request gave none.
+export type TurnSettings = { model: string | null; effort: string | null };
+
+export type FirstTurn = {
+  threadId: string;
+  expected: TurnSettings;
+  actual: TurnSettings;
+  refused: boolean;
+};
+
+// The app answers create_thread with a provisional id only; the real id first appears in the new thread's turn/start, whose tool output names the calling thread.
+// claim runs before the caller's wait resumes, so the thread is known as that caller's from the moment it is seen.
 export const createDelegationWatch = (
   claim: (sourceThreadId: string, threadId: string) => void,
+  { armedMs = CHECK_ARMED_MS }: { armedMs?: number } = {},
 ) => {
-  const waiters = new Map<string, ((threadId: string) => void)[]>();
-  // Every thread seen or named by an answer, so its late or repeated first turn never answers a later create_thread.
+  // At most one unconfirmed create per caller, since nothing in the first turn tells two creates of one caller apart.
+  // A Codex caller's own create_thread never passes through the bridge, so a caller must not mix it with socket creates in parallel.
+  const waiters = new Map<string, Waiter>();
+  // So a late or repeated first turn never answers a later create_thread.
   const claimed = new Set<string>();
+  // So the app resending a refused first turn never gets it run.
+  const refusedThreads = new Set<string>();
 
-  // A thread created from anywhere but a pending create_thread of a Claude thread is ignored, so it can never become someone's reviewer.
-  const observe = (sourceThreadId: string, threadId: string) => {
-    if (claimed.has(threadId)) return;
+  // A thread nobody waits for is ignored, so it can never become someone's reviewer; the answer is whether the turn may run.
+  const observe = (
+    sourceThreadId: string,
+    threadId: string,
+    actual: TurnSettings = NOT_GIVEN,
+  ) => {
+    if (refusedThreads.has(threadId)) return false;
+    const waiter = waiters.get(sourceThreadId);
+    if (waiter?.named === threadId) {
+      waiters.delete(sourceThreadId);
+      return settle(waiter, threadId, actual);
+    }
+    if (claimed.has(threadId)) return true;
     claimed.add(threadId);
-    const queue = waiters.get(sourceThreadId);
-    const next = queue?.shift();
-    if (queue?.length === 0) waiters.delete(sourceThreadId);
-    if (next === undefined) return;
-    claim(sourceThreadId, threadId);
-    next(threadId);
+    if (waiter === undefined || waiter.named !== null) return true;
+    waiters.delete(sourceThreadId);
+    if (waiter.record) claim(sourceThreadId, threadId);
+    return settle(waiter, threadId, actual);
   };
 
-  // Registered before create_thread is sent, since the new thread's turn/start can arrive before the tool answer.
-  const expect = (sourceThreadId: string) => {
-    let resolve: (threadId: string | null) => void = () => {};
-    const created = new Promise<string | null>((done) => {
+  // Registered before create_thread is sent, since the new thread's turn/start can arrive before the tool answer; null while the caller has an unconfirmed create.
+  // A timed-out wait leaves the check armed, so a late first turn on the wrong model is still refused until armedMs passes or cancel is called.
+  const expect = (
+    sourceThreadId: string,
+    {
+      expected = NOT_GIVEN,
+      record = true,
+    }: { expected?: TurnSettings; record?: boolean } = {},
+  ) => {
+    if (waiters.has(sourceThreadId)) return null;
+    let resolve: (turn: FirstTurn | null) => void = () => {};
+    const seen = new Promise<FirstTurn | null>((done) => {
       resolve = done;
     });
-    const queue = waiters.get(sourceThreadId) ?? [];
-    waiters.set(sourceThreadId, [...queue, resolve]);
+    let settled = false;
+    const disarm = setTimeout(() => cancel(), armedMs);
+    disarm.unref();
+    const waiter: Waiter = {
+      expected,
+      record,
+      named: null,
+      settle: (turn) => {
+        settled = true;
+        clearTimeout(disarm);
+        resolve(turn);
+      },
+    };
+    waiters.set(sourceThreadId, waiter);
     const cancel = () => {
-      const left = (waiters.get(sourceThreadId) ?? []).filter(
-        (waiter) => waiter !== resolve,
-      );
-      if (left.length === 0) waiters.delete(sourceThreadId);
-      else waiters.set(sourceThreadId, left);
-      resolve(null);
+      if (waiters.get(sourceThreadId) === waiter) {
+        waiters.delete(sourceThreadId);
+      }
+      waiter.settle(null);
     };
     return {
       wait: async (timeoutMs: number) => {
-        const timer = setTimeout(cancel, timeoutMs);
-        try {
-          return await created;
-        } finally {
-          clearTimeout(timer);
-        }
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timedOut = new Promise<null>((done) => {
+          timer = setTimeout(() => done(null), timeoutMs);
+        });
+        const turn = await Promise.race([seen, timedOut]);
+        clearTimeout(timer);
+        return turn;
       },
       cancel,
-      // The app's answer named the thread itself, so its first turn arriving later must not answer another create_thread.
       claim: (threadId: string) => {
         claimed.add(threadId);
-        cancel();
+        if (!settled) waiter.named = threadId;
       },
     };
   };
 
+  const settle = (waiter: Waiter, threadId: string, actual: TurnSettings) => {
+    const refused =
+      differs(waiter.expected.model, actual.model) ||
+      differs(waiter.expected.effort, actual.effort);
+    if (refused) refusedThreads.add(threadId);
+    waiter.settle({ threadId, expected: waiter.expected, actual, refused });
+    return !refused;
+  };
+
   return { observe, expect };
+};
+
+type Waiter = {
+  expected: TurnSettings;
+  record: boolean;
+  // The thread the app's answer named, whose first turn alone settles this waiter.
+  named: string | null;
+  settle: (turn: FirstTurn | null) => void;
+};
+
+// Only an explicit difference refuses a turn; a value the app leaves out is reported as null for the caller to judge.
+const differs = (expected: string | null, actual: string | null) =>
+  expected !== null && actual !== null && expected !== actual;
+
+const NOT_GIVEN: TurnSettings = { model: null, effort: null };
+
+// Creating a worktree can take long, so the first turn is waited for this long before the answer says the outcome is unknown.
+export const FIRST_TURN_WAIT_MS = 120_000;
+const CHECK_ARMED_MS = 600_000;
+
+// A provisional id such as clientThreadId is not a thread id, so only an explicit threadId or thread.id in the app's create_thread answer counts.
+export const answeredThreadId = (answer: unknown) => {
+  if (!isObject(answer)) return null;
+  const structured = threadIdField(answer.structuredContent);
+  if (structured !== null) return structured;
+  const content = Array.isArray(answer.content) ? answer.content : [];
+  for (const item of content) {
+    if (!isObject(item) || item.type !== "text") continue;
+    if (typeof item.text !== "string") continue;
+    const parsed = parseJson(item.text);
+    const threadId = parsed.isOk() ? threadIdField(parsed.value) : null;
+    if (threadId !== null) return threadId;
+  }
+  return null;
+};
+
+const threadIdField = (value: unknown): string | null => {
+  if (!isObject(value)) return null;
+  if (typeof value.threadId === "string" && value.threadId !== "") {
+    return value.threadId;
+  }
+  const nested = isObject(value.thread) ? value.thread.id : undefined;
+  return typeof nested === "string" && nested !== "" ? nested : null;
 };
 
 // Only the create_thread tool output names the thread that created the one it starts.

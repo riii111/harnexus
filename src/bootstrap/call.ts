@@ -10,12 +10,13 @@ const EXIT = {
   unknown: 3,
   rejected: 4,
   invalid: 5,
+  // The thread exists but never ran, so creating another is a choice, not a retry.
+  model_mismatch: 6,
 } as const;
 
 // Longer than the longest wait_threads the bridge allows, so the bridge always answers first.
 const ANSWER_TIMEOUT_MS = 15 * 60_000;
 
-// Sends one Codex app tool call read from stdin to the running bridge and prints its answer line as is.
 // The exit status tells a call that never left (2, safe to send again) from one whose effect is unknown (3, never send again).
 const socketPath = () => {
   const configured = process.env.HARNEXUS_CALL_SOCKET;

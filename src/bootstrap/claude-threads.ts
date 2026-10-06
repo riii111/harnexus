@@ -159,6 +159,7 @@ export const connectClaudeThreads = ({
     isClaudeThread: (threadId) => store.get(threadId) !== undefined,
     openLink,
     request,
+    delegations,
   });
   return { router, closeAll: turns.closeAll, callGateway };
 };

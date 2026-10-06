@@ -112,6 +112,33 @@ describe("startClaudeSession options", () => {
       ANTHROPIC_CUSTOM_HEADERS: "X-Trace: 1",
     });
   });
+
+  test.each([
+    {
+      name: "names the thread it runs when the call socket is open",
+      exposeThreadId: true,
+      expected: "th-fixture",
+    },
+    {
+      name: "keeps the inherited value when the call socket is closed",
+      exposeThreadId: false,
+      expected: "th-bridge",
+    },
+  ])("CODEX_THREAD_ID for Claude's tools $name", async ({
+    exposeThreadId,
+    expected,
+  }) => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      env: { PATH: "/usr/bin", CODEX_THREAD_ID: "th-bridge" },
+    });
+
+    await startClaudeSession({ ...SETTINGS, exposeThreadId }, claude.runtime);
+
+    expect(claude.options().env).toEqual({
+      PATH: "/usr/bin",
+      CODEX_THREAD_ID: expected,
+    });
+  });
 });
 
 describe("startClaudeSession authentication", () => {
@@ -962,6 +989,7 @@ describe("readClaudeSession", () => {
 });
 
 const SETTINGS: ClaudeSessionSettings = {
+  threadId: "th-fixture",
   cwd: "/work/tree",
   model: "claude-sonnet-5",
   connection: SUBSCRIPTION_CONNECTION,
