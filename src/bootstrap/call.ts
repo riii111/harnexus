@@ -10,6 +10,8 @@ const EXIT = {
   unknown: 3,
   rejected: 4,
   invalid: 5,
+  // The thread exists but its first turn was refused before it ran, so creating another is a choice, not a retry.
+  model_mismatch: 6,
 } as const;
 
 // Longer than the longest wait_threads the bridge allows, so the bridge always answers first.

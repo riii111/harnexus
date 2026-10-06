@@ -54,6 +54,42 @@ describe("connectClaudeThreads", () => {
     expect(sessions()).toBe(1);
   });
 
+  test("refuses the first turn of a thread a Codex thread created through the socket on another model", async () => {
+    const { store, sent, callAfter } = await workerA();
+
+    const { answer, routed } = await callAfter([codexWorkerFirstTurn()], {
+      threadId: CODEX_CALLER,
+      tool: "create_thread",
+      arguments: {
+        prompt: "work",
+        target: TARGET,
+        model: "gpt-worker",
+        thinking: "low",
+      },
+    });
+
+    expect(answer).toEqual({
+      outcome: "model_mismatch",
+      threadId: CODEX_WORKER,
+      expected: { model: "gpt-worker", effort: "low" },
+      actual: { model: "gpt-other", effort: "low" },
+    });
+    expect(routed).toEqual([null]);
+    expect(sent).toContainEqual({
+      id: 4,
+      error: { code: -32600, message: expect.stringContaining("not run") },
+    });
+    expect(store.reviewerOwner(CODEX_WORKER)).toBeUndefined();
+  });
+
+  test("gives a Claude thread's tools its thread id as CODEX_THREAD_ID", async () => {
+    const { started, env } = await workerA();
+
+    await started();
+
+    expect(env()?.CODEX_THREAD_ID).toBe(WORKER_A);
+  });
+
   test("asks the server to keep a Claude thread on disk when its first turn runs", async () => {
     const { requests, started } = await workerA();
 
@@ -148,12 +184,13 @@ const workerA = async () => {
   const settings: ClaudeSessionSettings[] = [];
   const sent: Sent[] = [];
   let linesBeforeAnswer: object[] = [];
+  const routed: (Buffer | null)[] = [];
   const requests: { method: string; params: unknown }[] = [];
   const request: ServerRequest = async (method, params) => {
     requests.push({ method, params });
     if (method === "model/list") return Result.ok(MODELS);
     if (method === "thread/inject_items") return Result.ok({});
-    for (const line of linesBeforeAnswer) fromApp(line);
+    for (const line of linesBeforeAnswer) routed.push(fromApp(line));
     return Result.ok({
       content: [{ type: "text", text: JSON.stringify(PROVISIONAL) }],
     });
@@ -201,6 +238,14 @@ const workerA = async () => {
       threads.closeAll();
     },
     createThreadAfter,
+    // The socket's call, made once the app has sent these lines.
+    callAfter: async (lines: object[], call: object) => {
+      linesBeforeAnswer = lines;
+      const answer = await threads.callGateway.handle(JSON.stringify(call));
+      threads.closeAll();
+      return { answer: JSON.parse(answer), routed };
+    },
+    env: () => claude.options().env,
     sessions: () => settings.length,
   };
 };
@@ -241,6 +286,22 @@ const reviewerFirstTurn = () => ({
   },
 });
 
+const codexWorkerFirstTurn = () => ({
+  id: 4,
+  method: "turn/start",
+  params: {
+    threadId: CODEX_WORKER,
+    input: [],
+    model: "gpt-other",
+    effort: "low",
+    toolOutput: {
+      name: "create_thread",
+      namespace: "codex_app",
+      output: `<codex_delegation>\n  <source_thread_id>${CODEX_CALLER}</source_thread_id>\n  <prompt>work</prompt>\n</codex_delegation>`,
+    },
+  },
+});
+
 const replyToWorkerB = () => ({
   id: REPLY_ID,
   method: "turn/start",
@@ -269,6 +330,8 @@ const WORKER_A = "th-fixture-worker-a";
 const WORKER_B = "th-fixture-worker-b";
 const REVIEWER = "th-fixture-reviewer-a";
 const REPLY_ID = 3;
+const CODEX_CALLER = "th-fixture-codex-caller";
+const CODEX_WORKER = "th-fixture-codex-worker";
 const MODEL = "claude-sonnet-5";
 const SUBSCRIPTION: AccountInfo = {
   subscriptionType: "Claude Max",

@@ -28,15 +28,15 @@ describe("createDelegationWatch", () => {
     watch.observe("th-claude", "th-reviewer-1");
     watch.observe("th-claude", "th-reviewer-2");
 
-    expect(await first.wait(1_000)).toBe("th-reviewer-1");
-    expect(await second.wait(1_000)).toBe("th-reviewer-2");
+    expect((await first.wait(1_000))?.threadId).toBe("th-reviewer-1");
+    expect((await second.wait(1_000))?.threadId).toBe("th-reviewer-2");
   });
 
   test("ignores a repeated first turn of a thread it already handed out", async () => {
     const watch = createDelegationWatch(() => {});
     const first = watch.expect("th-claude");
     watch.observe("th-claude", "th-reviewer-1");
-    expect(await first.wait(1_000)).toBe("th-reviewer-1");
+    expect((await first.wait(1_000))?.threadId).toBe("th-reviewer-1");
     const second = watch.expect("th-claude");
 
     watch.observe("th-claude", "th-reviewer-1");
@@ -52,6 +52,93 @@ describe("createDelegationWatch", () => {
     watch.observe("th-claude", "th-unrelated");
 
     expect(await waiting.wait(20)).toBeNull();
+  });
+});
+
+describe("createDelegationWatch first turn check", () => {
+  test.each([
+    {
+      name: "the expected model and effort",
+      actual: { model: "gpt-worker", effort: "low" },
+      runs: true,
+    },
+    {
+      name: "another model",
+      actual: { model: "gpt-other", effort: "low" },
+      runs: false,
+    },
+    {
+      name: "another effort",
+      actual: { model: "gpt-worker", effort: "high" },
+      runs: false,
+    },
+    {
+      name: "no model or effort",
+      actual: { model: null, effort: null },
+      runs: true,
+    },
+  ])("lets a first turn asking for $name run: $runs", async ({
+    actual,
+    runs,
+  }) => {
+    const watch = createDelegationWatch(() => {});
+    const created = watch.expect("th-codex", { expected: EXPECTED });
+
+    expect(watch.observe("th-codex", "th-worker", actual)).toBe(runs);
+    expect(await created.wait(1_000)).toEqual({
+      threadId: "th-worker",
+      expected: EXPECTED,
+      actual,
+      refused: !runs,
+    });
+  });
+
+  test("checks nothing a create_thread did not ask for", () => {
+    const watch = createDelegationWatch(() => {});
+    watch.expect("th-codex", {
+      expected: { model: "gpt-worker", effort: null },
+    });
+
+    expect(
+      watch.observe("th-codex", "th-worker", {
+        model: "gpt-worker",
+        effort: "xhigh",
+      }),
+    ).toBe(true);
+  });
+
+  test("keeps the check armed after a wait times out until it is disarmed", async () => {
+    const watch = createDelegationWatch(() => {}, { armedMs: 60 });
+    const first = watch.expect("th-codex", { expected: EXPECTED });
+    const second = watch.expect("th-codex", { expected: EXPECTED });
+
+    expect(await first.wait(10)).toBeNull();
+    expect(watch.observe("th-codex", "th-late", MISMATCH)).toBe(false);
+    await Bun.sleep(80);
+
+    expect(watch.observe("th-codex", "th-after", MISMATCH)).toBe(true);
+    expect(await second.wait(10)).toBeNull();
+  });
+
+  test("checks the first turn of a thread the answer already named", async () => {
+    const watch = createDelegationWatch(() => {});
+    const created = watch.expect("th-codex", { expected: EXPECTED });
+    created.claim("th-worker");
+
+    expect(watch.observe("th-codex", "th-worker", MISMATCH)).toBe(false);
+    expect((await created.wait(1_000))?.refused).toBe(true);
+  });
+
+  test("records nothing for a caller that asked not to be recorded", () => {
+    const claims: string[][] = [];
+    const watch = createDelegationWatch((source, threadId) =>
+      claims.push([source, threadId]),
+    );
+    watch.expect("th-codex", { record: false });
+
+    watch.observe("th-codex", "th-worker");
+
+    expect(claims).toEqual([]);
   });
 });
 
@@ -180,3 +267,6 @@ describe("delegatedMessage", () => {
 
 const REPLY =
   "<codex_delegation>\n  <source_thread_id>th-reviewer</source_thread_id>\n  <input>looks good</input>\n</codex_delegation>";
+
+const EXPECTED = { model: "gpt-worker", effort: "low" };
+const MISMATCH = { model: "gpt-other", effort: "low" };

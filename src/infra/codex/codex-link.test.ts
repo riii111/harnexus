@@ -652,6 +652,122 @@ describe("createCodexLink call", () => {
   });
 });
 
+describe("createCodexLink createChecked", () => {
+  test.each([
+    {
+      name: "a first turn on the sent model and effort",
+      actual: { model: "gpt-fixture", effort: "low" },
+      refused: false,
+    },
+    {
+      name: "a first turn on another model",
+      actual: { model: "gpt-other", effort: "low" },
+      refused: true,
+    },
+    {
+      name: "a first turn that names neither",
+      actual: { model: null, effort: null },
+      refused: false,
+    },
+  ])("records the reviewer and reports $name", async ({ actual, refused }) => {
+    const delegations = createDelegationWatch(() => {});
+    const runs: boolean[] = [];
+    const { link, store } = await connect({
+      delegations,
+      answer: () => {
+        runs.push(delegations.observe(CALLER, REVIEWER, actual));
+        return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
+      },
+    });
+
+    const created = await link.createChecked({
+      prompt: "review",
+      target: TARGET,
+      thinking: "low",
+    });
+
+    expect(runs).toEqual([!refused]);
+    expect(created.firstTurn).toEqual({
+      threadId: REVIEWER,
+      expected: { model: "gpt-fixture", effort: "low" },
+      actual,
+      refused,
+    });
+    expect(created.result.isError === true).toBe(refused);
+    expect(created.armed).toBe(false);
+    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
+  });
+
+  test("keeps the check armed when the first turn is not seen in time", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const { link } = await connect({
+      delegations,
+      answer: () => Result.ok(textAnswer(JSON.stringify(PROVISIONAL))),
+    });
+
+    const created = await link.createChecked({
+      prompt: "review",
+      target: TARGET,
+      model: "gpt-worker",
+    });
+
+    expect(created.armed).toBe(true);
+    expect(
+      delegations.observe(CALLER, REVIEWER, {
+        model: "gpt-other",
+        effort: null,
+      }),
+    ).toBe(false);
+  });
+
+  test("reports a refused first turn even when the app then answers with an error", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const { link } = await connect({
+      delegations,
+      answer: () => {
+        delegations.observe(CALLER, REVIEWER, {
+          model: "gpt-other",
+          effort: null,
+        });
+        return Result.ok({ ...textAnswer("first turn failed"), isError: true });
+      },
+    });
+
+    const created = await link.createChecked({
+      prompt: "review",
+      target: TARGET,
+    });
+
+    expect(created.firstTurn?.refused).toBe(true);
+    expect(created.armed).toBe(false);
+  });
+
+  test("checks the first turn of a thread the app's answer named", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const { link } = await connect({
+      delegations,
+      answer: () => {
+        setTimeout(
+          () =>
+            delegations.observe(CALLER, REVIEWER, {
+              model: "gpt-other",
+              effort: null,
+            }),
+          5,
+        );
+        return Result.ok(textAnswer(JSON.stringify({ threadId: REVIEWER })));
+      },
+    });
+
+    const created = await link.createChecked({
+      prompt: "review",
+      target: TARGET,
+    });
+
+    expect(created.firstTurn?.refused).toBe(true);
+  });
+});
+
 const connect = async ({
   caller = CALLER,
   reviewers = {},
@@ -699,6 +815,7 @@ const connect = async ({
     request,
     delegations,
     createdThreadWaitMs: 20,
+    firstTurnWaitMs: 20,
   });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();

@@ -9,7 +9,11 @@ import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 import { createSerialQueue } from "../../runtime/serial-queue.ts";
 import { isClaudeModel } from "../claude/models.ts";
-import type { DelegationWatch } from "./delegations.ts";
+import {
+  type DelegationWatch,
+  FIRST_TURN_WAIT_MS,
+  type FirstTurn,
+} from "./delegations.ts";
 import type { ServerRequest } from "./server-requests.ts";
 
 // The subset of the thread store the link reads and writes; the real store satisfies it structurally.
@@ -35,12 +39,14 @@ export const createCodexLink = ({
   request,
   delegations,
   createdThreadWaitMs = CREATED_THREAD_WAIT_MS,
+  firstTurnWaitMs = FIRST_TURN_WAIT_MS,
 }: {
   callerThreadId: string;
   store: LinkStore;
   request: ServerRequest;
   delegations: Pick<DelegationWatch, "expect">;
   createdThreadWaitMs?: number;
+  firstTurnWaitMs?: number;
 }) => {
   const writes = createSerialQueue();
   let unknownWrite: string | null = null;
@@ -129,8 +135,13 @@ export const createCodexLink = ({
   const currentGeneration = () => (stopped ? null : generation);
 
   // Without a model the app would give the reviewer this thread's Claude model, and the bridge would then run the reviewer as Claude.
+  // A checked create, from the call socket, expects the first turn on the model and effort it sent and reports that turn.
   const createThread = async (
-    args: Record<string, unknown> & { model?: string | undefined },
+    args: Record<string, unknown> & {
+      model?: string | undefined;
+      thinking?: string | undefined;
+    },
+    checked: CheckedCreate | null = null,
   ) => {
     const queuedIn = currentGeneration();
     const model = await reviewerModel(args.model);
@@ -144,11 +155,35 @@ export const createCodexLink = ({
       {
         queuedIn,
         beforeSend: () => {
-          watch.created = delegations.expect(callerThreadId);
+          watch.created = delegations.expect(
+            callerThreadId,
+            checked === null
+              ? {}
+              : {
+                  expected: {
+                    model: model.model,
+                    effort: args.thinking ?? null,
+                  },
+                },
+          );
         },
-        onSuccess: (answer) => recordReviewer(answer, watch.created),
+        onSuccess: (answer) => recordReviewer(answer, watch.created, checked),
       },
     );
+    // The app may answer with an error because the first turn was refused, which the caller must still learn of.
+    if (checked !== null && checked.firstTurn === null) {
+      checked.firstTurn = (await watch.created?.wait(0)) ?? null;
+    }
+    // A thread that may exist but whose first turn was not seen keeps its check armed, so a late turn on the wrong model is still refused.
+    if (
+      checked !== null &&
+      watch.created !== null &&
+      checked.firstTurn === null &&
+      (result.isError !== true || unknownWrite !== null)
+    ) {
+      checked.armed = true;
+      return result;
+    }
     watch.created?.cancel();
     return result;
   };
@@ -191,11 +226,18 @@ export const createCodexLink = ({
   const recordReviewer = async (
     result: ToolResult,
     created: CreatedThread | null,
+    checked: CheckedCreate | null,
   ) => {
     const answered = createdThreadId(result);
     if (answered !== null) created?.claim(answered);
-    const threadId =
-      answered ?? (await created?.wait(createdThreadWaitMs)) ?? null;
+    const turn =
+      answered !== null && checked === null
+        ? null
+        : ((await created?.wait(
+            checked === null ? createdThreadWaitMs : firstTurnWaitMs,
+          )) ?? null);
+    if (checked !== null) checked.firstTurn = turn;
+    const threadId = answered ?? turn?.threadId ?? null;
     if (threadId === null) {
       unknownWrite = "create_thread";
       return failure(
@@ -207,6 +249,11 @@ export const createCodexLink = ({
       unknownWrite = "create_thread";
       return failure(
         `Thread ${threadId} was created but could not be saved as your reviewer (${added.error.message}). Do not create another; ask the user to check the app.`,
+      );
+    }
+    if (turn?.refused === true) {
+      return failure(
+        `Thread ${threadId} was created, but its first turn asked for model ${turn.actual.model} and effort ${turn.actual.effort} instead of ${turn.expected.model} and ${turn.expected.effort}, so it was stopped before it ran.`,
       );
     }
     // The app's own answer carries only a provisional id, so the real one is what the model must use from here on.
@@ -242,6 +289,24 @@ export const createCodexLink = ({
       : `Thread ${denied.join(", ")} is neither one of your reviewers nor a thread that sent you work. Only reviewers created with create_thread from this thread and threads named as <source_thread_id> in a <codex_delegation> you received can be used, and this thread itself can only be read or waited on.`;
   };
 
+  const createTool = tool(
+    "create_thread",
+    "Start a new Codex app thread as your reviewer and send it the first prompt. Apart from threads that sent you work, only threads created here can be read, waited on or messaged afterwards. Do not ask the reviewer to message this thread back; wait for it with wait_threads and read its answer with read_thread.",
+    {
+      prompt: z.string().min(1),
+      target: CREATE_TARGET,
+      title: z.string().optional(),
+      model: z
+        .string()
+        .optional()
+        .describe(
+          "A Codex model for the reviewer; leave it out to use the app's default Codex model.",
+        ),
+      thinking: z.string().optional(),
+    },
+    (args) => createThread(args),
+  );
+
   const tools = [
     tool(
       "list_projects",
@@ -250,23 +315,7 @@ export const createCodexLink = ({
       () => read("list_projects", {}, []),
       { annotations: { readOnlyHint: true } },
     ),
-    tool(
-      "create_thread",
-      "Start a new Codex app thread as your reviewer and send it the first prompt. Apart from threads that sent you work, only threads created here can be read, waited on or messaged afterwards. Do not ask the reviewer to message this thread back; wait for it with wait_threads and read its answer with read_thread.",
-      {
-        prompt: z.string().min(1),
-        target: CREATE_TARGET,
-        title: z.string().optional(),
-        model: z
-          .string()
-          .optional()
-          .describe(
-            "A Codex model for the reviewer; leave it out to use the app's default Codex model.",
-          ),
-        thinking: z.string().optional(),
-      },
-      (args) => createThread(args),
-    ),
+    createTool,
     tool(
       "send_message_to_thread",
       "Send a message to one of your reviewer threads, or to a thread that sent you work (the <source_thread_id> of a <codex_delegation> you received), which starts a turn there.",
@@ -328,9 +377,26 @@ export const createCodexLink = ({
       : failure(`Invalid arguments for ${name}: ${parsed.error.message}`);
   };
 
+  const createChecked = async (args: unknown) => {
+    const parsed = z.object(createTool.inputSchema).safeParse(args);
+    if (!parsed.success) {
+      return {
+        result: failure(
+          `Invalid arguments for create_thread: ${parsed.error.message}`,
+        ),
+        firstTurn: null,
+        armed: false,
+      };
+    }
+    const checked: CheckedCreate = { firstTurn: null, armed: false };
+    const result = await createThread(parsed.data, checked);
+    return { result, ...checked };
+  };
+
   return {
     server: createSdkMcpServer({ name: CODEX_LINK_SERVER, tools }),
     call,
+    createChecked,
     // Reads only reach this thread, its own reviewers and the threads that sent it work, so they run without asking; creating and sending stay under the user's Claude permission rules.
     allowedTools: READ_TOOLS.map(
       (name) => `mcp__${CODEX_LINK_SERVER}__${name}`,
@@ -355,6 +421,9 @@ type AppTool =
 const READ_TOOLS = ["list_projects", "read_thread", "wait_threads"] as const;
 
 type CreatedThread = ReturnType<DelegationWatch["expect"]>;
+
+// armed: the thread may exist but its first turn was not seen, so the outcome is unknown and the check stays armed.
+type CheckedCreate = { firstTurn: FirstTurn | null; armed: boolean };
 
 type ToolResult = Awaited<ReturnType<SdkMcpToolDefinition["handler"]>>;
 

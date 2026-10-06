@@ -1,12 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { Result } from "better-result";
 import { createCallGateway } from "./call-gateway.ts";
+import { createDelegationWatch, type FirstTurn } from "./delegations.ts";
 import type { ServerRequest } from "./server-requests.ts";
 
 describe("createCallGateway", () => {
-  test("sends a Codex thread's call to the app as given and returns the answer", async () => {
-    const { gateway, requests } = setup({
-      answer: () => Result.ok({ content: [{ type: "text", text: "made" }] }),
+  test("sends a Codex thread's call to the app as given and returns the answer with the new thread", async () => {
+    const { gateway, requests, watch } = setup({
+      answer: () => {
+        watch.observe(CODEX, "th-new", { model: "gpt-x", effort: "medium" });
+        return Result.ok({ content: [{ type: "text", text: "made" }] });
+      },
     });
 
     const answer = await gateway.handle(
@@ -20,6 +24,9 @@ describe("createCallGateway", () => {
     expect(JSON.parse(answer)).toEqual({
       outcome: "done",
       result: { content: [{ type: "text", text: "made" }] },
+      threadId: "th-new",
+      model: "gpt-x",
+      effort: "medium",
     });
     expect(requests).toEqual([
       {
@@ -100,10 +107,13 @@ describe("createCallGateway", () => {
     expect(JSON.parse(first)).toEqual({
       outcome: "done",
       result: { content: [{ type: "text", text: "linked create_thread" }] },
+      threadId: "th-reviewer",
+      model: "gpt-x",
+      effort: null,
     });
     expect(opened).toEqual([CLAUDE]);
     expect(linkCalls).toEqual([
-      { tool: "create_thread", args: { prompt: "review" } },
+      { tool: "checked create_thread", args: { prompt: "review" } },
       {
         tool: "send_message_to_thread",
         args: { threadId: "r", prompt: "again" },
@@ -133,14 +143,176 @@ describe("createCallGateway", () => {
   });
 });
 
+describe("createCallGateway create_thread of a Codex thread", () => {
+  test("answers with the real id when the first turn arrives after the tool answer", async () => {
+    const { gateway, watch } = setup({
+      answer: () => Result.ok(CLIENT_ANSWER),
+    });
+
+    const answering = gateway.handle(CREATE);
+    await Bun.sleep(5);
+    expect(watch.observe(CODEX, "th-worker", ASKED)).toBe(true);
+
+    expect(JSON.parse(await answering)).toEqual({
+      outcome: "done",
+      result: CLIENT_ANSWER,
+      threadId: "th-worker",
+      ...ASKED,
+    });
+  });
+
+  test("refuses a first turn on another model and answers with what it asked for", async () => {
+    const { gateway, watch } = setup({
+      answer: () => {
+        runs.push(watch.observe(CODEX, "th-worker", OTHER));
+        return Result.ok(CLIENT_ANSWER);
+      },
+    });
+    const runs: boolean[] = [];
+
+    const answer = JSON.parse(await gateway.handle(CREATE));
+
+    expect(runs).toEqual([false]);
+    expect(answer).toEqual({
+      outcome: "model_mismatch",
+      threadId: "th-worker",
+      expected: ASKED,
+      actual: OTHER,
+    });
+  });
+
+  test("reports a first turn that names no model or effort without blocking it", async () => {
+    const { gateway, watch } = setup({
+      answer: () => {
+        runs.push(watch.observe(CODEX, "th-worker", NONE));
+        return Result.ok(CLIENT_ANSWER);
+      },
+    });
+    const runs: boolean[] = [];
+
+    const answer = JSON.parse(await gateway.handle(CREATE));
+
+    expect(runs).toEqual([true]);
+    expect(answer).toMatchObject({ outcome: "done", ...NONE });
+  });
+
+  test("gives in-flight creates of one caller their threads in order", async () => {
+    const { gateway, watch } = setup({
+      answer: () => Result.ok(CLIENT_ANSWER),
+    });
+
+    const first = gateway.handle(CREATE);
+    const second = gateway.handle(CREATE);
+    await Bun.sleep(5);
+    watch.observe(CODEX, "th-worker-1", ASKED);
+    watch.observe(CODEX, "th-worker-2", ASKED);
+
+    expect(JSON.parse(await first).threadId).toBe("th-worker-1");
+    expect(JSON.parse(await second).threadId).toBe("th-worker-2");
+  });
+
+  test("answers unknown when the first turn is late and still refuses it on another model", async () => {
+    const { gateway, watch } = setup({
+      answer: () => Result.ok(CLIENT_ANSWER),
+    });
+
+    const answer = JSON.parse(await gateway.handle(CREATE));
+
+    expect(answer).toMatchObject({ outcome: "unknown", result: CLIENT_ANSWER });
+    expect(watch.observe(CODEX, "th-worker", OTHER)).toBe(false);
+  });
+
+  test("reports a refused first turn even when the app then answers with an error", async () => {
+    const { gateway, watch } = setup({
+      answer: () => {
+        watch.observe(CODEX, "th-worker", OTHER);
+        return Result.ok({ content: [], isError: true });
+      },
+    });
+
+    const answer = JSON.parse(await gateway.handle(CREATE));
+
+    expect(answer.outcome).toBe("model_mismatch");
+  });
+
+  test("checks nothing after the app answers with an error", async () => {
+    const { gateway, watch } = setup({
+      answer: () => Result.ok({ content: [], isError: true }),
+    });
+
+    const answer = JSON.parse(await gateway.handle(CREATE));
+
+    expect(answer.outcome).toBe("tool_error");
+    expect(watch.observe(CODEX, "th-other", OTHER)).toBe(true);
+  });
+});
+
+describe("createCallGateway create_thread of a Claude thread", () => {
+  test.each([
+    {
+      name: "a refused first turn as a model mismatch",
+      created: {
+        firstTurn: {
+          threadId: "th-reviewer",
+          expected: ASKED,
+          actual: OTHER,
+          refused: true,
+        },
+        armed: false,
+      },
+      expected: {
+        outcome: "model_mismatch",
+        threadId: "th-reviewer",
+        expected: ASKED,
+        actual: OTHER,
+      },
+    },
+    {
+      name: "an unseen first turn as unknown",
+      created: { firstTurn: null, armed: true },
+      expected: { outcome: "unknown" },
+    },
+    {
+      name: "a create the link refused as a tool error",
+      created: { firstTurn: null, armed: false },
+      expected: { outcome: "tool_error" },
+    },
+  ])("reports $name", async ({ created, expected }) => {
+    const { gateway } = setup({ claude: [CLAUDE], created });
+
+    const answer = await gateway.handle(
+      JSON.stringify({
+        threadId: CLAUDE,
+        tool: "create_thread",
+        arguments: { prompt: "review" },
+      }),
+    );
+
+    expect(JSON.parse(answer)).toMatchObject(expected);
+  });
+});
+
 const setup = ({
   answer = () => Result.ok({ content: [] }),
   claude = [],
+  created = {
+    firstTurn: {
+      threadId: "th-reviewer",
+      expected: { model: "gpt-x", effort: null },
+      actual: { model: "gpt-x", effort: null },
+      refused: false,
+    },
+    armed: false,
+  },
+  armedMs = 600_000,
 }: {
   // The real errors are told apart by their tag alone.
   answer?: () => Result<unknown, { _tag: string; message: string }>;
   claude?: readonly string[];
+  created?: { firstTurn: FirstTurn | null; armed: boolean };
+  armedMs?: number;
 } = {}) => {
+  const watch = createDelegationWatch(() => {}, { armedMs });
   const requests: { method: string; params: unknown; timeoutMs: number }[] = [];
   const linkCalls: { tool: string; args: unknown }[] = [];
   const opened: string[] = [];
@@ -157,12 +329,40 @@ const setup = ({
           linkCalls.push({ tool, args });
           return { content: [{ type: "text", text: `linked ${tool}` }] };
         },
+        createChecked: async (args) => {
+          linkCalls.push({ tool: "checked create_thread", args });
+          return {
+            result: {
+              content: [{ type: "text", text: "linked create_thread" }],
+            },
+            ...created,
+          };
+        },
       };
     },
     request,
+    delegations: watch,
+    firstTurnWaitMs: 50,
   });
-  return { gateway, requests, linkCalls, opened };
+  return { gateway, requests, linkCalls, opened, watch };
 };
 
 const CODEX = "codex-thread";
 const CLAUDE = "claude-thread";
+
+const ASKED = { model: "gpt-worker", effort: "low" };
+const OTHER = { model: "gpt-other", effort: "low" };
+const NONE = { model: null, effort: null };
+const CLIENT_ANSWER = {
+  content: [
+    {
+      type: "text",
+      text: '{"clientThreadId":"client-new-thread:1","hostId":"local"}',
+    },
+  ],
+};
+const CREATE = JSON.stringify({
+  threadId: CODEX,
+  tool: "create_thread",
+  arguments: { prompt: "work", model: "gpt-worker", thinking: "low" },
+});

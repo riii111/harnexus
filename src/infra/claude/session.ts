@@ -53,6 +53,8 @@ import {
 import { claudeConfigDir, findSessionFile } from "./transcripts.ts";
 
 export type ClaudeSessionSettings = {
+  // The app thread this session runs, given to Claude's tools as CODEX_THREAD_ID as Codex gives it to its own.
+  threadId: string;
   cwd: string;
   model: string;
   connection: Connection;
@@ -336,7 +338,10 @@ const sessionOptions = (
 ): Options => ({
   cwd: settings.cwd,
   model: settings.model,
-  env: connectionEnv(settings.connection, env),
+  env: {
+    ...connectionEnv(settings.connection, env),
+    CODEX_THREAD_ID: settings.threadId,
+  },
   // A worktree's own shared settings may set another project, and the flag layer outranks them as the repository's local settings do in its own checkout.
   ...(settings.connection.provider === "vertex" && {
     settings: { env: { ...settings.connection.env } },
