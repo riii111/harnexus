@@ -93,6 +93,32 @@ describe("createDelegationWatch first turn check", () => {
     });
   });
 
+  test("refuses a refused thread's first turn again when the app resends it", () => {
+    const watch = createDelegationWatch(() => {});
+    watch.expect("th-codex", { expected: EXPECTED });
+    watch.observe("th-codex", "th-worker", MISMATCH);
+
+    expect(watch.observe("th-codex", "th-worker", EXPECTED)).toBe(false);
+  });
+
+  test("tells a caller with an unconfirmed create from one without", () => {
+    const watch = createDelegationWatch(() => {});
+    const queued = watch.expect("th-codex");
+    const named = watch.expect("th-claude");
+    named.claim("th-reviewer");
+
+    expect(["th-codex", "th-claude", "th-other"].map(watch.isWaiting)).toEqual([
+      true,
+      true,
+      false,
+    ]);
+    queued.cancel();
+    watch.observe("th-claude", "th-reviewer");
+    expect(watch.isWaiting("th-codex") || watch.isWaiting("th-claude")).toBe(
+      false,
+    );
+  });
+
   test("checks nothing a create_thread did not ask for", () => {
     const watch = createDelegationWatch(() => {});
     watch.expect("th-codex", {

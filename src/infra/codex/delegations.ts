@@ -14,6 +14,7 @@ export type FirstTurn = {
 };
 
 type Waiter = {
+  sourceThreadId: string;
   expected: TurnSettings;
   record: boolean;
   settle: (turn: FirstTurn | null) => void;
@@ -30,6 +31,8 @@ export const createDelegationWatch = (
   const named = new Map<string, Waiter>();
   // Every thread seen or named by an answer, so its late or repeated first turn never answers a later create_thread.
   const claimed = new Set<string>();
+  // Threads whose first turn was refused, so the app sending that turn again never gets it run.
+  const refusedThreads = new Set<string>();
 
   const remove = (sourceThreadId: string, waiter: Waiter) => {
     const left = (waiters.get(sourceThreadId) ?? []).filter(
@@ -46,6 +49,7 @@ export const createDelegationWatch = (
     const refused =
       differs(waiter.expected.model, actual.model) ||
       differs(waiter.expected.effort, actual.effort);
+    if (refused) refusedThreads.add(threadId);
     waiter.settle({ threadId, expected: waiter.expected, actual, refused });
     return !refused;
   };
@@ -56,6 +60,7 @@ export const createDelegationWatch = (
     threadId: string,
     actual: TurnSettings = NOT_GIVEN,
   ) => {
+    if (refusedThreads.has(threadId)) return false;
     const bound = named.get(threadId);
     if (bound !== undefined) {
       named.delete(threadId);
@@ -86,7 +91,9 @@ export const createDelegationWatch = (
     });
     let settled = false;
     const disarm = setTimeout(() => cancel(), armedMs);
+    disarm.unref();
     const waiter: Waiter = {
+      sourceThreadId,
       expected,
       record,
       settle: (turn) => {
@@ -123,7 +130,14 @@ export const createDelegationWatch = (
     };
   };
 
-  return { observe, expect };
+  // A caller with a create still waiting for its first turn, whose thread a new create's first turn could otherwise be paired with.
+  const isWaiting = (sourceThreadId: string) =>
+    waiters.has(sourceThreadId) ||
+    [...named.values()].some(
+      (waiter) => waiter.sourceThreadId === sourceThreadId,
+    );
+
+  return { observe, expect, isWaiting };
 };
 
 // Only an explicit difference refuses a turn; a value the app leaves out is reported as null for the caller to judge.

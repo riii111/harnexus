@@ -1,13 +1,14 @@
 import { z } from "zod";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
+import { createSerialQueue } from "../../runtime/serial-queue.ts";
 import {
   type DelegationWatch,
   FIRST_TURN_WAIT_MS,
   type FirstTurn,
   type TurnSettings,
 } from "./delegations.ts";
-import type { ServerRequest } from "./server-requests.ts";
+import type { ServerRequest, ServerRequestError } from "./server-requests.ts";
 
 // The answer names what is known about the call, so the caller can tell a call that never left from one whose effect is unknown and must not be repeated.
 // A create_thread is answered once the new thread's first turn is seen, with its real id and the model and effort that turn asked for.
@@ -20,7 +21,12 @@ export type GatewayAnswer =
       expected: TurnSettings;
       actual: TurnSettings;
     }
-  | { outcome: "unknown"; message: string; result?: unknown }
+  | {
+      outcome: "unknown";
+      message: string;
+      result?: unknown;
+      threadId?: string;
+    }
   | {
       outcome: "not_sent" | "rejected" | "invalid";
       message: string;
@@ -33,7 +39,8 @@ type Link = {
   createChecked: (args: unknown) => Promise<{
     result: ToolAnswer;
     firstTurn: FirstTurn | null;
-    armed: boolean;
+    threadId: string | null;
+    unknown: boolean;
   }>;
 };
 
@@ -50,9 +57,11 @@ export const createCallGateway = ({
   isClaudeThread: (threadId: string) => boolean;
   openLink: (threadId: string) => Link;
   request: ServerRequest;
-  delegations: Pick<DelegationWatch, "expect">;
+  delegations: Pick<DelegationWatch, "expect" | "isWaiting">;
   firstTurnWaitMs?: number;
 }) => {
+  // One socket create at a time per caller, since a first turn is paired with the oldest waiting create of its caller.
+  const creates = createSerialQueue();
   // Kept per thread, so an unknown write stops later writes from the same thread.
   const links = new Map<string, Link>();
 
@@ -74,87 +83,144 @@ export const createCallGateway = ({
       };
     }
     const { threadId, tool, arguments: args } = call.data;
+    if (tool === "create_thread") {
+      return creates.run(threadId, () => createThread(threadId, args));
+    }
     if (isClaudeThread(threadId)) {
-      if (tool === "create_thread") {
-        const created = await linkOf(threadId).createChecked(args);
-        return createdAnswer(created.result, created.firstTurn, created.armed);
-      }
       const result = await linkOf(threadId).call(tool, args);
       return {
         outcome: result.isError === true ? "tool_error" : "done",
         result,
       };
     }
+    const answered = await callApp(threadId, tool, args);
+    if (answered.isOk()) {
+      const result = answered.value;
+      return {
+        outcome:
+          isObject(result) && result.isError === true ? "tool_error" : "done",
+        result,
+      };
+    }
+    return failedCall(answered.error);
+  };
+
+  // The in-chat create_thread of a Claude caller's own model is not serialized with these, so the two can still be paired crosswise.
+  const createThread = async (
+    threadId: string,
+    args: Record<string, unknown>,
+  ): Promise<GatewayAnswer> => {
+    if (delegations.isWaiting(threadId)) {
+      return {
+        outcome: "not_sent",
+        message:
+          "an earlier create_thread of this thread is still unconfirmed, so another is not sent until its first turn is seen or its check expires",
+      };
+    }
+    if (isClaudeThread(threadId)) {
+      const created = await linkOf(threadId).createChecked(args);
+      return createdAnswer(created);
+    }
     // Registered before the call is sent, since the new thread's first turn can reach the bridge before the tool answer.
-    const created =
-      tool === "create_thread"
-        ? delegations.expect(threadId, {
-            expected: {
-              model: stringOrNull(args.model),
-              effort: stringOrNull(args.thinking),
-            },
-            record: false,
-          })
-        : null;
-    const answered = await request(
+    const created = delegations.expect(threadId, {
+      expected: {
+        model: stringOrNull(args.model),
+        effort: stringOrNull(args.thinking),
+      },
+      record: false,
+    });
+    const answered = await callApp(threadId, "create_thread", args);
+    if (answered.isOk()) {
+      const result = answered.value;
+      const failed = isObject(result) && result.isError === true;
+      // The app may answer with an error because the first turn was refused, so a turn already seen is still reported.
+      const firstTurn = await created.wait(failed ? 0 : firstTurnWaitMs);
+      if (failed) created.cancel();
+      return createdAnswer({
+        result,
+        firstTurn,
+        threadId: firstTurn?.threadId ?? null,
+        unknown: firstTurn === null && !failed,
+      });
+    }
+    // A thread already seen exists whatever became of the answer.
+    const firstTurn = await created.wait(0);
+    if (firstTurn !== null) {
+      return createdAnswer({
+        result: null,
+        firstTurn,
+        threadId: firstTurn.threadId,
+        unknown: false,
+      });
+    }
+    // A create_thread whose answer was lost may still have made the thread, so its check stays armed.
+    if (answered.error._tag !== "ServerRequestUnanswered") created.cancel();
+    return failedCall(answered.error);
+  };
+
+  const callApp = (
+    threadId: string,
+    tool: AppTool,
+    args: Record<string, unknown>,
+  ) =>
+    request(
       "mcpServer/tool/call",
       { threadId, server: CODEX_APP_SERVER, tool, arguments: args },
       { timeoutMs: timeoutOf(tool, args) },
     );
-    if (answered.isOk()) {
-      const result = answered.value;
-      const failed = isObject(result) && result.isError === true;
-      if (created === null) {
-        return { outcome: failed ? "tool_error" : "done", result };
-      }
-      // The app may answer with an error because the first turn was refused, so a turn already seen is still reported.
-      if (failed) created.cancel();
-      const turn = await created.wait(failed ? 0 : firstTurnWaitMs);
-      return createdAnswer(result, turn, turn === null && !failed);
-    }
-    const error = answered.error;
-    // A create_thread whose answer was lost may still have made the thread, so its check stays armed.
-    if (error._tag !== "ServerRequestUnanswered") created?.cancel();
-    switch (error._tag) {
-      case "ServerRequestNotSent":
-        return { outcome: "not_sent", message: error.message };
-      case "ServerRequestUnanswered":
-        return { outcome: "unknown", message: error.message };
-      case "ServerRequestRejected":
-        return { outcome: "rejected", message: error.message };
-    }
-  };
 
   return {
     handle: async (line: string) => JSON.stringify(await handle(line)),
   };
 };
 
-const createdAnswer = (
-  result: unknown,
-  turn: FirstTurn | null,
-  armed: boolean,
-): GatewayAnswer => {
-  if (turn?.refused === true) {
+const failedCall = (error: ServerRequestError): GatewayAnswer => {
+  switch (error._tag) {
+    case "ServerRequestNotSent":
+      return { outcome: "not_sent", message: error.message };
+    case "ServerRequestUnanswered":
+      return { outcome: "unknown", message: error.message };
+    case "ServerRequestRejected":
+      return { outcome: "rejected", message: error.message };
+  }
+};
+
+// A thread known to exist is never answered as an error, since the caller would then create another.
+const createdAnswer = ({
+  result,
+  firstTurn,
+  threadId,
+  unknown,
+}: {
+  result: unknown;
+  firstTurn: FirstTurn | null;
+  threadId: string | null;
+  unknown: boolean;
+}): GatewayAnswer => {
+  if (firstTurn?.refused === true) {
     return {
       outcome: "model_mismatch",
-      threadId: turn.threadId,
-      expected: turn.expected,
-      actual: turn.actual,
+      threadId: firstTurn.threadId,
+      expected: firstTurn.expected,
+      actual: firstTurn.actual,
     };
   }
-  if (armed) {
+  if (unknown) {
     return {
       outcome: "unknown",
       message:
-        "the new thread's first turn was not seen in time, so its id and model are unknown; a later turn on another model is still refused",
+        "the new thread may exist but its first turn was not seen in time or it could not be recorded; do not create it again, and a later first turn on another model is still refused",
       result,
+      ...(threadId !== null && { threadId }),
     };
   }
-  if (turn === null || (isObject(result) && result.isError === true)) {
-    return { outcome: "tool_error", result };
-  }
-  return { outcome: "done", result, threadId: turn.threadId, ...turn.actual };
+  if (firstTurn === null) return { outcome: "tool_error", result };
+  return {
+    outcome: "done",
+    result,
+    threadId: firstTurn.threadId,
+    ...firstTurn.actual,
+  };
 };
 
 const stringOrNull = (value: unknown) =>

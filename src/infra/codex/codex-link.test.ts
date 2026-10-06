@@ -694,8 +694,47 @@ describe("createCodexLink createChecked", () => {
       refused,
     });
     expect(created.result.isError === true).toBe(refused);
-    expect(created.armed).toBe(false);
+    expect(created.unknown).toBe(false);
     expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
+  });
+
+  test.each([
+    {
+      name: "a thread that could not be recorded",
+      addReviewerFails: true,
+      observed: true,
+      answered: PROVISIONAL,
+    },
+    {
+      name: "a named thread whose first turn was not seen",
+      addReviewerFails: false,
+      observed: false,
+      answered: { threadId: REVIEWER },
+    },
+  ])("reports $name as unknown with its id", async ({
+    addReviewerFails,
+    observed,
+    answered,
+  }) => {
+    const delegations = createDelegationWatch(() => {});
+    const { link } = await connect({
+      delegations,
+      addReviewerFails,
+      answer: () => {
+        if (observed) {
+          delegations.observe(CALLER, REVIEWER, { model: null, effort: null });
+        }
+        return Result.ok(textAnswer(JSON.stringify(answered)));
+      },
+    });
+
+    const created = await link.createChecked({
+      prompt: "review",
+      target: TARGET,
+    });
+
+    expect(created.unknown).toBe(true);
+    expect(created.threadId).toBe(REVIEWER);
   });
 
   test("keeps the check armed when the first turn is not seen in time", async () => {
@@ -711,7 +750,7 @@ describe("createCodexLink createChecked", () => {
       model: "gpt-worker",
     });
 
-    expect(created.armed).toBe(true);
+    expect(created.unknown).toBe(true);
     expect(
       delegations.observe(CALLER, REVIEWER, {
         model: "gpt-other",
@@ -739,7 +778,7 @@ describe("createCodexLink createChecked", () => {
     });
 
     expect(created.firstTurn?.refused).toBe(true);
-    expect(created.armed).toBe(false);
+    expect(created.unknown).toBe(false);
   });
 
   test("checks the first turn of a thread the app's answer named", async () => {

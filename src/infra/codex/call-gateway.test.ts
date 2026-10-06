@@ -196,30 +196,99 @@ describe("createCallGateway create_thread of a Codex thread", () => {
     expect(answer).toMatchObject({ outcome: "done", ...NONE });
   });
 
-  test("gives in-flight creates of one caller their threads in order", async () => {
-    const { gateway, watch } = setup({
+  test("sends a caller's next create only after the first turn of its previous one", async () => {
+    const { gateway, watch, requests } = setup({
       answer: () => Result.ok(CLIENT_ANSWER),
     });
 
     const first = gateway.handle(CREATE);
     const second = gateway.handle(CREATE);
     await Bun.sleep(5);
+    expect(requests).toHaveLength(1);
     watch.observe(CODEX, "th-worker-1", ASKED);
+    expect(JSON.parse(await first).threadId).toBe("th-worker-1");
+    await Bun.sleep(5);
+    expect(requests).toHaveLength(2);
     watch.observe(CODEX, "th-worker-2", ASKED);
 
-    expect(JSON.parse(await first).threadId).toBe("th-worker-1");
     expect(JSON.parse(await second).threadId).toBe("th-worker-2");
   });
 
-  test("answers unknown when the first turn is late and still refuses it on another model", async () => {
-    const { gateway, watch } = setup({
+  test("answers unknown when the first turn is late, still refuses it on another model and sends no other create meanwhile", async () => {
+    const { gateway, watch, requests } = setup({
       answer: () => Result.ok(CLIENT_ANSWER),
+    });
+
+    const first = JSON.parse(await gateway.handle(CREATE));
+    const second = JSON.parse(await gateway.handle(CREATE));
+
+    expect(first).toMatchObject({ outcome: "unknown", result: CLIENT_ANSWER });
+    expect(first.threadId).toBeUndefined();
+    expect(second.outcome).toBe("not_sent");
+    expect(requests).toHaveLength(1);
+    expect(watch.observe(CODEX, "th-worker", OTHER)).toBe(false);
+  });
+
+  test("sends a create again once the check of an unconfirmed one expires", async () => {
+    const { gateway, requests } = setup({
+      answer: () => Result.ok(CLIENT_ANSWER),
+      armedMs: 80,
+    });
+
+    await gateway.handle(CREATE);
+    await Bun.sleep(60);
+    await gateway.handle(CREATE);
+
+    expect(requests).toHaveLength(2);
+  });
+
+  test.each([
+    {
+      name: "rejected",
+      tag: "ServerRequestRejected",
+      seen: ASKED,
+      expected: { outcome: "done", threadId: "th-worker", ...ASKED },
+    },
+    {
+      name: "unanswered",
+      tag: "ServerRequestUnanswered",
+      seen: ASKED,
+      expected: { outcome: "done", threadId: "th-worker", ...ASKED },
+    },
+    {
+      name: "unanswered on another model",
+      tag: "ServerRequestUnanswered",
+      seen: OTHER,
+      expected: { outcome: "model_mismatch", threadId: "th-worker" },
+    },
+  ])("answers from a first turn already seen when the call is $name", async ({
+    tag,
+    seen,
+    expected,
+  }) => {
+    const { gateway, watch } = setup({
+      answer: () => {
+        watch.observe(CODEX, "th-worker", seen);
+        return Result.err({ _tag: tag, message: "failed" });
+      },
     });
 
     const answer = JSON.parse(await gateway.handle(CREATE));
 
-    expect(answer).toMatchObject({ outcome: "unknown", result: CLIENT_ANSWER });
-    expect(watch.observe(CODEX, "th-worker", OTHER)).toBe(false);
+    expect(answer).toMatchObject(expected);
+  });
+
+  test("answers done for an accepted first turn even when the app answers with an error", async () => {
+    const { gateway, watch } = setup({
+      answer: () => {
+        watch.observe(CODEX, "th-worker", ASKED);
+        return Result.ok({ content: [], isError: true });
+      },
+    });
+
+    const answer = JSON.parse(await gateway.handle(CREATE));
+
+    expect(answer).toMatchObject({ outcome: "done", threadId: "th-worker" });
   });
 
   test("reports a refused first turn even when the app then answers with an error", async () => {
@@ -248,6 +317,22 @@ describe("createCallGateway create_thread of a Codex thread", () => {
 });
 
 describe("createCallGateway create_thread of a Claude thread", () => {
+  test("sends nothing while an earlier create of the caller is unconfirmed", async () => {
+    const { gateway, watch, linkCalls } = setup({ claude: [CLAUDE] });
+    watch.expect(CLAUDE);
+
+    const answer = await gateway.handle(
+      JSON.stringify({
+        threadId: CLAUDE,
+        tool: "create_thread",
+        arguments: { prompt: "review" },
+      }),
+    );
+
+    expect(JSON.parse(answer).outcome).toBe("not_sent");
+    expect(linkCalls).toEqual([]);
+  });
+
   test.each([
     {
       name: "a refused first turn as a model mismatch",
@@ -258,7 +343,8 @@ describe("createCallGateway create_thread of a Claude thread", () => {
           actual: OTHER,
           refused: true,
         },
-        armed: false,
+        threadId: "th-reviewer",
+        unknown: false,
       },
       expected: {
         outcome: "model_mismatch",
@@ -269,12 +355,31 @@ describe("createCallGateway create_thread of a Claude thread", () => {
     },
     {
       name: "an unseen first turn as unknown",
-      created: { firstTurn: null, armed: true },
+      created: { firstTurn: null, threadId: null, unknown: true },
       expected: { outcome: "unknown" },
     },
     {
+      name: "a named thread whose first turn was unseen as unknown with its id",
+      created: { firstTurn: null, threadId: "th-reviewer", unknown: true },
+      expected: { outcome: "unknown", threadId: "th-reviewer" },
+    },
+    {
+      name: "a seen thread that could not be recorded as unknown with its id",
+      created: {
+        firstTurn: {
+          threadId: "th-reviewer",
+          expected: ASKED,
+          actual: ASKED,
+          refused: false,
+        },
+        threadId: "th-reviewer",
+        unknown: true,
+      },
+      expected: { outcome: "unknown", threadId: "th-reviewer" },
+    },
+    {
       name: "a create the link refused as a tool error",
-      created: { firstTurn: null, armed: false },
+      created: { firstTurn: null, threadId: null, unknown: false },
       expected: { outcome: "tool_error" },
     },
   ])("reports $name", async ({ created, expected }) => {
@@ -302,14 +407,19 @@ const setup = ({
       actual: { model: "gpt-x", effort: null },
       refused: false,
     },
-    armed: false,
+    threadId: "th-reviewer",
+    unknown: false,
   },
   armedMs = 600_000,
 }: {
   // The real errors are told apart by their tag alone.
   answer?: () => Result<unknown, { _tag: string; message: string }>;
   claude?: readonly string[];
-  created?: { firstTurn: FirstTurn | null; armed: boolean };
+  created?: {
+    firstTurn: FirstTurn | null;
+    threadId: string | null;
+    unknown: boolean;
+  };
   armedMs?: number;
 } = {}) => {
   const watch = createDelegationWatch(() => {}, { armedMs });

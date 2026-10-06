@@ -170,21 +170,24 @@ export const createCodexLink = ({
         onSuccess: (answer) => recordReviewer(answer, watch.created, checked),
       },
     );
-    // The app may answer with an error because the first turn was refused, which the caller must still learn of.
-    if (checked !== null && checked.firstTurn === null) {
-      checked.firstTurn = (await watch.created?.wait(0)) ?? null;
-    }
-    // A thread that may exist but whose first turn was not seen keeps its check armed, so a late turn on the wrong model is still refused.
-    if (
-      checked !== null &&
-      watch.created !== null &&
-      checked.firstTurn === null &&
-      (result.isError !== true || unknownWrite !== null)
-    ) {
-      checked.armed = true;
+    if (checked === null || watch.created === null) {
+      watch.created?.cancel();
       return result;
     }
-    watch.created?.cancel();
+    // The app may answer with an error because the first turn was refused, which the caller must still learn of.
+    checked.firstTurn ??= await watch.created.wait(0);
+    checked.threadId ??= checked.firstTurn?.threadId ?? null;
+    // Only this create can have set it, since a write after an unknown one is never sent.
+    checked.unknown = unknownWrite !== null;
+    // A thread that may exist but whose first turn was not seen keeps its check armed, so a late turn on the wrong model is still refused.
+    if (
+      checked.firstTurn === null &&
+      (result.isError !== true || checked.unknown)
+    ) {
+      checked.unknown = true;
+      return result;
+    }
+    watch.created.cancel();
     return result;
   };
 
@@ -236,8 +239,11 @@ export const createCodexLink = ({
         : ((await created?.wait(
             checked === null ? createdThreadWaitMs : firstTurnWaitMs,
           )) ?? null);
-    if (checked !== null) checked.firstTurn = turn;
     const threadId = answered ?? turn?.threadId ?? null;
+    if (checked !== null) {
+      checked.firstTurn = turn;
+      checked.threadId = threadId;
+    }
     if (threadId === null) {
       unknownWrite = "create_thread";
       return failure(
@@ -385,10 +391,15 @@ export const createCodexLink = ({
           `Invalid arguments for create_thread: ${parsed.error.message}`,
         ),
         firstTurn: null,
-        armed: false,
+        threadId: null,
+        unknown: false,
       };
     }
-    const checked: CheckedCreate = { firstTurn: null, armed: false };
+    const checked: CheckedCreate = {
+      firstTurn: null,
+      threadId: null,
+      unknown: false,
+    };
     const result = await createThread(parsed.data, checked);
     return { result, ...checked };
   };
@@ -422,8 +433,12 @@ const READ_TOOLS = ["list_projects", "read_thread", "wait_threads"] as const;
 
 type CreatedThread = ReturnType<DelegationWatch["expect"]>;
 
-// armed: the thread may exist but its first turn was not seen, so the outcome is unknown and the check stays armed.
-type CheckedCreate = { firstTurn: FirstTurn | null; armed: boolean };
+// unknown: the thread may exist but its first turn was not seen or it could not be recorded, so the create must not be repeated.
+type CheckedCreate = {
+  firstTurn: FirstTurn | null;
+  threadId: string | null;
+  unknown: boolean;
+};
 
 type ToolResult = Awaited<ReturnType<SdkMcpToolDefinition["handler"]>>;
 
