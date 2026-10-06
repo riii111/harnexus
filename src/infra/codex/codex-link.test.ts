@@ -270,7 +270,7 @@ describe("createCodexLink over the app's turn for the created thread", () => {
     const router = createRouter(
       CODEX_ONLY_TURNS,
       () => {},
-      delegations,
+      delegations.observe,
       NO_HISTORY,
       createModelCatalog().models,
       "warn",
@@ -692,7 +692,6 @@ describe("createCodexLink createChecked", () => {
       expected: { model: "gpt-fixture", effort: "low" },
       actual,
       refused,
-      ambiguous: false,
     });
     expect(created.result.isError === true).toBe(refused);
     expect(created.unknown).toBe(false);

@@ -78,7 +78,6 @@ describe("createDelegationWatch first turn check", () => {
       expected: EXPECTED,
       actual,
       refused: true,
-      ambiguous: false,
     });
   });
 
@@ -135,80 +134,6 @@ describe("createDelegationWatch first turn check", () => {
     watch.observe("th-codex", "th-worker");
 
     expect(claims).toEqual([]);
-  });
-});
-
-describe("createDelegationWatch with a thread's own create_thread", () => {
-  test.each([
-    { name: "on the expected model", actual: EXPECTED_TURN },
-    { name: "on another model", actual: MISMATCH },
-  ])("holds back a socket create while the thread's own create started first runs $name", async ({
-    actual,
-  }) => {
-    const watch = createDelegationWatch(() => {});
-    watch.noteAppCall("item/started", ownCall("inProgress"));
-
-    expect(watch.expect("th-codex", { expected: EXPECTED })).toBeNull();
-    expect(watch.observe("th-codex", "th-own", actual)).toBe(true);
-    expect(watch.expect("th-codex", { expected: EXPECTED })).not.toBeNull();
-  });
-
-  test.each([
-    {
-      name: "both on the expected model",
-      first: EXPECTED_TURN,
-      second: EXPECTED_TURN,
-      runs: [true, true],
-    },
-    {
-      name: "the first on another model",
-      first: MISMATCH,
-      second: EXPECTED_TURN,
-      runs: [false, true],
-    },
-    {
-      name: "the second on another model",
-      first: EXPECTED_TURN,
-      second: MISMATCH,
-      runs: [true, false],
-    },
-  ])("holds both first turns to a socket create the thread's own create overlapped, $name", async ({
-    first,
-    second,
-    runs,
-  }) => {
-    const watch = createDelegationWatch(() => {});
-    const created = expecting(watch, "th-codex", { expected: EXPECTED });
-    watch.noteAppCall("item/started", ownCall("inProgress"));
-
-    expect([
-      watch.observe("th-codex", "th-a", first),
-      watch.observe("th-codex", "th-b", second),
-    ]).toEqual([...runs]);
-    expect((await created.wait(1_000))?.ambiguous).toBe(true);
-  });
-
-  test("waits for one first turn again once the overlapping own create fails", async () => {
-    const watch = createDelegationWatch(() => {});
-    const created = expecting(watch, "th-codex", { expected: EXPECTED });
-    watch.noteAppCall("item/started", ownCall("inProgress"));
-    watch.noteAppCall("item/completed", ownCall("failed"));
-
-    expect(watch.observe("th-codex", "th-socket", MISMATCH)).toBe(false);
-    expect(await created.wait(1_000)).toMatchObject({
-      threadId: "th-socket",
-      refused: true,
-      ambiguous: false,
-    });
-  });
-
-  test("ignores a create_thread run outside a turn, as the bridge's own calls are", () => {
-    const watch = createDelegationWatch(() => {});
-    const { turnId: _turnId, ...params } = ownCall("inProgress");
-
-    watch.noteAppCall("item/started", params);
-
-    expect(watch.expect("th-codex")).not.toBeNull();
   });
 });
 
@@ -373,16 +298,3 @@ const expecting = (
   watch: ReturnType<typeof createDelegationWatch>,
   ...args: Parameters<ReturnType<typeof createDelegationWatch>["expect"]>
 ) => watch.expect(...args) ?? expect.unreachable("the caller already waits");
-const EXPECTED_TURN = EXPECTED;
-
-const ownCall = (status: string) => ({
-  threadId: "th-codex",
-  turnId: "tu-1",
-  item: {
-    type: "mcpToolCall",
-    id: "it-own",
-    server: "codex_app",
-    tool: "create_thread",
-    status,
-  },
-});

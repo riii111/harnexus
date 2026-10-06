@@ -161,34 +161,6 @@ describe("createCallGateway create_thread of a Codex thread", () => {
     });
   });
 
-  test("answers unknown when the thread's own create_thread overlapped the socket create", async () => {
-    const { gateway, watch } = setup({
-      answer: () => {
-        watch.noteAppCall("item/started", {
-          threadId: CODEX,
-          turnId: "tu-1",
-          item: {
-            type: "mcpToolCall",
-            id: "it-own",
-            server: "codex_app",
-            tool: "create_thread",
-            status: "inProgress",
-          },
-        });
-        runs.push(watch.observe(CODEX, "th-own", OTHER));
-        runs.push(watch.observe(CODEX, "th-socket", ASKED));
-        return Result.ok(CLIENT_ANSWER);
-      },
-    });
-    const runs: boolean[] = [];
-
-    const answer = JSON.parse(await gateway.handle(CREATE));
-
-    expect(runs).toEqual([false, true]);
-    expect(answer.outcome).toBe("unknown");
-    expect(answer.threadId).toBeUndefined();
-  });
-
   test("reports a first turn that names no model or effort without blocking it", async () => {
     const { gateway, watch } = setup({
       answer: () => {
@@ -389,7 +361,6 @@ describe("createCallGateway create_thread of a Claude thread", () => {
           expected: ASKED,
           actual: OTHER,
           refused: true,
-          ambiguous: false,
         },
         threadId: "th-reviewer",
         unknown: false,
@@ -425,7 +396,6 @@ describe("createCallGateway create_thread of a Claude thread", () => {
           expected: ASKED,
           actual: ASKED,
           refused: false,
-          ambiguous: false,
         },
         threadId: "th-reviewer",
         unknown: true,
@@ -462,7 +432,6 @@ const setup = ({
       expected: { model: "gpt-x", effort: null },
       actual: { model: "gpt-x", effort: null },
       refused: false,
-      ambiguous: false,
     },
     threadId: "th-reviewer",
     unknown: false,

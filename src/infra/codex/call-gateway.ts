@@ -197,15 +197,6 @@ const createdAnswer = ({
   threadId: string | null;
   unknown: boolean;
 }): GatewayAnswer => {
-  // The turn may belong to the caller's own create_thread, so neither its id nor its verdict can be reported as this create's.
-  if (firstTurn?.ambiguous === true) {
-    return {
-      outcome: "unknown",
-      message:
-        "the thread's own create_thread ran at the same time, so which new thread is this one is unknown; both first turns were held to the expected model and effort",
-      result,
-    };
-  }
   if (firstTurn?.refused === true) {
     return {
       outcome: "model_mismatch",

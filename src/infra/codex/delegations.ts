@@ -11,8 +11,6 @@ export type FirstTurn = {
   expected: TurnSettings;
   actual: TurnSettings;
   refused: boolean;
-  // The caller's own create_thread ran at the same time, so this turn may be that thread's.
-  ambiguous: boolean;
 };
 
 // The app answers create_thread with a provisional id only; the real id first appears in the new thread's turn/start, whose tool output names the calling thread.
@@ -22,13 +20,12 @@ export const createDelegationWatch = (
   { armedMs = CHECK_ARMED_MS }: { armedMs?: number } = {},
 ) => {
   // At most one unconfirmed create per caller, since nothing in the first turn tells two creates of one caller apart.
+  // A Codex caller's own create_thread never passes through the bridge, so a caller must not mix it with socket creates in parallel.
   const waiters = new Map<string, Waiter>();
   // So a late or repeated first turn never answers a later create_thread.
   const claimed = new Set<string>();
   // So the app resending a refused first turn never gets it run.
   const refusedThreads = new Set<string>();
-  // A Codex thread's own create_thread calls, by item id, until they complete.
-  const ownCreates = new Map<string, OwnCreate>();
 
   // A thread nobody waits for is ignored, so it can never become someone's reviewer; the answer is whether the turn may run.
   const observe = (
@@ -45,12 +42,6 @@ export const createDelegationWatch = (
     if (claimed.has(threadId)) return true;
     claimed.add(threadId);
     if (waiter === undefined || waiter.named !== null) return true;
-    // Either turn may be the overlapping own create's, so each is held to the expectation and neither settles alone.
-    if (waiter.overlaps > 0) {
-      waiter.overlaps -= 1;
-      waiter.ambiguous = true;
-      return check(waiter, threadId, actual).refused === false;
-    }
     waiters.delete(sourceThreadId);
     if (waiter.record) claim(sourceThreadId, threadId);
     return settle(waiter, threadId, actual);
@@ -77,8 +68,6 @@ export const createDelegationWatch = (
       expected,
       record,
       named: null,
-      overlaps: 0,
-      ambiguous: false,
       settle: (turn) => {
         settled = true;
         clearTimeout(disarm);
@@ -110,51 +99,16 @@ export const createDelegationWatch = (
     };
   };
 
-  // A Codex thread's own codex_app calls reach the app over the codex_app pipe, never through the bridge, so they cannot be refused; their item notifications only let the watch account for them.
-  const noteAppCall = (method: string, params: Record<string, unknown>) => {
-    const call = ownCreateCall(params);
-    if (call === null) return;
-    if (method === "item/started") {
-      const waiting = waiters.get(call.threadId);
-      if (waiting !== undefined && waiting.named === null) {
-        waiting.overlaps += 1;
-        ownCreates.set(call.itemId, { overlapped: waiting });
-        return;
-      }
-      const created = expect(call.threadId, { record: false });
-      if (created !== null) ownCreates.set(call.itemId, { created });
-      return;
-    }
-    if (method !== "item/completed") return;
-    const own = ownCreates.get(call.itemId);
-    ownCreates.delete(call.itemId);
-    if (own === undefined || call.status !== "failed") return;
-    // A failed create makes no thread, so no first turn is left to wait for.
-    if ("created" in own) own.created.cancel();
-    else if (own.overlapped.overlaps > 0) own.overlapped.overlaps -= 1;
-  };
-
-  const check = (waiter: Waiter, threadId: string, actual: TurnSettings) => {
+  const settle = (waiter: Waiter, threadId: string, actual: TurnSettings) => {
     const refused =
       differs(waiter.expected.model, actual.model) ||
       differs(waiter.expected.effort, actual.effort);
     if (refused) refusedThreads.add(threadId);
-    return {
-      threadId,
-      expected: waiter.expected,
-      actual,
-      refused,
-      ambiguous: waiter.ambiguous,
-    };
+    waiter.settle({ threadId, expected: waiter.expected, actual, refused });
+    return !refused;
   };
 
-  const settle = (waiter: Waiter, threadId: string, actual: TurnSettings) => {
-    const turn = check(waiter, threadId, actual);
-    waiter.settle(turn);
-    return !turn.refused;
-  };
-
-  return { observe, expect, noteAppCall };
+  return { observe, expect };
 };
 
 type Waiter = {
@@ -162,34 +116,8 @@ type Waiter = {
   record: boolean;
   // The thread the app's answer named, whose first turn alone settles this waiter.
   named: string | null;
-  // Own create_thread calls of the caller started while this create waits, each owing a first turn.
-  overlaps: number;
-  ambiguous: boolean;
   settle: (turn: FirstTurn | null) => void;
 };
-
-type CreatedThread = NonNullable<ReturnType<DelegationWatch["expect"]>>;
-
-type OwnCreate = { created: CreatedThread } | { overlapped: Waiter };
-
-// Only a model's own call has a turn; the bridge's mcpServer/tool/call runs outside one.
-const ownCreateCall = (params: Record<string, unknown>) => {
-  const item = params.item;
-  if (
-    !isObject(item) ||
-    item.type !== "mcpToolCall" ||
-    item.server !== CODEX_APP_SERVER ||
-    item.tool !== "create_thread" ||
-    typeof item.id !== "string" ||
-    typeof params.threadId !== "string" ||
-    typeof params.turnId !== "string"
-  ) {
-    return null;
-  }
-  return { itemId: item.id, threadId: params.threadId, status: item.status };
-};
-
-const CODEX_APP_SERVER = "codex_app";
 
 // Only an explicit difference refuses a turn; a value the app leaves out is reported as null for the caller to judge.
 const differs = (expected: string | null, actual: string | null) =>
