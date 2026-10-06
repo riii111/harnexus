@@ -161,6 +161,25 @@ describe("turn/start of a thread created by create_thread", () => {
     expect(calls).toEqual([["delegated", "th-codex", "th-worker", expected]]);
   });
 
+  test("tells the watch of a thread's own create_thread and passes the notice to the app", () => {
+    const { router, calls } = setup();
+    const params = {
+      threadId: "th-codex",
+      turnId: "tu-1",
+      item: {
+        type: "mcpToolCall",
+        id: "it-1",
+        server: "codex_app",
+        tool: "create_thread",
+        status: "inProgress",
+      },
+    };
+    const line = encode({ method: "item/started", params });
+
+    expect(router.fromServer(line)).toBe(line);
+    expect(calls).toEqual([["appCall", "item/started", params]]);
+  });
+
   test("refuses a first turn the creator did not expect without passing it to the server", () => {
     const { router, calls, events } = setup(
       [],
@@ -2091,9 +2110,12 @@ const setup = (
       effortRule: rule,
     },
     (event) => events.push(event),
-    (source, threadId, asked) => {
-      calls.push(["delegated", source, threadId, asked]);
-      return delegatedRuns;
+    {
+      observe: (source, threadId, asked) => {
+        calls.push(["delegated", source, threadId, asked]);
+        return delegatedRuns;
+      },
+      noteAppCall: (method, params) => calls.push(["appCall", method, params]),
     },
     history,
     () => ({ ...catalog.models(), vertex }),

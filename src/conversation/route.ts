@@ -102,12 +102,15 @@ type Pending =
 export const createRouter = (
   turns: Turns,
   log: (event: RouteEvent) => void,
-  // false refuses the turn, so a created thread on an unexpected model never starts.
-  onDelegated: (
-    sourceThreadId: string,
-    threadId: string,
-    asked: TurnSettings,
-  ) => boolean,
+  delegations: {
+    // false refuses the turn, so a created thread on an unexpected model never starts.
+    observe: (
+      sourceThreadId: string,
+      threadId: string,
+      asked: TurnSettings,
+    ) => boolean;
+    noteAppCall: (method: string, params: Record<string, unknown>) => void;
+  },
   history: History,
   claudeModels: () => ListedClaudeModels,
   unverifiedCodex: "warn" | "pause",
@@ -245,7 +248,7 @@ export const createRouter = (
   const noteDelegation = (params: Record<string, unknown>) => {
     const source = delegationSource(params);
     if (source === null || typeof params.threadId !== "string") return true;
-    return onDelegated(source, params.threadId, {
+    return delegations.observe(source, params.threadId, {
       model: requestedModel(params) ?? null,
       effort: requestedEffort(params) ?? null,
     });
@@ -377,11 +380,27 @@ export const createRouter = (
   // The substring check only skips parsing; the method decides, since a response can carry the same text in its thread history.
   // A response that opens a Claude thread waits for its history, which holds back the server's later lines until it is read.
   const fromServer = (line: Buffer): Buffer | Promise<Buffer> => {
-    if (pending.size === 0 && !line.includes(SETTINGS_UPDATED)) return line;
+    if (
+      pending.size === 0 &&
+      !line.includes(SETTINGS_UPDATED) &&
+      !line.includes(CREATE_THREAD)
+    ) {
+      return line;
+    }
     const message = parseMessage(line);
     if (message === null) return line;
     if (message.method === SETTINGS_UPDATED) {
       return rewriteSettingsUpdated(message) ?? line;
+    }
+    if (
+      message.method === "item/started" ||
+      message.method === "item/completed"
+    ) {
+      delegations.noteAppCall(
+        message.method,
+        isObject(message.params) ? message.params : {},
+      );
+      return line;
     }
     if (message.method !== undefined) return line;
     const id = message.id;
@@ -576,6 +595,8 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
 };
 
 const SETTINGS_UPDATED = "thread/settings/updated";
+
+const CREATE_THREAD = '"create_thread"';
 
 const REFUSED_METHODS = [
   "thread/start",

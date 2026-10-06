@@ -12,7 +12,7 @@ import {
 import type { ServerRequest, ServerRequestError } from "./server-requests.ts";
 
 // The answer names what is known about the call, so the caller can tell a call that never left from one whose effect is unknown and must not be repeated.
-export type GatewayAnswer =
+type GatewayAnswer =
   | { outcome: "done" | "tool_error"; result: unknown }
   | ({ outcome: "done"; result: unknown; threadId: string } & TurnSettings)
   | {
@@ -104,7 +104,6 @@ export const createCallGateway = ({
     return failedCall(answered.error);
   };
 
-  // A Codex caller's own in-chat create_thread registers no waiter, so its first turn can still be taken for a socket create's.
   const createThread = async (
     threadId: string,
     args: Record<string, unknown>,
@@ -198,6 +197,15 @@ const createdAnswer = ({
   threadId: string | null;
   unknown: boolean;
 }): GatewayAnswer => {
+  // The turn may belong to the caller's own create_thread, so neither its id nor its verdict can be reported as this create's.
+  if (firstTurn?.ambiguous === true) {
+    return {
+      outcome: "unknown",
+      message:
+        "the thread's own create_thread ran at the same time, so which new thread is this one is unknown; both first turns were held to the expected model and effort",
+      result,
+    };
+  }
   if (firstTurn?.refused === true) {
     return {
       outcome: "model_mismatch",

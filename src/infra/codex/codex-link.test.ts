@@ -270,7 +270,7 @@ describe("createCodexLink over the app's turn for the created thread", () => {
     const router = createRouter(
       CODEX_ONLY_TURNS,
       () => {},
-      delegations.observe,
+      delegations,
       NO_HISTORY,
       createModelCatalog().models,
       "warn",
@@ -692,40 +692,39 @@ describe("createCodexLink createChecked", () => {
       expected: { model: "gpt-fixture", effort: "low" },
       actual,
       refused,
+      ambiguous: false,
     });
     expect(created.result.isError === true).toBe(refused);
     expect(created.unknown).toBe(false);
     expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
   });
 
-  test.each([
-    {
-      name: "a thread that could not be recorded",
-      addReviewerFails: true,
-      observed: true,
-      answered: PROVISIONAL,
-    },
-    {
-      name: "a named thread whose first turn was not seen",
-      addReviewerFails: false,
-      observed: false,
-      answered: { threadId: REVIEWER },
-    },
-  ])("reports $name as unknown with its id", async ({
-    addReviewerFails,
-    observed,
-    answered,
-  }) => {
+  test("reports a seen thread as unknown with its id when saving the reviewer fails", async () => {
     const delegations = createDelegationWatch(() => {});
     const { link } = await connect({
       delegations,
-      addReviewerFails,
+      addReviewerFails: true,
       answer: () => {
-        if (observed) {
-          delegations.observe(CALLER, REVIEWER, { model: null, effort: null });
-        }
-        return Result.ok(textAnswer(JSON.stringify(answered)));
+        delegations.observe(CALLER, REVIEWER, { model: null, effort: null });
+        return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
       },
+    });
+
+    const created = await link.createChecked({
+      prompt: "review",
+      target: TARGET,
+    });
+
+    expect(created.unknown).toBe(true);
+    expect(created.threadId).toBe(REVIEWER);
+  });
+
+  test("reports the real id the app named as unknown while its first turn is unseen", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const { link } = await connect({
+      delegations,
+      answer: () =>
+        Result.ok(textAnswer(JSON.stringify({ threadId: REVIEWER }))),
     });
 
     const created = await link.createChecked({
@@ -825,7 +824,7 @@ describe("createCodexLink creates of one caller from two links", () => {
       target: TARGET,
       model: "gpt-worker",
     });
-    await Bun.sleep(1);
+    await waitUntil(() => socket.requests.length === 1);
     const inChat = await chat.client.callTool({
       name: "create_thread",
       arguments: { prompt: "review", target: TARGET },
@@ -858,7 +857,7 @@ describe("createCodexLink creates of one caller from two links", () => {
       name: "create_thread",
       arguments: { prompt: "review", target: TARGET },
     });
-    await Bun.sleep(1);
+    await waitUntil(() => chat.requests.length === 1);
     const socketCreate = await socket.link.createChecked({
       prompt: "work",
       target: TARGET,
