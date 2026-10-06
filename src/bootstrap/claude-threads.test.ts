@@ -82,12 +82,12 @@ describe("connectClaudeThreads", () => {
     expect(store.reviewerOwner(CODEX_WORKER)).toBeUndefined();
   });
 
-  test("gives a Claude thread's tools its thread id as CODEX_THREAD_ID", async () => {
-    const { started, env } = await workerA();
+  test("starts a Claude thread's session with the thread it runs", async () => {
+    const { started, settingsOf } = await workerA();
 
     await started();
 
-    expect(env()?.CODEX_THREAD_ID).toBe(WORKER_A);
+    expect(settingsOf()?.threadId).toBe(WORKER_A);
   });
 
   test("asks the server to keep a Claude thread on disk when its first turn runs", async () => {
@@ -244,7 +244,7 @@ const workerA = async () => {
       threads.closeAll();
       return { answer: JSON.parse(answer), routed };
     },
-    env: () => claude.options().env,
+    settingsOf: () => settings[0],
     sessions: () => settings.length,
   };
 };

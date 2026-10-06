@@ -53,8 +53,9 @@ import {
 import { claudeConfigDir, findSessionFile } from "./transcripts.ts";
 
 export type ClaudeSessionSettings = {
-  // Reaches Claude's tools as CODEX_THREAD_ID, as Codex gives it to its own.
   threadId: string;
+  // Only with the call socket open, so a script in Claude's Bash can name its thread as Codex threads do with CODEX_THREAD_ID.
+  exposeThreadId?: boolean;
   cwd: string;
   model: string;
   connection: Connection;
@@ -340,7 +341,9 @@ const sessionOptions = (
   model: settings.model,
   env: {
     ...connectionEnv(settings.connection, env),
-    CODEX_THREAD_ID: settings.threadId,
+    ...(settings.exposeThreadId === true && {
+      CODEX_THREAD_ID: settings.threadId,
+    }),
   },
   // A worktree's own shared settings may set another project, and the flag layer outranks them as the repository's local settings do in its own checkout.
   ...(settings.connection.provider === "vertex" && {

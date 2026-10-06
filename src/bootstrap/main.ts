@@ -128,12 +128,17 @@ async function withClaude(relay: {
   const appInjector = createLineInjector(process.stdout);
   // The bridge's own requests to the server are answered before the router reads the server output, so their responses never reach the app.
   const serverCalls = attachServerRequests(relay);
+  let callSocketOpen = false;
   const { router, closeAll, callGateway } = connectClaudeThreads({
     store: store.value,
     permissionMode: permissionMode.value,
     request: serverCalls.request,
     startSession: (session, signal) =>
-      startClaudeSession(session, undefined, signal),
+      startClaudeSession(
+        { ...session, exposeThreadId: callSocketOpen },
+        undefined,
+        signal,
+      ),
     findSession: claudeSessionExists,
     listConversations: (cwd, since) => listClaudeConversations(cwd, { since }),
     lastRecordOf: (sessionId) => readLastRecordUuid(sessionId),
@@ -153,7 +158,7 @@ async function withClaude(relay: {
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });
-  await openCallSocket(callGateway.handle);
+  callSocketOpen = await openCallSocket(callGateway.handle);
   const appRewriter = createLineRewriter(router.fromApp);
   const serverRewriter = createLineRewriter(router.fromServer);
   process.stdin.on("error", (error) => appRewriter.destroy(error));
@@ -176,16 +181,17 @@ async function openCallSocket(handle: (line: string) => Promise<string>) {
   );
   if (path.isErr()) {
     logger.log({ event: "call_socket_unavailable", reason: path.error._tag });
-    return;
+    return false;
   }
-  if (path.value === null) return;
+  if (path.value === null) return false;
   const served = await serveLines(path.value, handle);
   if (served.isErr()) {
     logger.log({
       event: "call_socket_unavailable",
       reason: served.error._tag,
     });
-    return;
+    return false;
   }
   logger.log({ event: "call_socket_listening" });
+  return true;
 }

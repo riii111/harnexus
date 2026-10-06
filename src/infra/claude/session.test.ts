@@ -110,20 +110,33 @@ describe("startClaudeSession options", () => {
       HOME: "/home/user",
       CLAUDE_CODE_OAUTH_TOKEN: "subscription-token",
       ANTHROPIC_CUSTOM_HEADERS: "X-Trace: 1",
-      CODEX_THREAD_ID: "th-fixture",
     });
   });
 
-  test("gives Claude's tools the thread it runs as CODEX_THREAD_ID, replacing an inherited one", async () => {
+  test.each([
+    {
+      name: "names the thread it runs when the call socket is open",
+      exposeThreadId: true,
+      expected: "th-fixture",
+    },
+    {
+      name: "keeps the inherited value when the call socket is closed",
+      exposeThreadId: false,
+      expected: "th-bridge",
+    },
+  ])("CODEX_THREAD_ID for Claude's tools $name", async ({
+    exposeThreadId,
+    expected,
+  }) => {
     const claude = fakeClaude(SUBSCRIPTION, {
       env: { PATH: "/usr/bin", CODEX_THREAD_ID: "th-bridge" },
     });
 
-    await startClaudeSession(SETTINGS, claude.runtime);
+    await startClaudeSession({ ...SETTINGS, exposeThreadId }, claude.runtime);
 
     expect(claude.options().env).toEqual({
       PATH: "/usr/bin",
-      CODEX_THREAD_ID: "th-fixture",
+      CODEX_THREAD_ID: expected,
     });
   });
 });
@@ -239,7 +252,6 @@ describe("startClaudeSession Vertex connection", () => {
       CLAUDE_CODE_USE_VERTEX: "1",
       ANTHROPIC_VERTEX_PROJECT_ID: "sidework-project",
       CLOUD_ML_REGION: "global",
-      CODEX_THREAD_ID: "th-fixture",
     });
   });
 
