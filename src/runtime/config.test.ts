@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  loadCallSocketPath,
   loadLogPath,
   loadPermissionMode,
   loadShutdownGraceMs,
@@ -121,3 +122,38 @@ describe("loadVertexModels", () => {
     expect(loadVertexModels(env)).toBe(expected);
   });
 });
+
+describe("loadCallSocketPath", () => {
+  test.each([
+    { name: "unset", value: undefined },
+    { name: "empty", value: "" },
+    { name: "off", value: "off" },
+  ])("keeps the socket closed when the variable is $name", ({ value }) => {
+    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: value }, STATE);
+
+    expect(path.isOk() && path.value).toBeNull();
+  });
+
+  test("places the socket beside the thread store when on", () => {
+    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: "on" }, STATE);
+
+    expect(path.isOk() && path.value).toBe("/state/harnexus/call.sock");
+  });
+
+  test("uses an absolute path as given", () => {
+    const path = loadCallSocketPath(
+      { HARNEXUS_CALL_SOCKET: "/tmp/h.sock" },
+      STATE,
+    );
+
+    expect(path.isOk() && path.value).toBe("/tmp/h.sock");
+  });
+
+  test("rejects a relative path", () => {
+    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: "h.sock" }, STATE);
+
+    expect(path.isErr() && path.error._tag).toBe("CallSocketPathNotAbsolute");
+  });
+});
+
+const STATE = "/state/harnexus/threads.json";

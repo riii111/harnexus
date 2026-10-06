@@ -23,7 +23,11 @@ import { createHistoryRequests } from "./history-request.ts";
 import { createRouter, type RouteEvent } from "./route.ts";
 import { createSubagentRequests } from "./subagent-requests.ts";
 import { createSubagents } from "./subagents.ts";
-import type { AppRequest, Mode } from "./thread-request.ts";
+import {
+  type AppRequest,
+  type Mode,
+  refusalMessage,
+} from "./thread-request.ts";
 
 describe("Claude conversation rewind routing", () => {
   test.each([
@@ -125,7 +129,61 @@ describe("turn/start of a thread created by create_thread", () => {
     const routed = router.fromApp(line);
 
     expect(routed).toBe(line);
-    expect(calls).toEqual([["delegated", "th-claude", "th-reviewer"]]);
+    expect(calls).toEqual([
+      ["delegated", "th-claude", "th-reviewer", { model: null, effort: null }],
+    ]);
+  });
+
+  test.each([
+    {
+      name: "the model and effort fields",
+      asked: { model: "gpt-fixture", effort: "low" },
+      expected: { model: "gpt-fixture", effort: "low" },
+    },
+    {
+      name: "the collaboration mode settings",
+      asked: {
+        collaborationMode: {
+          mode: "default",
+          settings: { model: "gpt-fixture", reasoning_effort: "high" },
+        },
+      },
+      expected: { model: "gpt-fixture", effort: "high" },
+    },
+  ])("reports what the first turn asks for from $name", ({
+    asked,
+    expected,
+  }) => {
+    const { router, calls } = setup();
+
+    router.fromApp(delegatedTurn(asked));
+
+    expect(calls).toEqual([["delegated", "th-codex", "th-worker", expected]]);
+  });
+
+  test("refuses a first turn the creator did not expect without passing it to the server", () => {
+    const { router, calls, events } = setup(
+      [],
+      {},
+      "warn",
+      false,
+      false,
+      false,
+    );
+
+    const routed = router.fromApp(delegatedTurn({ model: "gpt-other" }));
+
+    expect(routed).toBeNull();
+    expect(calls.at(-1)).toEqual([
+      "reject",
+      { id: 9, params: expect.objectContaining({ threadId: "th-worker" }) },
+      refusalMessage("model_mismatch"),
+    ]);
+    expect(events).toContainEqual({
+      event: "claude_request_refused",
+      method: "turn/start",
+      reason: "model_mismatch",
+    });
   });
 
   test("reports nothing for another tool's output", () => {
@@ -1870,6 +1928,22 @@ describe("Claude thread history", () => {
 });
 
 const CLAUDE = "claude-sonnet-5";
+
+const delegatedTurn = (asked: object) =>
+  encode({
+    id: 9,
+    method: "turn/start",
+    params: {
+      threadId: "th-worker",
+      input: [],
+      ...asked,
+      toolOutput: {
+        name: "create_thread",
+        namespace: "codex_app",
+        output: "<source_thread_id>th-codex</source_thread_id>",
+      },
+    },
+  });
 const VERIFIED_AGENT = "Codex Desktop/0.158.0-alpha.2.1 (Mac OS 26.5.1; arm64)";
 const UNVERIFIED_AGENT = "Codex Desktop/0.159.0 (Mac OS 26.5.1; arm64)";
 
@@ -1908,6 +1982,7 @@ const setup = (
   unverifiedCodex: "warn" | "pause" = "warn",
   holdForks = false,
   vertex = false,
+  delegatedRuns = true,
 ) => {
   const calls: unknown[][] = [];
   const events: RouteEvent[] = [];
@@ -2016,7 +2091,10 @@ const setup = (
       effortRule: rule,
     },
     (event) => events.push(event),
-    (source, threadId) => calls.push(["delegated", source, threadId]),
+    (source, threadId, asked) => {
+      calls.push(["delegated", source, threadId, asked]);
+      return delegatedRuns;
+    },
     history,
     () => ({ ...catalog.models(), vertex }),
     unverifiedCodex,

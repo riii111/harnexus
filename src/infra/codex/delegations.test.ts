@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  answeredThreadId,
   createDelegationWatch,
   delegatedMessage,
   delegationSource,
@@ -19,25 +20,35 @@ describe("createDelegationWatch", () => {
     expect(claims).toEqual([["th-claude", "th-reviewer-1"]]);
   });
 
-  test("gives each waiting create_thread the next thread started for its caller", async () => {
+  test("takes no second create of a caller until the first is confirmed or cancelled", async () => {
     const watch = createDelegationWatch(() => {});
-    const first = watch.expect("th-claude");
-    const second = watch.expect("th-claude");
+    const first = expecting(watch, "th-claude");
 
-    watch.observe("th-other", "th-foreign");
+    expect(watch.expect("th-claude")).toBeNull();
+    expect(watch.expect("th-other")).not.toBeNull();
     watch.observe("th-claude", "th-reviewer-1");
-    watch.observe("th-claude", "th-reviewer-2");
+    expect((await first.wait(1_000))?.threadId).toBe("th-reviewer-1");
+    expecting(watch, "th-claude").cancel();
+    expect(watch.expect("th-claude")).not.toBeNull();
+  });
 
-    expect(await first.wait(1_000)).toBe("th-reviewer-1");
-    expect(await second.wait(1_000)).toBe("th-reviewer-2");
+  test("keeps a caller unconfirmed while the thread its answer named has not started", () => {
+    const watch = createDelegationWatch(() => {});
+    expecting(watch, "th-claude").claim("th-reviewer");
+
+    watch.observe("th-claude", "th-other-thread");
+    expect(watch.expect("th-claude")).toBeNull();
+    watch.observe("th-claude", "th-reviewer");
+
+    expect(watch.expect("th-claude")).not.toBeNull();
   });
 
   test("ignores a repeated first turn of a thread it already handed out", async () => {
     const watch = createDelegationWatch(() => {});
-    const first = watch.expect("th-claude");
+    const first = expecting(watch, "th-claude");
     watch.observe("th-claude", "th-reviewer-1");
-    expect(await first.wait(1_000)).toBe("th-reviewer-1");
-    const second = watch.expect("th-claude");
+    expect((await first.wait(1_000))?.threadId).toBe("th-reviewer-1");
+    const second = expecting(watch, "th-claude");
 
     watch.observe("th-claude", "th-reviewer-1");
 
@@ -47,11 +58,110 @@ describe("createDelegationWatch", () => {
   test("keeps a thread seen before anyone waits from answering a later create_thread when its turn comes again", async () => {
     const watch = createDelegationWatch(() => {});
     watch.observe("th-claude", "th-unrelated");
-    const waiting = watch.expect("th-claude");
+    const waiting = expecting(watch, "th-claude");
 
     watch.observe("th-claude", "th-unrelated");
 
     expect(await waiting.wait(20)).toBeNull();
+  });
+});
+
+describe("createDelegationWatch first turn check", () => {
+  test("refuses a first turn on another effort and reports it", async () => {
+    const watch = createDelegationWatch(() => {});
+    const created = expecting(watch, "th-codex", { expected: EXPECTED });
+    const actual = { model: "gpt-worker", effort: "high" };
+
+    expect(watch.observe("th-codex", "th-worker", actual)).toBe(false);
+    expect(await created.wait(1_000)).toEqual({
+      threadId: "th-worker",
+      expected: EXPECTED,
+      actual,
+      refused: true,
+    });
+  });
+
+  test("refuses a refused thread's first turn again when the app resends it", () => {
+    const watch = createDelegationWatch(() => {});
+    watch.expect("th-codex", { expected: EXPECTED });
+    watch.observe("th-codex", "th-worker", MISMATCH);
+
+    expect(watch.observe("th-codex", "th-worker", EXPECTED)).toBe(false);
+  });
+
+  test("checks nothing a create_thread did not ask for", () => {
+    const watch = createDelegationWatch(() => {});
+    watch.expect("th-codex", {
+      expected: { model: "gpt-worker", effort: null },
+    });
+
+    expect(
+      watch.observe("th-codex", "th-worker", {
+        model: "gpt-worker",
+        effort: "xhigh",
+      }),
+    ).toBe(true);
+  });
+
+  test("keeps the check armed after a wait times out until it is disarmed", async () => {
+    const watch = createDelegationWatch(() => {}, { armedMs: 60 });
+    const first = expecting(watch, "th-codex", { expected: EXPECTED });
+
+    expect(await first.wait(10)).toBeNull();
+    expect(watch.observe("th-codex", "th-late", MISMATCH)).toBe(false);
+    expecting(watch, "th-codex", { expected: EXPECTED });
+    await Bun.sleep(80);
+
+    expect(watch.observe("th-codex", "th-after", MISMATCH)).toBe(true);
+  });
+
+  test("checks the first turn of a thread the answer already named", async () => {
+    const watch = createDelegationWatch(() => {});
+    const created = expecting(watch, "th-codex", { expected: EXPECTED });
+    created.claim("th-worker");
+
+    expect(watch.observe("th-codex", "th-worker", MISMATCH)).toBe(false);
+    expect((await created.wait(1_000))?.refused).toBe(true);
+  });
+
+  test("records nothing for a caller that asked not to be recorded", () => {
+    const claims: string[][] = [];
+    const watch = createDelegationWatch((source, threadId) =>
+      claims.push([source, threadId]),
+    );
+    watch.expect("th-codex", { record: false });
+
+    watch.observe("th-codex", "th-worker");
+
+    expect(claims).toEqual([]);
+  });
+});
+
+describe("answeredThreadId", () => {
+  test.each([
+    {
+      name: "a structured threadId",
+      answer: { content: [], structuredContent: { threadId: "th-new" } },
+      expected: "th-new",
+    },
+    {
+      name: "a thread.id in text",
+      answer: {
+        content: [{ type: "text", text: '{"thread":{"id":"th-new"}}' }],
+      },
+      expected: "th-new",
+    },
+    {
+      name: "a provisional id only",
+      answer: {
+        content: [
+          { type: "text", text: '{"clientThreadId":"client-new-thread:1"}' },
+        ],
+      },
+      expected: null,
+    },
+  ])("reads $name", ({ answer, expected }) => {
+    expect(answeredThreadId(answer)).toBe(expected);
   });
 });
 
@@ -180,3 +290,11 @@ describe("delegatedMessage", () => {
 
 const REPLY =
   "<codex_delegation>\n  <source_thread_id>th-reviewer</source_thread_id>\n  <input>looks good</input>\n</codex_delegation>";
+
+const EXPECTED = { model: "gpt-worker", effort: "low" };
+const MISMATCH = { model: "gpt-other", effort: "low" };
+
+const expecting = (
+  watch: ReturnType<typeof createDelegationWatch>,
+  ...args: Parameters<ReturnType<typeof createDelegationWatch>["expect"]>
+) => watch.expect(...args) ?? expect.unreachable("the caller already waits");

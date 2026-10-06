@@ -1402,6 +1402,7 @@ export const createClaudeRuntime = ({
     pending.link = link;
     const starting = startSession(
       {
+        threadId: record.threadId,
         cwd: record.worktree,
         model: baseModelId(model),
         connection,

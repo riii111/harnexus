@@ -22,6 +22,7 @@ import { type RelayObserver, relayStreams } from "../infra/codex/relay.ts";
 import { attachServerRequests } from "../infra/codex/server-requests.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import {
+  loadCallSocketPath,
   loadPermissionMode,
   loadShutdownGraceMs,
   loadStatePath,
@@ -29,6 +30,7 @@ import {
   loadVertexModels,
 } from "../runtime/config.ts";
 import { openServerPipes } from "../runtime/process.boundary.ts";
+import { serveLines } from "../runtime/socket.boundary.ts";
 import { connectClaudeThreads } from "./claude-threads.ts";
 import { createBridgeLogger } from "./logging.ts";
 import {
@@ -126,12 +128,17 @@ async function withClaude(relay: {
   const appInjector = createLineInjector(process.stdout);
   // The bridge's own requests to the server are answered before the router reads the server output, so their responses never reach the app.
   const serverCalls = attachServerRequests(relay);
-  const { router, closeAll } = connectClaudeThreads({
+  let callSocketOpen = false;
+  const { router, closeAll, callGateway } = connectClaudeThreads({
     store: store.value,
     permissionMode: permissionMode.value,
     request: serverCalls.request,
     startSession: (session, signal) =>
-      startClaudeSession(session, undefined, signal),
+      startClaudeSession(
+        { ...session, exposeThreadId: callSocketOpen },
+        undefined,
+        signal,
+      ),
     findSession: claudeSessionExists,
     listConversations: (cwd, since) => listClaudeConversations(cwd, { since }),
     lastRecordOf: (sessionId) => readLastRecordUuid(sessionId),
@@ -151,6 +158,7 @@ async function withClaude(relay: {
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });
+  callSocketOpen = await openCallSocket(callGateway.handle);
   const appRewriter = createLineRewriter(router.fromApp);
   const serverRewriter = createLineRewriter(router.fromServer);
   process.stdin.on("error", (error) => appRewriter.destroy(error));
@@ -164,4 +172,26 @@ async function withClaude(relay: {
     },
     closeAll,
   };
+}
+
+// A failure only leaves the socket closed; the app and its Claude threads work as before.
+async function openCallSocket(handle: (line: string) => Promise<string>) {
+  const path = loadStatePath(process.env).andThen((statePath) =>
+    loadCallSocketPath(process.env, statePath),
+  );
+  if (path.isErr()) {
+    logger.log({ event: "call_socket_unavailable", reason: path.error._tag });
+    return false;
+  }
+  if (path.value === null) return false;
+  const served = await serveLines(path.value, handle);
+  if (served.isErr()) {
+    logger.log({
+      event: "call_socket_unavailable",
+      reason: served.error._tag,
+    });
+    return false;
+  }
+  logger.log({ event: "call_socket_listening" });
+  return true;
 }

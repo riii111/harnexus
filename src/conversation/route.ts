@@ -2,7 +2,10 @@ import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import type { InferErr } from "better-result";
 import { type EffortRule, isClaudeModel } from "../infra/claude/models.ts";
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
-import { delegationSource } from "../infra/codex/delegations.ts";
+import {
+  delegationSource,
+  type TurnSettings,
+} from "../infra/codex/delegations.ts";
 import { codexVersion, isVerifiedCodex } from "../infra/codex/versions.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
@@ -99,7 +102,12 @@ type Pending =
 export const createRouter = (
   turns: Turns,
   log: (event: RouteEvent) => void,
-  onDelegated: (sourceThreadId: string, threadId: string) => void,
+  // false refuses the turn, so a created thread on an unexpected model never starts.
+  onDelegated: (
+    sourceThreadId: string,
+    threadId: string,
+    asked: TurnSettings,
+  ) => boolean,
   history: History,
   claudeModels: () => ListedClaudeModels,
   unverifiedCodex: "warn" | "pause",
@@ -161,7 +169,10 @@ export const createRouter = (
         return line;
       }
       case "turn/start":
-        noteDelegation(params);
+        if (!noteDelegation(params)) {
+          refuse("turn/start", request, "model_mismatch");
+          return null;
+        }
         if (
           !isClaudeModel(requestedModel(params)) &&
           !turns.isClaudeThread(params.threadId)
@@ -233,9 +244,11 @@ export const createRouter = (
   // The first turn/start of a thread made by create_thread is the only place its real id meets the thread that asked for it.
   const noteDelegation = (params: Record<string, unknown>) => {
     const source = delegationSource(params);
-    if (source !== null && typeof params.threadId === "string") {
-      onDelegated(source, params.threadId);
-    }
+    if (source === null || typeof params.threadId !== "string") return true;
+    return onDelegated(source, params.threadId, {
+      model: requestedModel(params) ?? null,
+      effort: requestedEffort(params) ?? null,
+    });
   };
 
   // The server creates the thread on its default model, so a Claude model never reaches it; a resume that would move a Claude thread is refused, since Claude keeps running where the thread started.
