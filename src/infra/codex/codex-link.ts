@@ -5,11 +5,11 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result, TaggedError } from "better-result";
 import { z } from "zod";
-import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 import { createSerialQueue } from "../../runtime/serial-queue.ts";
 import { isClaudeModel } from "../claude/models.ts";
 import {
+  answeredThreadId,
   type DelegationWatch,
   FIRST_TURN_WAIT_MS,
   type FirstTurn,
@@ -94,11 +94,11 @@ export const createCodexLink = ({
     {
       queuedIn = currentGeneration(),
       onSuccess = async (result) => result,
-      beforeSend = () => {},
+      beforeSend = () => null,
     }: {
       queuedIn?: number | null;
       onSuccess?: (result: ToolResult) => Promise<ToolResult>;
-      beforeSend?: () => void;
+      beforeSend?: () => string | null;
     } = {},
   ) =>
     writes.run(CODEX_APP_SERVER, async () => {
@@ -111,8 +111,9 @@ export const createCodexLink = ({
       if (queuedIn !== generation) return notSentAfterStop(name);
       const refusal = refuseTargets(targets, { allowSelf: false });
       if (refusal !== null) return failure(refusal);
+      const unsendable = beforeSend();
+      if (unsendable !== null) return failure(unsendable);
       writesInFlight += 1;
-      beforeSend();
       try {
         const called = await callApp(name, args, WRITE_TIMEOUT_MS);
         if (called.isErr()) {
@@ -135,7 +136,6 @@ export const createCodexLink = ({
   const currentGeneration = () => (stopped ? null : generation);
 
   // Without a model the app would give the reviewer this thread's Claude model, and the bridge would then run the reviewer as Claude.
-  // A checked create, from the call socket, expects the first turn on the model and effort it sent and reports that turn.
   const createThread = async (
     args: Record<string, unknown> & {
       model?: string | undefined;
@@ -166,23 +166,30 @@ export const createCodexLink = ({
                   },
                 },
           );
+          if (watch.created !== null) return null;
+          if (checked !== null) checked.busy = true;
+          return "An earlier create_thread of this thread has not been confirmed yet, so this one was not sent. Do not create another thread; ask the user to check the app.";
         },
         onSuccess: (answer) => recordReviewer(answer, watch.created, checked),
       },
     );
+    // An error answer can still name the thread it made, whose first turn must then never answer another create.
+    const named = result.isError === true ? answeredThreadId(result) : null;
+    if (named !== null) watch.created?.claim(named);
     if (checked === null || watch.created === null) {
       watch.created?.cancel();
       return result;
     }
+    checked.threadId ??= named;
     // The app may answer with an error because the first turn was refused, which the caller must still learn of.
     checked.firstTurn ??= await watch.created.wait(0);
     checked.threadId ??= checked.firstTurn?.threadId ?? null;
     // Only this create can have set it, since a write after an unknown one is never sent.
     checked.unknown = unknownWrite !== null;
-    // A thread that may exist but whose first turn was not seen keeps its check armed, so a late turn on the wrong model is still refused.
+    // A thread that may exist keeps its check armed, so a late turn on the wrong model is still refused.
     if (
       checked.firstTurn === null &&
-      (result.isError !== true || checked.unknown)
+      (result.isError !== true || checked.unknown || named !== null)
     ) {
       checked.unknown = true;
       return result;
@@ -231,7 +238,7 @@ export const createCodexLink = ({
     created: CreatedThread | null,
     checked: CheckedCreate | null,
   ) => {
-    const answered = createdThreadId(result);
+    const answered = answeredThreadId(result);
     if (answered !== null) created?.claim(answered);
     const turn =
       answered !== null && checked === null
@@ -393,12 +400,14 @@ export const createCodexLink = ({
         firstTurn: null,
         threadId: null,
         unknown: false,
+        busy: false,
       };
     }
     const checked: CheckedCreate = {
       firstTurn: null,
       threadId: null,
       unknown: false,
+      busy: false,
     };
     const result = await createThread(parsed.data, checked);
     return { result, ...checked };
@@ -433,11 +442,12 @@ const READ_TOOLS = ["list_projects", "read_thread", "wait_threads"] as const;
 
 type CreatedThread = ReturnType<DelegationWatch["expect"]>;
 
-// unknown: the thread may exist but its first turn was not seen or it could not be recorded, so the create must not be repeated.
+// unknown: the thread may exist, so the create must not be repeated.
 type CheckedCreate = {
   firstTurn: FirstTurn | null;
   threadId: string | null;
   unknown: boolean;
+  busy: boolean;
 };
 
 type ToolResult = Awaited<ReturnType<SdkMcpToolDefinition["handler"]>>;
@@ -490,19 +500,6 @@ const toContentItem = (item: unknown): ContentItem[] => {
   return [];
 };
 
-// A provisional id such as clientThreadId is not a thread id, so only an explicit threadId or thread.id counts; the exact format is still to be recorded on the app in P8b.
-const createdThreadId = (result: ToolResult) => {
-  const structured = findThreadIdField(result.structuredContent);
-  if (structured !== null) return structured;
-  for (const item of result.content) {
-    if (item.type !== "text") continue;
-    const parsed = parseJson(item.text);
-    const threadId = parsed.isOk() ? findThreadIdField(parsed.value) : null;
-    if (threadId !== null) return threadId;
-  }
-  return null;
-};
-
 // The server's own model/list, which never includes the Claude models the bridge adds for the app.
 const readModelPage = (value: unknown) => {
   const page = isObject(value) ? value : {};
@@ -518,15 +515,6 @@ const readModelPage = (value: unknown) => {
     defaultModel: found?.model ?? null,
     nextCursor: typeof page.nextCursor === "string" ? page.nextCursor : null,
   };
-};
-
-const findThreadIdField = (value: unknown): string | null => {
-  if (!isObject(value)) return null;
-  if (typeof value.threadId === "string" && value.threadId !== "") {
-    return value.threadId;
-  }
-  const nested = isObject(value.thread) ? value.thread.id : undefined;
-  return typeof nested === "string" && nested !== "" ? nested : null;
 };
 
 const notSentAfterStop = (name: AppTool) =>

@@ -102,7 +102,7 @@ type Pending =
 export const createRouter = (
   turns: Turns,
   log: (event: RouteEvent) => void,
-  // Answers whether the new thread's first turn may run, so a turn on another model than its creator expected never starts.
+  // false refuses the turn, so a created thread on an unexpected model never starts.
   onDelegated: (
     sourceThreadId: string,
     threadId: string,

@@ -20,7 +20,6 @@ class SocketRequestFailed extends TaggedError("SocketRequestFailed")<{
   message: string;
 }> {}
 
-// One request line per connection, answered with one line; a connection that sends more than the limit before a newline is closed unanswered.
 export const serveLines = (
   path: string,
   handle: (line: string) => Promise<string>,

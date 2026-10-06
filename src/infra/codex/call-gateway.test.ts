@@ -304,6 +304,44 @@ describe("createCallGateway create_thread of a Codex thread", () => {
     expect(answer.outcome).toBe("model_mismatch");
   });
 
+  test("answers with the id the app named and still checks that thread's late first turn", async () => {
+    const { gateway, watch } = setup({
+      answer: () => Result.ok(NAMED_ANSWER),
+    });
+
+    const answer = JSON.parse(await gateway.handle(CREATE));
+
+    expect(answer).toMatchObject({ outcome: "unknown", threadId: "th-named" });
+    expect(watch.observe(CODEX, "th-other", OTHER)).toBe(true);
+    expect(watch.observe(CODEX, "th-named", OTHER)).toBe(false);
+  });
+
+  test("answers done with the id the app named once that thread's first turn comes", async () => {
+    const { gateway, watch } = setup({
+      answer: () => Result.ok(NAMED_ANSWER),
+    });
+
+    const answering = gateway.handle(CREATE);
+    await Bun.sleep(5);
+    watch.observe(CODEX, "th-named", ASKED);
+
+    expect(JSON.parse(await answering)).toMatchObject({
+      outcome: "done",
+      threadId: "th-named",
+    });
+  });
+
+  test("keeps the check of a thread an error answer named", async () => {
+    const { gateway, watch } = setup({
+      answer: () => Result.ok({ ...NAMED_ANSWER, isError: true }),
+    });
+
+    const answer = JSON.parse(await gateway.handle(CREATE));
+
+    expect(answer).toMatchObject({ outcome: "unknown", threadId: "th-named" });
+    expect(watch.observe(CODEX, "th-named", OTHER)).toBe(false);
+  });
+
   test("checks nothing after the app answers with an error", async () => {
     const { gateway, watch } = setup({
       answer: () => Result.ok({ content: [], isError: true }),
@@ -317,9 +355,11 @@ describe("createCallGateway create_thread of a Codex thread", () => {
 });
 
 describe("createCallGateway create_thread of a Claude thread", () => {
-  test("sends nothing while an earlier create of the caller is unconfirmed", async () => {
-    const { gateway, watch, linkCalls } = setup({ claude: [CLAUDE] });
-    watch.expect(CLAUDE);
+  test("answers not_sent when the link sent nothing for an unconfirmed earlier create", async () => {
+    const { gateway } = setup({
+      claude: [CLAUDE],
+      created: { firstTurn: null, threadId: null, unknown: false, busy: true },
+    });
 
     const answer = await gateway.handle(
       JSON.stringify({
@@ -330,7 +370,6 @@ describe("createCallGateway create_thread of a Claude thread", () => {
     );
 
     expect(JSON.parse(answer).outcome).toBe("not_sent");
-    expect(linkCalls).toEqual([]);
   });
 
   test.each([
@@ -345,6 +384,7 @@ describe("createCallGateway create_thread of a Claude thread", () => {
         },
         threadId: "th-reviewer",
         unknown: false,
+        busy: false,
       },
       expected: {
         outcome: "model_mismatch",
@@ -355,12 +395,17 @@ describe("createCallGateway create_thread of a Claude thread", () => {
     },
     {
       name: "an unseen first turn as unknown",
-      created: { firstTurn: null, threadId: null, unknown: true },
+      created: { firstTurn: null, threadId: null, unknown: true, busy: false },
       expected: { outcome: "unknown" },
     },
     {
       name: "a named thread whose first turn was unseen as unknown with its id",
-      created: { firstTurn: null, threadId: "th-reviewer", unknown: true },
+      created: {
+        firstTurn: null,
+        threadId: "th-reviewer",
+        unknown: true,
+        busy: false,
+      },
       expected: { outcome: "unknown", threadId: "th-reviewer" },
     },
     {
@@ -374,12 +419,13 @@ describe("createCallGateway create_thread of a Claude thread", () => {
         },
         threadId: "th-reviewer",
         unknown: true,
+        busy: false,
       },
       expected: { outcome: "unknown", threadId: "th-reviewer" },
     },
     {
       name: "a create the link refused as a tool error",
-      created: { firstTurn: null, threadId: null, unknown: false },
+      created: { firstTurn: null, threadId: null, unknown: false, busy: false },
       expected: { outcome: "tool_error" },
     },
   ])("reports $name", async ({ created, expected }) => {
@@ -409,6 +455,7 @@ const setup = ({
     },
     threadId: "th-reviewer",
     unknown: false,
+    busy: false,
   },
   armedMs = 600_000,
 }: {
@@ -419,6 +466,7 @@ const setup = ({
     firstTurn: FirstTurn | null;
     threadId: string | null;
     unknown: boolean;
+    busy: boolean;
   };
   armedMs?: number;
 } = {}) => {
@@ -476,3 +524,6 @@ const CREATE = JSON.stringify({
   tool: "create_thread",
   arguments: { prompt: "work", model: "gpt-worker", thinking: "low" },
 });
+const NAMED_ANSWER = {
+  content: [{ type: "text", text: '{"threadId":"th-named"}' }],
+};

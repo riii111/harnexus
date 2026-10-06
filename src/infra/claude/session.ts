@@ -53,7 +53,7 @@ import {
 import { claudeConfigDir, findSessionFile } from "./transcripts.ts";
 
 export type ClaudeSessionSettings = {
-  // The app thread this session runs, given to Claude's tools as CODEX_THREAD_ID as Codex gives it to its own.
+  // Reaches Claude's tools as CODEX_THREAD_ID, as Codex gives it to its own.
   threadId: string;
   cwd: string;
   model: string;

@@ -238,7 +238,6 @@ const workerA = async () => {
       threads.closeAll();
     },
     createThreadAfter,
-    // The socket's call, made once the app has sent these lines.
     callAfter: async (lines: object[], call: object) => {
       linesBeforeAnswer = lines;
       const answer = await threads.callGateway.handle(JSON.stringify(call));

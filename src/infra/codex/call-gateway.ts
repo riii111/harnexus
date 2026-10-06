@@ -3,6 +3,7 @@ import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 import { createSerialQueue } from "../../runtime/serial-queue.ts";
 import {
+  answeredThreadId,
   type DelegationWatch,
   FIRST_TURN_WAIT_MS,
   type FirstTurn,
@@ -11,7 +12,6 @@ import {
 import type { ServerRequest, ServerRequestError } from "./server-requests.ts";
 
 // The answer names what is known about the call, so the caller can tell a call that never left from one whose effect is unknown and must not be repeated.
-// A create_thread is answered once the new thread's first turn is seen, with its real id and the model and effort that turn asked for.
 export type GatewayAnswer =
   | { outcome: "done" | "tool_error"; result: unknown }
   | ({ outcome: "done"; result: unknown; threadId: string } & TurnSettings)
@@ -41,12 +41,11 @@ type Link = {
     firstTurn: FirstTurn | null;
     threadId: string | null;
     unknown: boolean;
+    busy: boolean;
   }>;
 };
 
-// A process outside the app sends one Codex app tool call per line on behalf of an existing thread; it sends exactly what it is given and keeps no state of its own.
 // Claude threads go through their codex_link, so a reviewer they create is recorded and reachable from the Claude chat as if Claude had created it.
-// A Codex thread's create_thread is not recorded anywhere; the watch only learns the new thread's id and checks its first turn.
 export const createCallGateway = ({
   isClaudeThread,
   openLink,
@@ -57,10 +56,10 @@ export const createCallGateway = ({
   isClaudeThread: (threadId: string) => boolean;
   openLink: (threadId: string) => Link;
   request: ServerRequest;
-  delegations: Pick<DelegationWatch, "expect" | "isWaiting">;
+  delegations: Pick<DelegationWatch, "expect">;
   firstTurnWaitMs?: number;
 }) => {
-  // One socket create at a time per caller, since a first turn is paired with the oldest waiting create of its caller.
+  // Queued rather than refused, so a script's creates in a row each go out once the previous one is confirmed.
   const creates = createSerialQueue();
   // Kept per thread, so an unknown write stops later writes from the same thread.
   const links = new Map<string, Link>();
@@ -105,21 +104,14 @@ export const createCallGateway = ({
     return failedCall(answered.error);
   };
 
-  // The in-chat create_thread of a Claude caller's own model is not serialized with these, so the two can still be paired crosswise.
+  // A Codex caller's own in-chat create_thread registers no waiter, so its first turn can still be taken for a socket create's.
   const createThread = async (
     threadId: string,
     args: Record<string, unknown>,
   ): Promise<GatewayAnswer> => {
-    if (delegations.isWaiting(threadId)) {
-      return {
-        outcome: "not_sent",
-        message:
-          "an earlier create_thread of this thread is still unconfirmed, so another is not sent until its first turn is seen or its check expires",
-      };
-    }
     if (isClaudeThread(threadId)) {
       const created = await linkOf(threadId).createChecked(args);
-      return createdAnswer(created);
+      return created.busy ? BUSY : createdAnswer(created);
     }
     // Registered before the call is sent, since the new thread's first turn can reach the bridge before the tool answer.
     const created = delegations.expect(threadId, {
@@ -129,21 +121,24 @@ export const createCallGateway = ({
       },
       record: false,
     });
+    if (created === null) return BUSY;
     const answered = await callApp(threadId, "create_thread", args);
     if (answered.isOk()) {
       const result = answered.value;
       const failed = isObject(result) && result.isError === true;
+      const named = answeredThreadId(result);
+      if (named !== null) created.claim(named);
       // The app may answer with an error because the first turn was refused, so a turn already seen is still reported.
       const firstTurn = await created.wait(failed ? 0 : firstTurnWaitMs);
-      if (failed) created.cancel();
+      const exists = named !== null || !failed;
+      if (!exists) created.cancel();
       return createdAnswer({
         result,
         firstTurn,
-        threadId: firstTurn?.threadId ?? null,
-        unknown: firstTurn === null && !failed,
+        threadId: firstTurn?.threadId ?? named,
+        unknown: firstTurn === null && exists,
       });
     }
-    // A thread already seen exists whatever became of the answer.
     const firstTurn = await created.wait(0);
     if (firstTurn !== null) {
       return createdAnswer({
@@ -153,7 +148,7 @@ export const createCallGateway = ({
         unknown: false,
       });
     }
-    // A create_thread whose answer was lost may still have made the thread, so its check stays armed.
+    // A lost answer may still have made the thread, so its check stays armed.
     if (answered.error._tag !== "ServerRequestUnanswered") created.cancel();
     return failedCall(answered.error);
   };
@@ -172,6 +167,12 @@ export const createCallGateway = ({
   return {
     handle: async (line: string) => JSON.stringify(await handle(line)),
   };
+};
+
+const BUSY: GatewayAnswer = {
+  outcome: "not_sent",
+  message:
+    "an earlier create_thread of this thread is still unconfirmed, so another is not sent until its first turn is seen or its check expires",
 };
 
 const failedCall = (error: ServerRequestError): GatewayAnswer => {

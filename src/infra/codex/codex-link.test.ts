@@ -807,6 +807,111 @@ describe("createCodexLink createChecked", () => {
   });
 });
 
+describe("createCodexLink creates of one caller from two links", () => {
+  test("refuses an in-chat create while a socket create of the same thread is unconfirmed", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const answered = deferred();
+    const socket = await connect({
+      delegations,
+      answer: async () => {
+        await answered.promise;
+        return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
+      },
+    });
+    const chat = await connect({ delegations });
+
+    const socketCreate = socket.link.createChecked({
+      prompt: "work",
+      target: TARGET,
+      model: "gpt-worker",
+    });
+    await Bun.sleep(1);
+    const inChat = await chat.client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review", target: TARGET },
+    });
+    const runs = delegations.observe(CALLER, REVIEWER, {
+      model: "gpt-other",
+      effort: null,
+    });
+    answered.resolve();
+
+    expect(inChat.isError).toBe(true);
+    expect(chat.requests).toEqual([]);
+    expect(runs).toBe(false);
+    expect((await socketCreate).firstTurn?.refused).toBe(true);
+  });
+
+  test("sends no socket create while an in-chat create of the same thread is unconfirmed", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const answered = deferred();
+    const chat = await connect({
+      delegations,
+      answer: async () => {
+        await answered.promise;
+        return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
+      },
+    });
+    const socket = await connect({ delegations });
+
+    const inChat = chat.client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review", target: TARGET },
+    });
+    await Bun.sleep(1);
+    const socketCreate = await socket.link.createChecked({
+      prompt: "work",
+      target: TARGET,
+      model: "gpt-worker",
+    });
+    const runs = delegations.observe(CALLER, REVIEWER, {
+      model: "gpt-other",
+      effort: null,
+    });
+    answered.resolve();
+
+    expect(socketCreate.busy).toBe(true);
+    expect(socket.requests).toEqual([]);
+    expect(runs).toBe(true);
+    expect((await inChat).structuredContent).toEqual({ threadId: REVIEWER });
+    expect(chat.store.reviewers(CALLER)).toEqual([REVIEWER]);
+  });
+
+  test("keeps the check of a thread named by an error answer", async () => {
+    const delegations = createDelegationWatch(() => {});
+    const { link } = await connect({
+      delegations,
+      answer: () =>
+        Result.ok({
+          ...textAnswer(JSON.stringify({ threadId: REVIEWER })),
+          isError: true,
+        }),
+    });
+
+    const created = await link.createChecked({
+      prompt: "work",
+      target: TARGET,
+      model: "gpt-worker",
+    });
+
+    expect(created).toMatchObject({ threadId: REVIEWER, unknown: true });
+    expect(
+      delegations.observe(CALLER, REVIEWER, {
+        model: "gpt-other",
+        effort: null,
+      }),
+    ).toBe(false);
+  });
+});
+
+const deferred = () => {
+  let resolve: () => void = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+};
+
 const connect = async ({
   caller = CALLER,
   reviewers = {},
