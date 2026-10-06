@@ -16,6 +16,7 @@ import {
 } from "../infra/codex/observe.ts";
 import type { openThreadStore } from "../infra/thread-store.ts";
 import {
+  type loadCallSocketPath,
   loadLogPath,
   type loadPermissionMode,
   type loadStatePath,
@@ -23,6 +24,7 @@ import {
 import { openLogSink } from "../runtime/fs.boundary.ts";
 import { createLogger, type LogSink } from "../runtime/logger.ts";
 import type { Signal } from "../runtime/process.boundary.ts";
+import type { serveLines } from "../runtime/socket.boundary.ts";
 import {
   type ServerSignalEvent,
   serializeServerSignalEvent,
@@ -39,9 +41,16 @@ type LogEvent =
   | { event: "claude_models_unavailable"; reason: ModelsFailure }
   | { event: "claude_models_loaded"; count: number }
   | { event: "bridge_signaled"; signal: Signal }
+  | { event: "call_socket_listening" }
+  | { event: "call_socket_unavailable"; reason: CallSocketFailure }
   | ObservationEvent
   | ClaudeLogEvent
   | RouteEvent;
+
+type CallSocketFailure =
+  | InferErr<ReturnType<typeof loadStatePath>>["_tag"]
+  | InferErr<ReturnType<typeof loadCallSocketPath>>["_tag"]
+  | InferErr<Awaited<ReturnType<typeof serveLines>>>["_tag"];
 
 type StartupFailure = "ServerPipesUnavailable";
 
@@ -81,6 +90,7 @@ const serializeLogEvent = (entry: LogEvent) => {
   switch (entry.event) {
     case "bridge_started":
     case "server_closed":
+    case "call_socket_listening":
       return { event: entry.event };
     case "bridge_startup_failed":
     case "log_file_unavailable":
@@ -93,6 +103,7 @@ const serializeLogEvent = (entry: LogEvent) => {
     case "claude_unavailable":
     case "effort_settings_unavailable":
     case "claude_models_unavailable":
+    case "call_socket_unavailable":
       return { event: entry.event, reason: entry.reason };
     case "claude_models_loaded":
       return { event: entry.event, count: entry.count };

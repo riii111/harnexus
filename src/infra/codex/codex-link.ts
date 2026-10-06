@@ -316,8 +316,21 @@ export const createCodexLink = ({
     ),
   ];
 
+  // The call socket reaches the same tools without a Claude turn, so their checks, the reviewer record and the stop after an unknown write all still apply.
+  const call = async (name: string, args: unknown): Promise<ToolResult> => {
+    const found = tools.find((entry) => entry.name === name) as
+      | SdkMcpToolDefinition
+      | undefined;
+    if (found === undefined) return failure(`${name} is not a Codex app tool.`);
+    const parsed = z.object(found.inputSchema).safeParse(args);
+    return parsed.success
+      ? found.handler(parsed.data, undefined)
+      : failure(`Invalid arguments for ${name}: ${parsed.error.message}`);
+  };
+
   return {
     server: createSdkMcpServer({ name: CODEX_LINK_SERVER, tools }),
+    call,
     // Reads only reach this thread, its own reviewers and the threads that sent it work, so they run without asking; creating and sending stay under the user's Claude permission rules.
     allowedTools: READ_TOOLS.map(
       (name) => `mcp__${CODEX_LINK_SERVER}__${name}`,

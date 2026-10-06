@@ -11,6 +11,7 @@ import { createSubagentRestore } from "../conversation/subagent-restore.ts";
 import { createSubagents } from "../conversation/subagents.ts";
 import { createThreadValues } from "../conversation/thread-values.ts";
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
+import { createCallGateway } from "../infra/codex/call-gateway.ts";
 import { createCodexLink } from "../infra/codex/codex-link.ts";
 import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
@@ -55,6 +56,8 @@ export const connectClaudeThreads = ({
   log: (event: ClaudeLogEvent | RouteEvent) => void;
 }) => {
   const delegations = createDelegationWatch(store.claimReviewer);
+  const openLink = (callerThreadId: string) =>
+    createCodexLink({ callerThreadId, store, request, delegations });
   const threads = createThreadValues(store, log);
   const subagents = createSubagents({ send });
   const subagentRestore = createSubagentRestore({
@@ -94,8 +97,7 @@ export const connectClaudeThreads = ({
         { threadId, name },
         { timeoutMs: RENAME_TIMEOUT_MS },
       ),
-    openLink: (callerThreadId) =>
-      createCodexLink({ callerThreadId, store, request, delegations }),
+    openLink: (callerThreadId) => openLink(callerThreadId),
     send,
     log,
     effortRule,
@@ -153,7 +155,12 @@ export const connectClaudeThreads = ({
       send,
     }),
   );
-  return { router, closeAll: turns.closeAll };
+  const callGateway = createCallGateway({
+    isClaudeThread: (threadId) => store.get(threadId) !== undefined,
+    openLink,
+    request,
+  });
+  return { router, closeAll: turns.closeAll, callGateway };
 };
 
 // The server writes a thread to disk only once it holds some history, and Claude turns never reach it, so without this item the app cannot reopen a Claude thread after a restart; the note carries no conversation text.

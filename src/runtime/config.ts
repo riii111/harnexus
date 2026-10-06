@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { Result, TaggedError } from "better-result";
 
 class PermissionModeInvalid extends TaggedError("PermissionModeInvalid")<{
@@ -7,6 +7,13 @@ class PermissionModeInvalid extends TaggedError("PermissionModeInvalid")<{
 }> {}
 
 class LogPathNotAbsolute extends TaggedError("LogPathNotAbsolute")<{
+  path: string;
+  message: string;
+}> {}
+
+class CallSocketPathNotAbsolute extends TaggedError(
+  "CallSocketPathNotAbsolute",
+)<{
   path: string;
   message: string;
 }> {}
@@ -91,6 +98,32 @@ const VERTEX_ENV = "HARNEXUS_VERTEX";
 // Only "on" lists the Vertex AI models, which most users have no repository for.
 export const loadVertexModels = (env: Record<string, string | undefined>) =>
   env[VERTEX_ENV] === "on";
+
+const CALL_SOCKET_ENV = "HARNEXUS_CALL_SOCKET";
+
+// Off unless asked for, since the socket lets any process of the user create and message threads in the app; "on" places it beside the thread store.
+export const loadCallSocketPath = (
+  env: Record<string, string | undefined>,
+  statePath: string,
+) => {
+  const value = env[CALL_SOCKET_ENV];
+  if (value === undefined || value === "" || value === "off") {
+    return Result.ok(null);
+  }
+  if (value === "on") return Result.ok(defaultCallSocketPath(statePath));
+  if (!isAbsolute(value)) {
+    return Result.err(
+      new CallSocketPathNotAbsolute({
+        path: value,
+        message: `${CALL_SOCKET_ENV} must be on, off or an absolute path`,
+      }),
+    );
+  }
+  return Result.ok(value);
+};
+
+export const defaultCallSocketPath = (statePath: string) =>
+  join(dirname(statePath), "call.sock");
 
 const DEFAULT_SHUTDOWN_GRACE_MS = 5000;
 

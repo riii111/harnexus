@@ -616,6 +616,42 @@ describe("createCodexLink write outcomes", () => {
   });
 });
 
+describe("createCodexLink call", () => {
+  test("runs a tool by name with the same checks and records as the tool itself", async () => {
+    const { link, store, requests } = await connect({
+      answer: () =>
+        Result.ok(textAnswer(JSON.stringify({ threadId: REVIEWER }))),
+    });
+
+    const result = await link.call("create_thread", {
+      prompt: "review",
+      target: TARGET,
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
+    expect(requests.map((request) => request.params.arguments)).toEqual([
+      { prompt: "review", target: TARGET, model: "gpt-fixture" },
+    ]);
+  });
+
+  test.each([
+    { name: "an unknown tool", tool: "delete_thread", args: {} },
+    {
+      name: "arguments the tool does not accept",
+      tool: "create_thread",
+      args: { prompt: "" },
+    },
+  ])("refuses $name without calling the app", async ({ tool, args }) => {
+    const { link, requests } = await connect();
+
+    const result = await link.call(tool, args);
+
+    expect(result.isError).toBe(true);
+    expect(requests).toEqual([]);
+  });
+});
+
 const connect = async ({
   caller = CALLER,
   reviewers = {},
