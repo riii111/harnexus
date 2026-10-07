@@ -161,7 +161,7 @@ describe("createCallGateway create_thread of a Codex thread", () => {
     });
   });
 
-  test("reports a first turn that names no model or effort without blocking it", async () => {
+  test("refuses a first turn that names no model or effort and reports it as a mismatch", async () => {
     const { gateway, watch } = setup({
       answer: () => {
         runs.push(watch.observe(CODEX, "th-worker", NONE));
@@ -172,8 +172,13 @@ describe("createCallGateway create_thread of a Codex thread", () => {
 
     const answer = JSON.parse(await gateway.handle(CREATE));
 
-    expect(runs).toEqual([true]);
-    expect(answer).toMatchObject({ outcome: "done", ...NONE });
+    expect(runs).toEqual([false]);
+    expect(answer).toMatchObject({
+      outcome: "model_mismatch",
+      threadId: "th-worker",
+      expected: ASKED,
+      actual: NONE,
+    });
   });
 
   test("sends a caller's next create only after the first turn of its previous one", async () => {

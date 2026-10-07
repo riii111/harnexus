@@ -4,6 +4,7 @@ import {
   createDelegationWatch,
   delegatedMessage,
   delegationSource,
+  refusalOf,
 } from "./delegations.ts";
 
 describe("createDelegationWatch", () => {
@@ -87,6 +88,30 @@ describe("createDelegationWatch first turn check", () => {
     watch.observe("th-codex", "th-worker", MISMATCH);
 
     expect(watch.observe("th-codex", "th-worker", EXPECTED)).toBe(false);
+  });
+
+  test.each([
+    {
+      name: "no model",
+      actual: { model: null, effort: "medium" },
+    },
+    {
+      name: "no effort",
+      actual: { model: "gpt-worker", effort: null },
+    },
+  ])("refuses a first turn that gives $name for one that was asked", async ({
+    actual,
+  }) => {
+    const watch = createDelegationWatch(() => {});
+    const created = expecting(watch, "th-codex", { expected: EXPECTED });
+
+    expect(watch.observe("th-codex", "th-worker", actual)).toBe(false);
+    expect(await created.wait(1_000)).toEqual({
+      threadId: "th-worker",
+      expected: EXPECTED,
+      actual,
+      refused: true,
+    });
   });
 
   test("checks nothing a create_thread did not ask for", () => {
@@ -290,6 +315,21 @@ describe("delegatedMessage", () => {
 
 const REPLY =
   "<codex_delegation>\n  <source_thread_id>th-reviewer</source_thread_id>\n  <input>looks good</input>\n</codex_delegation>";
+
+test.each([
+  {
+    name: "a value left out as not said",
+    actual: { model: null, effort: "low" },
+    text: "did not say which model (expected gpt-worker)",
+  },
+  {
+    name: "each differing setting",
+    actual: { model: "gpt-other", effort: null },
+    text: "asked for model gpt-other instead of gpt-worker and did not say which effort (expected low)",
+  },
+])("refusalOf names $name", ({ actual, text }) => {
+  expect(refusalOf(EXPECTED, actual)).toBe(text);
+});
 
 const EXPECTED = { model: "gpt-worker", effort: "low" };
 const MISMATCH = { model: "gpt-other", effort: "low" };

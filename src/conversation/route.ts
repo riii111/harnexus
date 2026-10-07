@@ -7,12 +7,15 @@ import {
   type TurnSettings,
 } from "../infra/codex/delegations.ts";
 import { codexVersion, isVerifiedCodex } from "../infra/codex/versions.ts";
+import { type LiveTurn, withLiveTurn } from "../presentation/history.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import {
   type createHistoryRequests,
+  endsLive,
   type HistoryEvent,
   isHistoryMethod,
+  withLiveStatus,
   withResumeHistory,
   withTurns,
 } from "./history-request.ts";
@@ -77,6 +80,7 @@ type Turns = {
   selectEffort: (threadId: string, effort: string) => void;
   effortOf: (threadId: string) => EffortLevel | null;
   effortRule: EffortRule;
+  liveTurnOf: (threadId: string) => LiveTurn | null;
 };
 
 type RefusedMethod = (typeof REFUSED_METHODS)[number];
@@ -95,7 +99,11 @@ type Pending =
       history: ReturnType<History["load"]> | null;
       params: Record<string, unknown>;
     }
-  | { kind: "threadRead"; history: ReturnType<History["load"]> }
+  | {
+      kind: "threadRead";
+      threadId: string;
+      history: ReturnType<History["load"]> | null;
+    }
   | { kind: "childList"; params: Record<string, unknown> };
 
 // Lines that are not Claude requests pass as the same bytes; server requests and app responses share ids with the other direction, so only lines with a method are read as app requests and only lines without one as server responses.
@@ -212,11 +220,14 @@ export const createRouter = (
       case "thread/settings/update":
         return routeSettingsUpdate(line, message, request);
       case "thread/read":
-        if (params.includeTurns !== true) return line;
         if (!turns.isClaudeThread(params.threadId)) return line;
         pending.set(id, {
           kind: "threadRead",
-          history: history.load(String(params.threadId)),
+          threadId: String(params.threadId),
+          history:
+            params.includeTurns === true
+              ? history.load(String(params.threadId))
+              : null,
         });
         return line;
       // The server would compact its own record, which holds none of the Claude conversation.
@@ -416,9 +427,20 @@ export const createRouter = (
         result: subagents.withChildren(result, request.params),
       });
     }
+    // Whether a turn runs is asked as the answer goes out, since it may end while the server answers.
     if (request.kind === "threadRead") {
+      if (request.history === null) {
+        const live = turns.liveTurnOf(request.threadId) !== null;
+        return live
+          ? encode({ ...message, result: withLiveStatus(result, live) })
+          : line;
+      }
       return request.history.then((loaded) => {
         if (loaded.isErr()) return line;
+        const shown = withLiveTurn(
+          loaded.value,
+          turns.liveTurnOf(request.threadId),
+        );
         log({
           event: "claude_history_served",
           method: "thread/read",
@@ -426,9 +448,12 @@ export const createRouter = (
           excludeTurns: false,
           initialPage: false,
           picked: false,
-          turns: loaded.value.length,
+          turns: shown.length,
         });
-        return encode({ ...message, result: withTurns(result, loaded.value) });
+        return encode({
+          ...message,
+          result: withLiveStatus(withTurns(result, shown), endsLive(shown)),
+        });
       });
     }
     const thread = isObject(result.thread) ? result.thread : {};
@@ -479,6 +504,7 @@ export const createRouter = (
       if (loaded.isErr()) return encode({ ...message, result: opened });
       // Taken only once the history goes out, since a resume the server fails would otherwise use up the pick.
       const picked = history.takePicked(threadId);
+      const shown = withLiveTurn(loaded.value, turns.liveTurnOf(threadId));
       log({
         event: "claude_history_served",
         method: "thread/resume",
@@ -486,11 +512,14 @@ export const createRouter = (
         excludeTurns: params.excludeTurns === true,
         initialPage: isObject(params.initialTurnsPage),
         picked,
-        turns: loaded.value.length,
+        turns: shown.length,
       });
       return encode({
         ...message,
-        result: withResumeHistory(opened, loaded.value, params, picked),
+        result: withLiveStatus(
+          withResumeHistory(opened, shown, params, picked),
+          endsLive(shown),
+        ),
       });
     });
   };

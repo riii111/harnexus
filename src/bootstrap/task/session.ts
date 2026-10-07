@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { Result } from "better-result";
 import type { CallOutcome } from "../../infra/codex/call-gateway.ts";
+import { refusalOf, type TurnSettings } from "../../infra/codex/delegations.ts";
 import { loadCallerSocketPath } from "../../runtime/config.ts";
 import {
   entryExists,
@@ -119,6 +120,38 @@ type Confirmed = (
   state: Fields | null,
 ) => Result<Fields, TaskFailed>;
 
+// The kind and thread fields of a session's state summary, read from its confirmed state and pending send.
+type Summarize = (state: Fields | null, pending: Fields | null) => Fields;
+
+const field = (record: unknown, key: string) =>
+  isObject(record) ? (record[key] ?? null) : null;
+
+const settingsOf = (record: unknown) => ({
+  model: field(record, "model"),
+  effort: field(record, "effort"),
+});
+
+// A thread runs on what its create asked and got until a later send names a model or thinking, so a send naming neither leaves its settings as they were.
+const sentSettings = (sent: unknown) => {
+  const expected = settingsOf(field(sent, "expected"));
+  return field(sent, "tool") === "create_thread" ||
+    expected.model !== null ||
+    expected.effort !== null
+    ? { requested: expected, actual: settingsOf(field(sent, "actual")) }
+    : null;
+};
+
+const checkedOf = (settings: Fields): TurnSettings => ({
+  model: typeof settings.model === "string" ? settings.model : null,
+  effort: typeof settings.effort === "string" ? settings.effort : null,
+});
+
+// The app answers a refusal with the settings it checked; anything else is shown as it came.
+const refusalText = (expected: unknown, actual: unknown) =>
+  isObject(expected) && isObject(actual)
+    ? refusalOf(checkedOf(expected), checkedOf(actual))
+    : `expected ${asText(expected)}, actual ${asText(actual)}`;
+
 const asRecord = (value: unknown, path: string) =>
   !truthy(value)
     ? Result.ok(null)
@@ -130,6 +163,7 @@ const asRecord = (value: unknown, path: string) =>
 const openSession = (
   directory: string,
   confirmed: Confirmed,
+  summarize: Summarize,
   deps: SessionDeps,
   legacy?: () => Promise<Result<Fields | null, TaskFailed>>,
 ) =>
@@ -151,8 +185,8 @@ const openSession = (
       if (pending === null) return Result.ok();
       if (pending.status === "refused")
         return fail(
-          `thread ${asText(pending.threadId)} refused its first turn: expected ${asText(pending.expected)}, ` +
-            `actual ${asText(pending.actual)}; fix the model, then resolve --not-sent`,
+          `thread ${asText(pending.threadId)} refused its first turn: ${refusalText(pending.expected, pending.actual)}; ` +
+            "fix the model, then resolve --not-sent",
         );
       return fail(
         `previous ${asText(pending.tool)} ended as ${asText(pending.status)}; never resend. ` +
@@ -185,11 +219,15 @@ const openSession = (
         const next = yield* confirmed(id, record, sent, state);
         yield* Result.await(save(statePath, next, { exclusive: false }));
         yield* Result.await(remove(pendingPath));
+        // A message to an existing thread that asked for no model or effort learns neither, so nulls would only mislead.
+        const unasked =
+          sent.tool === "send_message_to_thread" &&
+          args.model === undefined &&
+          args.thinking === undefined;
         return Result.ok({
           tool: sent.tool,
           threadId: thread,
-          ...sent.actual,
-          expected: sent.expected,
+          ...(!unasked && { ...sent.actual, expected: sent.expected }),
           state: statePath,
         });
       });
@@ -286,10 +324,25 @@ const openSession = (
         );
       });
 
+    // Flat fields only, with null for anything unknown, so a reader never has to guess where a value is nested.
     const show = () =>
       Result.gen(async function* () {
         const refused = yield* Result.await(load(historyPath));
-        return Result.ok({ state, pending: pendingLoaded, refused });
+        const sent = field(state, "sent");
+        // A state saved before settings were kept still holds them in its create.
+        const settings = field(state, "settings") ?? sentSettings(sent);
+        return Result.ok<Fields>({
+          ...summarize(state, pending),
+          requested: settingsOf(field(settings, "requested")),
+          actual: settingsOf(field(settings, "actual")),
+          pending: field(pending, "status"),
+          pendingThreadId: field(pending, "threadId"),
+          statePath,
+          prompt: field(sent, "prompt"),
+          refusedThreadIds: (Array.isArray(refused) ? refused : []).map(
+            (record) => field(record, "threadId"),
+          ),
+        });
       });
 
     return Result.ok({ statePath, state, checkIdle, send, resolve, show });
@@ -313,6 +366,12 @@ export const launchSession = (data: Fields, deps: SessionDeps) =>
     sessionDir(deps.env, "launch", String(data.projectId), String(data.taskId)),
     (thread, pending, sent) =>
       Result.ok({ threadId: thread, request: pending.request ?? null, sent }),
+    (state) => ({
+      kind: "launch",
+      // The session is kept per task, so its request names the task before anything was sent.
+      taskId: data.taskId ?? null,
+      workerThreadId: field(state, "threadId"),
+    }),
     deps,
   );
 
@@ -334,7 +393,25 @@ export const reviewSession = (data: Fields, deps: SessionDeps) =>
         reviewer: thread,
         candidate: pending.candidate ?? null,
         sent,
+        settings:
+          sentSettings(sent) ??
+          field(state, "settings") ??
+          sentSettings(field(state, "sent")),
       });
+    },
+    (state, pending) => {
+      const candidate = field(state, "candidate");
+      return {
+        kind: "review",
+        reviewerThreadId: field(state, "reviewer"),
+        workerThreadId:
+          field(candidate, "workerChatId") ?? data.workerChatId ?? null,
+        base: field(candidate, "base"),
+        head: field(candidate, "head"),
+        baseBranch: field(candidate, "baseBranch"),
+        prUrl: field(candidate, "prUrl"),
+        pendingHead: field(field(pending, "candidate"), "head"),
+      };
     },
     deps,
     () => legacyReviewState(String(data.checkout)),

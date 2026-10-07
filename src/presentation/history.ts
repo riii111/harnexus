@@ -69,6 +69,65 @@ export const buildHistory = (
   return turns;
 };
 
+// The turn the bridge is running on a thread, with the record of the prompt that opened it once Claude has written it.
+export type LiveTurn = {
+  turnId: string;
+  record: string | null;
+  startedAtMs: number;
+};
+
+// A record says nothing of a turn still running, so the turns from its prompt on, steers included, are shown as one turn in progress under the id the live notifications carry.
+export const withLiveTurn = (
+  history: readonly HistoryTurn[],
+  live: LiveTurn | null,
+): HistoryTurn[] => {
+  if (live === null) return [...history];
+  const opened =
+    live.record === null
+      ? -1
+      : history.findIndex(
+          (entry) => entry.turn.id === `${HISTORY_TURN_PREFIX}${live.record}`,
+        );
+  const first = history[opened];
+  // A turn not yet recorded, one Claude started itself without a prompt, or one a rewind cut off is shown empty.
+  if (first === undefined) {
+    return [
+      ...history,
+      {
+        turn: {
+          id: live.turnId,
+          items: [],
+          itemsView: "summary",
+          status: "inProgress",
+          error: null,
+          startedAt: Math.floor(live.startedAtMs / 1000),
+          completedAt: null,
+          durationMs: null,
+        },
+        items: [],
+      },
+    ];
+  }
+  return [
+    ...history.slice(0, opened),
+    {
+      turn: {
+        ...first.turn,
+        id: live.turnId,
+        items: [],
+        status: "inProgress",
+        error: null,
+        completedAt: null,
+        durationMs: null,
+      },
+      items: history
+        .slice(opened)
+        .flatMap((entry) => entry.items)
+        .map((entry) => ({ ...entry, turnId: live.turnId })),
+    },
+  ];
+};
+
 // A thread the app already holds never asks for history it was given while open, so a picked conversation is streamed in as finished turns; the ids match what a later read rebuilds.
 export const replayHistory = (
   history: readonly HistoryTurn[],
@@ -506,6 +565,10 @@ const timeOf = (message: SessionMessage) => {
 };
 
 const HISTORY_TURN_PREFIX = "harnexus-history-";
+
+// The id a history turn takes from the record of the prompt that opened it.
+export const historyTurnId = (record: string) =>
+  `${HISTORY_TURN_PREFIX}${record}`;
 
 // Claude Code writes these as user messages when a turn is stopped.
 const INTERRUPTED = /^\[Request interrupted by user/;

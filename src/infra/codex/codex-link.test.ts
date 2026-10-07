@@ -667,7 +667,7 @@ describe("createCodexLink createChecked", () => {
     {
       name: "a first turn that names neither",
       actual: { model: null, effort: null },
-      refused: false,
+      refused: true,
     },
   ])("records the reviewer and reports $name", async ({ actual, refused }) => {
     const delegations = createDelegationWatch(() => {});
@@ -1088,6 +1088,7 @@ const CODEX_ONLY_TURNS: Parameters<typeof createRouter>[0] = {
   selectEffort: () => expect.unreachable("no Claude thread in this session"),
   effortOf: () => null,
   effortRule: () => null,
+  liveTurnOf: () => null,
 };
 
 const NO_SUBAGENTS: Parameters<typeof createRouter>[6] = {

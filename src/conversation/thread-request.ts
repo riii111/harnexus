@@ -116,7 +116,7 @@ const REFUSAL_MESSAGES = {
     "the previous Claude turn on this thread stopped before its outcome was known; check what that turn did, such as changed files or messages to other threads, then send a message yourself to continue",
   unsupported_request: "this request is not supported on a Claude thread yet",
   model_mismatch:
-    "this thread's first turn asked for another model or effort than the thread that created it expected, so it was not run",
+    "this thread's first turn asked for another model or effort than the thread that created it expected, or did not say which, so it was not run",
   claude_paused:
     "Claude threads are paused because harnexus was not checked on this Codex CLI version; update harnexus, or unset HARNEXUS_UNVERIFIED_CODEX to run anyway",
 } as const;

@@ -13,6 +13,7 @@ import {
   type DelegationWatch,
   FIRST_TURN_WAIT_MS,
   type FirstTurn,
+  refusalOf,
 } from "./delegations.ts";
 import type { ServerRequest } from "./server-requests.ts";
 
@@ -266,7 +267,7 @@ export const createCodexLink = ({
     }
     if (turn?.refused === true) {
       return failure(
-        `Thread ${threadId} was created, but its first turn asked for model ${turn.actual.model} and effort ${turn.actual.effort} instead of ${turn.expected.model} and ${turn.expected.effort}, so it was stopped before it ran.`,
+        `Thread ${threadId} was created, but its first turn ${refusalOf(turn.expected, turn.actual)}, so it was stopped before it ran.`,
       );
     }
     // The app's own answer carries only a provisional id, so the real one is what the model must use from here on.

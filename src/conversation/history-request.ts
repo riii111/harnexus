@@ -7,6 +7,9 @@ import {
   type AgentRef,
   buildHistory,
   type HistoryTurn,
+  historyTurnId,
+  type LiveTurn,
+  withLiveTurn,
 } from "../presentation/history.ts";
 import {
   pageItems,
@@ -34,6 +37,8 @@ type Threads = {
   sessionIdOf: (threadId: string) => string | null;
   takePicked: (threadId: string) => boolean;
   rewindOf?: (threadId: string) => RewindPoint | undefined;
+  liveTurnOf?: (threadId: string) => LiveTurn | null;
+  recordOf?: (threadId: string, turnId: string) => string | null;
 };
 
 type ReadSession = (sessionId: string) => ReturnType<typeof readClaudeSession>;
@@ -122,7 +127,11 @@ export const createHistoryRequests = ({
 
   const answer = async (method: HistoryMethod, request: AppRequest) => {
     const threadId = String(request.params.threadId);
-    const history = await load(threadId);
+    const loaded = await load(threadId);
+    // Asked once the record is read, so a turn that ended meanwhile is not shown running.
+    const history = loaded.map((turns) =>
+      withLiveTurn(turns, threads.liveTurnOf?.(threadId) ?? null),
+    );
     if (history.isErr()) {
       send({
         id: request.id,
@@ -130,7 +139,26 @@ export const createHistoryRequests = ({
       });
       return;
     }
-    const result = pageFor(method, history.value, request.params);
+    // A live turn's id leaves the history once the turn ends, so a cursor or turn naming it then names the recorded turn its prompt opened.
+    const known = new Set(history.value.map((entry) => entry.turn.id));
+    const resolve = (turnId: string) => {
+      const record = known.has(turnId)
+        ? null
+        : (threads.recordOf?.(threadId, turnId) ?? null);
+      return record === null ? turnId : historyTurnId(record);
+    };
+    const { cursor, turnId } = request.params;
+    const result = pageFor(method, history.value, {
+      ...request.params,
+      ...(method === "thread/turns/list" &&
+        typeof cursor === "string" && {
+          cursor: cursor.replace(
+            TURN_CURSOR,
+            (_, at: string, id: string) => at + resolve(id),
+          ),
+        }),
+      ...(typeof turnId === "string" && { turnId: resolve(turnId) }),
+    });
     send(
       result === null
         ? {
@@ -203,6 +231,20 @@ export const withTurns = (
       }
     : result;
 
+// The server never runs a Claude turn, so it reports a Claude thread idle even while the bridge runs one.
+export const withLiveStatus = (
+  result: Record<string, unknown>,
+  live: boolean,
+) =>
+  live && isObject(result.thread)
+    ? { ...result, thread: { ...result.thread, status: ACTIVE } }
+    : result;
+
+export const endsLive = (history: readonly HistoryTurn[]) =>
+  history.at(-1)?.turn.status === "inProgress";
+
+const ACTIVE = { type: "active", activeFlags: [] };
+
 const pageFor = (
   method: HistoryMethod,
   history: readonly HistoryTurn[],
@@ -242,6 +284,8 @@ const directionOf = (value: unknown, fallback: SortDirection): SortDirection =>
 
 const viewOf = (value: unknown): TurnsView =>
   value === "notLoaded" || value === "full" ? value : "summary";
+
+const TURN_CURSOR = /^(at:|after:)(.+)$/s;
 
 const HISTORY_METHODS = [
   "thread/turns/list",

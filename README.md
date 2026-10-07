@@ -166,3 +166,11 @@ bun run install:task
 This builds a standalone executable and replaces the installed one in a single step. Agents run `launch`, `review` and `state` without approval, so allow-list only that installed command, for example `harnexus-task launch`. Never allow-list `bun run task` or the `dist/` binary in this repository: a sandboxed agent can write to the checkout, and what it changed there would then run outside the sandbox. `~/.local/bin` is outside the sandboxes' writable paths.
 
 Allow rules must name the command itself, without environment assignments in front of it, since variables such as `BUN_OPTIONS` or `BUN_BE_BUN` make the executable run other code.
+
+`harnexus-task state --request REQUEST` prints one flat JSON object for the session, with every key present and `null` for what is unknown. A review session's state file also keeps the reviewer's `settings`; the other recorded fields keep the `taskctl` layout.
+
+- Both kinds: `kind` (`launch` or `review`), `requested` and `actual` (each `{model, effort}`: what the thread was created with, or what a later send that named a model or thinking asked and got), `pending` (the status of an unresolved send, such as `unknown` or `refused`, or null), `pendingThreadId` (the thread that send named, or null), `statePath`, `prompt` (the last confirmed prompt) and `refusedThreadIds` (threads whose first turn was refused and released).
+- Launch sessions: `taskId` and `workerThreadId`.
+- Review sessions: `reviewerThreadId`, `workerThreadId`, and `base`, `head`, `baseBranch` and `prUrl` of the last confirmed send, with `pendingHead`, the head of an unresolved send, or null.
+
+Without `--request`, `state` prints every recorded file as it is stored.
