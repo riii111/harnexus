@@ -125,18 +125,18 @@ describe("loadVertexModels", () => {
 });
 
 describe("loadCallSocketPath", () => {
-  test.each([
-    { name: "unset", value: undefined },
-    { name: "empty", value: "" },
-    { name: "off", value: "off" },
-  ])("keeps the socket closed when the variable is $name", ({ value }) => {
-    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: value }, STATE);
+  test("keeps the socket closed when the variable is off", () => {
+    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: "off" }, STATE);
 
     expect(path.isOk() && path.value).toBeNull();
   });
 
-  test("places the socket beside the thread store when on", () => {
-    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: "on" }, STATE);
+  test.each([
+    { name: "unset", value: undefined },
+    { name: "empty", value: "" },
+    { name: "on", value: "on" },
+  ])("places the socket beside the thread store when $name", ({ value }) => {
+    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: value }, STATE);
 
     expect(path.isOk() && path.value).toBe("/state/harnexus/call.sock");
   });

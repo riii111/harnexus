@@ -269,7 +269,7 @@ describe("harnexus-task launch", () => {
     const sent = await launch([], [created("w1", "claude-opus-5-5")]);
 
     expect(missing.code).toBe(1);
-    expect(missing.err).toContain("HARNEXUS_CALL_SOCKET=on");
+    expect(missing.err).toContain("HARNEXUS_CALL_SOCKET=off");
     expect(missing.err).toContain("outside the sandbox");
     expect([sent.code, sent.err]).toEqual([0, ""]);
   });

@@ -37,7 +37,7 @@ import {
 } from "./request.ts";
 
 const CALL_TIMEOUT_MS = 15 * 60_000;
-const SOCKET_HINT = `start harnexus with HARNEXUS_CALL_SOCKET=on and run ${NAME} outside the sandbox`;
+const SOCKET_HINT = `the socket is closed only when the app was opened with HARNEXUS_CALL_SOCKET=off, so open it with bun run open-app and run ${NAME} outside the sandbox`;
 
 const NOT_SENT: readonly CallOutcome[] = ["not_sent", "rejected", "invalid"];
 

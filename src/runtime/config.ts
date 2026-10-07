@@ -101,16 +101,16 @@ export const loadVertexModels = (env: Record<string, string | undefined>) =>
 
 const CALL_SOCKET_ENV = "HARNEXUS_CALL_SOCKET";
 
-// Off unless asked for, since the socket lets any process of the user create and message threads in the app; "on" places it beside the thread store.
+// Open beside the thread store unless "off", since harnexus-task sends through it; "off" closes it, as the socket lets any process of the user create and message threads in the app.
 export const loadCallSocketPath = (
   env: Record<string, string | undefined>,
   statePath: string,
 ) => {
   const value = env[CALL_SOCKET_ENV];
-  if (value === undefined || value === "" || value === "off") {
-    return Result.ok(null);
+  if (value === "off") return Result.ok(null);
+  if (value === undefined || value === "" || value === "on") {
+    return Result.ok(defaultCallSocketPath(statePath));
   }
-  if (value === "on") return Result.ok(defaultCallSocketPath(statePath));
   if (!isAbsolute(value)) {
     return Result.err(
       new CallSocketPathNotAbsolute({
@@ -122,7 +122,7 @@ export const loadCallSocketPath = (
   return Result.ok(value);
 };
 
-// A caller finds the socket at an absolute HARNEXUS_CALL_SOCKET, or where "on" places it for the bridge.
+// A caller finds the socket at an absolute HARNEXUS_CALL_SOCKET, or where the bridge places it by default.
 export const loadCallerSocketPath = (
   env: Record<string, string | undefined>,
   home: () => string = homedir,
