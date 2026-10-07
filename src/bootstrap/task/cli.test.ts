@@ -163,8 +163,17 @@ describe("harnexus-task launch", () => {
     expect(changed.err).toContain("already has worker w1");
     expect(harnexus.calls).toHaveLength(1);
     const state = await invoke(["state", "--request", await write(data)]);
-    expect(state.out.state.sent.prompt).toBe(args.prompt);
-    expect(state.out.state.sent.actual.effort).toBe("medium");
+    expect(state.out).toEqual({
+      kind: "launch",
+      taskId: "TR1",
+      workerThreadId: "w1",
+      requested: { model: "claude-opus-5-5", effort: "medium" },
+      actual: { model: "claude-opus-5-5", effort: "medium" },
+      pending: null,
+      statePath: first.out.state,
+      prompt: args.prompt,
+      refusedThreadIds: [],
+    });
   });
 
   test("stops at a model mismatch without a second create", async () => {
@@ -195,7 +204,12 @@ describe("harnexus-task launch", () => {
     ]);
     expect([released.code, released.err]).toEqual([0, ""]);
     const state = await invoke(["state", "--request", request]);
-    expect(state.out.refused[0].actual).toBe("gpt-5");
+    expect(state.out).toMatchObject({
+      taskId: "TR1",
+      workerThreadId: null,
+      pending: null,
+      refusedThreadIds: ["w1"],
+    });
     const retried = await launch([], [created("w2", "claude-opus-5-5")]);
     expect([retried.code, retried.out.threadId]).toEqual([0, "w2"]);
   });
@@ -443,11 +457,7 @@ describe("harnexus-task launch", () => {
 
     expect(unconfirmed.code).toBe(1);
     expect(unconfirmed.err).toContain("thread ID is unknown");
-    expect(state.out.pending).toMatchObject({
-      status: "unknown",
-      threadId: null,
-      answer: { outcome: "done" },
-    });
+    expect(state.out).toMatchObject({ taskId: "TR1", pending: "unknown" });
     expect(blocked.err).toContain("never resend");
     expect([resolved.code, resolved.out.threadId]).toEqual([0, "w1"]);
   });
@@ -585,7 +595,11 @@ describe("harnexus-task review", () => {
     data.prUrl = "https://github.com/example/repo/pull/1";
     const again = await review([], [{ outcome: "done" }]);
     expect([again.code, again.err]).toEqual([0, ""]);
-    expect(again.out.threadId).toBe("r1");
+    expect(again.out).toEqual({
+      tool: "send_message_to_thread",
+      threadId: "r1",
+      state: first.out.state,
+    });
     const last = harnexus.calls.at(-1);
     expect(last?.tool).toBe("send_message_to_thread");
     expect(last?.arguments.threadId).toBe("r1");
@@ -597,6 +611,34 @@ describe("harnexus-task review", () => {
     expect((await readdir(checkout)).sort()).toEqual(before);
   });
 
+  test("states a review session in flat fields", async () => {
+    const { invoke, write, commit, initial, data, review } =
+      await reviewFixture();
+    await review([], [created("r1", "gpt-6.1-sol")]);
+    const fixed = commit("test: fix");
+    data.prUrl = "https://github.com/example/repo/pull/1";
+    const sent = await review([], [{ outcome: "done" }]);
+
+    const state = await invoke(["state", "--request", await write(data)]);
+
+    expect(state.out).toEqual({
+      kind: "review",
+      reviewerThreadId: "r1",
+      workerThreadId: "worker",
+      base: initial,
+      head: fixed,
+      baseBranch: "base",
+      prUrl: "https://github.com/example/repo/pull/1",
+      lastSentHead: fixed,
+      requested: { model: null, effort: null },
+      actual: { model: null, effort: null },
+      pending: null,
+      statePath: sent.out.state,
+      prompt: expect.stringContaining(`${initial}...${fixed}`),
+      refusedThreadIds: [],
+    });
+  });
+
   test("keeps a reviewer it cannot accept pending as unknown", async () => {
     const { invoke, write, data, review } = await reviewFixture();
 
@@ -606,9 +648,10 @@ describe("harnexus-task review", () => {
 
     expect(itself.code).toBe(1);
     expect(itself.err).toContain("cannot review itself");
-    expect(state.out.pending).toMatchObject({
-      status: "unknown",
-      threadId: "worker",
+    expect(state.out).toMatchObject({
+      reviewerThreadId: null,
+      workerThreadId: "worker",
+      pending: "unknown",
     });
     expect(blocked.err).toContain("never resend");
   });
