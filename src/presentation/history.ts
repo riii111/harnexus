@@ -69,6 +69,58 @@ export const buildHistory = (
   return turns;
 };
 
+// The turn the bridge is running on a thread, with the record of the prompt that opened it once Claude has written it.
+export type LiveTurn = {
+  turnId: string;
+  record: string | null;
+  startedAtMs: number;
+};
+
+// A record says nothing of a turn still running, so its last turn is shown in progress under the id the live notifications carry; a turn Claude has not yet recorded is shown empty.
+export const withLiveTurn = (
+  history: readonly HistoryTurn[],
+  live: LiveTurn | null,
+): HistoryTurn[] => {
+  if (live === null) return [...history];
+  const opened = history.findIndex(
+    (entry) => entry.turn.id === `${HISTORY_TURN_PREFIX}${live.record}`,
+  );
+  const last = history.at(-1);
+  if (live.record === null || opened < 0 || last === undefined) {
+    return [
+      ...history,
+      {
+        turn: {
+          id: live.turnId,
+          items: [],
+          itemsView: "summary",
+          status: "inProgress",
+          error: null,
+          startedAt: Math.floor(live.startedAtMs / 1000),
+          completedAt: null,
+          durationMs: null,
+        },
+        items: [],
+      },
+    ];
+  }
+  return [
+    ...history.slice(0, -1),
+    {
+      turn: {
+        ...last.turn,
+        id: live.turnId,
+        items: [],
+        status: "inProgress",
+        error: null,
+        completedAt: null,
+        durationMs: null,
+      },
+      items: last.items.map((entry) => ({ ...entry, turnId: live.turnId })),
+    },
+  ];
+};
+
 // A thread the app already holds never asks for history it was given while open, so a picked conversation is streamed in as finished turns; the ids match what a later read rebuilds.
 export const replayHistory = (
   history: readonly HistoryTurn[],

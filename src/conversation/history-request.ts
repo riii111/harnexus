@@ -7,6 +7,8 @@ import {
   type AgentRef,
   buildHistory,
   type HistoryTurn,
+  type LiveTurn,
+  withLiveTurn,
 } from "../presentation/history.ts";
 import {
   pageItems,
@@ -34,6 +36,7 @@ type Threads = {
   sessionIdOf: (threadId: string) => string | null;
   takePicked: (threadId: string) => boolean;
   rewindOf?: (threadId: string) => RewindPoint | undefined;
+  liveTurnOf?: (threadId: string) => LiveTurn | null;
 };
 
 type ReadSession = (sessionId: string) => ReturnType<typeof readClaudeSession>;
@@ -66,7 +69,7 @@ export const createHistoryRequests = ({
     ]);
 
   // A thread with no session yet has an empty history.
-  const load = (threadId: string): Promise<Loaded> => {
+  const read = (threadId: string): Promise<Loaded> => {
     const kept = subagentHistory(threadId);
     if (kept !== undefined) return Promise.resolve(Result.ok(kept));
     const key = keyOf(threadId);
@@ -79,8 +82,8 @@ export const createHistoryRequests = ({
     }
     const rewind = threads.rewindOf?.(threadId);
     const loaded = readSession(sessionId).then(async (original) => {
-      if (keyOf(threadId) !== key) return load(threadId);
-      const read = original.andThen((messages) => {
+      if (keyOf(threadId) !== key) return read(threadId);
+      const recorded = original.andThen((messages) => {
         if (rewind === undefined) return Result.ok(messages);
         if (rewind.at === null) return Result.ok([]);
         const index = messages.findIndex(
@@ -96,15 +99,15 @@ export const createHistoryRequests = ({
           : Result.ok(messages.slice(0, index + 1));
       });
       // The app's stream waits on this history, so a fault while reading back the thread's agents leaves them out rather than failing it; the next read tries again.
-      if (read.isOk()) {
+      if (recorded.isOk()) {
         const restored = await Result.tryPromise(() =>
-          subagents.restore(threadId, sessionId, thread.cwd, read.value),
+          subagents.restore(threadId, sessionId, thread.cwd, recorded.value),
         );
         if (restored.isErr()) log({ event: "claude_subagents_unrestored" });
       }
-      if (keyOf(threadId) !== key) return load(threadId);
+      if (keyOf(threadId) !== key) return read(threadId);
       if (reading.get(threadId)?.loaded === loaded) reading.delete(threadId);
-      return read
+      return recorded
         .tapError((error) =>
           log({ event: "claude_history_unreadable", error: error._tag }),
         )
@@ -119,6 +122,14 @@ export const createHistoryRequests = ({
     reading.set(threadId, { key, loaded });
     return loaded;
   };
+
+  // A shared read may outlast the turn it saw running, so whether one runs is asked once the read is done.
+  const load = (threadId: string): Promise<Loaded> =>
+    read(threadId).then((loaded) =>
+      loaded.map((history) =>
+        withLiveTurn(history, threads.liveTurnOf?.(threadId) ?? null),
+      ),
+    );
 
   const answer = async (method: HistoryMethod, request: AppRequest) => {
     const threadId = String(request.params.threadId);
@@ -202,6 +213,20 @@ export const withTurns = (
         },
       }
     : result;
+
+// The server never runs a Claude turn, so it reports a Claude thread idle even while the bridge runs one.
+export const withLiveStatus = (
+  result: Record<string, unknown>,
+  live: boolean,
+) =>
+  live && isObject(result.thread)
+    ? { ...result, thread: { ...result.thread, status: ACTIVE } }
+    : result;
+
+export const endsLive = (history: readonly HistoryTurn[]) =>
+  history.at(-1)?.turn.status === "inProgress";
+
+const ACTIVE = { type: "active", activeFlags: [] };
 
 const pageFor = (
   method: HistoryMethod,

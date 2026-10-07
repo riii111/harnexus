@@ -13,6 +13,7 @@ import {
   isClaudeEffort,
 } from "../infra/claude/models.ts";
 import { readClaudeSession } from "../infra/claude/session.ts";
+import type { LiveTurn } from "../presentation/history.ts";
 import {
   conversation,
   prompt,
@@ -1927,6 +1928,154 @@ describe("Claude thread history", () => {
   });
 });
 
+describe("a Claude thread with a running turn", () => {
+  test("reads the running turn in progress under its live id, then completed once it ends", async () => {
+    const { router, live } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+    const read = async (id: number) => {
+      router.fromApp(
+        encode({
+          id,
+          method: "thread/read",
+          params: { threadId: "th-claude", includeTurns: true },
+        }),
+      );
+      return parse(await router.fromServer(idleThread(id)));
+    };
+
+    live.set("th-claude", LIVE);
+    const running = await read(6);
+    live.delete("th-claude");
+    const ended = await read(7);
+
+    expect(running.result.thread.status).toEqual({
+      type: "active",
+      activeFlags: [],
+    });
+    expect(running.result.thread.turns.map(statusOf)).toEqual([
+      ["harnexus-history-u1", "completed", false],
+      ["harnexus-turn-live", "inProgress", true],
+    ]);
+    expect(running.result.thread.turns[1].items).toMatchObject([
+      { type: "userMessage" },
+      { type: "agentMessage", text: "welcome" },
+    ]);
+    expect(ended.result.thread.status).toEqual({ type: "idle" });
+    expect(ended.result.thread.turns.map(statusOf)).toEqual([
+      ["harnexus-history-u1", "completed", false],
+      ["harnexus-history-u2", "completed", false],
+    ]);
+  });
+
+  test.each([
+    {
+      name: "a turn Claude has recorded",
+      turn: LIVE,
+      turns: [
+        ["harnexus-turn-live", "inProgress", true],
+        ["harnexus-history-u1", "completed", false],
+      ],
+    },
+    {
+      name: "a turn Claude has not recorded yet",
+      turn: { ...LIVE, record: null },
+      turns: [
+        ["harnexus-turn-live", "inProgress", true],
+        ["harnexus-history-u2", "completed", false],
+        ["harnexus-history-u1", "completed", false],
+      ],
+    },
+  ])("lists $name as the newest turn, in progress", async ({ turn, turns }) => {
+    const { router, live, sent } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+    live.set("th-claude", turn);
+
+    router.fromApp(
+      encode({
+        id: 8,
+        method: "thread/turns/list",
+        params: { threadId: "th-claude", sortDirection: "desc" },
+      }),
+    );
+    await until(() => responseTo(sent, 8) !== null);
+
+    expect(responseTo(sent, 8).result.data.map(statusOf)).toEqual(turns);
+  });
+
+  test.each([
+    {
+      name: "a read without turns",
+      method: "thread/read",
+      params: { includeTurns: false },
+    },
+    { name: "a resume", method: "thread/resume", params: {} },
+  ])("reports the thread active on $name", async ({ method, params }) => {
+    const { router, live } = setup(["th-claude"], {
+      "th-claude": conversation(),
+    });
+    live.set("th-claude", LIVE);
+
+    router.fromApp(
+      encode({ id: 9, method, params: { threadId: "th-claude", ...params } }),
+    );
+    const out = parse(await router.fromServer(idleThread(9)));
+
+    expect(out.result.thread.status).toEqual({
+      type: "active",
+      activeFlags: [],
+    });
+  });
+
+  test("passes a read without turns unchanged while no turn runs", async () => {
+    const { router } = setup(["th-claude"], { "th-claude": conversation() });
+    const answer = idleThread(9);
+
+    router.fromApp(
+      encode({
+        id: 9,
+        method: "thread/read",
+        params: { threadId: "th-claude", includeTurns: false },
+      }),
+    );
+
+    expect(await router.fromServer(answer)).toBe(answer);
+  });
+});
+
+const LIVE: LiveTurn = {
+  turnId: "harnexus-turn-live",
+  record: "u2",
+  startedAtMs: 1_790_000_000_000,
+};
+
+const idleThread = (id: number) =>
+  encode({
+    id,
+    result: {
+      thread: {
+        id: "th-claude",
+        model: "gpt-fixture",
+        cwd: "/fixture/work",
+        status: { type: "idle" },
+      },
+      model: "gpt-fixture",
+      cwd: "/fixture/work",
+    },
+  });
+
+const statusOf = (turn: {
+  id: string;
+  status: string;
+  completedAt: number | null;
+  durationMs: number | null;
+}) => [
+  turn.id,
+  turn.status,
+  turn.completedAt === null && turn.durationMs === null,
+];
+
 const CLAUDE = "claude-sonnet-5";
 
 const delegatedTurn = (asked: object) =>
@@ -1994,6 +2143,7 @@ const setup = (
   const sent: object[] = [];
   const reads: string[] = [];
   const picked = new Set<string>();
+  const live = new Map<string, LiveTurn>();
   const threads = new Map(
     claudeThreads.map((id) => [id, { model: CLAUDE, cwd: "/fixture/work" }]),
   );
@@ -2008,6 +2158,7 @@ const setup = (
       sessionIdOf: (threadId) =>
         threadId in records ? `session-${threadId}` : null,
       takePicked: (threadId) => picked.delete(threadId),
+      liveTurnOf: (threadId) => live.get(threadId) ?? null,
     },
     readSession: (sessionId) => {
       reads.push(sessionId);
@@ -2089,6 +2240,7 @@ const setup = (
       },
       effortOf,
       effortRule: rule,
+      liveTurnOf: (threadId) => live.get(threadId) ?? null,
     },
     (event) => events.push(event),
     (source, threadId, asked) => {
@@ -2107,6 +2259,7 @@ const setup = (
     sent,
     reads,
     picked,
+    live,
     catalog,
     pinFork,
     subagents,

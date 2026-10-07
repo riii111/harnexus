@@ -7,6 +7,7 @@ import { delegatedMessage } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import { isManualTurnTrigger } from "../infra/codex/turn-trigger.ts";
 import type { ThreadRecord, ThreadStore } from "../infra/thread-store.ts";
+import type { LiveTurn } from "../presentation/history.ts";
 import type { UserInput } from "../presentation/protocol.ts";
 import { RECOVERY_NOTICE } from "../presentation/recovery.ts";
 import {
@@ -875,6 +876,16 @@ export const createTurnController = <Tag extends string>({
     sessionIdOf: threads.sessionIdOf,
     takePicked: threads.takePicked,
     rewindOf: threads.rewindOf,
+    liveTurnOf: (threadId: string): LiveTurn | null => {
+      const active = activeTurns.get(threadId);
+      if (active === undefined || active.state.finished) return null;
+      const { turnId, startedAtMs } = active.state;
+      return {
+        turnId,
+        record: runtime.recordOf(threadId, turnId),
+        startedAtMs,
+      };
+    },
     adopt: threads.adopt,
     adoptFork: (threadId: string, thread: Thread, sourceId: string) => {
       threads.adoptFork(threadId, thread, sourceId);

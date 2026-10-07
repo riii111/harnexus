@@ -104,6 +104,23 @@ describe("turn/start on a Claude thread", () => {
     ]);
   });
 
+  test("names the running turn and its prompt's record until the turn ends", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    await firstPrompt(claude.prompt());
+    const running = turns.liveTurnOf(THREAD);
+    claude.emit(sdk(answer("msg-1", "hi")));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(running).toMatchObject({ turnId: "turn-1" });
+    expect(typeof running?.record).toBe("string");
+    expect(turns.liveTurnOf(THREAD)).toBeNull();
+  });
+
   test("accepts the next turn sent while the app receives turn/completed", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     let startNext = () => {};
