@@ -4,6 +4,7 @@ import {
   createDelegationWatch,
   delegatedMessage,
   delegationSource,
+  refusalOf,
 } from "./delegations.ts";
 
 describe("createDelegationWatch", () => {
@@ -314,6 +315,21 @@ describe("delegatedMessage", () => {
 
 const REPLY =
   "<codex_delegation>\n  <source_thread_id>th-reviewer</source_thread_id>\n  <input>looks good</input>\n</codex_delegation>";
+
+test.each([
+  {
+    name: "a value left out as not said",
+    actual: { model: null, effort: "low" },
+    text: "did not say which model (expected gpt-worker)",
+  },
+  {
+    name: "each differing setting",
+    actual: { model: "gpt-other", effort: null },
+    text: "asked for model gpt-other instead of gpt-worker and did not say which effort (expected low)",
+  },
+])("refusalOf names $name", ({ actual, text }) => {
+  expect(refusalOf(EXPECTED, actual)).toBe(text);
+});
 
 const EXPECTED = { model: "gpt-worker", effort: "low" };
 const MISMATCH = { model: "gpt-other", effort: "low" };

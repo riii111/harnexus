@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { Result } from "better-result";
 import type { CallOutcome } from "../../infra/codex/call-gateway.ts";
+import { refusalOf, type TurnSettings } from "../../infra/codex/delegations.ts";
 import { loadCallerSocketPath } from "../../runtime/config.ts";
 import {
   entryExists,
@@ -130,6 +131,27 @@ const settingsOf = (record: unknown) => ({
   effort: field(record, "effort"),
 });
 
+// A thread runs on what its create asked and got until a later send names a model or thinking, so a send naming neither leaves its settings as they were.
+const sentSettings = (sent: unknown) => {
+  const expected = settingsOf(field(sent, "expected"));
+  return field(sent, "tool") === "create_thread" ||
+    expected.model !== null ||
+    expected.effort !== null
+    ? { requested: expected, actual: settingsOf(field(sent, "actual")) }
+    : null;
+};
+
+const checkedOf = (settings: Fields): TurnSettings => ({
+  model: typeof settings.model === "string" ? settings.model : null,
+  effort: typeof settings.effort === "string" ? settings.effort : null,
+});
+
+// The app answers a refusal with the settings it checked; anything else is shown as it came.
+const refusalText = (expected: unknown, actual: unknown) =>
+  isObject(expected) && isObject(actual)
+    ? refusalOf(checkedOf(expected), checkedOf(actual))
+    : `expected ${asText(expected)}, actual ${asText(actual)}`;
+
 const asRecord = (value: unknown, path: string) =>
   !truthy(value)
     ? Result.ok(null)
@@ -163,8 +185,8 @@ const openSession = (
       if (pending === null) return Result.ok();
       if (pending.status === "refused")
         return fail(
-          `thread ${asText(pending.threadId)} refused its first turn: expected ${asText(pending.expected)}, ` +
-            `actual ${asText(pending.actual)}; fix the model, then resolve --not-sent`,
+          `thread ${asText(pending.threadId)} refused its first turn: ${refusalText(pending.expected, pending.actual)}; ` +
+            "fix the model, then resolve --not-sent",
         );
       return fail(
         `previous ${asText(pending.tool)} ended as ${asText(pending.status)}; never resend. ` +
@@ -307,11 +329,14 @@ const openSession = (
       Result.gen(async function* () {
         const refused = yield* Result.await(load(historyPath));
         const sent = field(state, "sent");
+        // A state saved before settings were kept still holds them in its create.
+        const settings = field(state, "settings") ?? sentSettings(sent);
         return Result.ok<Fields>({
           ...summarize(state, pending),
-          requested: settingsOf(field(sent, "expected")),
-          actual: settingsOf(field(sent, "actual")),
+          requested: settingsOf(field(settings, "requested")),
+          actual: settingsOf(field(settings, "actual")),
           pending: field(pending, "status"),
+          pendingThreadId: field(pending, "threadId"),
           statePath,
           prompt: field(sent, "prompt"),
           refusedThreadIds: (Array.isArray(refused) ? refused : []).map(
@@ -368,22 +393,24 @@ export const reviewSession = (data: Fields, deps: SessionDeps) =>
         reviewer: thread,
         candidate: pending.candidate ?? null,
         sent,
+        settings:
+          sentSettings(sent) ??
+          field(state, "settings") ??
+          sentSettings(field(state, "sent")),
       });
     },
     (state, pending) => {
-      const recorded = field(state, "candidate");
-      // A pending send carries the newest candidate, which the recorded one follows once it is confirmed.
-      const latest = field(pending, "candidate") ?? recorded;
+      const candidate = field(state, "candidate");
       return {
         kind: "review",
         reviewerThreadId: field(state, "reviewer"),
         workerThreadId:
-          field(latest, "workerChatId") ?? data.workerChatId ?? null,
-        base: field(latest, "base"),
-        head: field(latest, "head"),
-        baseBranch: field(latest, "baseBranch"),
-        prUrl: field(latest, "prUrl"),
-        lastSentHead: field(recorded, "head"),
+          field(candidate, "workerChatId") ?? data.workerChatId ?? null,
+        base: field(candidate, "base"),
+        head: field(candidate, "head"),
+        baseBranch: field(candidate, "baseBranch"),
+        prUrl: field(candidate, "prUrl"),
+        pendingHead: field(field(pending, "candidate"), "head"),
       };
     },
     deps,

@@ -170,6 +170,7 @@ describe("harnexus-task launch", () => {
       requested: { model: "claude-opus-5-5", effort: "medium" },
       actual: { model: "claude-opus-5-5", effort: "medium" },
       pending: null,
+      pendingThreadId: null,
       statePath: first.out.state,
       prompt: args.prompt,
       refusedThreadIds: [],
@@ -212,6 +213,28 @@ describe("harnexus-task launch", () => {
     });
     const retried = await launch([], [created("w2", "claude-opus-5-5")]);
     expect([retried.code, retried.out.threadId]).toEqual([0, "w2"]);
+  });
+
+  test("names a first turn that did not say its model as such", async () => {
+    const { launch } = await launchFixture();
+    const settings = (model: string | null) => ({ model, effort: "medium" });
+
+    const refused = await launch(
+      [],
+      [
+        {
+          outcome: "model_mismatch",
+          threadId: "w1",
+          expected: settings("claude-opus-5-5"),
+          actual: settings(null),
+        },
+      ],
+    );
+
+    expect(refused.err).toContain(
+      "did not say which model (expected claude-opus-5-5)",
+    );
+    expect(refused.err).not.toContain("null");
   });
 
   test("never resends a create whose answer was lost", async () => {
@@ -611,17 +634,21 @@ describe("harnexus-task review", () => {
     expect((await readdir(checkout)).sort()).toEqual(before);
   });
 
-  test("states a review session in flat fields", async () => {
+  test("states a review session in flat fields, keeping the reviewer's settings and a pending send apart", async () => {
     const { invoke, write, commit, initial, data, review } =
       await reviewFixture();
     await review([], [created("r1", "gpt-6.1-sol")]);
     const fixed = commit("test: fix");
     data.prUrl = "https://github.com/example/repo/pull/1";
     const sent = await review([], [{ outcome: "done" }]);
+    const request = await write(data);
+    const confirmed = await invoke(["state", "--request", request]);
+    const later = commit("test: later");
+    await review([], [{ outcome: "unknown", threadId: "r1" }]);
 
-    const state = await invoke(["state", "--request", await write(data)]);
+    const pending = await invoke(["state", "--request", request]);
 
-    expect(state.out).toEqual({
+    const summary = {
       kind: "review",
       reviewerThreadId: "r1",
       workerThreadId: "worker",
@@ -629,13 +656,21 @@ describe("harnexus-task review", () => {
       head: fixed,
       baseBranch: "base",
       prUrl: "https://github.com/example/repo/pull/1",
-      lastSentHead: fixed,
-      requested: { model: null, effort: null },
-      actual: { model: null, effort: null },
+      pendingHead: null,
+      requested: { model: "gpt-6.1-sol", effort: "medium" },
+      actual: { model: "gpt-6.1-sol", effort: "medium" },
       pending: null,
+      pendingThreadId: null,
       statePath: sent.out.state,
       prompt: expect.stringContaining(`${initial}...${fixed}`),
       refusedThreadIds: [],
+    };
+    expect(confirmed.out).toEqual(summary);
+    expect(pending.out).toEqual({
+      ...summary,
+      pendingHead: later,
+      pending: "unknown",
+      pendingThreadId: "r1",
     });
   });
 
@@ -678,6 +713,10 @@ describe("harnexus-task review", () => {
         actual: { model: "gpt-6.1-sol", effort: "medium" },
         workspace: checkout,
         answer: created("r1", "gpt-6.1-sol"),
+      },
+      settings: {
+        requested: { model: "gpt-6.1-sol", effort: "medium" },
+        actual: { model: "gpt-6.1-sol", effort: "medium" },
       },
     });
   });

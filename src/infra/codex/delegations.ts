@@ -123,6 +123,17 @@ type Waiter = {
 const differs = (expected: string | null, actual: string | null) =>
   expected !== null && expected !== actual;
 
+// What a refused first turn did with each checked setting, naming a value it left out as not said rather than as null.
+export const refusalOf = (expected: TurnSettings, actual: TurnSettings) =>
+  (["model", "effort"] as const)
+    .filter((key) => differs(expected[key], actual[key]))
+    .map((key) =>
+      actual[key] === null
+        ? `did not say which ${key} (expected ${expected[key]})`
+        : `asked for ${key} ${actual[key]} instead of ${expected[key]}`,
+    )
+    .join(" and ");
+
 const NOT_GIVEN: TurnSettings = { model: null, effort: null };
 
 // Creating a worktree can take long, so the first turn is waited for this long before the answer says the outcome is unknown.
