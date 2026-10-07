@@ -667,7 +667,7 @@ describe("createCodexLink createChecked", () => {
     {
       name: "a first turn that names neither",
       actual: { model: null, effort: null },
-      refused: false,
+      refused: true,
     },
   ])("records the reviewer and reports $name", async ({ actual, refused }) => {
     const delegations = createDelegationWatch(() => {});

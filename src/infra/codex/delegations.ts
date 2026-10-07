@@ -119,9 +119,9 @@ type Waiter = {
   settle: (turn: FirstTurn | null) => void;
 };
 
-// Only an explicit difference refuses a turn; a value the app leaves out is reported as null for the caller to judge.
+// A value the app leaves out cannot confirm what was asked, so it refuses the turn like a different one; a setting nobody asked for is not checked.
 const differs = (expected: string | null, actual: string | null) =>
-  expected !== null && actual !== null && expected !== actual;
+  expected !== null && expected !== actual;
 
 const NOT_GIVEN: TurnSettings = { model: null, effort: null };
 

@@ -89,6 +89,30 @@ describe("createDelegationWatch first turn check", () => {
     expect(watch.observe("th-codex", "th-worker", EXPECTED)).toBe(false);
   });
 
+  test.each([
+    {
+      name: "no model",
+      actual: { model: null, effort: "medium" },
+    },
+    {
+      name: "no effort",
+      actual: { model: "gpt-worker", effort: null },
+    },
+  ])("refuses a first turn that gives $name for one that was asked", async ({
+    actual,
+  }) => {
+    const watch = createDelegationWatch(() => {});
+    const created = expecting(watch, "th-codex", { expected: EXPECTED });
+
+    expect(watch.observe("th-codex", "th-worker", actual)).toBe(false);
+    expect(await created.wait(1_000)).toEqual({
+      threadId: "th-worker",
+      expected: EXPECTED,
+      actual,
+      refused: true,
+    });
+  });
+
   test("checks nothing a create_thread did not ask for", () => {
     const watch = createDelegationWatch(() => {});
     watch.expect("th-codex", {
