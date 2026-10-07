@@ -157,10 +157,12 @@ Set `HARNEXUS_APP_PATH` if the app is installed somewhere else. `HARNEXUS_LOG_PA
 
 `harnexus-task` launches task workers and requests reviews in the app for the `task-*` skills. It renders a fixed prompt from the installed skill templates in `$CODEX_HOME/skills`, creates the thread or sends the message through harnexus, and records each send under `~/.local/state/taskctl/` so a send with an unknown result is never repeated. Its subcommands are `launch`, `review`, `state` and `resolve`; it replaces the `taskctl` script and continues the sessions it recorded.
 
-It needs the app opened with `HARNEXUS_CALL_SOCKET=on bun run open-app`, and runs outside the sandbox. Build a standalone executable at `dist/harnexus-task` with:
+It needs the app opened with `HARNEXUS_CALL_SOCKET=on bun run open-app`, and runs outside the sandbox. Install it to `~/.local/bin/harnexus-task` with:
 
 ```sh
-bun run build:task
+bun run install:task
 ```
 
-Or run it from source with `bun run task <subcommand> ...`.
+This builds a standalone executable and replaces the installed one in a single step. Agents run `launch`, `review` and `state` without approval, so allow-list only that installed command, for example `harnexus-task launch`. Never allow-list `bun run task` or the `dist/` binary in this repository: a sandboxed agent can write to the checkout, and what it changed there would then run outside the sandbox. `~/.local/bin` is outside the sandboxes' writable paths.
+
+Allow rules must name the command itself, without environment assignments in front of it, since variables such as `BUN_OPTIONS` or `BUN_BE_BUN` make the executable run other code.

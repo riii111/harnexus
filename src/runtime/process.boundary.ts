@@ -79,16 +79,17 @@ export const readCommandOutput = (
   });
 
 export type CommandOutput = {
-  status: number | null;
+  status: number;
   stdout: string;
   stderr: string;
 };
 
-// A command that ran is ok whatever its exit status, so the caller decides what a failure means; only one that could not start is an error.
+// A command that ran is ok whatever its exit status, so the caller decides what a failure means; one that could not start or hung past the timeout is an error.
 export const runCommand = (
   file: string,
   args: readonly string[],
   env: Record<string, string | undefined>,
+  timeoutMs = COMMAND_TIMEOUT_MS,
 ) =>
   Result.tryPromise({
     try: () =>
@@ -96,13 +97,11 @@ export const runCommand = (
         execFile(
           file,
           [...args],
-          { env, maxBuffer: COMMAND_OUTPUT_LIMIT },
+          { env, timeout: timeoutMs, maxBuffer: COMMAND_OUTPUT_LIMIT },
           (error, stdout, stderr) => {
             if (error === null) resolve({ status: 0, stdout, stderr });
-            else if (typeof error.code === "number")
+            else if (typeof error.code === "number" && !error.killed)
               resolve({ status: error.code, stdout, stderr });
-            else if (error.signal !== undefined && error.signal !== null)
-              resolve({ status: null, stdout, stderr });
             else reject(error);
           },
         );
@@ -111,7 +110,10 @@ export const runCommand = (
       new CommandFailed({
         command: file,
         cause,
-        message: `cannot run ${file}`,
+        message:
+          isObject(cause) && cause.killed === true
+            ? `${file} was stopped after ${timeoutMs} ms`
+            : `cannot run ${file}`,
       }),
   });
 

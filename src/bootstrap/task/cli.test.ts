@@ -13,7 +13,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runTask, TASK_DEPS, type TaskDeps } from "./cli.ts";
-import { type SaveJson, saveJson } from "./session.ts";
+import { callApp, type SaveJson, saveJson } from "./session.ts";
 
 const SKILLS = join(import.meta.dir, "../../../test/fixtures/task-skills");
 const README = join(import.meta.dir, "../../../README.md");
@@ -352,12 +352,11 @@ describe("harnexus-task launch", () => {
     expect(harnexus.calls).toEqual([]);
   });
 
-  test("continues a session the Python taskctl recorded and writes the same format", async () => {
+  test("continues a session the Python taskctl recorded and records state in its layout", async () => {
     const { env, harnexus, data, launch } = await launchFixture();
-    const session = join(
-      env.XDG_STATE_HOME ?? "",
-      "taskctl/launch/6279de90d3447943",
-    );
+    const launches = join(env.XDG_STATE_HOME ?? "", "taskctl/launch");
+    // The key the Python version derives from "project\nTR1".
+    const session = join(launches, "6279de90d3447943");
     await mkdir(session, { recursive: true });
     await writeFile(
       join(session, "state.json"),
@@ -365,25 +364,147 @@ describe("harnexus-task launch", () => {
     );
 
     const resumed = await launch();
-
-    expect(resumed.stdout).toBe(
-      `{"existing": "w1", "state": "${join(session, "state.json")}"}\n`,
-    );
-    expect(harnexus.calls).toEqual([]);
     data.taskId = "TR9";
-    await launch([], [created("w9", "claude-opus-5-5")]);
-    const written = await readdir(
-      join(env.XDG_STATE_HOME ?? "", "taskctl/launch"),
+    const lost = await launch([], [DROP]);
+    const other =
+      (await readdir(launches)).find((name) => name !== "6279de90d3447943") ??
+      "";
+    const pending = JSON.parse(
+      await readFile(join(launches, other, "pending.json"), "utf8"),
     );
-    const other = written.find((name) => name !== "6279de90d3447943") ?? "";
-    const text = await readFile(
-      join(env.XDG_STATE_HOME ?? "", "taskctl/launch", other, "state.json"),
-      "utf8",
+
+    expect(resumed.out).toEqual({
+      existing: "w1",
+      state: join(session, "state.json"),
+    });
+    expect(lost.code).toBe(1);
+    expect(harnexus.calls).toHaveLength(1);
+    const workspace = {
+      type: "project",
+      projectId: "project",
+      environment: { type: "worktree" },
+    };
+    expect(pending).toEqual({
+      status: "unknown",
+      tool: "create_thread",
+      arguments: {
+        prompt: expect.any(String),
+        target: workspace,
+        title: "Impl TR9",
+        model: "claude-opus-5-5",
+        thinking: "medium",
+      },
+      request: data,
+      workspace,
+      threadId: null,
+      answer: { outcome: "unknown", error: expect.any(String) },
+    });
+  });
+
+  test("records a confirmed launch in the Python state layout", async () => {
+    const { data, launch } = await launchFixture();
+
+    const sent = await launch([], [created("w1", "claude-opus-5-5")]);
+    const state = JSON.parse(await readFile(sent.out.state, "utf8"));
+
+    expect(state).toEqual({
+      threadId: "w1",
+      request: data,
+      sent: {
+        tool: "create_thread",
+        prompt: expect.any(String),
+        expected: { model: "claude-opus-5-5", effort: "medium" },
+        actual: { model: "claude-opus-5-5", effort: "medium" },
+        workspace: {
+          type: "project",
+          projectId: "project",
+          environment: { type: "worktree" },
+        },
+        answer: created("w1", "claude-opus-5-5"),
+      },
+    });
+  });
+
+  test("keeps a done answer it cannot confirm pending as unknown", async () => {
+    const { invoke, write, data, launch } = await launchFixture();
+
+    const unconfirmed = await launch([], [{ outcome: "done" }]);
+    const request = await write(data);
+    const state = await invoke(["state", "--request", request]);
+    const blocked = await launch();
+    const resolved = await invoke([
+      "resolve",
+      "--request",
+      request,
+      "--sent",
+      "--thread-id",
+      "w1",
+    ]);
+
+    expect(unconfirmed.code).toBe(1);
+    expect(unconfirmed.err).toContain("thread ID is unknown");
+    expect(state.out.pending).toMatchObject({
+      status: "unknown",
+      threadId: null,
+      answer: { outcome: "done" },
+    });
+    expect(blocked.err).toContain("never resend");
+    expect([resolved.code, resolved.out.threadId]).toEqual([0, "w1"]);
+  });
+
+  test("ignores relative state and Codex directories", async () => {
+    const { root, env, launch } = await launchFixture();
+    await mkdir(join(root, ".codex"));
+    await symlink(SKILLS, join(root, ".codex/skills"));
+    Object.assign(env, {
+      HOME: root,
+      CODEX_HOME: "harnexus-task-relative-codex",
+      XDG_STATE_HOME: "harnexus-task-relative-state",
+    });
+
+    const sent = await launch([], [created("w1", "claude-opus-5-5")]);
+
+    expect([sent.code, sent.err]).toEqual([0, ""]);
+    expect(sent.out.state.startsWith(join(root, ".local/state/taskctl/"))).toBe(
+      true,
     );
-    expect(text).toBe(JSON.stringify(JSON.parse(text), null, 1));
-    expect(
-      text.startsWith('{\n "threadId": "w9",\n "request": {\n  "taskId"'),
-    ).toBe(true);
+  });
+
+  test("treats a stale socket file as not sent", async () => {
+    const { env, root, socket, launch } = await launchFixture();
+    const stale = join(root, "stale.sock");
+    await writeFile(stale, "");
+    env.HARNEXUS_CALL_SOCKET = stale;
+
+    const refused = await launch();
+    env.HARNEXUS_CALL_SOCKET = socket;
+    const sent = await launch([], [created("w1", "claude-opus-5-5")]);
+
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain("was not sent");
+    expect([sent.code, sent.err]).toEqual([0, ""]);
+  });
+});
+
+describe("callApp", () => {
+  test("reports a connected call without an answer in time as unknown", async () => {
+    const { root } = await fixture();
+    const silent = join(root, "silent.sock");
+    const server = createServer(() => {});
+    await new Promise<void>((resolve) => server.listen(silent, resolve));
+    cleanups.push(async () => {
+      server.close();
+    });
+
+    const answer = await callApp(
+      { HARNEXUS_CALL_SOCKET: silent },
+      "caller",
+      "create_thread",
+      {},
+      50,
+    );
+
+    expect(answer.outcome).toBe("unknown");
   });
 });
 
@@ -474,6 +595,48 @@ describe("harnexus-task review", () => {
     expect((await review()).code).toBe(1);
     expect(harnexus.calls).toHaveLength(2);
     expect((await readdir(checkout)).sort()).toEqual(before);
+  });
+
+  test("keeps a reviewer it cannot accept pending as unknown", async () => {
+    const { invoke, write, data, review } = await reviewFixture();
+
+    const itself = await review([], [created("worker", "gpt-6.1-sol")]);
+    const state = await invoke(["state", "--request", await write(data)]);
+    const blocked = await review();
+
+    expect(itself.code).toBe(1);
+    expect(itself.err).toContain("cannot review itself");
+    expect(state.out.pending).toMatchObject({
+      status: "unknown",
+      threadId: "worker",
+    });
+    expect(blocked.err).toContain("never resend");
+  });
+
+  test("records a confirmed review in the Python state layout", async () => {
+    const { checkout, initial, data, review } = await reviewFixture();
+
+    const sent = await review([], [created("r1", "gpt-6.1-sol")]);
+    const state = JSON.parse(await readFile(sent.out.state, "utf8"));
+
+    expect(state).toEqual({
+      reviewer: "r1",
+      candidate: {
+        ...data,
+        checkout,
+        workerChatId: "worker",
+        head: initial,
+        base: initial,
+      },
+      sent: {
+        tool: "create_thread",
+        prompt: expect.any(String),
+        expected: { model: "gpt-6.1-sol", effort: "medium" },
+        actual: { model: "gpt-6.1-sol", effort: "medium" },
+        workspace: checkout,
+        answer: created("r1", "gpt-6.1-sol"),
+      },
+    });
   });
 
   test("keeps a re-review tool_error unknown", async () => {
@@ -681,10 +844,16 @@ describe("harnexus-task review", () => {
     expect(JSON.parse(await readFile(state, "utf8")).reviewer).toBe("r0");
   });
 
-  test("refuses a symlinked reviewctl state", async () => {
+  test.each([
+    {
+      name: "an existing file",
+      content: '{"reviewer": "r0", "candidate": {}}',
+    },
+    { name: "nothing", content: null },
+  ])("refuses a reviewctl state symlinked to $name", async ({ content }) => {
     const { root, checkout, review } = await reviewFixture();
     const target = join(root, "elsewhere.json");
-    await writeFile(target, JSON.stringify({ reviewer: "r0", candidate: {} }));
+    if (content !== null) await writeFile(target, content);
     await mkdir(join(checkout, ".reviewctl"));
     await symlink(target, join(checkout, ".reviewctl/state.json"));
 

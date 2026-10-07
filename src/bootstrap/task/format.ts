@@ -20,7 +20,7 @@ export const hasSpace = (value: string) => SPACE.test(value);
 export const isBlank = (value: string) =>
   [...value].every((char) => SPACE.test(char));
 
-// Python truthiness, which decides whether recorded state counts as present.
+// Python truthiness, which decides whether state recorded by either version counts as present.
 export const truthy = (value: unknown) =>
   value !== undefined &&
   value !== null &&
@@ -30,63 +30,13 @@ export const truthy = (value: unknown) =>
   !(Array.isArray(value) && value.length === 0) &&
   !(isObject(value) && Object.keys(value).length === 0);
 
-export const jsonEqual = (a: unknown, b: unknown): boolean => {
-  if (Array.isArray(a) && Array.isArray(b))
-    return a.length === b.length && a.every((item, i) => jsonEqual(item, b[i]));
-  if (isObject(a) && isObject(b)) {
-    const keys = Object.keys(a);
-    return (
-      keys.length === Object.keys(b).length &&
-      keys.every((key) => Object.hasOwn(b, key) && jsonEqual(a[key], b[key]))
-    );
-  }
-  return a === b;
-};
+export const jsonEqual = (a: unknown, b: unknown) => Bun.deepEquals(a, b, true);
 
-// json.dumps with its default separators, so stdout reads exactly as the Python taskctl printed it.
-export const pyDumps = (value: unknown): string => {
-  if (Array.isArray(value)) return `[${value.map(pyDumps).join(", ")}]`;
-  if (isObject(value))
-    return `{${Object.entries(value)
-      .map(([key, item]) => `${JSON.stringify(key)}: ${pyDumps(item)}`)
-      .join(", ")}}`;
-  return JSON.stringify(value ?? null);
-};
+export const asText = (value: unknown) =>
+  typeof value === "string" ? value : JSON.stringify(value ?? null);
 
-// str() of a JSON value as Python formats it into a message.
-export const pyStr = (value: unknown) =>
-  typeof value === "string" ? value : pyRepr(value);
-
-const pyRepr = (value: unknown): string => {
-  if (value === null || value === undefined) return "None";
-  if (value === true) return "True";
-  if (value === false) return "False";
-  if (typeof value === "string") return reprString(value);
-  if (Array.isArray(value)) return `[${value.map(pyRepr).join(", ")}]`;
-  if (isObject(value))
-    return `{${Object.entries(value)
-      .map(([key, item]) => `${reprString(key)}: ${pyRepr(item)}`)
-      .join(", ")}}`;
-  return String(value);
-};
-
-const reprString = (value: string) => {
-  const quote = value.includes("'") && !value.includes('"') ? '"' : "'";
-  const escaped = [...value].map((char) => {
-    if (char === "\\" || char === quote) return `\\${char}`;
-    if (char === "\n") return "\\n";
-    if (char === "\r") return "\\r";
-    if (char === "\t") return "\\t";
-    const code = char.codePointAt(0) ?? 0;
-    return code < 0x20 || (code >= 0x7f && code <= 0xa0)
-      ? `\\x${code.toString(16).padStart(2, "0")}`
-      : char;
-  });
-  return `${quote}${escaped.join("")}${quote}`;
-};
-
-// str.format with named fields only, which is all the installed templates use.
-export const pyFormat = (
+// Named fields only, and an unknown field or stray brace is an error, so a changed template never sends a half-filled prompt.
+export const formatTemplate = (
   template: string,
   fields: Record<string, string>,
 ): Result<string, TaskFailed> => {
@@ -97,7 +47,7 @@ export const pyFormat = (
       if (match === "{{") return "{";
       if (match === "}}") return "}";
       if (name === undefined) {
-        problem ??= `Single '${match}' encountered in format string`;
+        problem ??= `single '${match}' in template`;
         return match;
       }
       const value = Object.hasOwn(fields, name) ? fields[name] : undefined;

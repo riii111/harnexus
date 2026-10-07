@@ -2,9 +2,11 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { Result } from "better-result";
 import {
-  pathKind,
+  isDirectory,
+  isFile,
+  pathExists,
   readRegularTextFile,
-  resolvePathLoosely,
+  realPathOrSelf,
 } from "../../runtime/fs.boundary.ts";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
@@ -15,10 +17,10 @@ import type {
 import {
   type Fields,
   fail,
+  formatTemplate,
   hasSpace,
   isBlank,
   jsonEqual,
-  pyFormat,
   SPACE_CHARS,
   TaskFailed,
   truthy,
@@ -41,8 +43,12 @@ const COMPLETION_TARGETS: Record<string, string> = {
 
 export const homeOf = (env: Env) => env.HOME ?? homedir();
 
+// A relative directory is ignored, as the XDG spec has it, so the working directory never picks the templates or the state.
+export const absoluteOr = (value: string | undefined, fallback: string) =>
+  value?.startsWith("/") ? value : fallback;
+
 export const codexHome = (env: Env) =>
-  env.CODEX_HOME ?? join(homeOf(env), ".codex");
+  absoluteOr(env.CODEX_HOME, join(homeOf(env), ".codex"));
 
 export const ioFailed = (error: { message: string; cause?: unknown }) => {
   const { cause } = error;
@@ -113,12 +119,11 @@ export const callerId = (env: Env) => {
 // urlsplit's scheme and netloc, which decide whether a reference is a URL rather than a path.
 const isHttpsUrl = (value: string) => {
   const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]*)/s.exec(value);
-  if (scheme === null || scheme[1]?.toLowerCase() !== "https")
-    return Result.ok(false);
-  const netloc = scheme[2] ?? "";
-  if (netloc.includes("[") !== netloc.includes("]"))
-    return fail("Invalid IPv6 URL");
-  return Result.ok(netloc !== "" && !hasSpace(value));
+  return (
+    scheme?.[1]?.toLowerCase() === "https" &&
+    scheme[2] !== "" &&
+    !hasSpace(value)
+  );
 };
 
 const documentRefs = (values: unknown) =>
@@ -127,8 +132,8 @@ const documentRefs = (values: unknown) =>
       return fail("documentRefs must be a nonempty list of paths or URLs");
     for (const value of values) {
       const ref = yield* singleLine(value, "documentRefs entry");
-      if (yield* isHttpsUrl(ref)) continue;
-      if (!ref.startsWith("/") || (await pathKind(ref)) === null)
+      if (isHttpsUrl(ref)) continue;
+      if (!ref.startsWith("/") || !(await pathExists(ref)))
         return fail(
           `document reference must be an existing absolute path or HTTPS URL: ${ref}`,
         );
@@ -175,18 +180,15 @@ export const workerPrompt = (data: Fields, skills: string) =>
   Result.gen(async function* () {
     const skill = join(skills, "task-worker/SKILL.md");
     const template = join(skills, "task-session-launch/references/worker.md");
-    if (
-      (await pathKind(skill)) !== "file" ||
-      (await pathKind(template)) !== "file"
-    )
+    if (!(await isFile(skill)) || !(await isFile(template)))
       return fail("task-worker or worker template is not installed");
     const text = yield* Result.await(readText(template));
-    return pyFormat(text, {
+    return formatTemplate(text, {
       task_id: String(data.taskId),
       document_refs: yield* Result.await(documentRefs(data.documentRefs)),
       completion_target:
         COMPLETION_TARGETS[String(data.completionTarget)] ?? "",
-      worker_skill_path: await resolvePathLoosely(skill),
+      worker_skill_path: await realPathOrSelf(skill),
     });
   });
 
@@ -260,17 +262,15 @@ export const reviewRequest = (path: string, env: Env, git: Git) =>
       return fail("prUrl must be a pull request URL or null");
     if (!Object.hasOwn(data, "prUrl")) data.prUrl = null;
     const requested = String(data.checkout);
-    const checkout = await resolvePathLoosely(requested);
-    const worktrees = await resolvePathLoosely(
-      join(codexHome(env), "worktrees"),
-    );
+    const checkout = await realPathOrSelf(requested);
+    const worktrees = await realPathOrSelf(join(codexHome(env), "worktrees"));
     const refused = fail(
       `checkout must be the top level of a worker worktree ${worktrees}/<id>/<name>`,
     );
     if (
       !requested.startsWith("/") ||
       dirname(dirname(checkout)) !== worktrees ||
-      (await pathKind(checkout)) !== "directory"
+      !(await isDirectory(checkout))
     )
       return refused;
     const top = yield* Result.await(
@@ -346,7 +346,7 @@ export const sessionValue = async (data: Fields, key: string) => {
       ? null
       : data[old];
   return key === "checkout" && truthy(value)
-    ? resolvePathLoosely(String(value))
+    ? realPathOrSelf(String(value))
     : (value ?? null);
 };
 
@@ -363,15 +363,15 @@ export const reviewPrompt = (data: Fields, skills: string) =>
     };
     const template = join(references, "reviewer.md");
     for (const path of [template, ...Object.values(paths)]) {
-      if ((await pathKind(path)) !== "file")
+      if (!(await isFile(path)))
         return fail("ai-code-review or reviewer templates are not installed");
     }
     const text = yield* Result.await(readText(template));
     const resolved: Record<string, string> = {};
     for (const [key, path] of Object.entries(paths)) {
-      resolved[key] = await resolvePathLoosely(path);
+      resolved[key] = await realPathOrSelf(path);
     }
-    return pyFormat(text, {
+    return formatTemplate(text, {
       ...resolved,
       task_id: String(data.taskId),
       document_refs: yield* Result.await(documentRefs(data.documentRefs)),

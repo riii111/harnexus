@@ -27,9 +27,8 @@ if (path === null) {
 const line = (await Bun.stdin.text()).trim().replaceAll("\n", " ");
 const answer = await requestLine(path, line, ANSWER_TIMEOUT_MS);
 if (answer.isErr()) {
-  // A socket that could not be reached never received the call; any other failure came after it was written.
-  const unreached =
-    answer.error.code === "ENOENT" || answer.error.code === "ECONNREFUSED";
+  // A socket that could not be connected to never received the call; any other failure came after it was written.
+  const unreached = !answer.error.connected;
   process.stderr.write(
     `harnexus call: ${answer.error.message} (${answer.error.code ?? "no code"})\n`,
   );

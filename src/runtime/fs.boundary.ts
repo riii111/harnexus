@@ -15,7 +15,6 @@ import {
   open,
   readdir,
   readFile,
-  readlink,
   realpath,
   rename,
   rm,
@@ -227,39 +226,26 @@ const writeTemporary = async (path: string, content: string) => {
   return temporary;
 };
 
-// Null for a path that cannot be inspected, as Python's Path.exists and Path.is_file treat it.
-export const pathKind = async (
-  path: string,
-  { follow }: { follow: boolean } = { follow: true },
-) => {
-  const found = await (follow ? stat(path) : lstat(path)).catch(() => null);
-  if (found === null) return null;
-  if (found.isFile()) return "file";
-  if (found.isDirectory()) return "directory";
-  return found.isSymbolicLink() ? "symlink" : "other";
-};
+// False for a path that cannot be inspected, as for one that does not exist.
+export const isFile = async (path: string) =>
+  (await stat(path).catch(() => null))?.isFile() ?? false;
 
-// Resolves symlinks as far as the path exists and keeps the rest, like Python's Path.resolve(), so a missing path still gets its real parent.
-export const resolvePathLoosely = async (
-  path: string,
-  hops = 0,
-): Promise<string> => {
-  const absolute = path.startsWith("/") ? path : `${process.cwd()}/${path}`;
-  const real = await realpath(absolute).catch(() => null);
-  if (real !== null) return real;
-  const above = dirname(absolute);
-  if (above === absolute) return absolute;
-  const parent = await resolvePathLoosely(above, hops);
-  const name = basename(absolute);
-  if (name === ".") return parent;
-  if (name === "..") return dirname(parent);
-  const joined = join(parent, name);
-  const target =
-    hops < SYMLINK_HOPS ? await readlink(joined).catch(() => null) : null;
-  return target === null
-    ? joined
-    : resolvePathLoosely(resolve(parent, target), hops + 1);
-};
+export const isDirectory = async (path: string) =>
+  (await stat(path).catch(() => null))?.isDirectory() ?? false;
+
+export const pathExists = async (path: string) =>
+  (await stat(path).catch(() => null)) !== null;
+
+// Inspects the entry itself, so a dangling symlink still counts.
+export const entryExists = async (path: string) =>
+  (await lstat(path).catch(() => null)) !== null;
+
+export const isSymlink = async (path: string) =>
+  (await lstat(path).catch(() => null))?.isSymbolicLink() ?? false;
+
+// A path that cannot be resolved is kept as given, made absolute.
+export const realPathOrSelf = (path: string) =>
+  realpath(resolve(path)).catch(() => resolve(path));
 
 // The parent is synced too, so files created inside later cannot be lost with a directory entry that never reached the disk.
 export const prepareDirectory = (path: string) =>
@@ -440,7 +426,5 @@ const isNotDirectory = (cause: unknown) =>
   cause instanceof Error && "code" in cause && cause.code === "ENOTDIR";
 
 const OWNER_ONLY = 0o600;
-
-const SYMLINK_HOPS = 40;
 
 const OWNER_ONLY_DIRECTORY = 0o700;

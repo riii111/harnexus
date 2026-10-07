@@ -4,12 +4,14 @@ import { Result } from "better-result";
 import type { CallOutcome } from "../../infra/codex/call-gateway.ts";
 import { loadCallerSocketPath } from "../../runtime/config.ts";
 import {
+  entryExists,
+  isDirectory,
+  isSymlink,
   listDirectoryIfExists,
-  pathKind,
   prepareDirectory,
   readTextFileIfExists,
+  realPathOrSelf,
   removeFile,
-  resolvePathLoosely,
   writeFileAtomic,
   writeFileExclusive,
 } from "../../runtime/fs.boundary.ts";
@@ -17,15 +19,15 @@ import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 import { requestLine } from "../../runtime/socket.boundary.ts";
 import {
+  asText,
   type Fields,
   fail,
   jsonEqual,
-  pyDumps,
-  pyStr,
   TaskFailed,
   truthy,
 } from "./format.ts";
 import {
+  absoluteOr,
   chatId,
   type Env,
   homeOf,
@@ -49,7 +51,7 @@ const io = async <T>(
   pending: Promise<Result<T, { message: string; cause?: unknown }>>,
 ): Promise<Result<T, TaskFailed>> => (await pending).mapError(ioFailed);
 
-// Indented by one space like the Python taskctl, so either version reads the other's files.
+// Indented by one space like the Python taskctl, so the files read alike in either version.
 export const saveJson: SaveJson = (path, data, { exclusive }) =>
   Result.gen(async function* () {
     yield* Result.await(io(prepareDirectory(dirname(path))));
@@ -75,11 +77,12 @@ const load = (path: string) =>
 
 const remove = (path: string) => io(removeFile(path));
 
-const callApp = async (
+export const callApp = async (
   env: Env,
   caller: string,
   tool: string,
   args: Fields,
+  timeoutMs = CALL_TIMEOUT_MS,
 ): Promise<Fields> => {
   const path = loadCallerSocketPath(env, () => homeOf(env));
   if (path.isErr())
@@ -88,7 +91,7 @@ const callApp = async (
       error: `${path.error.message}; ${SOCKET_HINT}`,
     };
   const line = JSON.stringify({ threadId: caller, tool, arguments: args });
-  const answer = await requestLine(path.value, line, CALL_TIMEOUT_MS);
+  const answer = await requestLine(path.value, line, timeoutMs);
   if (answer.isErr()) {
     const reason = answer.error.code ?? answer.error.message;
     // The request may already have reached the App once connected.
@@ -148,11 +151,11 @@ const openSession = (
       if (pending === null) return Result.ok();
       if (pending.status === "refused")
         return fail(
-          `thread ${pyStr(pending.threadId)} refused its first turn: expected ${pyStr(pending.expected)}, ` +
-            `actual ${pyStr(pending.actual)}; fix the model, then resolve --not-sent`,
+          `thread ${asText(pending.threadId)} refused its first turn: expected ${asText(pending.expected)}, ` +
+            `actual ${asText(pending.actual)}; fix the model, then resolve --not-sent`,
         );
       return fail(
-        `previous ${pyStr(pending.tool)} ended as ${pyStr(pending.status)}; never resend. ` +
+        `previous ${asText(pending.tool)} ended as ${asText(pending.status)}; never resend. ` +
           "Ask the user to check the App, then run resolve --sent or --not-sent",
       );
     };
@@ -212,8 +215,21 @@ const openSession = (
         const thread = truthy(answer.threadId)
           ? answer.threadId
           : (args.threadId ?? null);
-        if (outcome === ("done" satisfies CallOutcome))
-          return await confirm(record, thread, answer);
+        if (outcome === ("done" satisfies CallOutcome)) {
+          const confirmed = await confirm(record, thread, answer);
+          // The thread exists, so a failed record is kept for resolve rather than released.
+          if (confirmed.isErr()) {
+            Object.assign(record, {
+              status: "unknown",
+              threadId: thread,
+              answer,
+            });
+            yield* Result.await(
+              save(pendingPath, record, { exclusive: false }),
+            );
+          }
+          return confirmed;
+        }
         if (outcome === ("model_mismatch" satisfies CallOutcome)) {
           Object.assign(record, {
             status: "refused",
@@ -226,7 +242,7 @@ const openSession = (
           pending = record;
           yield* checkIdle();
         }
-        const text = pyDumps(answer);
+        const text = JSON.stringify(answer);
         // A lost send_message answer reaches Claude callers as tool_error.
         if (
           (NOT_SENT as readonly unknown[]).includes(outcome) ||
@@ -280,7 +296,10 @@ const openSession = (
   });
 
 export const stateRoot = (env: Env) =>
-  join(env.XDG_STATE_HOME || join(homeOf(env), ".local/state"), "taskctl");
+  join(
+    absoluteOr(env.XDG_STATE_HOME, join(homeOf(env), ".local/state")),
+    "taskctl",
+  );
 
 const sessionDir = (env: Env, kind: string, ...values: string[]) =>
   join(
@@ -324,9 +343,8 @@ export const reviewSession = (data: Fields, deps: SessionDeps) =>
 const legacyReviewState = (checkout: string) =>
   Result.gen(async function* () {
     const path = join(checkout, ".reviewctl/state.json");
-    if ((await pathKind(path, { follow: false })) === null)
-      return Result.ok(null);
-    if ((await resolvePathLoosely(path)) !== path)
+    if (!(await entryExists(path))) return Result.ok(null);
+    if ((await isSymlink(path)) || (await realPathOrSelf(path)) !== path)
       return fail(`refusing symlinked legacy state ${path}`);
     const state = yield* Result.await(readJson(path));
     if (!isObject(state)) return fail(`${path} does not hold a JSON object`);
@@ -341,28 +359,25 @@ const legacyReviewState = (checkout: string) =>
     });
   });
 
-// Every recorded file, ordered by path components as Python sorts paths.
 export const listState = (env: Env) =>
   Result.gen(async function* () {
     const root = stateRoot(env);
-    const paths: string[][] = [];
-    if ((await pathKind(root)) === "directory") {
+    const paths: string[] = [];
+    if (await isDirectory(root)) {
       for (const kind of yield* Result.await(namesIn(root))) {
         const kindPath = join(root, kind);
-        if ((await pathKind(kindPath)) !== "directory") continue;
+        if (!(await isDirectory(kindPath))) continue;
         for (const key of yield* Result.await(namesIn(kindPath))) {
           const keyPath = join(kindPath, key);
-          if ((await pathKind(keyPath)) !== "directory") continue;
+          if (!(await isDirectory(keyPath))) continue;
           for (const name of yield* Result.await(namesIn(keyPath))) {
-            if (name.endsWith(".json")) paths.push([kind, key, name]);
+            if (name.endsWith(".json")) paths.push(join(keyPath, name));
           }
         }
       }
     }
-    paths.sort(byComponents);
     const listed: Fields = {};
-    for (const parts of paths) {
-      const path = join(root, ...parts);
+    for (const path of paths.sort()) {
       listed[path] = yield* Result.await(load(path));
     }
     return Result.ok(listed);
@@ -370,11 +385,3 @@ export const listState = (env: Env) =>
 
 const namesIn = async (path: string) =>
   (await io(listDirectoryIfExists(path))).map((names) => names ?? []);
-
-const byComponents = (a: readonly string[], b: readonly string[]) => {
-  for (let i = 0; i < Math.min(a.length, b.length); i += 1) {
-    const [x, y] = [a[i] ?? "", b[i] ?? ""];
-    if (x !== y) return x < y ? -1 : 1;
-  }
-  return a.length - b.length;
-};

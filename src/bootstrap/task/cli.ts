@@ -1,15 +1,9 @@
 import { join } from "node:path";
-import { Result } from "better-result";
+import { Result, TaggedError } from "better-result";
 import { isObject } from "../../runtime/object.ts";
 import { runCommand } from "../../runtime/process.boundary.ts";
-import {
-  type Fields,
-  fail,
-  jsonEqual,
-  pyDumps,
-  pyStr,
-  truthy,
-} from "./format.ts";
+import { type OptionTypes, parseOptions } from "./args.boundary.ts";
+import { asText, type Fields, fail, jsonEqual, truthy } from "./format.ts";
 import {
   callerId,
   candidate,
@@ -64,7 +58,7 @@ const launch = (args: Args, deps: TaskDeps) =>
     if (session.state !== null) {
       if (!jsonEqual(session.state.request, data))
         return fail(
-          `${pyStr(data.taskId)} already has worker ${pyStr(session.state.threadId)} ` +
+          `${asText(data.taskId)} already has worker ${asText(session.state.threadId)} ` +
             "launched with a different request",
         );
       return Result.ok<Fields>({
@@ -79,7 +73,7 @@ const launch = (args: Args, deps: TaskDeps) =>
     const sent: Fields = {
       prompt,
       target,
-      title: `Impl ${pyStr(data.taskId)}`,
+      title: `Impl ${asText(data.taskId)}`,
       model: args.model || "claude-opus-5-5",
       thinking: args.thinking || "medium",
     };
@@ -126,8 +120,8 @@ const review = (args: Args, deps: TaskDeps) =>
       }
       if (jsonEqual(previous.head ?? null, data.head))
         return fail(
-          `head ${pyStr(data.head)} was already sent to reviewer ` +
-            `${pyStr(session.state?.reviewer)}; wait for its result`,
+          `head ${asText(data.head)} was already sent to reviewer ` +
+            `${asText(session.state?.reviewer)}; wait for its result`,
         );
     }
     const sent: Fields = {
@@ -144,7 +138,7 @@ const review = (args: Args, deps: TaskDeps) =>
     } else {
       Object.assign(sent, {
         target: worktreeTarget(data.projectId),
-        title: `Review ${pyStr(data.taskId)}`,
+        title: `Review ${asText(data.taskId)}`,
         model: args.model || "gpt-6.1-sol",
         thinking: args.thinking || "medium",
       });
@@ -196,217 +190,101 @@ export const runTask = async (
   argv: readonly string[],
   deps: TaskDeps,
 ): Promise<TaskRun> => {
-  const parsed = parseArgs(argv);
-  if ("exit" in parsed) return parsed.exit;
-  const result = await COMMANDS[parsed.command](parsed, deps);
+  const parsed = parseCommand(argv);
+  if (parsed.isErr()) {
+    const { message, usage, code } = parsed.error;
+    return code === 0
+      ? { code, stdout: usage, stderr: "" }
+      : { code, stdout: "", stderr: `${usage}${NAME}: ${message}\n` };
+  }
+  const result = await COMMANDS[parsed.value.command](parsed.value, deps);
   return result.isOk()
-    ? { code: 0, stdout: `${pyDumps(result.value)}\n`, stderr: "" }
+    ? { code: 0, stdout: `${JSON.stringify(result.value)}\n`, stderr: "" }
     : { code: 1, stdout: "", stderr: `${NAME}: ${result.error.message}\n` };
 };
 
-type Option = {
-  flag: string;
-  key: "request" | "model" | "thinking" | "threadId" | "updateBase" | "sent";
-  value?: string;
-  required?: boolean;
-  help?: string;
-  notSent?: boolean;
-};
+class UsageShown extends TaggedError("UsageShown")<{
+  message: string;
+  usage: string;
+  code: number;
+}> {}
 
-const REQUEST: Option = { flag: "--request", key: "request", value: "REQUEST" };
-const MODEL_OPTIONS: Option[] = [
-  { ...REQUEST, required: true },
-  { flag: "--model", key: "model", value: "MODEL" },
-  { flag: "--thinking", key: "thinking", value: "THINKING" },
-];
+const MODEL_OPTIONS = {
+  request: { type: "string" },
+  model: { type: "string" },
+  thinking: { type: "string" },
+} as const;
 
-// The Python taskctl's argparse definitions, which callers and permission rules already match.
-const PARSERS: Record<Command, { help: string; options: Option[] }> = {
-  launch: {
-    help: "create a worker thread once per projectId and taskId",
-    options: MODEL_OPTIONS,
-  },
-  review: {
-    help: "send the current head to the worker's reviewer",
-    options: [
-      ...MODEL_OPTIONS,
-      {
-        flag: "--update-base",
-        key: "updateBase",
-        help: "fix a new base already integrated into head",
-      },
-    ],
-  },
-  state: { help: "show recorded state", options: [REQUEST] },
+// The Python taskctl's subcommands and options, which callers and permission rules already match.
+const OPTIONS: Record<Command, OptionTypes> = {
+  launch: MODEL_OPTIONS,
+  review: { ...MODEL_OPTIONS, "update-base": { type: "boolean" } },
+  state: { request: { type: "string" } },
   resolve: {
-    help: "settle an unknown or refused send after checking the App",
-    options: [
-      { ...REQUEST, required: true },
-      { flag: "--sent", key: "sent" },
-      { flag: "--not-sent", key: "sent", notSent: true },
-      { flag: "--thread-id", key: "threadId", value: "THREAD_ID" },
-    ],
+    request: { type: "string" },
+    sent: { type: "boolean" },
+    "not-sent": { type: "boolean" },
+    "thread-id": { type: "string" },
   },
 };
 
-const CHOICES = Object.keys(PARSERS) as Command[];
-const TOP_USAGE = `usage: ${NAME} [-h] {${CHOICES.join(",")}} ...`;
-const TOP_HELP = `${TOP_USAGE}
+const USAGE = {
+  launch: "launch --request REQUEST [--model MODEL] [--thinking THINKING]",
+  review:
+    "review --request REQUEST [--model MODEL] [--thinking THINKING] [--update-base]",
+  state: "state [--request REQUEST]",
+  resolve:
+    "resolve --request REQUEST (--sent | --not-sent) [--thread-id THREAD_ID]",
+} satisfies Record<Command, string>;
 
-Launch task workers and request independent reviews through harnexus.
+const usageOf = (commands: readonly Command[]) =>
+  `usage:\n${commands.map((command) => `  ${NAME} ${USAGE[command]}\n`).join("")}`;
 
-positional arguments:
-  {${CHOICES.join(",")}}
-${CHOICES.map((name) => `    ${name.padEnd(20)}${PARSERS[name].help}`).join("\n")}
+const isCommand = (value: string | undefined): value is Command =>
+  value !== undefined && Object.hasOwn(COMMANDS, value);
 
-options:
-  -h, --help            show this help message and exit
-`;
-
-const usageOf = (command: Command) => {
-  const parts = PARSERS[command].options.map((option) => {
-    if (option.flag === "--sent") return "(--sent | --not-sent)";
-    if (option.notSent) return "";
-    const text =
-      option.value === undefined
-        ? option.flag
-        : `${option.flag} ${option.value}`;
-    return option.required ? text : `[${text}]`;
+const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
+  const [command, ...rest] = argv;
+  const all = Object.keys(COMMANDS) as Command[];
+  if (!isCommand(command)) {
+    const help = command === "-h" || command === "--help";
+    return Result.err(
+      new UsageShown({
+        message: `expected a subcommand: ${all.join(", ")}`,
+        usage: usageOf(all),
+        code: help ? 0 : 2,
+      }),
+    );
+  }
+  const usage = usageOf([command]);
+  const shown = (message: string, code = 2) =>
+    Result.err(new UsageShown({ message, usage, code }));
+  const parsed = parseOptions(rest, {
+    ...OPTIONS[command],
+    help: { type: "boolean", short: "h" },
   });
-  return `usage: ${NAME} ${command} [-h] ${parts.filter((part) => part !== "").join(" ")}`;
-};
-
-const helpOf = (command: Command) =>
-  `${usageOf(command)}
-
-options:
-  -h, --help            show this help message and exit
-${PARSERS[command].options
-  .map((option) => {
-    const text =
-      option.value === undefined
-        ? option.flag
-        : `${option.flag} ${option.value}`;
-    return `  ${option.help === undefined ? text : `${text.padEnd(22)}${option.help}`}`;
-  })
-  .join("\n")}
-`;
-
-const usageError = (usage: string, prog: string, message: string) => ({
-  exit: {
-    code: 2,
-    stdout: "",
-    stderr: `${usage}\n${prog}: error: ${message}\n`,
-  },
-});
-
-const helpExit = (text: string) => ({
-  exit: { code: 0, stdout: text, stderr: "" },
-});
-
-const isNegativeNumber = (arg: string) => /^-\d+$|^-\d*\.\d+$/.test(arg);
-
-// Mirrors argparse: unique prefixes of long options, --opt=value, and values that look like options are refused.
-const parseArgs = (argv: readonly string[]): Args | { exit: TaskRun } => {
-  const [first, ...rest] = argv;
-  const topError = (message: string) => usageError(TOP_USAGE, NAME, message);
-  if (first === undefined || (first.startsWith("-") && first !== "-")) {
-    if (
-      first !== undefined &&
-      ["-h", "--h", "--he", "--hel", "--help"].includes(first)
-    )
-      return helpExit(TOP_HELP);
-    return topError("the following arguments are required: command");
-  }
-  if (!(CHOICES as string[]).includes(first))
-    return topError(
-      `argument command: invalid choice: '${first}' (choose from ${CHOICES.map((c) => `'${c}'`).join(", ")})`,
-    );
-  const command = first as Command;
-  const options = PARSERS[command].options;
-  const flags = ["--help", ...options.map((option) => option.flag)];
-  const subError = (message: string) =>
-    usageError(usageOf(command), `${NAME} ${command}`, message);
-  const match = (arg: string) => {
-    if (arg === "-h") return { names: ["--help"], explicit: undefined };
-    if (!arg.startsWith("--") || arg === "--")
-      return { names: [], explicit: undefined };
-    const at = arg.indexOf("=");
-    const name = at === -1 ? arg : arg.slice(0, at);
-    const explicit = at === -1 ? undefined : arg.slice(at + 1);
-    const names = flags.includes(name)
-      ? [name]
-      : flags.filter((flag) => flag.startsWith(name));
-    return { names, explicit };
+  if (parsed.isErr()) return shown(parsed.error.message);
+  const values = parsed.value;
+  if (values.help === true) return shown("", 0);
+  const text = (key: string) => {
+    const value = values[key];
+    return typeof value === "string" ? value : undefined;
   };
-  const isValue = (arg: string) =>
-    !arg.startsWith("-") ||
-    arg === "-" ||
-    (match(arg).names.length === 0 &&
-      (isNegativeNumber(arg) || arg.includes(" ")));
-  const args: Args = { command, updateBase: false, sent: false };
-  const seen = new Set<string>();
-  const extras: string[] = [];
-  let positional = false;
-  for (let i = 0; i < rest.length; i += 1) {
-    const arg = rest[i] ?? "";
-    if (positional || isValue(arg)) {
-      extras.push(arg);
-      continue;
-    }
-    if (arg === "--") {
-      positional = true;
-      continue;
-    }
-    const { names, explicit } = match(arg);
-    if (names.length > 1)
-      return subError(
-        `ambiguous option: ${arg.split("=")[0]} could match ${names.join(", ")}`,
-      );
-    const name = names[0];
-    if (name === undefined) {
-      extras.push(arg);
-      continue;
-    }
-    if (name === "--help") return helpExit(helpOf(command));
-    const option = options.find((candidate) => candidate.flag === name);
-    if (option === undefined) continue;
-    if (option.key === "sent") {
-      const other = option.notSent ? "--sent" : "--not-sent";
-      if (seen.has(other))
-        return subError(`argument ${name}: not allowed with argument ${other}`);
-    }
-    seen.add(name);
-    if (option.value === undefined) {
-      if (explicit !== undefined)
-        return subError(
-          `argument ${name}: ignored explicit argument '${explicit}'`,
-        );
-      if (option.key === "sent") args.sent = !option.notSent;
-      else if (option.key === "updateBase") args.updateBase = true;
-      continue;
-    }
-    let value = explicit;
-    if (value === undefined) {
-      const next = rest[i + 1];
-      if (next === undefined || !isValue(next))
-        return subError(`argument ${name}: expected one argument`);
-      value = next;
-      i += 1;
-    }
-    if (option.key !== "updateBase" && option.key !== "sent")
-      args[option.key] = value;
-  }
-  const missing = options
-    .filter((option) => option.required && !seen.has(option.flag))
-    .map((option) => option.flag);
-  if (missing.length > 0)
-    return subError(
-      `the following arguments are required: ${missing.join(", ")}`,
-    );
-  if (command === "resolve" && !seen.has("--sent") && !seen.has("--not-sent"))
-    return subError("one of the arguments --sent --not-sent is required");
-  if (extras.length > 0)
-    return topError(`unrecognized arguments: ${extras.join(" ")}`);
-  return args;
+  const args: Args = {
+    command,
+    updateBase: values["update-base"] === true,
+    sent: values.sent === true,
+  };
+  const request = text("request");
+  if (request !== undefined) args.request = request;
+  else if (command !== "state") return shown("--request is required");
+  if (command === "resolve" && values.sent === values["not-sent"])
+    return shown("exactly one of --sent and --not-sent is required");
+  const model = text("model");
+  if (model !== undefined) args.model = model;
+  const thinking = text("thinking");
+  if (thinking !== undefined) args.thinking = thinking;
+  const threadId = text("thread-id");
+  if (threadId !== undefined) args.threadId = threadId;
+  return Result.ok(args);
 };
