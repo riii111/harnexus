@@ -32,6 +32,9 @@ type GatewayAnswer =
       message: string;
     };
 
+// Shared with every caller of the socket, so none can miss or misspell an outcome.
+export type CallOutcome = GatewayAnswer["outcome"];
+
 type ToolAnswer = { content: unknown; isError?: boolean | undefined };
 
 type Link = {

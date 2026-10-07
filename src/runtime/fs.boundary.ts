@@ -9,17 +9,22 @@ import {
 } from "node:fs";
 import {
   access,
+  link,
+  lstat,
   mkdir,
   open,
   readdir,
   readFile,
+  readlink,
+  realpath,
   rename,
   rm,
   stat,
   unlink,
 } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { Result, TaggedError } from "better-result";
+import { isObject } from "./object.ts";
 
 class LogFileOpenFailed extends TaggedError("LogFileOpenFailed")<{
   path: string;
@@ -165,27 +170,96 @@ export const writeFileAtomic = (path: string, content: string) =>
 const replaceFile = (path: string, content: string) =>
   Result.tryPromise({
     try: async () => {
-      const temporary = join(
-        dirname(path),
-        `.${basename(path)}.${randomUUID()}.tmp`,
-      );
-      try {
-        const file = await open(temporary, "wx", OWNER_ONLY);
-        try {
-          await file.writeFile(content, "utf8");
-          await file.sync();
-        } finally {
-          await file.close();
-        }
-        await rename(temporary, path);
-      } catch (cause) {
+      const temporary = await writeTemporary(path, content);
+      await rename(temporary, path).catch(async (cause) => {
         await rm(temporary, { force: true }).catch(() => {});
         throw cause;
-      }
+      });
     },
     catch: (cause) =>
       new FileWriteFailed({ path, cause, message: `cannot write ${path}` }),
   });
+
+// False when a file already exists at path, so of several writers only one creates it, and only with its full content.
+export const writeFileExclusive = (path: string, content: string) =>
+  Result.gen(async function* () {
+    const created = yield* Result.await(
+      Result.tryPromise({
+        try: async () => {
+          const temporary = await writeTemporary(path, content);
+          try {
+            return await link(temporary, path).then(
+              () => true,
+              (cause) => {
+                if (isObject(cause) && cause.code === "EEXIST") return false;
+                throw cause;
+              },
+            );
+          } finally {
+            await rm(temporary, { force: true });
+          }
+        },
+        catch: (cause) =>
+          new FileWriteFailed({ path, cause, message: `cannot write ${path}` }),
+      }),
+    );
+    if (created) yield* Result.await(syncParent(path, "wrote"));
+    return Result.ok(created);
+  });
+
+const writeTemporary = async (path: string, content: string) => {
+  const temporary = join(
+    dirname(path),
+    `.${basename(path)}.${randomUUID()}.tmp`,
+  );
+  try {
+    const file = await open(temporary, "wx", OWNER_ONLY);
+    try {
+      await file.writeFile(content, "utf8");
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+  } catch (cause) {
+    await rm(temporary, { force: true }).catch(() => {});
+    throw cause;
+  }
+  return temporary;
+};
+
+// Null for a path that cannot be inspected, as Python's Path.exists and Path.is_file treat it.
+export const pathKind = async (
+  path: string,
+  { follow }: { follow: boolean } = { follow: true },
+) => {
+  const found = await (follow ? stat(path) : lstat(path)).catch(() => null);
+  if (found === null) return null;
+  if (found.isFile()) return "file";
+  if (found.isDirectory()) return "directory";
+  return found.isSymbolicLink() ? "symlink" : "other";
+};
+
+// Resolves symlinks as far as the path exists and keeps the rest, like Python's Path.resolve(), so a missing path still gets its real parent.
+export const resolvePathLoosely = async (
+  path: string,
+  hops = 0,
+): Promise<string> => {
+  const absolute = path.startsWith("/") ? path : `${process.cwd()}/${path}`;
+  const real = await realpath(absolute).catch(() => null);
+  if (real !== null) return real;
+  const above = dirname(absolute);
+  if (above === absolute) return absolute;
+  const parent = await resolvePathLoosely(above, hops);
+  const name = basename(absolute);
+  if (name === ".") return parent;
+  if (name === "..") return dirname(parent);
+  const joined = join(parent, name);
+  const target =
+    hops < SYMLINK_HOPS ? await readlink(joined).catch(() => null) : null;
+  return target === null
+    ? joined
+    : resolvePathLoosely(resolve(parent, target), hops + 1);
+};
 
 // The parent is synced too, so files created inside later cannot be lost with a directory entry that never reached the disk.
 export const prepareDirectory = (path: string) =>
@@ -366,5 +440,7 @@ const isNotDirectory = (cause: unknown) =>
   cause instanceof Error && "code" in cause && cause.code === "ENOTDIR";
 
 const OWNER_ONLY = 0o600;
+
+const SYMLINK_HOPS = 40;
 
 const OWNER_ONLY_DIRECTORY = 0o700;

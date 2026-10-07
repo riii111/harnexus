@@ -122,6 +122,17 @@ export const loadCallSocketPath = (
   return Result.ok(value);
 };
 
+// A caller finds the socket at an absolute HARNEXUS_CALL_SOCKET, or where "on" places it for the bridge.
+export const loadCallerSocketPath = (
+  env: Record<string, string | undefined>,
+  home: () => string = homedir,
+) => {
+  const configured = env[CALL_SOCKET_ENV];
+  if (configured?.startsWith("/")) return Result.ok(configured);
+  const state = loadStatePath(env, home);
+  return state.isOk() ? Result.ok(defaultCallSocketPath(state.value)) : state;
+};
+
 export const defaultCallSocketPath = (statePath: string) =>
   join(dirname(statePath), "call.sock");
 

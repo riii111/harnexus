@@ -1,4 +1,5 @@
-import { defaultCallSocketPath, loadStatePath } from "../runtime/config.ts";
+import type { CallOutcome } from "../infra/codex/call-gateway.ts";
+import { loadCallerSocketPath } from "../runtime/config.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import { requestLine } from "../runtime/socket.boundary.ts";
@@ -12,20 +13,13 @@ const EXIT = {
   invalid: 5,
   // The thread exists but never ran, so creating another is a choice, not a retry.
   model_mismatch: 6,
-} as const;
+} as const satisfies Record<CallOutcome, number>;
 
 // Longer than the longest wait_threads the bridge allows, so the bridge always answers first.
 const ANSWER_TIMEOUT_MS = 15 * 60_000;
 
 // The exit status tells a call that never left (2, safe to send again) from one whose effect is unknown (3, never send again).
-const socketPath = () => {
-  const configured = process.env.HARNEXUS_CALL_SOCKET;
-  if (configured?.startsWith("/")) return configured;
-  const state = loadStatePath(process.env);
-  return state.isOk() ? defaultCallSocketPath(state.value) : null;
-};
-
-const path = socketPath();
+const path = loadCallerSocketPath(process.env).unwrapOr(null);
 if (path === null) {
   process.stderr.write("harnexus call: HARNEXUS_STATE_PATH is invalid\n");
   process.exit(EXIT.invalid);

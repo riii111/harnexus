@@ -48,7 +48,7 @@ export const signalProcess = (pid: number, signal: Signal) =>
       }),
   });
 
-class CommandFailed extends TaggedError("CommandFailed")<{
+export class CommandFailed extends TaggedError("CommandFailed")<{
   command: string;
   cause: unknown;
   message: string;
@@ -75,6 +75,43 @@ export const readCommandOutput = (
         command: file,
         cause,
         message: `${file} failed`,
+      }),
+  });
+
+export type CommandOutput = {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+};
+
+// A command that ran is ok whatever its exit status, so the caller decides what a failure means; only one that could not start is an error.
+export const runCommand = (
+  file: string,
+  args: readonly string[],
+  env: Record<string, string | undefined>,
+) =>
+  Result.tryPromise({
+    try: () =>
+      new Promise<CommandOutput>((resolve, reject) => {
+        execFile(
+          file,
+          [...args],
+          { env, maxBuffer: COMMAND_OUTPUT_LIMIT },
+          (error, stdout, stderr) => {
+            if (error === null) resolve({ status: 0, stdout, stderr });
+            else if (typeof error.code === "number")
+              resolve({ status: error.code, stdout, stderr });
+            else if (error.signal !== undefined && error.signal !== null)
+              resolve({ status: null, stdout, stderr });
+            else reject(error);
+          },
+        );
+      }),
+    catch: (cause) =>
+      new CommandFailed({
+        command: file,
+        cause,
+        message: `cannot run ${file}`,
       }),
   });
 
