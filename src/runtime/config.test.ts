@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  loadCallerSocketPath,
   loadCallSocketPath,
   loadLogPath,
   loadPermissionMode,
@@ -124,18 +125,18 @@ describe("loadVertexModels", () => {
 });
 
 describe("loadCallSocketPath", () => {
-  test.each([
-    { name: "unset", value: undefined },
-    { name: "empty", value: "" },
-    { name: "off", value: "off" },
-  ])("keeps the socket closed when the variable is $name", ({ value }) => {
-    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: value }, STATE);
+  test("keeps the socket closed when the variable is off", () => {
+    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: "off" }, STATE);
 
     expect(path.isOk() && path.value).toBeNull();
   });
 
-  test("places the socket beside the thread store when on", () => {
-    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: "on" }, STATE);
+  test.each([
+    { name: "unset", value: undefined },
+    { name: "empty", value: "" },
+    { name: "on", value: "on" },
+  ])("places the socket beside the thread store when $name", ({ value }) => {
+    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: value }, STATE);
 
     expect(path.isOk() && path.value).toBe("/state/harnexus/call.sock");
   });
@@ -157,3 +158,30 @@ describe("loadCallSocketPath", () => {
 });
 
 const STATE = "/state/harnexus/threads.json";
+
+describe("loadCallerSocketPath", () => {
+  test.each([
+    {
+      name: "an absolute socket path",
+      env: { HARNEXUS_CALL_SOCKET: "/run/h/call.sock" },
+      expected: "/run/h/call.sock",
+    },
+    {
+      name: "on beside the configured thread store",
+      env: {
+        HARNEXUS_CALL_SOCKET: "on",
+        HARNEXUS_STATE_PATH: "/s/h/state.json",
+      },
+      expected: "/s/h/call.sock",
+    },
+    {
+      name: "nothing beside the default thread store",
+      env: {},
+      expected: "/home/u/.local/state/harnexus/call.sock",
+    },
+  ])("finds the socket for $name", ({ env, expected }) => {
+    const path = loadCallerSocketPath(env, () => "/home/u");
+
+    expect(path.isOk() && path.value).toBe(expected);
+  });
+});

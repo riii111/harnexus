@@ -11,7 +11,10 @@
     "test": "bun test",
     "doctor": "bun --no-env-file --config=/dev/null src/bootstrap/doctor.ts",
     "open-app": "bun --no-env-file --config=/dev/null src/bootstrap/open-app.ts",
-    "call": "bun --no-env-file --config=/dev/null src/bootstrap/call.ts"
+    "call": "bun --no-env-file --config=/dev/null src/bootstrap/call.ts",
+    "task": "bun --no-env-file --config=/dev/null src/bootstrap/task/main.ts",
+    "build:task": "bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/bootstrap/task/main.ts --outfile dist/harnexus-task",
+    "install:task": "bun run build:task && mkdir -p \"$HOME/.local/bin\" && install -m 0755 dist/harnexus-task \"$HOME/.local/bin/.harnexus-task.tmp\" && mv -f \"$HOME/.local/bin/.harnexus-task.tmp\" \"$HOME/.local/bin/harnexus-task\""
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.13",

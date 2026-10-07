@@ -9,17 +9,21 @@ import {
 } from "node:fs";
 import {
   access,
+  link,
+  lstat,
   mkdir,
   open,
   readdir,
   readFile,
+  realpath,
   rename,
   rm,
   stat,
   unlink,
 } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { Result, TaggedError } from "better-result";
+import { isObject } from "./object.ts";
 
 class LogFileOpenFailed extends TaggedError("LogFileOpenFailed")<{
   path: string;
@@ -165,27 +169,83 @@ export const writeFileAtomic = (path: string, content: string) =>
 const replaceFile = (path: string, content: string) =>
   Result.tryPromise({
     try: async () => {
-      const temporary = join(
-        dirname(path),
-        `.${basename(path)}.${randomUUID()}.tmp`,
-      );
-      try {
-        const file = await open(temporary, "wx", OWNER_ONLY);
-        try {
-          await file.writeFile(content, "utf8");
-          await file.sync();
-        } finally {
-          await file.close();
-        }
-        await rename(temporary, path);
-      } catch (cause) {
+      const temporary = await writeTemporary(path, content);
+      await rename(temporary, path).catch(async (cause) => {
         await rm(temporary, { force: true }).catch(() => {});
         throw cause;
-      }
+      });
     },
     catch: (cause) =>
       new FileWriteFailed({ path, cause, message: `cannot write ${path}` }),
   });
+
+// False when a file already exists at path, so of several writers only one creates it, and only with its full content.
+export const writeFileExclusive = (path: string, content: string) =>
+  Result.gen(async function* () {
+    const created = yield* Result.await(
+      Result.tryPromise({
+        try: async () => {
+          const temporary = await writeTemporary(path, content);
+          try {
+            return await link(temporary, path).then(
+              () => true,
+              (cause) => {
+                if (isObject(cause) && cause.code === "EEXIST") return false;
+                throw cause;
+              },
+            );
+          } finally {
+            await rm(temporary, { force: true });
+          }
+        },
+        catch: (cause) =>
+          new FileWriteFailed({ path, cause, message: `cannot write ${path}` }),
+      }),
+    );
+    if (created) yield* Result.await(syncParent(path, "wrote"));
+    return Result.ok(created);
+  });
+
+const writeTemporary = async (path: string, content: string) => {
+  const temporary = join(
+    dirname(path),
+    `.${basename(path)}.${randomUUID()}.tmp`,
+  );
+  try {
+    const file = await open(temporary, "wx", OWNER_ONLY);
+    try {
+      await file.writeFile(content, "utf8");
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+  } catch (cause) {
+    await rm(temporary, { force: true }).catch(() => {});
+    throw cause;
+  }
+  return temporary;
+};
+
+// False for a path that cannot be inspected, as for one that does not exist.
+export const isFile = async (path: string) =>
+  (await stat(path).catch(() => null))?.isFile() ?? false;
+
+export const isDirectory = async (path: string) =>
+  (await stat(path).catch(() => null))?.isDirectory() ?? false;
+
+export const pathExists = async (path: string) =>
+  (await stat(path).catch(() => null)) !== null;
+
+// Inspects the entry itself, so a dangling symlink still counts.
+export const entryExists = async (path: string) =>
+  (await lstat(path).catch(() => null)) !== null;
+
+export const isSymlink = async (path: string) =>
+  (await lstat(path).catch(() => null))?.isSymbolicLink() ?? false;
+
+// A path that cannot be resolved is kept as given, made absolute.
+export const realPathOrSelf = (path: string) =>
+  realpath(resolve(path)).catch(() => resolve(path));
 
 // The parent is synced too, so files created inside later cannot be lost with a directory entry that never reached the disk.
 export const prepareDirectory = (path: string) =>

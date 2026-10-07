@@ -48,7 +48,7 @@ export const signalProcess = (pid: number, signal: Signal) =>
       }),
   });
 
-class CommandFailed extends TaggedError("CommandFailed")<{
+export class CommandFailed extends TaggedError("CommandFailed")<{
   command: string;
   cause: unknown;
   message: string;
@@ -75,6 +75,45 @@ export const readCommandOutput = (
         command: file,
         cause,
         message: `${file} failed`,
+      }),
+  });
+
+export type CommandOutput = {
+  status: number;
+  stdout: string;
+  stderr: string;
+};
+
+// A command that ran is ok whatever its exit status, so the caller decides what a failure means; one that could not start or hung past the timeout is an error.
+export const runCommand = (
+  file: string,
+  args: readonly string[],
+  env: Record<string, string | undefined>,
+  timeoutMs = COMMAND_TIMEOUT_MS,
+) =>
+  Result.tryPromise({
+    try: () =>
+      new Promise<CommandOutput>((resolve, reject) => {
+        execFile(
+          file,
+          [...args],
+          { env, timeout: timeoutMs, maxBuffer: COMMAND_OUTPUT_LIMIT },
+          (error, stdout, stderr) => {
+            if (error === null) resolve({ status: 0, stdout, stderr });
+            else if (typeof error.code === "number" && !error.killed)
+              resolve({ status: error.code, stdout, stderr });
+            else reject(error);
+          },
+        );
+      }),
+    catch: (cause) =>
+      new CommandFailed({
+        command: file,
+        cause,
+        message:
+          isObject(cause) && cause.killed === true
+            ? `${file} was stopped after ${timeoutMs} ms`
+            : `cannot run ${file}`,
       }),
   });
 
