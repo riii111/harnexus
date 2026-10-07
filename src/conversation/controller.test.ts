@@ -121,6 +121,31 @@ describe("turn/start on a Claude thread", () => {
     expect(turns.liveTurnOf(THREAD)).toBeNull();
   });
 
+  test("names a turn queued behind one that ended as running until it starts", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const gap: unknown[] = [];
+    let readGap = () => {};
+    const { turns, sent } = await harness([claude], {
+      onSend: (message) => {
+        if (message.method === "turn/completed") readGap();
+      },
+    });
+    readGap = () => gap.push(turns.liveTurnOf(THREAD));
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    turns.startTurn(turnStart(11, "again"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+    claude.emit(sdk(answer("msg-1", "hi")));
+    claude.emit(sdk(success()));
+    await until(() => gap.length > 0);
+
+    expect(responseTo(sent, 11)?.result.turn).toMatchObject({ id: "turn-2" });
+    expect(gap).toEqual([
+      { turnId: "turn-2", record: null, startedAtMs: expect.any(Number) },
+    ]);
+  });
+
   test("accepts the next turn sent while the app receives turn/completed", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     let startNext = () => {};

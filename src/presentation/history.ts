@@ -76,17 +76,21 @@ export type LiveTurn = {
   startedAtMs: number;
 };
 
-// A record says nothing of a turn still running, so its last turn is shown in progress under the id the live notifications carry; a turn Claude has not yet recorded is shown empty.
+// A record says nothing of a turn still running, so the turns from its prompt on, steers included, are shown as one turn in progress under the id the live notifications carry.
 export const withLiveTurn = (
   history: readonly HistoryTurn[],
   live: LiveTurn | null,
 ): HistoryTurn[] => {
   if (live === null) return [...history];
-  const opened = history.findIndex(
-    (entry) => entry.turn.id === `${HISTORY_TURN_PREFIX}${live.record}`,
-  );
-  const last = history.at(-1);
-  if (live.record === null || opened < 0 || last === undefined) {
+  const opened =
+    live.record === null
+      ? -1
+      : history.findIndex(
+          (entry) => entry.turn.id === `${HISTORY_TURN_PREFIX}${live.record}`,
+        );
+  const first = history[opened];
+  // A turn not yet recorded, one Claude started itself without a prompt, or one a rewind cut off is shown empty.
+  if (first === undefined) {
     return [
       ...history,
       {
@@ -105,10 +109,10 @@ export const withLiveTurn = (
     ];
   }
   return [
-    ...history.slice(0, -1),
+    ...history.slice(0, opened),
     {
       turn: {
-        ...last.turn,
+        ...first.turn,
         id: live.turnId,
         items: [],
         status: "inProgress",
@@ -116,7 +120,10 @@ export const withLiveTurn = (
         completedAt: null,
         durationMs: null,
       },
-      items: last.items.map((entry) => ({ ...entry, turnId: live.turnId })),
+      items: history
+        .slice(opened)
+        .flatMap((entry) => entry.items)
+        .map((entry) => ({ ...entry, turnId: live.turnId })),
     },
   ];
 };
@@ -558,6 +565,10 @@ const timeOf = (message: SessionMessage) => {
 };
 
 const HISTORY_TURN_PREFIX = "harnexus-history-";
+
+// The id a history turn takes from the record of the prompt that opened it.
+export const historyTurnId = (record: string) =>
+  `${HISTORY_TURN_PREFIX}${record}`;
 
 // Claude Code writes these as user messages when a turn is stopped.
 const INTERRUPTED = /^\[Request interrupted by user/;

@@ -7,6 +7,7 @@ import {
   type AgentRef,
   buildHistory,
   type HistoryTurn,
+  historyTurnId,
   type LiveTurn,
   withLiveTurn,
 } from "../presentation/history.ts";
@@ -37,6 +38,7 @@ type Threads = {
   takePicked: (threadId: string) => boolean;
   rewindOf?: (threadId: string) => RewindPoint | undefined;
   liveTurnOf?: (threadId: string) => LiveTurn | null;
+  recordOf?: (threadId: string, turnId: string) => string | null;
 };
 
 type ReadSession = (sessionId: string) => ReturnType<typeof readClaudeSession>;
@@ -69,7 +71,7 @@ export const createHistoryRequests = ({
     ]);
 
   // A thread with no session yet has an empty history.
-  const read = (threadId: string): Promise<Loaded> => {
+  const load = (threadId: string): Promise<Loaded> => {
     const kept = subagentHistory(threadId);
     if (kept !== undefined) return Promise.resolve(Result.ok(kept));
     const key = keyOf(threadId);
@@ -82,8 +84,8 @@ export const createHistoryRequests = ({
     }
     const rewind = threads.rewindOf?.(threadId);
     const loaded = readSession(sessionId).then(async (original) => {
-      if (keyOf(threadId) !== key) return read(threadId);
-      const recorded = original.andThen((messages) => {
+      if (keyOf(threadId) !== key) return load(threadId);
+      const read = original.andThen((messages) => {
         if (rewind === undefined) return Result.ok(messages);
         if (rewind.at === null) return Result.ok([]);
         const index = messages.findIndex(
@@ -99,15 +101,15 @@ export const createHistoryRequests = ({
           : Result.ok(messages.slice(0, index + 1));
       });
       // The app's stream waits on this history, so a fault while reading back the thread's agents leaves them out rather than failing it; the next read tries again.
-      if (recorded.isOk()) {
+      if (read.isOk()) {
         const restored = await Result.tryPromise(() =>
-          subagents.restore(threadId, sessionId, thread.cwd, recorded.value),
+          subagents.restore(threadId, sessionId, thread.cwd, read.value),
         );
         if (restored.isErr()) log({ event: "claude_subagents_unrestored" });
       }
-      if (keyOf(threadId) !== key) return read(threadId);
+      if (keyOf(threadId) !== key) return load(threadId);
       if (reading.get(threadId)?.loaded === loaded) reading.delete(threadId);
-      return recorded
+      return read
         .tapError((error) =>
           log({ event: "claude_history_unreadable", error: error._tag }),
         )
@@ -123,17 +125,13 @@ export const createHistoryRequests = ({
     return loaded;
   };
 
-  // A shared read may outlast the turn it saw running, so whether one runs is asked once the read is done.
-  const load = (threadId: string): Promise<Loaded> =>
-    read(threadId).then((loaded) =>
-      loaded.map((history) =>
-        withLiveTurn(history, threads.liveTurnOf?.(threadId) ?? null),
-      ),
-    );
-
   const answer = async (method: HistoryMethod, request: AppRequest) => {
     const threadId = String(request.params.threadId);
-    const history = await load(threadId);
+    const loaded = await load(threadId);
+    // Asked once the record is read, so a turn that ended meanwhile is not shown running.
+    const history = loaded.map((turns) =>
+      withLiveTurn(turns, threads.liveTurnOf?.(threadId) ?? null),
+    );
     if (history.isErr()) {
       send({
         id: request.id,
@@ -141,7 +139,26 @@ export const createHistoryRequests = ({
       });
       return;
     }
-    const result = pageFor(method, history.value, request.params);
+    // A live turn's id leaves the history once the turn ends, so a cursor or turn naming it then names the recorded turn its prompt opened.
+    const known = new Set(history.value.map((entry) => entry.turn.id));
+    const resolve = (turnId: string) => {
+      const record = known.has(turnId)
+        ? null
+        : (threads.recordOf?.(threadId, turnId) ?? null);
+      return record === null ? turnId : historyTurnId(record);
+    };
+    const { cursor, turnId } = request.params;
+    const result = pageFor(method, history.value, {
+      ...request.params,
+      ...(method === "thread/turns/list" &&
+        typeof cursor === "string" && {
+          cursor: cursor.replace(
+            TURN_CURSOR,
+            (_, at: string, id: string) => at + resolve(id),
+          ),
+        }),
+      ...(typeof turnId === "string" && { turnId: resolve(turnId) }),
+    });
     send(
       result === null
         ? {
@@ -267,6 +284,8 @@ const directionOf = (value: unknown, fallback: SortDirection): SortDirection =>
 
 const viewOf = (value: unknown): TurnsView =>
   value === "notLoaded" || value === "full" ? value : "summary";
+
+const TURN_CURSOR = /^(at:|after:)(.+)$/s;
 
 const HISTORY_METHODS = [
   "thread/turns/list",

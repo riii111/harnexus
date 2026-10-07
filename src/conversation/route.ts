@@ -7,7 +7,7 @@ import {
   type TurnSettings,
 } from "../infra/codex/delegations.ts";
 import { codexVersion, isVerifiedCodex } from "../infra/codex/versions.ts";
-import type { LiveTurn } from "../presentation/history.ts";
+import { type LiveTurn, withLiveTurn } from "../presentation/history.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import {
@@ -427,6 +427,7 @@ export const createRouter = (
         result: subagents.withChildren(result, request.params),
       });
     }
+    // Whether a turn runs is asked as the answer goes out, since it may end while the server answers.
     if (request.kind === "threadRead") {
       if (request.history === null) {
         const live = turns.liveTurnOf(request.threadId) !== null;
@@ -436,6 +437,10 @@ export const createRouter = (
       }
       return request.history.then((loaded) => {
         if (loaded.isErr()) return line;
+        const shown = withLiveTurn(
+          loaded.value,
+          turns.liveTurnOf(request.threadId),
+        );
         log({
           event: "claude_history_served",
           method: "thread/read",
@@ -443,14 +448,11 @@ export const createRouter = (
           excludeTurns: false,
           initialPage: false,
           picked: false,
-          turns: loaded.value.length,
+          turns: shown.length,
         });
         return encode({
           ...message,
-          result: withLiveStatus(
-            withTurns(result, loaded.value),
-            endsLive(loaded.value),
-          ),
+          result: withLiveStatus(withTurns(result, shown), endsLive(shown)),
         });
       });
     }
@@ -502,6 +504,7 @@ export const createRouter = (
       if (loaded.isErr()) return encode({ ...message, result: opened });
       // Taken only once the history goes out, since a resume the server fails would otherwise use up the pick.
       const picked = history.takePicked(threadId);
+      const shown = withLiveTurn(loaded.value, turns.liveTurnOf(threadId));
       log({
         event: "claude_history_served",
         method: "thread/resume",
@@ -509,13 +512,13 @@ export const createRouter = (
         excludeTurns: params.excludeTurns === true,
         initialPage: isObject(params.initialTurnsPage),
         picked,
-        turns: loaded.value.length,
+        turns: shown.length,
       });
       return encode({
         ...message,
         result: withLiveStatus(
-          withResumeHistory(opened, loaded.value, params, picked),
-          endsLive(loaded.value),
+          withResumeHistory(opened, shown, params, picked),
+          endsLive(shown),
         ),
       });
     });

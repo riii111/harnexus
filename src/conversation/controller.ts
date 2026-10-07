@@ -136,6 +136,11 @@ export const createTurnController = <Tag extends string>({
   const modes = new Map<string, Mode>();
   const materialized = new Set<string>();
   const changingConversations = new Set<string>();
+  // Accepted turns whose stream has not started, such as one queued behind a running turn, in the order they were accepted.
+  const startingTurns = new Map<
+    string,
+    { threadId: string; acceptedAtMs: number }
+  >();
   const waitingTurns = new Map<
     string,
     { threadId: string; request: TurnRequest }
@@ -307,6 +312,7 @@ export const createTurnController = <Tag extends string>({
       allowRecovery,
     };
     if (inFlight > 0) waitingTurns.set(request.turnId, { threadId, request });
+    startingTurns.set(request.turnId, { threadId, acceptedAtMs: now() });
     if (compaction) {
       send({ id, result: {} });
     } else if (request.answered && id !== null) {
@@ -319,6 +325,7 @@ export const createTurnController = <Tag extends string>({
       send({ id, result: { turn: waiting.turn } });
     }
     void runTurn(request, thread, threadId, turn, messageId).then(() => {
+      startingTurns.delete(request.turnId);
       const left = (turnsInFlight.get(threadId) ?? 1) - 1;
       if (left > 0) {
         turnsInFlight.set(threadId, left);
@@ -683,6 +690,7 @@ export const createTurnController = <Tag extends string>({
         renderNotice(active.state, RECOVERY_NOTICE, "commentary", now()),
       );
     waitingTurns.delete(request.turnId);
+    startingTurns.delete(request.turnId);
     if (request.stopped) {
       active.state = markInterrupting(active.state);
     }
@@ -876,16 +884,25 @@ export const createTurnController = <Tag extends string>({
     sessionIdOf: threads.sessionIdOf,
     takePicked: threads.takePicked,
     rewindOf: threads.rewindOf,
+    // A turn accepted but not yet started keeps the thread running between one turn's end and the next one's start.
     liveTurnOf: (threadId: string): LiveTurn | null => {
       const active = activeTurns.get(threadId);
-      if (active === undefined || active.state.finished) return null;
-      const { turnId, startedAtMs } = active.state;
-      return {
-        turnId,
-        record: runtime.recordOf(threadId, turnId),
-        startedAtMs,
-      };
+      if (active !== undefined && !active.state.finished) {
+        const { turnId, startedAtMs } = active.state;
+        return {
+          turnId,
+          record: runtime.recordOf(threadId, turnId),
+          startedAtMs,
+        };
+      }
+      for (const [turnId, starting] of startingTurns) {
+        if (starting.threadId === threadId) {
+          return { turnId, record: null, startedAtMs: starting.acceptedAtMs };
+        }
+      }
+      return null;
     },
+    recordOf: runtime.recordOf,
     adopt: threads.adopt,
     adoptFork: (threadId: string, thread: Thread, sourceId: string) => {
       threads.adoptFork(threadId, thread, sourceId);
