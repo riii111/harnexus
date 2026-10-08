@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # The Claude models harnexus offers are the ones the Claude Code bundled with the SDK lists, so a new model appears only after the SDK is bumped.
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: daily
+    allow:
+      - dependency-name: "@anthropic-ai/claude-agent-sdk"
+    commit-message:
+      prefix: chore
