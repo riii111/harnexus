@@ -181,6 +181,24 @@ describe("createCallGateway create_thread of a Codex thread", () => {
     });
   });
 
+  test("reports a first turn the bridge refused after the settings check, with its reason", async () => {
+    const { gateway, watch } = setup({
+      answer: () => {
+        watch.observe(CODEX, "th-worker", ASKED, true);
+        watch.started("th-worker", "directory_unknown");
+        return Result.ok(CLIENT_ANSWER);
+      },
+    });
+
+    const answer = JSON.parse(await gateway.handle(CREATE));
+
+    expect(answer).toEqual({
+      outcome: "first_turn_refused",
+      threadId: "th-worker",
+      reason: "directory_unknown",
+    });
+  });
+
   test("sends a caller's next create only after the first turn of its previous one", async () => {
     const { gateway, watch, requests } = setup({
       answer: () => Result.ok(CLIENT_ANSWER),
@@ -366,6 +384,7 @@ describe("createCallGateway create_thread of a Claude thread", () => {
           expected: ASKED,
           actual: OTHER,
           refused: true,
+          refusal: null,
         },
         threadId: "th-reviewer",
         unknown: false,
@@ -401,6 +420,7 @@ describe("createCallGateway create_thread of a Claude thread", () => {
           expected: ASKED,
           actual: ASKED,
           refused: false,
+          refusal: null,
         },
         threadId: "th-reviewer",
         unknown: true,
@@ -437,6 +457,7 @@ const setup = ({
       expected: { model: "gpt-x", effort: null },
       actual: { model: "gpt-x", effort: null },
       refused: false,
+      refusal: null,
     },
     threadId: "th-reviewer",
     unknown: false,

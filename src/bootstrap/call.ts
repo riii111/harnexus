@@ -13,6 +13,7 @@ const EXIT = {
   invalid: 5,
   // The thread exists but never ran, so creating another is a choice, not a retry.
   model_mismatch: 6,
+  first_turn_refused: 7,
 } as const satisfies Record<CallOutcome, number>;
 
 // Longer than the longest wait_threads the bridge allows, so the bridge always answers first.

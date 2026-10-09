@@ -79,7 +79,34 @@ describe("createDelegationWatch first turn check", () => {
       expected: EXPECTED,
       actual,
       refused: true,
+      refusal: null,
     });
+  });
+
+  test("settles a first turn the bridge runs only once it reports whether it took the turn", async () => {
+    const watch = createDelegationWatch(() => {});
+    const created = expecting(watch, "th-codex", { expected: EXPECTED });
+
+    expect(watch.observe("th-codex", "th-worker", EXPECTED, true)).toBe(true);
+    expect(await created.wait(0)).toBeNull();
+    watch.started("th-worker", "directory_unknown");
+
+    expect(await created.wait(1_000)).toEqual({
+      threadId: "th-worker",
+      expected: EXPECTED,
+      actual: EXPECTED,
+      refused: false,
+      refusal: "directory_unknown",
+    });
+  });
+
+  test("refuses a first turn the bridge refused again when the app resends it", () => {
+    const watch = createDelegationWatch(() => {});
+    watch.expect("th-codex", { expected: EXPECTED });
+    watch.observe("th-codex", "th-worker", EXPECTED, true);
+    watch.started("th-worker", "directory_unknown");
+
+    expect(watch.observe("th-codex", "th-worker", EXPECTED, true)).toBe(false);
   });
 
   test("refuses a refused thread's first turn again when the app resends it", () => {
@@ -111,6 +138,7 @@ describe("createDelegationWatch first turn check", () => {
       expected: EXPECTED,
       actual,
       refused: true,
+      refusal: null,
     });
   });
 

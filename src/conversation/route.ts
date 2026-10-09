@@ -3,8 +3,8 @@ import type { InferErr } from "better-result";
 import { type EffortRule, isClaudeModel } from "../infra/claude/models.ts";
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
 import {
+  type DelegationWatch,
   delegationSource,
-  type TurnSettings,
 } from "../infra/codex/delegations.ts";
 import { codexVersion, isVerifiedCodex } from "../infra/codex/versions.ts";
 import { type LiveTurn, withLiveTurn } from "../presentation/history.ts";
@@ -69,7 +69,11 @@ type Turns = {
     sourceId: string,
   ) => Promise<void>;
   changeModel: (threadId: string, model: string) => void;
-  startTurn: (request: AppRequest, fallbackCwd: string | undefined) => void;
+  // The refusal when the turn was refused before it was started or queued.
+  startTurn: (
+    request: AppRequest,
+    fallbackCwd: string | undefined,
+  ) => Refusal | null;
   compactThread: (request: AppRequest) => void;
   steerTurn: (request: AppRequest) => void;
   interruptTurn: (request: AppRequest) => void;
@@ -110,12 +114,8 @@ type Pending =
 export const createRouter = (
   turns: Turns,
   log: (event: RouteEvent) => void,
-  // false refuses the turn, so a created thread on an unexpected model never starts.
-  onDelegated: (
-    sourceThreadId: string,
-    threadId: string,
-    asked: TurnSettings,
-  ) => boolean,
+  // observe answering false refuses the turn, so a created thread on an unexpected model never starts.
+  delegations: Pick<DelegationWatch, "observe" | "started">,
   history: History,
   claudeModels: () => ListedClaudeModels,
   unverifiedCodex: "warn" | "pause",
@@ -176,23 +176,23 @@ export const createRouter = (
         }
         return line;
       }
-      case "turn/start":
-        if (!noteDelegation(params)) {
+      case "turn/start": {
+        const claude =
+          isClaudeModel(requestedModel(params)) ||
+          turns.isClaudeThread(params.threadId);
+        if (!noteDelegation(params, claude)) {
           refuse("turn/start", request, "model_mismatch");
           return null;
         }
-        if (
-          !isClaudeModel(requestedModel(params)) &&
-          !turns.isClaudeThread(params.threadId)
-        ) {
-          return line;
-        }
+        if (!claude) return line;
         if (paused) {
           refuse("turn/start", request, "claude_paused");
+          noteStarted(params, "claude_paused");
           return null;
         }
-        turns.startTurn(request, cwdOf(params));
+        noteStarted(params, turns.startTurn(request, cwdOf(params)));
         return null;
+      }
       case "turn/steer":
         if (!turns.isClaudeThread(params.threadId)) return line;
         if (paused) {
@@ -253,13 +253,28 @@ export const createRouter = (
   };
 
   // The first turn/start of a thread made by create_thread is the only place its real id meets the thread that asked for it.
-  const noteDelegation = (params: Record<string, unknown>) => {
+  const noteDelegation = (params: Record<string, unknown>, claude: boolean) => {
     const source = delegationSource(params);
     if (source === null || typeof params.threadId !== "string") return true;
-    return onDelegated(source, params.threadId, {
-      model: requestedModel(params) ?? null,
-      effort: requestedEffort(params) ?? null,
-    });
+    return delegations.observe(
+      source,
+      params.threadId,
+      {
+        model: requestedModel(params) ?? null,
+        effort: requestedEffort(params) ?? null,
+      },
+      claude,
+    );
+  };
+
+  // A Claude first turn the bridge refused never ran, so its creator must not be told it started.
+  const noteStarted = (
+    params: Record<string, unknown>,
+    refusal: Refusal | null,
+  ) => {
+    if (typeof params.threadId === "string") {
+      delegations.started(params.threadId, refusal);
+    }
   };
 
   // The server creates the thread on its default model, so a Claude model never reaches it; a resume that would move a Claude thread is refused, since Claude keeps running where the thread started.
