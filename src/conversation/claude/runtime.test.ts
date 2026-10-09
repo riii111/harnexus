@@ -5,7 +5,6 @@ import type {
   EffortLevel,
   PermissionUpdate,
   SDKMessage,
-  SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
 import {
@@ -46,6 +45,7 @@ import {
   OUTCOME_UNKNOWN,
   promptsUntil,
   REFUSED,
+  readPrompts,
   reply,
   resolvedRequests,
   responseTo,
@@ -4349,21 +4349,6 @@ const writeSkill = async (name: string, body: string) => {
 };
 
 // Reads only as many prompts as were sent, since a read past them waits for the next send.
-const readPrompts = async (
-  claude: ReturnType<typeof fakeClaude>,
-  count: number,
-) => {
-  const prompt = claude.prompt();
-  if (prompt === null) return expect.unreachable("Claude never started");
-  const iterator = prompt[Symbol.asyncIterator]();
-  const read: SDKUserMessage[] = [];
-  while (read.length < count) {
-    const next = await iterator.next();
-    if (next.done === true) break;
-    read.push(next.value);
-  }
-  return read;
-};
 
 const bashCall = (toolUseId: string) => ({
   type: "assistant",

@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { type InferErr, Result } from "better-result";
@@ -36,6 +35,7 @@ import {
   OUTCOME_UNKNOWN,
   promptsUntil,
   REFUSED,
+  readPrompts,
   reply,
   resolvedRequests,
   responseTo,
@@ -1781,12 +1781,10 @@ describe("another thread's message arriving on a busy thread", () => {
     await until(() => responseTo(sent, 12) !== undefined);
 
     expect(responseTo(sent, 12)?.result.turn).toMatchObject({ id: "turn-3" });
-    for (const _ of [1, 2, 3]) {
+    for (const turn of [1, 2, 3]) {
+      await until(() => startedTurns(sent).length === turn);
       claude.emit(sdk(success()));
-      await until(
-        () => completedTurnStatuses(sent).length === startedTurns(sent).length,
-      );
-      await settle();
+      await until(() => completedTurnStatuses(sent).length === turn);
     }
     expect(startedTurns(sent)).toEqual(["turn-1", "turn-2", "turn-3"]);
     expect(await promptsUntil(claude, 3)).toEqual([
@@ -2131,19 +2129,3 @@ const UNANSWERED = {
   method: "mcpServer/tool/call",
   message: "the server closed before answering mcpServer/tool/call",
 } as InferErr<Awaited<ReturnType<ServerRequest>>>;
-
-const readPrompts = async (
-  claude: ReturnType<typeof fakeClaude>,
-  count: number,
-) => {
-  const prompt = claude.prompt();
-  if (prompt === null) return expect.unreachable("Claude never started");
-  const iterator = prompt[Symbol.asyncIterator]();
-  const read: SDKUserMessage[] = [];
-  while (read.length < count) {
-    const next = await iterator.next();
-    if (next.done === true) break;
-    read.push(next.value);
-  }
-  return read;
-};
