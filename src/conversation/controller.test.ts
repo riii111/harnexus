@@ -1495,15 +1495,20 @@ describe("turn/start carrying another thread's message", () => {
 
   test("starts a thread that another worker's reviewer created", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns } = await registeredWorkers([claude]);
+    const { turns, sent, store } = await registeredWorkers([claude]);
 
     turns.startTurn(
       reply(10, THREAD, OTHER_REVIEWER, "create_thread"),
       undefined,
     );
     await until(() => claude.started());
+    turns.startTurn(reply(11, THREAD, OTHER_REVIEWER), undefined);
+    await settle();
 
-    expect(claude.started()).toBe(true);
+    expect(store.get(THREAD)?.requesterThreadIds).toEqual([OTHER_REVIEWER]);
+    expect(
+      sent.filter((message) => message.id === 11 && "error" in message),
+    ).toEqual([]);
   });
 
   test("refuses a message from a reviewer another worker is still saving", async () => {

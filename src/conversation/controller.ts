@@ -173,11 +173,14 @@ export const createTurnController = <Tag extends string>({
       return;
     }
     const delegated = delegatedMessage(params);
-    // A thread's first turn from create_thread starts new work, not a reply, so whose reviewer its creator is does not matter.
+    // A thread's first turn from create_thread, and later messages from the thread that created it, are its own work rather than another worker's reviewer replying, so whose reviewer the sender is does not matter.
+    const source = delegated?.sourceThreadId;
     const owner =
-      delegated?.sourceThreadId == null || delegated.tool === "create_thread"
+      source == null ||
+      delegated?.tool === "create_thread" ||
+      store.get(threadId)?.requesterThreadIds.includes(source)
         ? undefined
-        : store.reviewerOwner(delegated.sourceThreadId);
+        : store.reviewerOwner(source);
     if (owner !== undefined && owner !== threadId) {
       refuse(id, "reply_to_other_worker");
       return;
