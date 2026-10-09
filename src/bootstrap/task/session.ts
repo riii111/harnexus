@@ -199,8 +199,11 @@ const openSession = (
       if (pending === null) return Result.ok();
       if (pending.status === "refused")
         return fail(
-          `thread ${asText(pending.threadId)} refused its first turn: ${refusalText(pending.expected, pending.actual)}; ` +
-            "fix the model, then resolve --not-sent",
+          truthy(pending.reason)
+            ? `the bridge refused the first turn of thread ${asText(pending.threadId)}: ${asText(pending.reason)}; ` +
+                "fix the cause, then resolve --not-sent"
+            : `thread ${asText(pending.threadId)} refused its first turn: ${refusalText(pending.expected, pending.actual)}; ` +
+                "fix the model, then resolve --not-sent",
         );
       return fail(
         `previous ${asText(pending.tool)} ended as ${asText(pending.status)}; never resend. ` +
@@ -282,13 +285,22 @@ const openSession = (
           }
           return confirmed;
         }
-        if (outcome === ("model_mismatch" satisfies CallOutcome)) {
+        // Either way the thread exists but never ran, so it is kept for resolve rather than sent again.
+        const refusal =
+          outcome === ("model_mismatch" satisfies CallOutcome)
+            ? {
+                expected: answer.expected ?? null,
+                actual: answer.actual ?? null,
+              }
+            : outcome === ("first_turn_refused" satisfies CallOutcome)
+              ? { reason: answer.reason ?? null }
+              : null;
+        if (refusal !== null) {
           Object.assign(record, {
             status: "refused",
             threadId: thread,
             answer,
-            expected: answer.expected ?? null,
-            actual: answer.actual ?? null,
+            ...refusal,
           });
           yield* Result.await(save(pendingPath, record, { exclusive: false }));
           pending = record;

@@ -5,6 +5,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  rename,
   rm,
   stat,
   writeFile,
@@ -58,8 +59,55 @@ describe("openLogSink", () => {
     expect(await readFile(path, "utf8")).toBe("before\nafter\n");
   });
 
-  test("returns an error when the file cannot be opened", () => {
-    const sink = openLogSink(join(dir, "absent", "x.log"));
+  test("moves a file over the limit to .1, replacing an older one, and starts anew", async () => {
+    const path = join(dir, "full.log");
+    await writeFile(path, "12345\n");
+    await writeFile(`${path}.1`, "oldest\n");
+
+    const sink = openLogSink(path, 5);
+    if (sink.isOk()) sink.value("next\n");
+
+    expect(await readFile(`${path}.1`, "utf8")).toBe("12345\n");
+    expect(await readFile(path, "utf8")).toBe("next\n");
+  });
+
+  test("keeps appending to a file within the limit", async () => {
+    const path = join(dir, "small.log");
+    await writeFile(path, "12345\n");
+
+    const sink = openLogSink(path, 6);
+    if (sink.isOk()) sink.value("next\n");
+
+    expect(await readFile(path, "utf8")).toBe("12345\nnext\n");
+    expect(await Bun.file(`${path}.1`).exists()).toBe(false);
+  });
+
+  test("creates a missing directory readable only by the owner", async () => {
+    const path = join(dir, "log-dir", "nested", "x.log");
+
+    const sink = openLogSink(path);
+    if (sink.isOk()) sink.value("line\n");
+
+    expect(await readFile(path, "utf8")).toBe("line\n");
+    expect((await stat(join(dir, "log-dir"))).mode & 0o777).toBe(0o700);
+  });
+
+  test("writes to the new file after another writer moved the old one aside", async () => {
+    const path = join(dir, "moved.log");
+    const sink = openLogSink(path);
+    await rename(path, `${path}.1`);
+
+    if (sink.isOk()) sink.value("after\n");
+
+    expect(await readFile(path, "utf8")).toBe("after\n");
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+  });
+
+  test("returns an error when the file cannot be opened", async () => {
+    const blocker = join(dir, "not-a-directory");
+    await writeFile(blocker, "");
+
+    const sink = openLogSink(join(blocker, "x.log"));
 
     expect(sink.isErr() && sink.error._tag).toBe("LogFileOpenFailed");
   });

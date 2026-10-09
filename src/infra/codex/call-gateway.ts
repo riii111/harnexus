@@ -21,6 +21,7 @@ type GatewayAnswer =
       expected: TurnSettings;
       actual: TurnSettings;
     }
+  | { outcome: "first_turn_refused"; threadId: string; reason: string }
   | {
       outcome: "unknown";
       message: string;
@@ -206,6 +207,13 @@ const createdAnswer = ({
       threadId: firstTurn.threadId,
       expected: firstTurn.expected,
       actual: firstTurn.actual,
+    };
+  }
+  if (firstTurn !== null && firstTurn.refusal !== null) {
+    return {
+      outcome: "first_turn_refused",
+      threadId: firstTurn.threadId,
+      reason: firstTurn.refusal,
     };
   }
   if (unknown) {

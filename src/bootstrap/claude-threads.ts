@@ -140,7 +140,7 @@ export const connectClaudeThreads = ({
   const router = createRouter(
     turns,
     log,
-    delegations.observe,
+    delegations,
     history,
     claudeModels,
     unverifiedCodex,

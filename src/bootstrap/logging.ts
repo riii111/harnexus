@@ -19,10 +19,10 @@ import {
   type loadCallSocketPath,
   loadLogPath,
   type loadPermissionMode,
-  type loadStatePath,
+  loadStatePath,
 } from "../runtime/config.ts";
 import { openLogSink } from "../runtime/fs.boundary.ts";
-import { createLogger, type LogSink } from "../runtime/logger.ts";
+import { createLogger } from "../runtime/logger.ts";
 import type { Signal } from "../runtime/process.boundary.ts";
 import type { serveLines } from "../runtime/socket.boundary.ts";
 import {
@@ -54,7 +54,10 @@ type CallSocketFailure =
 
 type StartupFailure = "ServerPipesUnavailable";
 
-type LogFileFailure = "LogPathNotAbsolute" | "LogFileOpenFailed";
+type LogFileFailure =
+  | "StatePathNotAbsolute"
+  | "LogPathNotAbsolute"
+  | "LogFileOpenFailed";
 
 type ClaudeUnavailable =
   | InferErr<ReturnType<typeof loadPermissionMode>>["_tag"]
@@ -69,17 +72,34 @@ type ModelsFailure = InferErr<
   Awaited<ReturnType<typeof loadClaudeModels>>
 >["_tag"];
 
-// The app may discard the server's stderr, so HARNEXUS_LOG_PATH keeps a copy in a file.
+// The app may discard the server's stderr, so a copy goes to a file unless HARNEXUS_LOG_PATH is off.
+// The default file leaves out each relayed message, which would fill it within one long turn; a path set by hand keeps them.
 export const createBridgeLogger = (env: NodeJS.ProcessEnv) => {
-  const file = loadLogPath(env).andThen((path) =>
-    path === null ? Result.ok(null) : openLogSink(path),
+  const file = loadStatePath(env)
+    .andThen((statePath) => loadLogPath(env, statePath))
+    .andThen((log) =>
+      log === null
+        ? Result.ok(null)
+        : openLogSink(log.path).map((append) => ({
+            append,
+            explicit: log.explicit,
+          })),
+    );
+  const toStderr = createLogger(
+    (line) => process.stderr.write(line),
+    serializeLogEvent,
   );
-  const appendToFile = file.isOk() ? file.value : null;
-  const sink: LogSink = (line) => {
-    process.stderr.write(line);
-    appendToFile?.(line);
+  const toFile =
+    file.isOk() && file.value !== null
+      ? createLogger(file.value.append, serializeLogEvent)
+      : null;
+  const keepsMessages = file.isOk() && file.value?.explicit === true;
+  const logger = {
+    log: (entry: LogEvent) => {
+      toStderr.log(entry);
+      if (entry.event !== "rpc_message" || keepsMessages) toFile?.log(entry);
+    },
   };
-  const logger = createLogger(sink, serializeLogEvent);
   if (file.isErr()) {
     logger.log({ event: "log_file_unavailable", reason: file.error._tag });
   }

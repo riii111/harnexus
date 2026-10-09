@@ -27,6 +27,7 @@ import { createSubagents } from "./subagents.ts";
 import {
   type AppRequest,
   type Mode,
+  type Refusal,
   refusalMessage,
 } from "./thread-request.ts";
 
@@ -185,6 +186,44 @@ describe("turn/start of a thread created by create_thread", () => {
       method: "turn/start",
       reason: "model_mismatch",
     });
+  });
+
+  test.each([
+    {
+      name: "the turn controller's refusal",
+      paused: false,
+      expected: "directory_unknown",
+    },
+    { name: "a pause", paused: true, expected: "claude_paused" },
+  ])("reports $name of a Claude first turn to the thread that created it", async ({
+    paused,
+    expected,
+  }) => {
+    const { router, starts } = setup(
+      [],
+      {},
+      paused ? "pause" : "warn",
+      false,
+      false,
+      true,
+      "directory_unknown",
+    );
+    if (paused) {
+      router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+      await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
+    }
+
+    router.fromApp(delegatedTurn({ model: CLAUDE }));
+
+    expect(starts).toEqual([["th-worker", expected]]);
+  });
+
+  test("reports no start of a Codex first turn, whose outcome only the server knows", () => {
+    const { router, starts } = setup();
+
+    router.fromApp(delegatedTurn({ model: "gpt-fixture" }));
+
+    expect(starts).toEqual([]);
   });
 
   test("reports nothing for another tool's output", () => {
@@ -2232,8 +2271,10 @@ const setup = (
   holdForks = false,
   vertex = false,
   delegatedRuns = true,
+  startRefusal: Refusal | null = null,
 ) => {
   const calls: unknown[][] = [];
+  const starts: [string, string | null][] = [];
   const events: RouteEvent[] = [];
   let pinFork = () => {};
   const forkPinned = new Promise<void>((resolve) => {
@@ -2321,8 +2362,10 @@ const setup = (
         const thread = threads.get(threadId);
         if (thread !== undefined) threads.set(threadId, { ...thread, model });
       },
-      startTurn: (request: AppRequest, cwd) =>
-        calls.push(["startTurn", request, cwd]),
+      startTurn: (request: AppRequest, cwd) => {
+        calls.push(["startTurn", request, cwd]);
+        return startRefusal;
+      },
       compactThread: (request) => calls.push(["compactThread", request]),
       steerTurn: (request) => calls.push(["steerTurn", request]),
       interruptTurn: (request) => calls.push(["interruptTurn", request]),
@@ -2345,9 +2388,12 @@ const setup = (
       liveTurnOf: (threadId) => live.get(threadId) ?? null,
     },
     (event) => events.push(event),
-    (source, threadId, asked) => {
-      calls.push(["delegated", source, threadId, asked]);
-      return delegatedRuns;
+    {
+      observe: (source, threadId, asked) => {
+        calls.push(["delegated", source, threadId, asked]);
+        return delegatedRuns;
+      },
+      started: (threadId, refusal) => starts.push([threadId, refusal]),
     },
     history,
     () => ({ ...catalog.models(), vertex }),
@@ -2357,6 +2403,7 @@ const setup = (
   return {
     router,
     calls,
+    starts,
     events,
     sent,
     reads,
