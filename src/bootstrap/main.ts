@@ -30,7 +30,7 @@ import {
   loadVertexModels,
 } from "../runtime/config.ts";
 import { openServerPipes } from "../runtime/process.boundary.ts";
-import { serveLines } from "../runtime/socket.boundary.ts";
+import { serveLinesWhenFree } from "../runtime/socket.boundary.ts";
 import { connectClaudeThreads } from "./claude-threads.ts";
 import { createBridgeLogger } from "./logging.ts";
 import {
@@ -158,7 +158,10 @@ async function withClaude(relay: {
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });
-  callSocketOpen = await openCallSocket(callGateway.handle);
+  // Not awaited: while another bridge holds the socket this one keeps waiting to take it over, and threads started before then go without CODEX_THREAD_ID.
+  void openCallSocket(callGateway.handle).then((open) => {
+    callSocketOpen = open;
+  });
   const appRewriter = createLineRewriter(router.fromApp);
   const serverRewriter = createLineRewriter(router.fromServer);
   process.stdin.on("error", (error) => appRewriter.destroy(error));
@@ -184,7 +187,10 @@ async function openCallSocket(handle: (line: string) => Promise<string>) {
     return false;
   }
   if (path.value === null) return false;
-  const served = await serveLines(path.value, handle);
+  const served = await serveLinesWhenFree(path.value, handle, {
+    onInUse: () =>
+      logger.log({ event: "call_socket_unavailable", reason: "SocketInUse" }),
+  });
   if (served.isErr()) {
     logger.log({
       event: "call_socket_unavailable",

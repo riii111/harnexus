@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { requestLine, serveLines } from "./socket.boundary.ts";
+import {
+  requestLine,
+  serveLines,
+  serveLinesWhenFree,
+} from "./socket.boundary.ts";
 
 let directory = "";
 
@@ -45,6 +49,29 @@ describe("serveLines", () => {
     const answer = await requestLine(path, "x", 1000);
 
     expect(answer.isOk() && answer.value).toBe("fresh");
+    if (served.isOk()) served.value.close();
+  });
+});
+
+describe("serveLinesWhenFree", () => {
+  test("takes the socket over once the bridge serving it is gone", async () => {
+    const path = join(directory, "call.sock");
+    const first = await serveLines(path, async () => "first");
+    let inUse = 0;
+
+    const second = serveLinesWhenFree(path, async () => "second", {
+      retryMs: 20,
+      onInUse: () => {
+        inUse += 1;
+      },
+    });
+    await Bun.sleep(60);
+    if (first.isOk()) first.value.close();
+    const served = await second;
+    const answer = await requestLine(path, "x", 1000);
+
+    expect(inUse).toBe(1);
+    expect(answer.isOk() && answer.value).toBe("second");
     if (served.isOk()) served.value.close();
   });
 });

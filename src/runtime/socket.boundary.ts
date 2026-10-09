@@ -75,6 +75,30 @@ export const serveLines = (
     return Result.ok({ close: () => server.close() });
   });
 
+// A socket another bridge serves is checked again until that bridge is gone, since the bridge that took it may be a short-lived one the app started beside this one.
+export const serveLinesWhenFree = (
+  path: string,
+  handle: (line: string) => Promise<string>,
+  {
+    retryMs = TAKEOVER_RETRY_MS,
+    onInUse,
+  }: { retryMs?: number; onInUse?: () => void } = {},
+) =>
+  new Promise<Awaited<ReturnType<typeof serveLines>>>((resolve) => {
+    let reported = false;
+    const attempt = async () => {
+      const served = await serveLines(path, handle);
+      if (served.isErr() && served.error._tag === "SocketInUse") {
+        if (!reported) onInUse?.();
+        reported = true;
+        setTimeout(attempt, retryMs).unref();
+        return;
+      }
+      resolve(served);
+    };
+    void attempt();
+  });
+
 // An empty line is only a probe: the server answers nothing to it but the connection proves it is alive.
 export const requestLine = (path: string, line: string, timeoutMs: number) => {
   let connected = false;
@@ -133,3 +157,4 @@ const listen = (server: Server, path: string) =>
 const OWNER_ONLY = 0o600;
 const LINE_LIMIT = 1_000_000;
 const PROBE_TIMEOUT_MS = 1000;
+const TAKEOVER_RETRY_MS = 5000;
