@@ -11,7 +11,7 @@ export type FirstTurn = {
   expected: TurnSettings;
   actual: TurnSettings;
   refused: boolean;
-  // Why the bridge refused a turn it runs itself after the settings check passed, such as reply_to_other_worker.
+  // Why the bridge refused a turn it runs itself after the settings check passed, such as directory_unknown.
   refusal: string | null;
 };
 
@@ -54,8 +54,12 @@ export const createDelegationWatch = (
   };
 
   // The router calls it in the same tick as observe, so an entry never outlives the turn it was set for.
+  // A refused turn joins refusedThreads, so the app resending it never runs a worker its creator was told never ran.
   const started = (threadId: string, refusal: string | null) => {
-    starting.get(threadId)?.(refusal);
+    const waiting = starting.get(threadId);
+    if (waiting === undefined) return;
+    if (refusal !== null) refusedThreads.add(threadId);
+    waiting(refusal);
     starting.delete(threadId);
   };
 

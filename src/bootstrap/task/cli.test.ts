@@ -220,13 +220,13 @@ describe("harnexus-task launch", () => {
     const refusal = {
       outcome: "first_turn_refused",
       threadId: "w1",
-      reason: "reply_to_other_worker",
+      reason: "directory_unknown",
     };
 
     const refused = await launch([], [refusal]);
 
     expect(refused.code).toBe(1);
-    expect(refused.err).toContain("reply_to_other_worker");
+    expect(refused.err).toContain("directory_unknown");
     expect((await launch()).code).toBe(1);
     expect(harnexus.calls).toHaveLength(1);
     const request = await write(data);
