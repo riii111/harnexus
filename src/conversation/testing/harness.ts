@@ -518,6 +518,23 @@ export const promptsUntil = async (
   return texts;
 };
 
+// Reads the messages themselves, whose uuids a result names as taken; it reads only as many as were sent, since a read past them waits for the next send.
+export const readPrompts = async (
+  claude: ReturnType<typeof fakeClaude>,
+  count: number,
+) => {
+  const prompt = claude.prompt();
+  if (prompt === null) return expect.unreachable("Claude never started");
+  const iterator = prompt[Symbol.asyncIterator]();
+  const read: SDKUserMessage[] = [];
+  while (read.length < count) {
+    const next = await iterator.next();
+    if (next.done === true) break;
+    read.push(next.value);
+  }
+  return read;
+};
+
 export const responseTo = (sent: Sent[], id: number) =>
   sent.find((message) => message.id === id);
 

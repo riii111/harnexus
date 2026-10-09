@@ -84,6 +84,18 @@ export const renderTurnStarted = (params: {
   return { ...seal(draft), turn };
 };
 
+// A turn/start that joins the running turn is answered with that turn, without its items, as Codex answers one it steers.
+export const steeredTurn = (state: TurnState): Turn => ({
+  id: state.turnId,
+  items: [],
+  itemsView: "notLoaded",
+  status: "inProgress",
+  error: null,
+  startedAt: toSeconds(state.startedAtMs),
+  completedAt: null,
+  durationMs: null,
+});
+
 export const renderToolOutput = (
   state: TurnState,
   output: Omit<FunctionCallOutputItem, "type" | "id">,

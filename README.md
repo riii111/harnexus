@@ -12,7 +12,7 @@ harnexus uses your Claude subscription through the official Claude Agent SDK, or
 
 - **Work with Claude**: Follow responses and tool execution as they appear in your chat.
 - **Stay involved**: Send follow-up instructions, stop a task, approve or reject operations, and answer Claude's questions in the app.
-- **Work with Codex**: Have Claude request a Codex review and continue from the feedback without copying messages between chats.
+- **Work with Codex**: Have Claude request a Codex review and continue from the feedback without copying messages between chats. As in a Codex chat, a message another chat sends while Claude is working reaches Claude at its next step.
 - **Pick up where you left off**: Reopen Claude chats after restarting the app and continue the conversation.
 - **Use your project instructions**: Work with your existing `CLAUDE.md` and attach skills from the app.
 
