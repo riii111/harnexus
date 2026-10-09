@@ -1,3 +1,6 @@
+import { parseJson } from "../runtime/json.boundary.ts";
+import { isObject } from "../runtime/object.ts";
+
 export type Check = {
   status: "ok" | "warn" | "fail";
   name: string;
@@ -57,6 +60,61 @@ export const processChecks = (
   ];
 };
 
+// Only event names, methods, reasons and versions are read, so a pasted report carries no more than the log's own fields allow.
+export const logChecks = (text: string, path: string, now: number): Check[] => {
+  const recent = text.split("\n").flatMap((line): LogEntry[] => {
+    const parsed = parseJson(line);
+    if (parsed.isErr() || !isObject(parsed.value)) return [];
+    const time = parsed.value.time;
+    return typeof time === "string" && Date.parse(time) >= now - LOG_WINDOW_MS
+      ? [{ ...parsed.value, time }]
+      : [];
+  });
+  const of = (event: string) => recent.filter((entry) => entry.event === event);
+  const version = of("codex_version").at(-1);
+  const unavailable = tally(
+    of("call_socket_unavailable").map((entry) => field(entry.reason)),
+  );
+  const refusals = [
+    ...of("claude_request_refused").map((entry) => ({
+      key: `request ${field(entry.method)} ${field(entry.reason)}`,
+      time: entry.time,
+    })),
+    ...of("claude_turn")
+      .filter((entry) => entry.step === "refused")
+      .map((entry) => ({
+        key: `turn ${field(entry.reason)}`,
+        time: entry.time,
+      })),
+  ];
+  const last = new Map(refusals.map(({ key, time }) => [key, time]));
+  const refused = [...tally(refusals.map(({ key }) => key))].map(
+    ([key, count]) => `${key} ${count} (last ${last.get(key)})`,
+  );
+  return [
+    {
+      status: "ok",
+      name: "Log",
+      detail: `${of("bridge_started").length} bridge starts in the last 24 hours, Codex CLI ${version === undefined ? "not seen" : field(version.version)}, in ${path}`,
+    },
+    {
+      status: unavailable.size === 0 ? "ok" : "warn",
+      name: "Call socket",
+      detail: [
+        `listening ${of("call_socket_listening").length}`,
+        ...[...unavailable].map(
+          ([reason, count]) => `unavailable ${count} (${reason})`,
+        ),
+      ].join(", "),
+    },
+    {
+      status: refused.length === 0 ? "ok" : "warn",
+      name: "Refusals",
+      detail: refused.length === 0 ? "none" : refused.join("; "),
+    },
+  ];
+};
+
 export const formatReport = (checks: readonly Check[]) =>
   `${checks
     .map(
@@ -77,6 +135,19 @@ const runs = (command: string, path: string) =>
 
 // The SDK starts the Claude Code binary it ships in its platform package.
 const CLAUDE_BINARY = /claude-agent-sdk-[a-z0-9-]+\/claude(\s|$)/;
+
+type LogEntry = Record<string, unknown> & { time: string };
+
+const tally = (keys: readonly string[]) => {
+  const counts = new Map<string, number>();
+  for (const key of keys) counts.set(key, (counts.get(key) ?? 0) + 1);
+  return counts;
+};
+
+const field = (value: unknown) =>
+  typeof value === "string" ? value : "unknown";
+
+const LOG_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const LAUNCHD = 1;
 

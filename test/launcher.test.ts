@@ -222,6 +222,25 @@ describe("app-server", () => {
     TIMEOUT,
   );
 
+  test(
+    "keeps the log beside the thread store when HARNEXUS_LOG_PATH is unset",
+    async () => {
+      const stateDir = join(dir, "default-log");
+      await mkdir(stateDir);
+      const { env } = setup({
+        HARNEXUS_STATE_PATH: join(stateDir, "threads.json"),
+        HARNEXUS_LOG_PATH: undefined,
+      });
+
+      const result = await finish(launch(["app-server"], env));
+      const logged = await Bun.file(join(stateDir, "bridge.log")).text();
+
+      expect(result.exitCode).toBe(0);
+      expect(logged).toContain('"event":"bridge_started"');
+    },
+    TIMEOUT,
+  );
+
   test.each([
     {
       name: "a relative path",
@@ -229,8 +248,8 @@ describe("app-server", () => {
       expected: "LogPathNotAbsolute",
     },
     {
-      name: "a path in a missing directory",
-      logPath: () => join(dir, "absent", "bridge.log"),
+      name: "a path below a file",
+      logPath: () => join(fakeCodex, "bridge.log"),
       expected: "LogFileOpenFailed",
     },
   ])(
@@ -260,7 +279,10 @@ describe("app-server", () => {
         join(cwd, "pre.ts"),
         `require("node:fs").writeFileSync(${JSON.stringify(preloaded)}, "");\n`,
       );
-      const { env } = setup();
+      const { env } = setup({
+        HARNEXUS_STATE_PATH: join(cwd, "threads.json"),
+        HARNEXUS_LOG_PATH: undefined,
+      });
 
       const result = await finish(launch(["app-server"], env, { cwd }));
 
@@ -473,6 +495,7 @@ const setup = (overrides: Record<string, string | undefined> = {}) => {
     HARNEXUS_CODEX_PATH: fakeCodex,
     HARNEXUS_BUN_PATH: BUN,
     HARNEXUS_STATE_PATH: join(dir, `threads-${reports}.json`),
+    HARNEXUS_LOG_PATH: join(dir, `bridge-${reports}.log`),
     FAKE_CODEX_REPORT: reportPath,
     ...overrides,
   });

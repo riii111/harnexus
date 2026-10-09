@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import {
-  closeSync,
+  appendFileSync,
+  chmodSync,
   constants,
   type Dirent,
-  fchmodSync,
-  openSync,
-  writeSync,
+  mkdirSync,
+  renameSync,
+  statSync,
 } from "node:fs";
 import {
   access,
@@ -61,20 +62,28 @@ class DirectoryPrepareFailed extends TaggedError("DirectoryPrepareFailed")<{
   message: string;
 }> {}
 
-// The open mode applies only to a new file, so an existing one is narrowed too; a failed write is dropped because logging must never stop the relay.
-export const openLogSink = (path: string) =>
+// The mode applies only to a new file, so an existing one is narrowed too; a failed write is dropped because logging must never stop the relay.
+// Each line is appended by path, so a bridge whose file another bridge moved aside at start writes to the new file, and lines of bridges running at once stay whole.
+export const openLogSink = (path: string, rotateAbove = LOG_ROTATE_BYTES) =>
   Result.try({
     try: () => {
-      const fd = openSync(path, "a", OWNER_ONLY);
-      try {
-        fchmodSync(fd, OWNER_ONLY);
-      } catch (cause) {
-        closeSync(fd);
-        throw cause;
+      mkdirSync(dirname(path), {
+        recursive: true,
+        mode: OWNER_ONLY_DIRECTORY,
+      });
+      if (
+        (statSync(path, { throwIfNoEntry: false })?.size ?? 0) > rotateAbove
+      ) {
+        // Another bridge starting at the same time may have moved it first.
+        try {
+          renameSync(path, `${path}.1`);
+        } catch {}
       }
+      appendFileSync(path, "", { mode: OWNER_ONLY });
+      chmodSync(path, OWNER_ONLY);
       return (line: string) => {
         try {
-          writeSync(fd, line);
+          appendFileSync(path, line, { mode: OWNER_ONLY });
         } catch {}
       };
     },
@@ -426,5 +435,7 @@ const isNotDirectory = (cause: unknown) =>
   cause instanceof Error && "code" in cause && cause.code === "ENOTDIR";
 
 const OWNER_ONLY = 0o600;
+
+const LOG_ROTATE_BYTES = 5 * 1024 * 1024;
 
 const OWNER_ONLY_DIRECTORY = 0o700;

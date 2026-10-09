@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   failed,
   formatReport,
+  logChecks,
   parseProcesses,
   processChecks,
 } from "./doctor-report.ts";
@@ -98,3 +99,91 @@ const REPO = "/work/harnexus";
 const BRIDGE = `/usr/bin/bun --no-env-file --config=/dev/null ${REPO}/src/bootstrap/main.ts`;
 
 const CLAUDE = `${REPO}/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`;
+
+describe("logChecks", () => {
+  test("summarizes starts, the latest Codex CLI, the call socket and refusals of the last 24 hours", () => {
+    const checks = logChecks(
+      [
+        line("2026-10-07T12:00:00.000Z", { event: "bridge_started" }),
+        line("2026-10-09T10:00:00.000Z", { event: "bridge_started" }),
+        line("2026-10-09T10:00:01.000Z", {
+          event: "codex_version",
+          version: "0.120.0",
+          verified: true,
+        }),
+        line("2026-10-09T10:00:02.000Z", { event: "call_socket_listening" }),
+        line("2026-10-09T11:00:00.000Z", { event: "bridge_started" }),
+        line("2026-10-09T11:00:01.000Z", {
+          event: "codex_version",
+          version: "0.121.0",
+          verified: false,
+        }),
+        line("2026-10-09T11:00:02.000Z", {
+          event: "call_socket_unavailable",
+          reason: "SocketInUse",
+        }),
+        line("2026-10-09T11:01:00.000Z", {
+          event: "claude_request_refused",
+          method: "thread/resume",
+          reason: "claude_thread_moved",
+        }),
+        line("2026-10-09T11:02:00.000Z", {
+          event: "claude_turn",
+          step: "refused",
+          reason: "busy",
+          error: null,
+        }),
+        line("2026-10-09T11:03:00.000Z", {
+          event: "claude_request_refused",
+          method: "thread/resume",
+          reason: "claude_thread_moved",
+        }),
+        "not json",
+        "",
+      ].join("\n"),
+      "/state/bridge.log",
+      Date.parse("2026-10-09T12:00:00.000Z"),
+    );
+
+    expect(checks).toEqual([
+      {
+        status: "ok",
+        name: "Log",
+        detail:
+          "2 bridge starts in the last 24 hours, Codex CLI 0.121.0, in /state/bridge.log",
+      },
+      {
+        status: "warn",
+        name: "Call socket",
+        detail: "listening 1, unavailable 1 (SocketInUse)",
+      },
+      {
+        status: "warn",
+        name: "Refusals",
+        detail:
+          "request thread/resume claude_thread_moved 2 (last 2026-10-09T11:03:00.000Z); turn busy 1 (last 2026-10-09T11:02:00.000Z)",
+      },
+    ]);
+  });
+
+  test("reports nothing seen for a log with no recent events", () => {
+    const checks = logChecks(
+      line("2026-10-01T00:00:00.000Z", { event: "bridge_started" }),
+      "/state/bridge.log",
+      Date.parse("2026-10-09T12:00:00.000Z"),
+    );
+
+    expect(checks.map(({ status, detail }) => ({ status, detail }))).toEqual([
+      {
+        status: "ok",
+        detail:
+          "0 bridge starts in the last 24 hours, Codex CLI not seen, in /state/bridge.log",
+      },
+      { status: "ok", detail: "listening 0" },
+      { status: "ok", detail: "none" },
+    ]);
+  });
+});
+
+const line = (time: string, fields: object) =>
+  JSON.stringify({ time, ...fields });

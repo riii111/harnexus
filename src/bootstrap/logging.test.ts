@@ -1,5 +1,18 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createBridgeLogger } from "./logging.ts";
+
+let dir: string;
+
+beforeAll(async () => {
+  dir = await mkdtemp(join(tmpdir(), "harnexus-logging-"));
+});
+
+afterAll(async () => {
+  await rm(dir, { recursive: true, force: true });
+});
 
 describe("createBridgeLogger", () => {
   test.each<{ name: string; entry: LogEvent; expected: object }>([
@@ -125,16 +138,57 @@ describe("createBridgeLogger", () => {
   });
 });
 
+describe("createBridgeLogger file", () => {
+  test.each([
+    {
+      name: "the default file leaves out relayed messages",
+      env: () => ({
+        HARNEXUS_STATE_PATH: join(dir, "default", "threads.json"),
+      }),
+      path: () => join(dir, "default", "bridge.log"),
+      expected: ["bridge_started"],
+    },
+    {
+      name: "a file set by hand keeps them",
+      env: () => ({ HARNEXUS_LOG_PATH: join(dir, "explicit.log") }),
+      path: () => join(dir, "explicit.log"),
+      expected: ["rpc_message", "bridge_started"],
+    },
+  ])("$name", async ({ env, path, expected }) => {
+    const write = spyOn(process.stderr, "write").mockImplementation(() => true);
+    const logger = createBridgeLogger(env());
+    logger.log({
+      event: "rpc_message",
+      direction: "server_to_app",
+      kind: "notification",
+      method: "item/agentMessage/delta",
+      id: null,
+      tools: [],
+      mcpStartup: null,
+      threadOpen: null,
+    });
+    logger.log({ event: "bridge_started" });
+    write.mockRestore();
+
+    const events = (await readFile(path(), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).event);
+
+    expect(events).toEqual([...expected]);
+  });
+});
+
 type LogEvent = Parameters<ReturnType<typeof createBridgeLogger>["log"]>[0];
 
-// Without HARNEXUS_LOG_PATH the bridge logger writes only to stderr, so each record is read back from there without its time.
+// With HARNEXUS_LOG_PATH off the bridge logger writes only to stderr, so each record is read back from there without its time.
 const logged = (entry: LogEvent) => {
   const lines: string[] = [];
   const write = spyOn(process.stderr, "write").mockImplementation((line) => {
     lines.push(String(line));
     return true;
   });
-  createBridgeLogger({}).log(entry);
+  createBridgeLogger({ HARNEXUS_LOG_PATH: "off" }).log(entry);
   write.mockRestore();
   return lines.map((line) => {
     const { time: _time, ...record } = JSON.parse(line);

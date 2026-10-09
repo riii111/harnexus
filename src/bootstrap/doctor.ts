@@ -2,8 +2,13 @@ import { dirname, join } from "node:path";
 import { readClaudeLogin } from "../infra/claude/session.ts";
 import { isVerifiedCodex } from "../infra/codex/versions.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
-import { loadStatePath } from "../runtime/config.ts";
-import { checkAccess, readTextFileIfExists } from "../runtime/fs.boundary.ts";
+import { loadLogPath, loadStatePath } from "../runtime/config.ts";
+import {
+  checkAccess,
+  readFileSlice,
+  readTextFileIfExists,
+  statFileIfExists,
+} from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import { readCommandOutput } from "../runtime/process.boundary.ts";
@@ -11,6 +16,7 @@ import {
   type Check,
   failed,
   formatReport,
+  logChecks,
   parseProcesses,
   processChecks,
 } from "./doctor-report.ts";
@@ -18,6 +24,7 @@ import {
 // The checks change nothing but create the store's marker directory when it is missing, as the bridge does, so the command is safe while the app runs; nothing it prints holds conversation text or credentials.
 const REPO = join(import.meta.dir, "..", "..");
 const APP = process.env.HARNEXUS_APP_PATH || "/Applications/ChatGPT.app";
+const LOG_TAIL_BYTES = 2 * 1024 * 1024;
 
 const checks: Check[] = [
   await appCheck(),
@@ -28,6 +35,7 @@ const checks: Check[] = [
   ...(await stateChecks()),
   await launcherCheck(),
   ...(await processesChecks()),
+  ...(await logSummaryChecks()),
 ];
 process.stdout.write(formatReport(checks));
 process.exit(failed(checks) ? 1 : 0);
@@ -166,6 +174,47 @@ async function processesChecks(): Promise<Check[]> {
   return listed.isOk()
     ? processChecks(parseProcesses(listed.value), REPO)
     : [{ status: "fail", name: "Processes", detail: "cannot list processes" }];
+}
+
+// The bridge finds its log as the app's environment sets it, which matches this shell's when the app was opened with bun run open-app.
+async function logSummaryChecks(): Promise<Check[]> {
+  const path = loadStatePath(process.env).andThen((statePath) =>
+    loadLogPath(process.env, statePath),
+  );
+  if (path.isErr()) {
+    return [{ status: "warn", name: "Log", detail: path.error.message }];
+  }
+  if (path.value === null) {
+    return [
+      {
+        status: "warn",
+        name: "Log",
+        detail:
+          "HARNEXUS_LOG_PATH is off; unset it and reopen the app with bun run open-app to keep a log",
+      },
+    ];
+  }
+  const { path: logPath } = path.value;
+  const text = await readLogTail(logPath);
+  if (text === null) {
+    return [
+      {
+        status: "warn",
+        name: "Log",
+        detail: `cannot read ${logPath}; the bridge writes it once the app runs with harnexus and HARNEXUS_LOG_PATH is not off`,
+      },
+    ];
+  }
+  return logChecks(text, logPath, Date.now());
+}
+
+// A bridge running long, or a log set by hand that keeps every relayed message, can grow well past the rotation limit, so only its end is read; a line cut at the start is skipped as unparsable.
+async function readLogTail(path: string) {
+  const found = await statFileIfExists(path);
+  if (found.isErr() || found.value === null) return null;
+  const start = Math.max(0, found.value.size - LOG_TAIL_BYTES);
+  const read = await readFileSlice(path, start, found.value.size - start);
+  return read.isOk() ? read.value : null;
 }
 
 async function packageVersion(path: string) {

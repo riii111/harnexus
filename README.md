@@ -86,7 +86,9 @@ First, make sure you quit the app before opening it with `bun run open-app`. The
 bun run doctor
 ```
 
-The report checks installed versions, your Claude login, saved state, the launcher, and any bridge or Claude processes left running. It prints no conversation text or credentials.
+The report checks installed versions, your Claude login, saved state, the launcher, and any bridge or Claude processes left running. It also summarizes the last 24 hours of the bridge log: bridge starts, the Codex CLI version, the call socket, and refused requests and turns. It prints no conversation text or credentials, so you can paste it into a bug report.
+
+The bridge log is kept at `~/.local/state/harnexus/bridge.log`, beside the saved state, and holds no conversation text. When it grows past 5 MB, the next bridge start moves it to `bridge.log.1`.
 
 ### After an app update
 
@@ -151,7 +153,7 @@ Write the agent's instructions in the file body: this replaces the built-in Expl
 
 ### Custom paths
 
-Set `HARNEXUS_APP_PATH` if the app is installed somewhere else. `HARNEXUS_LOG_PATH` and `HARNEXUS_STATE_PATH` set in your shell are passed to the app by `bun run open-app`; both must be absolute paths.
+Set `HARNEXUS_APP_PATH` if the app is installed somewhere else. `HARNEXUS_LOG_PATH` and `HARNEXUS_STATE_PATH` set in your shell are passed to the app by `bun run open-app`; both must be absolute paths. The log is kept beside the state file unless `HARNEXUS_LOG_PATH` names another file, or is `off` to keep no log file. A file named this way also records a summary of each message relayed between the app and Codex.
 
 ## harnexus-task
 
