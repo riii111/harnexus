@@ -2,7 +2,7 @@ import { dirname, join } from "node:path";
 import { readClaudeLogin } from "../infra/claude/session.ts";
 import { isVerifiedCodex } from "../infra/codex/versions.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
-import { loadStatePath } from "../runtime/config.ts";
+import { loadLogPath, loadStatePath } from "../runtime/config.ts";
 import { checkAccess, readTextFileIfExists } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
@@ -11,6 +11,7 @@ import {
   type Check,
   failed,
   formatReport,
+  logChecks,
   parseProcesses,
   processChecks,
 } from "./doctor-report.ts";
@@ -28,6 +29,7 @@ const checks: Check[] = [
   ...(await stateChecks()),
   await launcherCheck(),
   ...(await processesChecks()),
+  ...(await logSummaryChecks()),
 ];
 process.stdout.write(formatReport(checks));
 process.exit(failed(checks) ? 1 : 0);
@@ -166,6 +168,37 @@ async function processesChecks(): Promise<Check[]> {
   return listed.isOk()
     ? processChecks(parseProcesses(listed.value), REPO)
     : [{ status: "fail", name: "Processes", detail: "cannot list processes" }];
+}
+
+// The bridge finds its log as the app's environment sets it, which matches this shell's when the app was opened with bun run open-app.
+async function logSummaryChecks(): Promise<Check[]> {
+  const path = loadStatePath(process.env).andThen((statePath) =>
+    loadLogPath(process.env, statePath),
+  );
+  if (path.isErr()) {
+    return [{ status: "warn", name: "Log", detail: path.error.message }];
+  }
+  if (path.value === null) {
+    return [
+      {
+        status: "warn",
+        name: "Log",
+        detail:
+          "HARNEXUS_LOG_PATH is off; unset it and reopen the app with bun run open-app to keep a log",
+      },
+    ];
+  }
+  const text = await readTextFileIfExists(path.value);
+  if (text.isErr() || text.value === null) {
+    return [
+      {
+        status: "warn",
+        name: "Log",
+        detail: `cannot read ${path.value}; the bridge writes it once the app runs with harnexus and HARNEXUS_LOG_PATH is not off`,
+      },
+    ];
+  }
+  return logChecks(text.value, path.value, Date.now());
 }
 
 async function packageVersion(path: string) {

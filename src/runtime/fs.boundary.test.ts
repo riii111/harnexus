@@ -58,6 +58,29 @@ describe("openLogSink", () => {
     expect(await readFile(path, "utf8")).toBe("before\nafter\n");
   });
 
+  test("moves a file over the limit to .1, replacing an older one, and starts anew", async () => {
+    const path = join(dir, "full.log");
+    await writeFile(path, "12345\n");
+    await writeFile(`${path}.1`, "oldest\n");
+
+    const sink = openLogSink(path, 5);
+    if (sink.isOk()) sink.value("next\n");
+
+    expect(await readFile(`${path}.1`, "utf8")).toBe("12345\n");
+    expect(await readFile(path, "utf8")).toBe("next\n");
+  });
+
+  test("keeps appending to a file within the limit", async () => {
+    const path = join(dir, "small.log");
+    await writeFile(path, "12345\n");
+
+    const sink = openLogSink(path, 6);
+    if (sink.isOk()) sink.value("next\n");
+
+    expect(await readFile(path, "utf8")).toBe("12345\nnext\n");
+    expect(await Bun.file(`${path}.1`).exists()).toBe(false);
+  });
+
   test("returns an error when the file cannot be opened", () => {
     const sink = openLogSink(join(dir, "absent", "x.log"));
 

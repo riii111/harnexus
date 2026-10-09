@@ -33,23 +33,29 @@ describe("loadPermissionMode", () => {
 });
 
 describe("loadLogPath", () => {
-  test.each([
-    { name: "unset", env: {} },
-    { name: "empty", env: { HARNEXUS_LOG_PATH: "" } },
-  ])("returns null when the variable is $name", ({ env }) => {
-    const path = loadLogPath(env);
+  test("keeps no file when the variable is off", () => {
+    const path = loadLogPath({ HARNEXUS_LOG_PATH: "off" }, STATE);
 
     expect(path.isOk() && path.value).toBeNull();
   });
 
-  test("returns an absolute path", () => {
-    const path = loadLogPath({ HARNEXUS_LOG_PATH: "/var/log/x.log" });
+  test.each([
+    { name: "unset", value: undefined },
+    { name: "empty", value: "" },
+  ])("places the log beside the thread store when $name", ({ value }) => {
+    const path = loadLogPath({ HARNEXUS_LOG_PATH: value }, STATE);
+
+    expect(path.isOk() && path.value).toBe("/state/harnexus/bridge.log");
+  });
+
+  test("returns an absolute path as given", () => {
+    const path = loadLogPath({ HARNEXUS_LOG_PATH: "/var/log/x.log" }, STATE);
 
     expect(path.isOk() && path.value).toBe("/var/log/x.log");
   });
 
   test("rejects a relative path", () => {
-    const path = loadLogPath({ HARNEXUS_LOG_PATH: "x.log" });
+    const path = loadLogPath({ HARNEXUS_LOG_PATH: "x.log" }, STATE);
 
     expect(path.isErr() && path.error._tag).toBe("LogPathNotAbsolute");
   });

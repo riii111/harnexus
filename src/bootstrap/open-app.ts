@@ -62,10 +62,10 @@ async function findProblem() {
   // The bridge and the launcher refuse a relative path where nobody sees it, so it is refused here first.
   const permissionMode = loadPermissionMode(process.env);
   if (permissionMode.isErr()) return permissionMode.error.message;
-  const log = loadLogPath(process.env);
-  if (log.isErr()) return log.error.message;
   const state = loadStatePath(process.env);
   if (state.isErr()) return state.error.message;
+  const log = loadLogPath(process.env, state.value);
+  if (log.isErr()) return log.error.message;
   if (!isAbsolute(paths.codex)) {
     return "HARNEXUS_CODEX_PATH must be an absolute path";
   }

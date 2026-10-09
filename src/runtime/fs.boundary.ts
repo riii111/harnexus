@@ -5,6 +5,8 @@ import {
   type Dirent,
   fchmodSync,
   openSync,
+  renameSync,
+  statSync,
   writeSync,
 } from "node:fs";
 import {
@@ -62,9 +64,18 @@ class DirectoryPrepareFailed extends TaggedError("DirectoryPrepareFailed")<{
 }> {}
 
 // The open mode applies only to a new file, so an existing one is narrowed too; a failed write is dropped because logging must never stop the relay.
-export const openLogSink = (path: string) =>
+// Append mode keeps the lines of bridges running at once whole; the size is checked only at start, which the app's short-lived bridges reach often.
+export const openLogSink = (path: string, rotateAbove = LOG_ROTATE_BYTES) =>
   Result.try({
     try: () => {
+      if (
+        (statSync(path, { throwIfNoEntry: false })?.size ?? 0) > rotateAbove
+      ) {
+        // Another bridge starting at the same time may have moved it first.
+        try {
+          renameSync(path, `${path}.1`);
+        } catch {}
+      }
       const fd = openSync(path, "a", OWNER_ONLY);
       try {
         fchmodSync(fd, OWNER_ONLY);
@@ -426,5 +437,7 @@ const isNotDirectory = (cause: unknown) =>
   cause instanceof Error && "code" in cause && cause.code === "ENOTDIR";
 
 const OWNER_ONLY = 0o600;
+
+const LOG_ROTATE_BYTES = 5 * 1024 * 1024;
 
 const OWNER_ONLY_DIRECTORY = 0o700;

@@ -19,7 +19,7 @@ import {
   type loadCallSocketPath,
   loadLogPath,
   type loadPermissionMode,
-  type loadStatePath,
+  loadStatePath,
 } from "../runtime/config.ts";
 import { openLogSink } from "../runtime/fs.boundary.ts";
 import { createLogger, type LogSink } from "../runtime/logger.ts";
@@ -54,7 +54,10 @@ type CallSocketFailure =
 
 type StartupFailure = "ServerPipesUnavailable";
 
-type LogFileFailure = "LogPathNotAbsolute" | "LogFileOpenFailed";
+type LogFileFailure =
+  | "StatePathNotAbsolute"
+  | "LogPathNotAbsolute"
+  | "LogFileOpenFailed";
 
 type ClaudeUnavailable =
   | InferErr<ReturnType<typeof loadPermissionMode>>["_tag"]
@@ -69,11 +72,11 @@ type ModelsFailure = InferErr<
   Awaited<ReturnType<typeof loadClaudeModels>>
 >["_tag"];
 
-// The app may discard the server's stderr, so HARNEXUS_LOG_PATH keeps a copy in a file.
+// The app may discard the server's stderr, so a copy goes to a file unless HARNEXUS_LOG_PATH is off.
 export const createBridgeLogger = (env: NodeJS.ProcessEnv) => {
-  const file = loadLogPath(env).andThen((path) =>
-    path === null ? Result.ok(null) : openLogSink(path),
-  );
+  const file = loadStatePath(env)
+    .andThen((statePath) => loadLogPath(env, statePath))
+    .andThen((path) => (path === null ? Result.ok(null) : openLogSink(path)));
   const appendToFile = file.isOk() ? file.value : null;
   const sink: LogSink = (line) => {
     process.stderr.write(line);

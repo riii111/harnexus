@@ -134,7 +134,7 @@ const logged = (entry: LogEvent) => {
     lines.push(String(line));
     return true;
   });
-  createBridgeLogger({}).log(entry);
+  createBridgeLogger({ HARNEXUS_LOG_PATH: "off" }).log(entry);
   write.mockRestore();
   return lines.map((line) => {
     const { time: _time, ...record } = JSON.parse(line);
