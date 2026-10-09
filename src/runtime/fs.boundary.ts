@@ -1,13 +1,12 @@
 import { randomUUID } from "node:crypto";
 import {
-  closeSync,
+  appendFileSync,
+  chmodSync,
   constants,
   type Dirent,
-  fchmodSync,
-  openSync,
+  mkdirSync,
   renameSync,
   statSync,
-  writeSync,
 } from "node:fs";
 import {
   access,
@@ -63,11 +62,15 @@ class DirectoryPrepareFailed extends TaggedError("DirectoryPrepareFailed")<{
   message: string;
 }> {}
 
-// The open mode applies only to a new file, so an existing one is narrowed too; a failed write is dropped because logging must never stop the relay.
-// Append mode keeps the lines of bridges running at once whole; the size is checked only at start, which the app's short-lived bridges reach often.
+// The mode applies only to a new file, so an existing one is narrowed too; a failed write is dropped because logging must never stop the relay.
+// Each line is appended by path, so a bridge whose file another bridge moved aside at start writes to the new file, and lines of bridges running at once stay whole.
 export const openLogSink = (path: string, rotateAbove = LOG_ROTATE_BYTES) =>
   Result.try({
     try: () => {
+      mkdirSync(dirname(path), {
+        recursive: true,
+        mode: OWNER_ONLY_DIRECTORY,
+      });
       if (
         (statSync(path, { throwIfNoEntry: false })?.size ?? 0) > rotateAbove
       ) {
@@ -76,16 +79,11 @@ export const openLogSink = (path: string, rotateAbove = LOG_ROTATE_BYTES) =>
           renameSync(path, `${path}.1`);
         } catch {}
       }
-      const fd = openSync(path, "a", OWNER_ONLY);
-      try {
-        fchmodSync(fd, OWNER_ONLY);
-      } catch (cause) {
-        closeSync(fd);
-        throw cause;
-      }
+      appendFileSync(path, "", { mode: OWNER_ONLY });
+      chmodSync(path, OWNER_ONLY);
       return (line: string) => {
         try {
-          writeSync(fd, line);
+          appendFileSync(path, line, { mode: OWNER_ONLY });
         } catch {}
       };
     },

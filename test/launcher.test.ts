@@ -248,8 +248,8 @@ describe("app-server", () => {
       expected: "LogPathNotAbsolute",
     },
     {
-      name: "a path in a missing directory",
-      logPath: () => join(dir, "absent", "bridge.log"),
+      name: "a path below a file",
+      logPath: () => join(fakeCodex, "bridge.log"),
       expected: "LogFileOpenFailed",
     },
   ])(

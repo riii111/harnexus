@@ -153,7 +153,7 @@ Write the agent's instructions in the file body: this replaces the built-in Expl
 
 ### Custom paths
 
-Set `HARNEXUS_APP_PATH` if the app is installed somewhere else. `HARNEXUS_LOG_PATH` and `HARNEXUS_STATE_PATH` set in your shell are passed to the app by `bun run open-app`; both must be absolute paths. The log is kept beside the state file unless `HARNEXUS_LOG_PATH` names another file, or is `off` to keep no log file.
+Set `HARNEXUS_APP_PATH` if the app is installed somewhere else. `HARNEXUS_LOG_PATH` and `HARNEXUS_STATE_PATH` set in your shell are passed to the app by `bun run open-app`; both must be absolute paths. The log is kept beside the state file unless `HARNEXUS_LOG_PATH` names another file, or is `off` to keep no log file. A file named this way also records a summary of each message relayed between the app and Codex.
 
 ## harnexus-task
 

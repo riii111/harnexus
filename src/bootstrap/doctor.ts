@@ -3,7 +3,12 @@ import { readClaudeLogin } from "../infra/claude/session.ts";
 import { isVerifiedCodex } from "../infra/codex/versions.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import { loadLogPath, loadStatePath } from "../runtime/config.ts";
-import { checkAccess, readTextFileIfExists } from "../runtime/fs.boundary.ts";
+import {
+  checkAccess,
+  readFileSlice,
+  readTextFileIfExists,
+  statFileIfExists,
+} from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import { readCommandOutput } from "../runtime/process.boundary.ts";
@@ -19,6 +24,7 @@ import {
 // The checks change nothing but create the store's marker directory when it is missing, as the bridge does, so the command is safe while the app runs; nothing it prints holds conversation text or credentials.
 const REPO = join(import.meta.dir, "..", "..");
 const APP = process.env.HARNEXUS_APP_PATH || "/Applications/ChatGPT.app";
+const LOG_TAIL_BYTES = 2 * 1024 * 1024;
 
 const checks: Check[] = [
   await appCheck(),
@@ -188,17 +194,27 @@ async function logSummaryChecks(): Promise<Check[]> {
       },
     ];
   }
-  const text = await readTextFileIfExists(path.value);
-  if (text.isErr() || text.value === null) {
+  const { path: logPath } = path.value;
+  const text = await readLogTail(logPath);
+  if (text === null) {
     return [
       {
         status: "warn",
         name: "Log",
-        detail: `cannot read ${path.value}; the bridge writes it once the app runs with harnexus and HARNEXUS_LOG_PATH is not off`,
+        detail: `cannot read ${logPath}; the bridge writes it once the app runs with harnexus and HARNEXUS_LOG_PATH is not off`,
       },
     ];
   }
-  return logChecks(text.value, path.value, Date.now());
+  return logChecks(text, logPath, Date.now());
+}
+
+// A bridge running long, or a log set by hand that keeps every relayed message, can grow well past the rotation limit, so only its end is read; a line cut at the start is skipped as unparsable.
+async function readLogTail(path: string) {
+  const found = await statFileIfExists(path);
+  if (found.isErr() || found.value === null) return null;
+  const start = Math.max(0, found.value.size - LOG_TAIL_BYTES);
+  const read = await readFileSlice(path, start, found.value.size - start);
+  return read.isOk() ? read.value : null;
 }
 
 async function packageVersion(path: string) {

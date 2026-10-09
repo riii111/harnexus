@@ -45,13 +45,19 @@ describe("loadLogPath", () => {
   ])("places the log beside the thread store when $name", ({ value }) => {
     const path = loadLogPath({ HARNEXUS_LOG_PATH: value }, STATE);
 
-    expect(path.isOk() && path.value).toBe("/state/harnexus/bridge.log");
+    expect(path.isOk() && path.value).toEqual({
+      path: "/state/harnexus/bridge.log",
+      explicit: false,
+    });
   });
 
   test("returns an absolute path as given", () => {
     const path = loadLogPath({ HARNEXUS_LOG_PATH: "/var/log/x.log" }, STATE);
 
-    expect(path.isOk() && path.value).toBe("/var/log/x.log");
+    expect(path.isOk() && path.value).toEqual({
+      path: "/var/log/x.log",
+      explicit: true,
+    });
   });
 
   test("rejects a relative path", () => {

@@ -39,7 +39,7 @@ export const loadPermissionMode = (
 
 const LOG_PATH_ENV = "HARNEXUS_LOG_PATH";
 
-// Kept beside the thread store unless "off", since the app may discard the bridge's stderr and a log is what a report of a failure needs.
+// Kept beside the thread store unless "off", since the app may discard the bridge's stderr and a log is what a report of a failure needs; only a path set here asks for every line.
 export const loadLogPath = (
   env: Record<string, string | undefined>,
   statePath: string,
@@ -47,7 +47,10 @@ export const loadLogPath = (
   const path = env[LOG_PATH_ENV];
   if (path === "off") return Result.ok(null);
   if (path === undefined || path === "") {
-    return Result.ok(join(dirname(statePath), "bridge.log"));
+    return Result.ok({
+      path: join(dirname(statePath), "bridge.log"),
+      explicit: false,
+    });
   }
   if (!isAbsolute(path)) {
     return Result.err(
@@ -57,7 +60,7 @@ export const loadLogPath = (
       }),
     );
   }
-  return Result.ok(path);
+  return Result.ok({ path, explicit: true });
 };
 
 const STATE_PATH_ENV = "HARNEXUS_STATE_PATH";
