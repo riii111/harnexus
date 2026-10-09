@@ -1493,6 +1493,19 @@ describe("turn/start carrying another thread's message", () => {
     expect(claude.started()).toBe(false);
   });
 
+  test("starts a thread that another worker's reviewer created", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await registeredWorkers([claude]);
+
+    turns.startTurn(
+      reply(10, THREAD, OTHER_REVIEWER, "create_thread"),
+      undefined,
+    );
+    await until(() => claude.started());
+
+    expect(claude.started()).toBe(true);
+  });
+
   test("refuses a message from a reviewer another worker is still saving", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const gate = createGate();
