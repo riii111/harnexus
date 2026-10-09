@@ -1907,6 +1907,50 @@ describe("another thread's message arriving on a busy thread", () => {
     ]);
   });
 
+  test("runs ahead of a message typed after it when the running turn is stopped while the sender is being saved", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
+    const gate = createGate();
+    let holdWrites = false;
+    const { turns, sent } = await registeredWorkers([claude], {
+      writeState: async (target, content) => {
+        if (holdWrites) await gate.promise;
+        return writeFileAtomic(target, content);
+      },
+    });
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.prompted());
+    holdWrites = true;
+    turns.startTurn(reply(11, THREAD, CODEX_WORKER), undefined);
+    await settle();
+
+    turns.interruptTurn(interrupt(20, "turn-1"));
+    await until(() => claude.interrupts() === 1);
+    turns.startTurn(turnStart(12, "next"), undefined);
+    await settle();
+    expect(responseTo(sent, 12)).toBeUndefined();
+    gate.open();
+    await until(() => responseTo(sent, 12) !== undefined);
+    expect(
+      [responseTo(sent, 11), responseTo(sent, 12)].map(
+        (m) => m?.result.turn.id,
+      ),
+    ).toEqual(["turn-2", "turn-3"]);
+    claude.emit(
+      sdk(result({ subtype: "error_during_execution", is_error: true })),
+    );
+    for (const started of [2, 3]) {
+      await until(() => startedTurns(sent).length === started);
+      claude.emit(sdk(success()));
+      await until(() => completedTurnStatuses(sent).length === started);
+    }
+
+    expect(await promptsUntil(claude, 3)).toEqual([
+      "hello",
+      delegation(CODEX_WORKER),
+      "next",
+    ]);
+  });
+
   test("waits as the next turn when it carries a message id, which is saved before the message runs", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, store } = await harness([claude]);

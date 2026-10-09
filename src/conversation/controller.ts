@@ -146,7 +146,7 @@ export const createTurnController = <Tag extends string>({
     string,
     { threadId: string; request: TurnRequest }
   >();
-  // The last message being steered into each thread's running turn, which the next one waits for.
+  // The last message being steered into each thread's running turn, which every turn/start after it waits for.
   const steeringMessages = new Map<string, Promise<void>>();
   const appRequests = createAppRequests({ send, now });
   let closed = false;
@@ -216,24 +216,28 @@ export const createTurnController = <Tag extends string>({
       startedBy: "app" as const,
     };
     // The app gives another thread's message no id to deliver again, so one with an id stays on the turn path, which saves the id before the message runs.
-    // A message that cannot be steered still waits for the ones being steered ahead of it, since one of them may yet run as a turn.
-    if (delegated !== null && messageId === null) {
-      const active = steerableTurn(threadId);
-      if (active !== null || steeringMessages.has(threadId)) {
-        steerMessage(id, threadId, checked.thread, turn, active);
-        return null;
-      }
+    if (
+      delegated !== null &&
+      messageId === null &&
+      (steerableTurn(threadId) !== null || steeringMessages.has(threadId))
+    ) {
+      steerMessage(id, threadId, checked.thread, turn);
+      return null;
     }
-    acceptTurn(
-      id,
-      threadId,
-      checked.thread,
-      turn,
-      messageId,
-      false,
+    const allowRecovery =
       delegated === null &&
-        messageId !== null &&
-        isManualTurnTrigger(params.turnTrigger),
+      messageId !== null &&
+      isManualTurnTrigger(params.turnTrigger);
+    afterSteers(threadId, () =>
+      acceptTurn(
+        id,
+        threadId,
+        checked.thread,
+        turn,
+        messageId,
+        false,
+        allowRecovery,
+      ),
     );
     return null;
   };
@@ -272,10 +276,13 @@ export const createTurnController = <Tag extends string>({
       requester: null,
       startedBy: "app" as const,
     };
-    acceptTurn(id, threadId, checked.thread, turn, null, true);
+    afterSteers(threadId, () =>
+      acceptTurn(id, threadId, checked.thread, turn, null, true),
+    );
   };
 
   // Claude starts turns of its own, such as when a background task reports back, and the app is shown each as a turn nobody typed, behind any turn already accepted.
+  // It does not wait for messages being steered, since the runtime is told at once whether the turn will be shown.
   const startOwnTurn = (threadId: string) => {
     const thread = threads.threadOf(threadId);
     if (thread === undefined || closed || changingConversations.has(threadId))
@@ -358,40 +365,44 @@ export const createTurnController = <Tag extends string>({
       : active;
   };
 
-  // The sender is saved before Claude reads the message so Claude can answer it, and the messages for one thread reach Claude in the order they came however long each sender takes to save.
-  // A turn that can no longer take the message, such as one that ended or was stopped meanwhile, leaves it to run as the next turn.
+  // The sender is saved before Claude reads the message so Claude can answer it.
+  // Whether the running turn takes the message is decided when the steers ahead of it are done, and a turn that cannot take it, such as one that ended or was stopped meanwhile, leaves it to run as the next turn.
   const steerMessage = (
     id: AppRequest["id"],
     threadId: string,
     thread: Thread,
     input: TurnInput,
-    active: ActiveTurn<Tag> | null,
-  ) => {
-    const steering = (steeringMessages.get(threadId) ?? Promise.resolve()).then(
-      async () => {
-        if (active === null) {
-          acceptTurn(id, threadId, thread, input, null, false);
-          return;
-        }
-        const noted = await recordRequester(threadId, input.requester);
-        if (noted.isErr()) {
-          refuse(id, "requester_not_saved", noted.error);
-          return;
-        }
-        if (closed) {
-          refuse(id, "bridge_closing");
-          return;
-        }
-        const refusal = await runtime.steer(active.turn, input);
-        if (refusal !== null) {
-          acceptTurn(id, threadId, thread, input, null, false);
-          return;
-        }
-        send({ id, result: { turn: steeredTurn(active.state) } });
-        log({ event: "claude_turn", step: "steered" });
-        apply(active, renderInput(active.state, input, null));
-      },
-    );
+  ) =>
+    afterSteers(threadId, async () => {
+      const active = steerableTurn(threadId);
+      if (active === null) {
+        acceptTurn(id, threadId, thread, input, null, false);
+        return;
+      }
+      const noted = await recordRequester(threadId, input.requester);
+      if (noted.isErr()) {
+        refuse(id, "requester_not_saved", noted.error);
+        return;
+      }
+      if (closed) {
+        refuse(id, "bridge_closing");
+        return;
+      }
+      const refusal = await runtime.steer(active.turn, input);
+      if (refusal !== null) {
+        acceptTurn(id, threadId, thread, input, null, false);
+        return;
+      }
+      send({ id, result: { turn: steeredTurn(active.state) } });
+      log({ event: "claude_turn", step: "steered" });
+      apply(active, renderInput(active.state, input, null));
+    });
+
+  // A message still being steered may yet run as a turn, so a turn/start or compaction that came after it is accepted only once it is done, and the turns keep the order they came in; with nothing ahead, a turn is accepted at once.
+  const afterSteers = (threadId: string, run: () => void | Promise<void>) => {
+    const ahead = steeringMessages.get(threadId);
+    const steering = ahead === undefined ? run() : ahead.then(run);
+    if (steering === undefined) return;
     steeringMessages.set(threadId, steering);
     void steering.then(() => {
       if (steeringMessages.get(threadId) === steering)
