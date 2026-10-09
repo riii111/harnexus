@@ -215,6 +215,41 @@ describe("harnexus-task launch", () => {
     expect([retried.code, retried.out.threadId]).toEqual([0, "w2"]);
   });
 
+  test("stops at a first turn the bridge refused without a second create", async () => {
+    const { harnexus, invoke, write, data, launch } = await launchFixture();
+    const refusal = {
+      outcome: "first_turn_refused",
+      threadId: "w1",
+      reason: "reply_to_other_worker",
+    };
+
+    const refused = await launch([], [refusal]);
+
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain("reply_to_other_worker");
+    expect((await launch()).code).toBe(1);
+    expect(harnexus.calls).toHaveLength(1);
+    const request = await write(data);
+    expect((await invoke(["state", "--request", request])).out).toMatchObject({
+      pending: "refused",
+      pendingThreadId: "w1",
+    });
+    expect(
+      (await invoke(["resolve", "--request", request, "--sent"])).code,
+    ).toBe(1);
+    const released = await invoke([
+      "resolve",
+      "--request",
+      request,
+      "--not-sent",
+    ]);
+    expect([released.code, released.err]).toEqual([0, ""]);
+    expect((await invoke(["state", "--request", request])).out).toMatchObject({
+      pending: null,
+      refusedThreadIds: ["w1"],
+    });
+  });
+
   test("names a first turn that did not say its model as such", async () => {
     const { launch } = await launchFixture();
     const settings = (model: string | null) => ({ model, effort: "medium" });

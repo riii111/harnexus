@@ -79,6 +79,24 @@ describe("createDelegationWatch first turn check", () => {
       expected: EXPECTED,
       actual,
       refused: true,
+      refusal: null,
+    });
+  });
+
+  test("settles a first turn the bridge runs only once it reports whether it took the turn", async () => {
+    const watch = createDelegationWatch(() => {});
+    const created = expecting(watch, "th-codex", { expected: EXPECTED });
+
+    expect(watch.observe("th-codex", "th-worker", EXPECTED, true)).toBe(true);
+    expect(await created.wait(0)).toBeNull();
+    watch.started("th-worker", "reply_to_other_worker");
+
+    expect(await created.wait(1_000)).toEqual({
+      threadId: "th-worker",
+      expected: EXPECTED,
+      actual: EXPECTED,
+      refused: false,
+      refusal: "reply_to_other_worker",
     });
   });
 
@@ -111,6 +129,7 @@ describe("createDelegationWatch first turn check", () => {
       expected: EXPECTED,
       actual,
       refused: true,
+      refusal: null,
     });
   });
 

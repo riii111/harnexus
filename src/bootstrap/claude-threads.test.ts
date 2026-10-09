@@ -82,6 +82,24 @@ describe("connectClaudeThreads", () => {
     expect(store.reviewerOwner(CODEX_WORKER)).toBeUndefined();
   });
 
+  test("answers a Claude first turn the bridge refused with its reason instead of done", async () => {
+    const { sent, callAfter } = await workerA();
+
+    const { answer, routed } = await callAfter([claudeWorkerFirstTurn()], {
+      threadId: CODEX_CALLER,
+      tool: "create_thread",
+      arguments: { prompt: "work", target: TARGET, model: MODEL },
+    });
+
+    expect(answer).toEqual({
+      outcome: "first_turn_refused",
+      threadId: CLAUDE_WORKER,
+      reason: "directory_unknown",
+    });
+    expect(routed).toEqual([null]);
+    expect(sent).toContainEqual({ id: 5, error: expect.anything() });
+  });
+
   test("starts a Claude thread's session with the thread it runs", async () => {
     const { started, settingsOf } = await workerA();
 
@@ -301,6 +319,22 @@ const codexWorkerFirstTurn = () => ({
   },
 });
 
+// No cwd, so the bridge cannot tell where the new Claude thread works and refuses its turn.
+const claudeWorkerFirstTurn = () => ({
+  id: 5,
+  method: "turn/start",
+  params: {
+    threadId: CLAUDE_WORKER,
+    input: [],
+    model: MODEL,
+    toolOutput: {
+      name: "create_thread",
+      namespace: "codex_app",
+      output: `<codex_delegation>\n  <source_thread_id>${CODEX_CALLER}</source_thread_id>\n  <prompt>work</prompt>\n</codex_delegation>`,
+    },
+  },
+});
+
 const replyToWorkerB = () => ({
   id: REPLY_ID,
   method: "turn/start",
@@ -331,6 +365,7 @@ const REVIEWER = "th-fixture-reviewer-a";
 const REPLY_ID = 3;
 const CODEX_CALLER = "th-fixture-codex-caller";
 const CODEX_WORKER = "th-fixture-codex-worker";
+const CLAUDE_WORKER = "th-fixture-claude-worker";
 const MODEL = "claude-sonnet-5";
 const SUBSCRIPTION: AccountInfo = {
   subscriptionType: "Claude Max",

@@ -270,6 +270,11 @@ export const createCodexLink = ({
         `Thread ${threadId} was created, but its first turn ${refusalOf(turn.expected, turn.actual)}, so it was stopped before it ran.`,
       );
     }
+    if (turn !== null && turn.refusal !== null) {
+      return failure(
+        `Thread ${threadId} was created, but the bridge refused its first turn (${turn.refusal}), so it never ran.`,
+      );
+    }
     // The app's own answer carries only a provisional id, so the real one is what the model must use from here on.
     return {
       content: [

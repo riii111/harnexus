@@ -11,6 +11,8 @@ export type FirstTurn = {
   expected: TurnSettings;
   actual: TurnSettings;
   refused: boolean;
+  // Why the bridge refused a turn it runs itself after the settings check passed, such as reply_to_other_worker.
+  refusal: string | null;
 };
 
 // The app answers create_thread with a provisional id only; the real id first appears in the new thread's turn/start, whose tool output names the calling thread.
@@ -26,25 +28,35 @@ export const createDelegationWatch = (
   const claimed = new Set<string>();
   // So the app resending a refused first turn never gets it run.
   const refusedThreads = new Set<string>();
+  // Waiters for first turns the bridge runs itself, settled by started once the bridge has taken or refused the turn.
+  const starting = new Map<string, (refusal: string | null) => void>();
 
   // A thread nobody waits for is ignored, so it can never become someone's reviewer; the answer is whether the turn may run.
+  // bridgeRuns leaves the waiter to started, since the bridge can still refuse a Claude turn that passed the check.
   const observe = (
     sourceThreadId: string,
     threadId: string,
     actual: TurnSettings = NOT_GIVEN,
+    bridgeRuns = false,
   ) => {
     if (refusedThreads.has(threadId)) return false;
     const waiter = waiters.get(sourceThreadId);
     if (waiter?.named === threadId) {
       waiters.delete(sourceThreadId);
-      return settle(waiter, threadId, actual);
+      return settle(waiter, threadId, actual, bridgeRuns);
     }
     if (claimed.has(threadId)) return true;
     claimed.add(threadId);
     if (waiter === undefined || waiter.named !== null) return true;
     waiters.delete(sourceThreadId);
     if (waiter.record) claim(sourceThreadId, threadId);
-    return settle(waiter, threadId, actual);
+    return settle(waiter, threadId, actual, bridgeRuns);
+  };
+
+  // The router calls it in the same tick as observe, so an entry never outlives the turn it was set for.
+  const started = (threadId: string, refusal: string | null) => {
+    starting.get(threadId)?.(refusal);
+    starting.delete(threadId);
   };
 
   // Registered before create_thread is sent, since the new thread's turn/start can arrive before the tool answer; null while the caller has an unconfirmed create.
@@ -99,16 +111,26 @@ export const createDelegationWatch = (
     };
   };
 
-  const settle = (waiter: Waiter, threadId: string, actual: TurnSettings) => {
+  const settle = (
+    waiter: Waiter,
+    threadId: string,
+    actual: TurnSettings,
+    bridgeRuns: boolean,
+  ) => {
     const refused =
       differs(waiter.expected.model, actual.model) ||
       differs(waiter.expected.effort, actual.effort);
     if (refused) refusedThreads.add(threadId);
-    waiter.settle({ threadId, expected: waiter.expected, actual, refused });
+    const turn = { threadId, expected: waiter.expected, actual, refused };
+    if (bridgeRuns && !refused) {
+      starting.set(threadId, (refusal) => waiter.settle({ ...turn, refusal }));
+    } else {
+      waiter.settle({ ...turn, refusal: null });
+    }
     return !refused;
   };
 
-  return { observe, expect };
+  return { observe, started, expect };
 };
 
 type Waiter = {

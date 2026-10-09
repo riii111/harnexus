@@ -153,15 +153,13 @@ export const createTurnController = <Tag extends string>({
   const startTurn = (
     { id, params }: AppRequest,
     fallbackCwd: string | undefined,
-  ) => {
+  ): Refusal | null => {
     const threadId = params.threadId;
     if (typeof threadId === "string" && changingConversations.has(threadId)) {
-      refuse(id, "thread_busy");
-      return;
+      return refuse(id, "thread_busy");
     }
     if (typeof threadId !== "string") {
-      refuse(id, "missing_thread");
-      return;
+      return refuse(id, "missing_thread");
     }
     const checked = checkThread(
       params,
@@ -169,8 +167,7 @@ export const createTurnController = <Tag extends string>({
       fallbackCwd,
     );
     if ("refusal" in checked) {
-      refuse(id, checked.refusal);
-      return;
+      return refuse(id, checked.refusal);
     }
     const delegated = delegatedMessage(params);
     // A thread's first turn from create_thread, and later messages from the thread that created it, are its own work rather than another worker's reviewer replying, so whose reviewer the sender is does not matter.
@@ -182,22 +179,18 @@ export const createTurnController = <Tag extends string>({
         ? undefined
         : store.reviewerOwner(source);
     if (owner !== undefined && owner !== threadId) {
-      refuse(id, "reply_to_other_worker");
-      return;
+      return refuse(id, "reply_to_other_worker");
     }
     const input = messageInput(params.input, delegated);
     if (typeof input === "string") {
-      refuse(id, input);
-      return;
+      return refuse(id, input);
     }
     if (closed) {
-      refuse(id, "bridge_closing");
-      return;
+      return refuse(id, "bridge_closing");
     }
     const messageId = clientMessageId(params);
     if (messageId !== null && isDelivered(threadId, messageId)) {
-      refuse(id, "duplicate_message");
-      return;
+      return refuse(id, "duplicate_message");
     }
     if (messageId !== null) acceptMessage(threadId, messageId);
     threads.changeModel(threadId, checked.thread.model);
@@ -230,6 +223,7 @@ export const createTurnController = <Tag extends string>({
         messageId !== null &&
         isManualTurnTrigger(params.turnTrigger),
     );
+    return null;
   };
 
   // A compaction runs as a turn whose prompt is Claude's /compact, so it waits behind a running turn and meets the same stops and unknown outcomes; the app's empty answer comes on acceptance and the turn's notifications show the rest.
@@ -828,6 +822,7 @@ export const createTurnController = <Tag extends string>({
   ) => {
     reject({ id }, message);
     logRefusal(reason, cause);
+    return reason;
   };
 
   const logRefusal = (reason: Refusal, cause: { _tag: StoreTag } | null) =>
