@@ -4348,8 +4348,6 @@ const writeSkill = async (name: string, body: string) => {
   return path;
 };
 
-// Reads only as many prompts as were sent, since a read past them waits for the next send.
-
 const bashCall = (toolUseId: string) => ({
   type: "assistant",
   message: {

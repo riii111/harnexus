@@ -518,7 +518,7 @@ export const promptsUntil = async (
   return texts;
 };
 
-// Reads the messages themselves, whose uuids a result names as taken.
+// Reads the messages themselves, whose uuids a result names as taken; it reads only as many as were sent, since a read past them waits for the next send.
 export const readPrompts = async (
   claude: ReturnType<typeof fakeClaude>,
   count: number,
