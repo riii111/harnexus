@@ -18,6 +18,7 @@ import {
   renderTurnCompleted,
   renderTurnStarted,
   renderUserInput,
+  steeredTurn,
   type TurnOutcome,
   type TurnState,
 } from "../presentation/turn.ts";
@@ -145,11 +146,13 @@ export const createTurnController = <Tag extends string>({
     string,
     { threadId: string; request: TurnRequest }
   >();
+  // The last message being steered into each thread's running turn, which the next one waits for.
+  const steeringMessages = new Map<string, Promise<void>>();
   const appRequests = createAppRequests({ send, now });
   let closed = false;
 
   // fallbackCwd is the thread's directory as last reported by the server, used when a Codex thread switches to Claude.
-  // A turn/start on a busy thread, such as a reviewer's reply, waits in the store's per-thread queue instead of being refused; its sender gives up long before the running turn may end, so it is answered on acceptance.
+  // Another thread's message on a busy thread joins the running turn, as Codex steers it; any other turn/start on a busy thread, or a message the running turn cannot take, waits in the store's per-thread queue instead of being refused, and its sender gives up long before the running turn may end, so it is answered on acceptance.
   const startTurn = (
     { id, params }: AppRequest,
     fallbackCwd: string | undefined,
@@ -219,6 +222,15 @@ export const createTurnController = <Tag extends string>({
       ),
       startedBy: "app" as const,
     };
+    // The app gives another thread's message no id to deliver again, so one with an id stays on the turn path, which saves the id before the message runs.
+    // A message that cannot be steered still waits for the ones being steered ahead of it, since one of them may yet run as a turn.
+    if (delegated !== null && messageId === null) {
+      const active = steerableTurn(threadId);
+      if (active !== null || steeringMessages.has(threadId)) {
+        steerMessage(id, threadId, checked.thread, turn, active);
+        return;
+      }
+    }
     acceptTurn(
       id,
       threadId,
@@ -337,6 +349,59 @@ export const createTurnController = <Tag extends string>({
       }
       turnsInFlight.delete(threadId);
       runtime.threadIdle(threadId);
+    });
+  };
+
+  // A turn already waiting behind the running one would run after a message that came later, so the message waits too; a compaction or a turn being stopped takes no steer.
+  const steerableTurn = (threadId: string) => {
+    const active = activeTurns.get(threadId);
+    return active === undefined ||
+      active.state.finished ||
+      active.state.interrupting ||
+      active.state.compaction ||
+      turnsInFlight.get(threadId) !== 1
+      ? null
+      : active;
+  };
+
+  // The sender is saved before Claude reads the message so Claude can answer it, and the messages for one thread reach Claude in the order they came however long each sender takes to save.
+  // A turn that can no longer take the message, such as one that ended or was stopped meanwhile, leaves it to run as the next turn.
+  const steerMessage = (
+    id: AppRequest["id"],
+    threadId: string,
+    thread: Thread,
+    input: TurnInput,
+    active: ActiveTurn<Tag> | null,
+  ) => {
+    const steering = (steeringMessages.get(threadId) ?? Promise.resolve()).then(
+      async () => {
+        if (active === null) {
+          acceptTurn(id, threadId, thread, input, null, false);
+          return;
+        }
+        const noted = await recordRequester(threadId, input.requester);
+        if (noted.isErr()) {
+          refuse(id, "requester_not_saved", noted.error);
+          return;
+        }
+        if (closed) {
+          refuse(id, "bridge_closing");
+          return;
+        }
+        const refusal = await runtime.steer(active.turn, input);
+        if (refusal !== null) {
+          acceptTurn(id, threadId, thread, input, null, false);
+          return;
+        }
+        send({ id, result: { turn: steeredTurn(active.state) } });
+        log({ event: "claude_turn", step: "steered" });
+        apply(active, renderInput(active.state, input, null));
+      },
+    );
+    steeringMessages.set(threadId, steering);
+    void steering.then(() => {
+      if (steeringMessages.get(threadId) === steering)
+        steeringMessages.delete(threadId);
     });
   };
 
