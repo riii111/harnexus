@@ -38,7 +38,21 @@ import {
 } from "./request.ts";
 
 const CALL_TIMEOUT_MS = 15 * 60_000;
-const SOCKET_HINT = `the socket is closed only when the app was opened with HARNEXUS_CALL_SOCKET=off, so open it with bun run open-app and run ${NAME} outside the sandbox`;
+const SOCKET_HINT = `open the app with bun run open-app without HARNEXUS_CALL_SOCKET=off and run ${NAME} outside the sandbox`;
+
+const socketHint = (code: string | null) => {
+  switch (code) {
+    case "ENOENT":
+      return `no bridge has opened the socket; ${SOCKET_HINT}`;
+    case "ECONNREFUSED":
+      return "a bridge that has exited left the socket; the running bridge takes it over within seconds, so run again, and reopen the app with bun run open-app if it persists";
+    case "EPERM":
+    case "EACCES":
+      return `the sandbox blocked the connection; run ${NAME} outside the sandbox`;
+    default:
+      return SOCKET_HINT;
+  }
+};
 
 const NOT_SENT: readonly CallOutcome[] = ["not_sent", "rejected", "invalid"];
 
@@ -100,7 +114,7 @@ export const callApp = async (
       ? { outcome: "unknown", error: `no answer: ${reason}` }
       : {
           outcome: "not_sent",
-          error: `${path.value}: ${reason}; ${SOCKET_HINT}`,
+          error: `${path.value}: ${reason}; ${socketHint(answer.error.code)}`,
         };
   }
   const parsed = parseJson(answer.value);
