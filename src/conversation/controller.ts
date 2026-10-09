@@ -221,7 +221,7 @@ export const createTurnController = <Tag extends string>({
       const active = steerableTurn(threadId);
       if (active !== null || steeringMessages.has(threadId)) {
         steerMessage(id, threadId, checked.thread, turn, active);
-        return;
+        return null;
       }
     }
     acceptTurn(
