@@ -70,7 +70,6 @@ export const createHistoryRequests = ({
       threads.rewindOf?.(threadId) ?? null,
     ]);
 
-  // A thread with no session yet has an empty history.
   const load = (threadId: string): Promise<Loaded> => {
     const kept = subagentHistory(threadId);
     if (kept !== undefined) return Promise.resolve(Result.ok(kept));

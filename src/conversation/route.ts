@@ -69,7 +69,6 @@ type Turns = {
     sourceId: string,
   ) => Promise<void>;
   changeModel: (threadId: string, model: string) => void;
-  // The refusal when the turn was refused before it was started or queued.
   startTurn: (
     request: AppRequest,
     fallbackCwd: string | undefined,
@@ -98,7 +97,6 @@ type Pending =
   | {
       kind: "threadOpen";
       createdModel: string | null;
-      // The Claude thread a thread/fork copies, whose model the fork keeps.
       forkOf: string | null;
       history: ReturnType<History["load"]> | null;
       params: Record<string, unknown>;
