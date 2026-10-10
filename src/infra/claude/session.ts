@@ -60,14 +60,11 @@ export type ClaudeSessionSettings = {
   model: string;
   connection: Connection;
   resume?: string;
-  // Resumes into a new conversation, leaving the resumed one as it was.
   forkSession?: boolean;
-  // The last record of the resumed conversation to keep; later records are left out.
   resumeAt?: string;
   mcpServers?: Record<string, McpServerConfig>;
-  // Tools that run without asking, on top of the user's own allow rules.
   allowedTools?: string[];
-  permissionMode?: "default" | "auto" | "plan";
+  permissionMode: "default" | "auto" | "plan";
   canUseTool: CanUseTool;
 };
 
@@ -352,7 +349,7 @@ const sessionOptions = (
   settingSources: SETTING_SOURCES,
   systemPrompt: { type: "preset", preset: "claude_code" },
   // The bridge selects the mode explicitly so user settings cannot silently enable bypassPermissions.
-  permissionMode: settings.permissionMode ?? "auto",
+  permissionMode: settings.permissionMode,
   canUseTool: settings.canUseTool,
   includePartialMessages: true,
   // A subagent's thread shows what the agent wrote, not only the tools it called.
@@ -380,10 +377,8 @@ const createSession = (
   return {
     messages: readMessages(claude, () => closed, close),
     isClosed: () => closed,
-    send: (prompt: Prompt | string) => {
-      const uuid = closed
-        ? null
-        : queue.push(typeof prompt === "string" ? { text: prompt } : prompt);
+    send: (prompt: Prompt) => {
+      const uuid = closed ? null : queue.push(prompt);
       return uuid === null ? Result.err(sessionClosed()) : Result.ok(uuid);
     },
     interrupt: async () =>

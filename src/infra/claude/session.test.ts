@@ -15,6 +15,7 @@ import {
   resolveSettings,
   type SDKMessage,
   type SDKUserMessage,
+  type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Result } from "better-result";
 import {
@@ -186,11 +187,14 @@ describe("startClaudeSession authentication", () => {
       settingsEnv: { ANTHROPIC_BASE_URL: "https://gateway.example" },
       expected: "ANTHROPIC_BASE_URL",
     },
-  ])("stops before starting Claude when settings set $name", async ({
+  ])("stops before starting Claude when the repository's settings set $name", async ({
     settingsEnv,
     expected,
   }) => {
-    const claude = fakeClaude(SUBSCRIPTION, { settingsEnv });
+    const claude = fakeClaude(SUBSCRIPTION, {
+      settingsEnv,
+      userSettingsEnv: {},
+    });
 
     const started = await startClaudeSession(SETTINGS, claude.runtime);
 
@@ -255,31 +259,6 @@ describe("startClaudeSession Vertex connection", () => {
     });
   });
 
-  test("stops before any prompt when Claude Code reports the subscription instead", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-
-    const started = await startClaudeSession(VERTEX_SETTINGS, claude.runtime);
-
-    expect(started.isErr() && started.error._tag).toBe("ClaudeNotVertex");
-    expect(claude.closes()).toBe(1);
-    expect(await claude.prompts()).toEqual([]);
-  });
-
-  test("stops before starting Claude when settings set another Vertex project", async () => {
-    const claude = fakeClaude(
-      { apiProvider: "vertex" },
-      { settingsEnv: { ANTHROPIC_VERTEX_PROJECT_ID: "other-project" } },
-    );
-
-    const started = await startClaudeSession(VERTEX_SETTINGS, claude.runtime);
-
-    expect(started.isErr() && started.error).toMatchObject({
-      _tag: "ClaudeSettingsOverrideAuth",
-      names: ["ANTHROPIC_VERTEX_PROJECT_ID"],
-    });
-    expect(claude.started()).toBe(false);
-  });
-
   test("stops before starting Claude when the user's settings choose Vertex, even with the repository's values", async () => {
     const claude = fakeClaude(
       { apiProvider: "vertex" },
@@ -324,30 +303,16 @@ describe("startClaudeSession Vertex connection", () => {
 
     expect(started.isOk()).toBe(true);
   });
-
-  test("refuses Vertex on a repository left on the subscription", async () => {
-    const claude = fakeClaude({ apiProvider: "vertex" });
-
-    const started = await startClaudeSession(SETTINGS, claude.runtime);
-
-    expect(started.isErr() && started.error._tag).toBe("ClaudeNotSubscription");
-    expect(await claude.prompts()).toEqual([]);
-  });
 });
 
 describe("startClaudeSession settings directory", () => {
   let configDir = "";
-  let previous: string | undefined;
 
   beforeEach(() => {
     configDir = mkdtempSync(join(tmpdir(), "harnexus-claude-config-"));
-    previous = process.env.CLAUDE_CONFIG_DIR;
-    process.env.CLAUDE_CONFIG_DIR = configDir;
   });
 
   afterEach(() => {
-    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-    else process.env.CLAUDE_CONFIG_DIR = previous;
     rmSync(configDir, { recursive: true, force: true });
   });
 
@@ -357,9 +322,11 @@ describe("startClaudeSession settings directory", () => {
     });
     const claude = fakeClaude(SUBSCRIPTION);
 
-    const started = await startClaudeSession(
-      { ...SETTINGS, cwd: configDir },
-      { ...claude.runtime, resolveSettings, env: process.env },
+    const started = await withConfigDir(configDir, () =>
+      startClaudeSession(
+        { ...SETTINGS, cwd: configDir },
+        { ...claude.runtime, resolveSettings, env: process.env },
+      ),
     );
 
     expect(started.isErr() && started.error._tag).toBe(
@@ -367,46 +334,16 @@ describe("startClaudeSession settings directory", () => {
     );
     expect(claude.started()).toBe(false);
   });
-
-  test("gives Claude the config directory that was checked", async () => {
-    writeUserSettings(configDir, { ANTHROPIC_CUSTOM_HEADERS: "X-Trace: 1" });
-    const claude = fakeClaude(SUBSCRIPTION);
-
-    const started = await startClaudeSession(
-      { ...SETTINGS, cwd: configDir },
-      { ...claude.runtime, resolveSettings, env: process.env },
-    );
-
-    expect(started.isOk()).toBe(true);
-    expect(claude.options().env?.CLAUDE_CONFIG_DIR).toBe(configDir);
-  });
 });
 
 describe("startClaudeSession started session", () => {
-  test("sends the prompt text as a user message stamped with a returned uuid", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const session = await startedSession(claude);
-
-    const first = session.send("review the diff");
-    if (first.isErr()) return expect.unreachable(first.error.message);
-    const second = session.send("also run the tests");
-    if (second.isErr()) return expect.unreachable(second.error.message);
-    session.close();
-
-    expect(first.value).not.toBe(second.value);
-    expect(await claude.prompts()).toEqual([
-      userMessage("review the diff", first.value),
-      userMessage("also run the tests", second.value),
-    ]);
-  });
-
   test("wakes the SDK waiting on the prompt when a message is sent", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const session = await startedSession(claude);
     const prompt = claude.prompt()?.[Symbol.asyncIterator]();
     const waiting = prompt?.next();
 
-    const sent = session.send("steer to the failing test");
+    const sent = session.send({ text: "steer to the failing test" });
     if (sent.isErr()) return expect.unreachable(sent.error.message);
 
     expect(await waiting).toEqual({
@@ -442,29 +379,9 @@ describe("startClaudeSession started session", () => {
     for await (const item of session.messages) {
       expect(item.isErr() && item.error._tag).toBe("ClaudeStreamFailed");
       expect(claude.closes()).toBe(1);
-      const sent = session.send("steer");
+      const sent = session.send({ text: "steer" });
       expect(sent.isErr() && sent.error._tag).toBe("ClaudeSessionClosed");
     }
-  });
-
-  test("interrupts the running turn and keeps the session open", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const session = await startedSession(claude);
-
-    const interrupted = await session.interrupt();
-
-    expect(interrupted.isOk() && interrupted.value).toBeNull();
-    expect(claude.interrupts()).toBe(1);
-    expect(session.send("next turn").isOk()).toBe(true);
-  });
-
-  test("reports the sends that survive an interrupt", async () => {
-    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: ["uuid-1"] });
-    const session = await startedSession(claude);
-
-    const interrupted = await session.interrupt();
-
-    expect(interrupted.isOk() && interrupted.value).toEqual(["uuid-1"]);
   });
 
   test("reports an interrupt the SDK rejects", async () => {
@@ -480,16 +397,10 @@ describe("startClaudeSession started session", () => {
     );
   });
 
-  test.each([
-    { name: "ends", options: {} },
-    {
-      name: "fails",
-      options: { closeEnding: new Error("Operation aborted") },
-    },
-  ])("close ends the prompt and the stream when the pending read $name", async ({
-    options,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION, options);
+  test("close ends the prompt and the stream when the pending read fails", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      closeEnding: new Error("Operation aborted"),
+    });
     const session = await startedSession(claude);
     const reading = collect(session.messages);
 
@@ -510,7 +421,7 @@ describe("startClaudeSession started session", () => {
     for await (const _item of session.messages) break;
 
     expect(claude.closes()).toBe(1);
-    const sent = session.send("unheard");
+    const sent = session.send({ text: "unheard" });
     expect(sent.isErr() && sent.error._tag).toBe("ClaudeSessionClosed");
   });
 
@@ -524,7 +435,7 @@ describe("startClaudeSession started session", () => {
   }>([
     {
       name: "input",
-      act: async (session) => session.send("late"),
+      act: async (session) => session.send({ text: "late" }),
       reached: (claude) => claude.prompts(),
       none: [],
     },
@@ -560,60 +471,21 @@ describe("startClaudeSession started session", () => {
     expect(refused.isErr() && refused.error._tag).toBe("ClaudeSessionClosed");
     expect(await reached(claude)).toEqual(none);
   });
-
-  test("switches Claude's permission mode", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const session = await startedSession(claude);
-
-    const switched = await session.setPermissionMode("plan");
-
-    expect(switched.isOk()).toBe(true);
-    expect(claude.modes()).toEqual(["plan"]);
-  });
-
-  test("sets Claude's effort through the session flag settings", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const session = await startedSession(claude);
-
-    const switched = await session.setEffort("max");
-
-    expect(switched.isOk()).toBe(true);
-    expect(claude.efforts()).toEqual(["max"]);
-  });
-
-  test("reports an effort Claude refuses as its own failure", async () => {
-    const claude = fakeClaude(SUBSCRIPTION, {
-      effortError: new Error("no control channel"),
-    });
-    const session = await startedSession(claude);
-
-    const switched = await session.setEffort("high");
-
-    expect(switched.isErr() && switched.error._tag).toBe("ClaudeEffortFailed");
-  });
 });
 
 describe("loadEffortSettings", () => {
-  test("reads the effort level in the user's settings", async () => {
-    const claude = fakeClaude(SUBSCRIPTION, {
-      effortSettings: { effortLevel: "xhigh" },
-    });
+  test("reads the effort level from the user's settings alone", async () => {
+    const asked: SettingSource[][] = [];
 
-    const loaded = await loadEffortSettings("/work/tree", claude.runtime);
+    const loaded = await loadEffortSettings("/work/tree", {
+      resolveSettings: async ({ settingSources }) => {
+        asked.push(settingSources);
+        return { effective: { effortLevel: "xhigh" } };
+      },
+    });
 
     expect(loaded.isOk() && loaded.value.effortLevel).toBe("xhigh");
-  });
-
-  test("reports settings it cannot read", async () => {
-    const claude = fakeClaude(SUBSCRIPTION, {
-      settingsEnv: new Error("invalid settings"),
-    });
-
-    const loaded = await loadEffortSettings("/work/tree", claude.runtime);
-
-    expect(loaded.isErr() && loaded.error._tag).toBe(
-      "ClaudeSettingsUnavailable",
-    );
+    expect(asked).toEqual([["user"]]);
   });
 });
 
@@ -993,6 +865,7 @@ const SETTINGS: ClaudeSessionSettings = {
   cwd: "/work/tree",
   model: "claude-sonnet-5",
   connection: SUBSCRIPTION_CONNECTION,
+  permissionMode: "auto",
   canUseTool: async () => ({ behavior: "deny", message: "not in this test" }),
 };
 

@@ -4,7 +4,6 @@ import type {
   Settings,
 } from "@anthropic-ai/claude-agent-sdk";
 
-// efforts are the levels the model takes, and a model without any does not take effort.
 export type ClaudeModel = {
   id: string;
   displayName: string;
@@ -14,7 +13,6 @@ export type ClaudeModel = {
 
 export type ModelCatalog = ReturnType<typeof createModelCatalog>;
 
-// The level a thread runs at on the model given the level picked for it, or null for a model without effort.
 export type EffortRule = (
   model: string,
   picked: EffortLevel | null,
