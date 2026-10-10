@@ -3,7 +3,6 @@ import { isObject } from "../../runtime/object.ts";
 
 export type DelegationWatch = ReturnType<typeof createDelegationWatch>;
 
-// null where the request gave none.
 export type TurnSettings = { model: string | null; effort: string | null };
 
 export type FirstTurn = {
@@ -28,7 +27,6 @@ export const createDelegationWatch = (
   const claimed = new Set<string>();
   // So the app resending a refused first turn never gets it run.
   const refusedThreads = new Set<string>();
-  // Waiters for first turns the bridge runs itself, settled by started once the bridge has taken or refused the turn.
   const starting = new Map<string, (refusal: string | null) => void>();
 
   // A thread nobody waits for is ignored, so it can never become someone's reviewer; the answer is whether the turn may run.
@@ -149,7 +147,6 @@ type Waiter = {
 const differs = (expected: string | null, actual: string | null) =>
   expected !== null && expected !== actual;
 
-// What a refused first turn did with each checked setting, naming a value it left out as not said rather than as null.
 export const refusalOf = (expected: TurnSettings, actual: TurnSettings) =>
   (["model", "effort"] as const)
     .filter((key) => differs(expected[key], actual[key]))
