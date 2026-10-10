@@ -207,6 +207,37 @@ describe("tool approval", () => {
     expect((await decision)?.behavior).toBe("deny");
   });
 
+  test("returns the app's answers to Claude's question", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await startedTurn(claude);
+    const input = {
+      questions: [
+        {
+          question: "Which?",
+          header: "Pick",
+          options: [
+            { label: "A", description: "the first" },
+            { label: "B", description: "the second" },
+          ],
+          multiSelect: false,
+        },
+      ],
+    };
+
+    const decision = askTool(claude, "AskUserQuestion", input);
+    const request = await appRequest(sent);
+    turns.answerRequest({
+      id: request.id,
+      result: { answers: { "question-1": { answers: ["A"] } } },
+    });
+
+    expect(request.method).toBe("item/tool/requestUserInput");
+    expect(await decision).toEqual({
+      behavior: "allow",
+      updatedInput: { ...input, answers: { "Which?": "A" } },
+    });
+  });
+
   test("asks about a subagent's tool on an item of its own while its agent runs in the turn", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { sent } = await startedTurn(claude);
