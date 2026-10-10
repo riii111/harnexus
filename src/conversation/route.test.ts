@@ -35,37 +35,25 @@ describe("Claude conversation rewind routing", () => {
   test.each([
     { method: "thread/revert" },
     { method: "thread/rollback" },
-  ])("keeps $method away from the Codex conversation", ({ method }) => {
+  ])("hands $method of a Claude thread to the rewind instead of the server", ({
+    method,
+  }) => {
     const { router, calls } = setup(["th-claude"]);
-    const claude = encode({
-      id: 5,
-      method,
-      params: {
-        threadId: "th-claude",
-        beforeTurnId: "harnexus-history-u1",
-        numTurns: 1,
-      },
-    });
-    expect(router.fromApp(claude)).toBeNull();
-    expect(calls).toEqual([
-      [
-        "reject",
-        {
-          id: 5,
-          params: {
-            threadId: "th-claude",
-            beforeTurnId: "harnexus-history-u1",
-            numTurns: 1,
-          },
-        },
-        "rewinding this Claude conversation is unavailable",
-      ],
-    ]);
+    const params = {
+      threadId: "th-claude",
+      beforeTurnId: "harnexus-history-u1",
+      numTurns: 1,
+    };
     const codex = encode({
       id: 6,
       method,
       params: { threadId: "codex", numTurns: 1 },
     });
+
+    const routed = router.fromApp(encode({ id: 5, method, params }));
+
+    expect(routed).toBeNull();
+    expect(calls).toEqual([["revert", method, { id: 5, params }]]);
     expect(router.fromApp(codex)).toEqual(codex);
   });
 });
@@ -226,7 +214,7 @@ describe("turn/start of a thread created by create_thread", () => {
     expect(starts).toEqual([]);
   });
 
-  test("reports nothing for another tool's output", () => {
+  test("reports nothing for a message sent by send_message_to_thread", () => {
     const { router, calls } = setup();
 
     router.fromApp(
@@ -237,8 +225,10 @@ describe("turn/start of a thread created by create_thread", () => {
           threadId: "th-other",
           input: [],
           toolOutput: {
-            name: "fork_thread",
-            output: "<source_thread_id>th-claude</source_thread_id>",
+            name: "send_message_to_thread",
+            namespace: "codex_app",
+            output:
+              "<codex_delegation>\n  <source_thread_id>th-claude</source_thread_id>\n</codex_delegation>",
           },
         },
       }),
@@ -2399,6 +2389,9 @@ const setup = (
     () => ({ ...catalog.models(), vertex }),
     unverifiedCodex,
     subagentRequests,
+    async (method, request) => {
+      calls.push(["revert", method, request]);
+    },
   );
   return {
     router,
