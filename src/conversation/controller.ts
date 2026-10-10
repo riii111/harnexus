@@ -137,7 +137,6 @@ export const createTurnController = <Tag extends string>({
   const modes = new Map<string, Mode>();
   const materialized = new Set<string>();
   const changingConversations = new Set<string>();
-  // Accepted turns whose stream has not started, such as one queued behind a running turn, in the order they were accepted.
   const startingTurns = new Map<
     string,
     { threadId: string; acceptedAtMs: number }
@@ -146,13 +145,11 @@ export const createTurnController = <Tag extends string>({
     string,
     { threadId: string; request: TurnRequest }
   >();
-  // The last message being steered into each thread's running turn, which every turn/start after it waits for.
   const steeringMessages = new Map<string, Promise<void>>();
   const appRequests = createAppRequests({ send, now });
   let closed = false;
 
-  // fallbackCwd is the thread's directory as last reported by the server, used when a Codex thread switches to Claude.
-  // Another thread's message on a busy thread joins the running turn, as Codex steers it; any other turn/start on a busy thread, or a message the running turn cannot take, waits in the store's per-thread queue instead of being refused, and its sender gives up long before the running turn may end, so it is answered on acceptance.
+  // A turn/start that waits behind a running turn is answered on acceptance, since its sender gives up long before the running turn may end.
   const startTurn = (
     { id, params }: AppRequest,
     fallbackCwd: string | undefined,
@@ -197,7 +194,6 @@ export const createTurnController = <Tag extends string>({
     }
     if (messageId !== null) acceptMessage(threadId, messageId);
     threads.changeModel(threadId, checked.thread.model);
-    // A turn/start without an effort, such as another thread's reply, runs at the thread's level.
     const effort = requestedEffort(params);
     if (effort !== undefined) selectEffort(threadId, effort);
     const turn = {
@@ -242,7 +238,6 @@ export const createTurnController = <Tag extends string>({
     return null;
   };
 
-  // A compaction runs as a turn whose prompt is Claude's /compact, so it waits behind a running turn and meets the same stops and unknown outcomes; the app's empty answer comes on acceptance and the turn's notifications show the rest.
   const compactThread = ({ id, params }: AppRequest) => {
     const threadId = params.threadId;
     if (typeof threadId !== "string") {
@@ -281,8 +276,7 @@ export const createTurnController = <Tag extends string>({
     );
   };
 
-  // Claude starts turns of its own, such as when a background task reports back, and the app is shown each as a turn nobody typed, behind any turn already accepted.
-  // It does not wait for messages being steered, since the runtime is told at once whether the turn will be shown.
+  // A turn Claude starts on its own does not wait for messages being steered, since the runtime is told at once whether the turn will be shown.
   const startOwnTurn = (threadId: string) => {
     const thread = threads.threadOf(threadId);
     if (thread === undefined || closed || changingConversations.has(threadId))
@@ -366,7 +360,6 @@ export const createTurnController = <Tag extends string>({
   };
 
   // The sender is saved before Claude reads the message so Claude can answer it.
-  // Whether the running turn takes the message is decided when the steers ahead of it are done, and a turn that cannot take it, such as one that ended or was stopped meanwhile, leaves it to run as the next turn.
   const steerMessage = (
     id: AppRequest["id"],
     threadId: string,
@@ -443,7 +436,7 @@ export const createTurnController = <Tag extends string>({
     apply(active, renderUserInput(active.state, input.items, null, now()));
   };
 
-  // The reply comes first so the app sees it before the interrupted turn completes; a failed interrupt stops Claude by closing the session.
+  // The reply comes first so the app sees it before the interrupted turn completes.
   const interruptTurn = ({ id, params }: AppRequest) => {
     const threadId = String(params.threadId);
     const active = activeTurns.get(threadId);
@@ -493,7 +486,6 @@ export const createTurnController = <Tag extends string>({
     threads.changeEffort(threadId, effort);
   };
 
-  // The runtime closes its sessions, which ends each active turn's message stream, so no Claude process outlives the bridge.
   const closeAll = () => {
     closed = true;
     appRequests.cancel(null);
@@ -704,7 +696,6 @@ export const createTurnController = <Tag extends string>({
     acceptedMessageIds.set(threadId, ids.add(messageId));
   };
 
-  // A message refused before it ran may be sent again.
   const forgetMessage = (threadId: string, messageId: string | null) => {
     if (messageId === null) return;
     const ids = acceptedMessageIds.get(threadId);
@@ -860,7 +851,6 @@ export const createTurnController = <Tag extends string>({
     }
   };
 
-  // A turn the user already stopped ends as interrupted whatever went wrong afterwards.
   const fail = (
     active: ActiveTurn<Tag>,
     error: { _tag: Tag; message: string },

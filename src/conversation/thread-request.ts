@@ -31,7 +31,6 @@ export const requestedEffort = (params: Record<string, unknown>) => {
     : undefined;
 };
 
-// fallbackCwd is where the server last reported a Codex thread, since a request that switches it to Claude may not carry its directory.
 // A thread may move to another Claude model, but Claude keeps running where the thread started, so a new directory is refused.
 export const checkThread = (
   params: Record<string, unknown>,
