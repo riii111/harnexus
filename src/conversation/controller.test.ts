@@ -370,7 +370,6 @@ describe("a thread whose last turn has an unknown outcome", () => {
     expect(responseTo(after.sent, 11)?.result.turn.id).toBeDefined();
     expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
     expect(after.settings[0]).toMatchObject({ resume: "se-1" });
-    expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
   });
 
   test.each([
