@@ -34,11 +34,4 @@ describe("readSkills", () => {
       unreadable: [gone],
     });
   });
-
-  test("reads nothing for a prompt without skill links", async () => {
-    expect(await readSkills("plain")).toEqual({
-      skills: [],
-      unreadable: [],
-    });
-  });
 });

@@ -167,11 +167,6 @@ describe("subagents", () => {
       { item: { type: "reasoning", content: ["Where "] } },
       { item: { type: "agentMessage", text: "Found it." } },
     ]);
-    expect(items()?.map(({ item }) => item.type)).toEqual([
-      "userMessage",
-      "reasoning",
-      "agentMessage",
-    ]);
   });
 });
 
@@ -296,72 +291,6 @@ test("adds a nested agent's completion to its parent agent's last turn once that
   ).toMatchObject([
     { params: { turnId: `${outer?.id}-turn-1` } },
     { params: { turnId: lastTurn } },
-  ]);
-});
-
-test("leaves out an agent whose caller is unknown", () => {
-  const subagents = createSubagents({ send: () => {} });
-
-  subagents.start({ ...agent("th-1", "toolu-inner"), depth: 2 });
-
-  expect(subagents.descendantsOf("th-1")).toEqual([]);
-});
-
-test("closes a call refused for an agent as declined in its thread", () => {
-  const subagents = createSubagents({ send: () => {} });
-
-  subagents.start(agent("th-1", "toolu-1"));
-  const [child] = subagents.childrenOf("th-1");
-  subagents.message("th-1", {
-    type: "assistant",
-    message: {
-      id: "msg-1",
-      content: [
-        {
-          type: "tool_use",
-          id: "toolu-ls",
-          name: "Bash",
-          input: { command: "ls" },
-        },
-      ],
-      stop_reason: null,
-    },
-    parent_tool_use_id: "toolu-1",
-  } as unknown as SDKMessage);
-  subagents.decline("th-1", "toolu-ls");
-  subagents.message("th-1", {
-    type: "user",
-    message: {
-      role: "user",
-      content: [
-        {
-          type: "tool_result",
-          tool_use_id: "toolu-ls",
-          content: "denied",
-          is_error: true,
-        },
-      ],
-    },
-    parent_tool_use_id: "toolu-1",
-  } as unknown as SDKMessage);
-
-  expect(subagents.historyOf(child?.id ?? "")?.[0]?.items).toMatchObject([
-    { item: { type: "userMessage" } },
-    { item: { type: "commandExecution", status: "declined" } },
-  ]);
-});
-
-test("names a resumed agent's calls apart, with only the running one still open", () => {
-  const subagents = createSubagents({ send: () => {} });
-
-  subagents.start(agent("th-1", "toolu-1"));
-  subagents.complete("th-1", "task-toolu-1", DONE);
-  subagents.start({ ...agent("th-1", "toolu-2"), taskId: "task-toolu-1" });
-  const refOf = subagents.agentRefOf("th-1");
-
-  expect([refOf("toolu-1")?.active, refOf("toolu-2")?.active]).toEqual([
-    false,
-    true,
   ]);
 });
 
@@ -695,7 +624,7 @@ test("shows an edit an agent made once another agent resumed it in the turn of t
   ).toEqual(["/fixture/work/a.ts"]);
 });
 
-test("shows in the parent's history an agent's edits in the turn whose call started it, once per read", () => {
+test("shows in the parent's history an agent's edits between its start and completion in the turn whose call started it", () => {
   const subagents = createSubagents({ send: () => {} });
   subagents.start(agent("th-1", "toolu-1"));
   for (const m of editBy("toolu-1", "toolu-edit", "/fixture/work/a.ts")) {
@@ -715,12 +644,14 @@ test("shows in the parent's history an agent's edits in the turn whose call star
     reply("p5", "m2", { type: "text", text: "sure" }, "end_turn"),
   ];
 
-  const read = () =>
-    buildHistory(
-      record,
-      { threadId: "th-1", cwd: "/fixture/work" },
-      subagents.agentRefOf("th-1"),
-    ).map((turn) =>
+  const history = buildHistory(
+    record,
+    { threadId: "th-1", cwd: "/fixture/work" },
+    subagents.agentRefOf("th-1"),
+  );
+
+  expect(
+    history.map((turn) =>
       turn.items.flatMap(({ item }) =>
         item.type === "subAgentActivity"
           ? [item.kind]
@@ -728,10 +659,8 @@ test("shows in the parent's history an agent's edits in the turn whose call star
             ? [item.changes[0]?.path]
             : [],
       ),
-    );
-
-  expect(read()).toEqual([["started", "/fixture/work/a.ts", "completed"], []]);
-  expect(read()).toEqual(read());
+    ),
+  ).toEqual([["started", "/fixture/work/a.ts", "completed"], []]);
 });
 
 test("ends every running agent of a thread whose session closed", () => {

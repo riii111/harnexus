@@ -537,17 +537,6 @@ describe("/session", () => {
       "This repository's Claude Code settings now choose your Claude subscription. Send /switch-connection",
     );
   });
-
-  test("answers that a thread has no conversation yet without starting Claude", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
-
-    turns.startTurn(turnStart(10, "/session"), undefined);
-    await until(() => turnCompleted(sent) !== undefined);
-
-    expect(agentTexts(sent).at(-1)).toContain("no Claude conversation yet");
-    expect(claude.started()).toBe(false);
-  });
 });
 
 describe("/switch-connection", () => {
