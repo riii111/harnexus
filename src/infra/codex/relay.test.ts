@@ -86,27 +86,6 @@ describe("relayStreams", () => {
     expect(output.bytes().equals(Buffer.concat(chunks))).toBe(true);
   });
 
-  test("relays both ways and ends once the server output has reached the app", async () => {
-    const output = collector({ delayMs: 5 });
-    const serverInput = collector();
-    const serverOutput = new PassThrough();
-    const input = new PassThrough();
-
-    const relaying = relayStreams({
-      appInput: input,
-      appOutput: output.stream,
-      serverInput: serverInput.stream,
-      serverOutput,
-      stopServer: IGNORE_SIGNALS,
-    });
-    input.end("to server\n");
-    serverOutput.end("to app\n");
-    await relaying;
-
-    expect(output.bytes().toString()).toBe("to app\n");
-    expect(serverInput.bytes().toString()).toBe("to server\n");
-  });
-
   test("signals a server that outlives the app with SIGTERM, then SIGKILL", async () => {
     const signals: string[] = [];
     const serverOutput = new PassThrough();

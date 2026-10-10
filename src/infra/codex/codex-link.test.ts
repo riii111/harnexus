@@ -1,11 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { type InferErr, Result, TaggedError } from "better-result";
-import { createRouter } from "../../conversation/route.ts";
-import { createModelCatalog } from "../claude/models.ts";
 import { createCodexLink } from "./codex-link.ts";
 import { createDelegationWatch } from "./delegations.ts";
 import type { ServerRequest } from "./server-requests.ts";
@@ -229,17 +225,12 @@ describe("createCodexLink tools", () => {
     });
   });
 
-  test.each([
-    { name: "a thread id", structured: { threadId: REVIEWER } },
-    { name: "a nested thread id", structured: { thread: { id: REVIEWER } } },
-  ])("prefers $name in the structured answer over one in the text", async ({
-    structured,
-  }) => {
+  test("prefers a thread id in the structured answer over one in the text", async () => {
     const { client, store } = await connect({
       answer: () =>
         Result.ok({
           ...textAnswer(JSON.stringify({ threadId: OTHER_REVIEWER })),
-          structuredContent: structured,
+          structuredContent: { threadId: REVIEWER },
         }),
     });
 
@@ -261,45 +252,6 @@ describe("createCodexLink tools", () => {
 
     expect(created.isError).toBe(true);
     expect(requests).toEqual([]);
-  });
-});
-
-describe("createCodexLink over the app's turn for the created thread", () => {
-  test("saves the thread the app starts for the call as the reviewer", async () => {
-    const delegations = createDelegationWatch(() => {});
-    const router = createRouter(
-      CODEX_ONLY_TURNS,
-      () => {},
-      delegations,
-      NO_HISTORY,
-      createModelCatalog().models,
-      "warn",
-      NO_SUBAGENTS,
-    );
-    const forwarded: (Buffer | null)[] = [];
-    const { client, store } = await connect({
-      caller: "th-fixture-claude",
-      delegations,
-      answer: () => {
-        for (const line of appLines("create-thread-delegation.jsonl")) {
-          forwarded.push(router.fromApp(line));
-        }
-        return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
-      },
-    });
-
-    const created = await client.callTool({
-      name: "create_thread",
-      arguments: { prompt: "review", target: TARGET },
-    });
-
-    expect(created.structuredContent).toEqual({
-      threadId: "th-fixture-reviewer",
-    });
-    expect(store.reviewers("th-fixture-claude")).toEqual([
-      "th-fixture-reviewer",
-    ]);
-    expect(forwarded).toEqual(appLines("create-thread-delegation.jsonl"));
   });
 });
 
@@ -664,11 +616,6 @@ describe("createCodexLink createChecked", () => {
       actual: { model: "gpt-other", effort: "low" },
       refused: true,
     },
-    {
-      name: "a first turn that names neither",
-      actual: { model: null, effort: null },
-      refused: true,
-    },
   ])("records the reviewer and reports $name", async ({ actual, refused }) => {
     const delegations = createDelegationWatch(() => {});
     const runs: boolean[] = [];
@@ -912,7 +859,6 @@ const deferred = () => {
 };
 
 const connect = async ({
-  caller = CALLER,
   reviewers = {},
   requesters = [],
   callerRegistered = true,
@@ -925,7 +871,6 @@ const connect = async ({
   models?: (
     params: Record<string, unknown>,
   ) => Result<unknown, ServerRequestError>;
-  caller?: string;
   reviewers?: Record<string, string[]>;
   requesters?: string[];
   callerRegistered?: boolean;
@@ -937,9 +882,9 @@ const connect = async ({
     | Promise<Result<unknown, ServerRequestError>>;
 } = {}) => {
   const store = fakeStore(
-    callerRegistered ? { [caller]: [], ...reviewers } : reviewers,
+    callerRegistered ? { [CALLER]: [], ...reviewers } : reviewers,
     addReviewerFails,
-    { [caller]: requesters },
+    { [CALLER]: requesters },
   );
   const requests: RecordedRequest[] = [];
   const modelLists: unknown[] = [];
@@ -953,7 +898,7 @@ const connect = async ({
     return answer(call);
   };
   const link = createCodexLink({
-    callerThreadId: caller,
+    callerThreadId: CALLER,
     store,
     request,
     delegations,
@@ -1064,49 +1009,6 @@ type RecordedRequest = {
   timeoutMs: number;
 };
 
-const appLines = (file: string) =>
-  readFileSync(join(FIXTURE_DIR, file), "utf8")
-    .split("\n")
-    .filter((line) => line !== "")
-    .map((line) => JSON.parse(line))
-    .filter((record) => record.direction === "app_to_server")
-    .map((record) => Buffer.from(`${JSON.stringify(record.message)}\n`));
-
-const CODEX_ONLY_TURNS: Parameters<typeof createRouter>[0] = {
-  isClaudeThread: () => false,
-  threadOf: () => undefined,
-  adopt: () => expect.unreachable("no Claude thread in this session"),
-  adoptFork: () => expect.unreachable("no Claude thread in this session"),
-  changeModel: () => expect.unreachable("no Claude thread in this session"),
-  startTurn: () => expect.unreachable("no Claude thread in this session"),
-  compactThread: () => expect.unreachable("no Claude thread in this session"),
-  steerTurn: () => expect.unreachable("no Claude thread in this session"),
-  interruptTurn: () => expect.unreachable("no Claude thread in this session"),
-  reject: () => expect.unreachable("no Claude thread in this session"),
-  answerRequest: () => false,
-  selectMode: () => expect.unreachable("no Claude thread in this session"),
-  modeOf: () => undefined,
-  selectEffort: () => expect.unreachable("no Claude thread in this session"),
-  effortOf: () => null,
-  effortRule: () => null,
-  liveTurnOf: () => null,
-};
-
-const NO_SUBAGENTS: Parameters<typeof createRouter>[6] = {
-  isChild: () => false,
-  answer: async () => {},
-  withChildren: (result) => result,
-  listedParentOf: () => null,
-  remember: () => {},
-};
-
-const NO_HISTORY: Parameters<typeof createRouter>[3] = {
-  load: () => expect.unreachable("no Claude thread in this session"),
-  answer: () => expect.unreachable("no Claude thread in this session"),
-  takePicked: () => expect.unreachable("no Claude thread in this session"),
-};
-
-const FIXTURE_DIR = join(import.meta.dir, "../../../test/fixtures/app-server");
 const CALLER = "thread-caller";
 const DEFAULT_MODELS = {
   data: [

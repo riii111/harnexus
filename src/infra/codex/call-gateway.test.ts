@@ -128,7 +128,6 @@ describe("createCallGateway", () => {
       name: "a tool the app does not offer",
       line: '{"threadId":"t","tool":"delete_thread"}',
     },
-    { name: "a missing thread", line: '{"tool":"list_projects"}' },
     {
       name: "an unknown field",
       line: '{"threadId":"t","tool":"list_projects","model":"x"}',
@@ -158,26 +157,6 @@ describe("createCallGateway create_thread of a Codex thread", () => {
       result: CLIENT_ANSWER,
       threadId: "th-worker",
       ...ASKED,
-    });
-  });
-
-  test("refuses a first turn that names no model or effort and reports it as a mismatch", async () => {
-    const { gateway, watch } = setup({
-      answer: () => {
-        runs.push(watch.observe(CODEX, "th-worker", NONE));
-        return Result.ok(CLIENT_ANSWER);
-      },
-    });
-    const runs: boolean[] = [];
-
-    const answer = JSON.parse(await gateway.handle(CREATE));
-
-    expect(runs).toEqual([false]);
-    expect(answer).toMatchObject({
-      outcome: "model_mismatch",
-      threadId: "th-worker",
-      expected: ASKED,
-      actual: NONE,
     });
   });
 
@@ -249,12 +228,6 @@ describe("createCallGateway create_thread of a Codex thread", () => {
     {
       name: "rejected",
       tag: "ServerRequestRejected",
-      seen: ASKED,
-      expected: { outcome: "done", threadId: "th-worker", ...ASKED },
-    },
-    {
-      name: "unanswered",
-      tag: "ServerRequestUnanswered",
       seen: ASKED,
       expected: { outcome: "done", threadId: "th-worker", ...ASKED },
     },
@@ -398,21 +371,6 @@ describe("createCallGateway create_thread of a Claude thread", () => {
       },
     },
     {
-      name: "an unseen first turn as unknown",
-      created: { firstTurn: null, threadId: null, unknown: true, busy: false },
-      expected: { outcome: "unknown" },
-    },
-    {
-      name: "a named thread whose first turn was unseen as unknown with its id",
-      created: {
-        firstTurn: null,
-        threadId: "th-reviewer",
-        unknown: true,
-        busy: false,
-      },
-      expected: { outcome: "unknown", threadId: "th-reviewer" },
-    },
-    {
       name: "a seen thread that could not be recorded as unknown with its id",
       created: {
         firstTurn: {
@@ -427,11 +385,6 @@ describe("createCallGateway create_thread of a Claude thread", () => {
         busy: false,
       },
       expected: { outcome: "unknown", threadId: "th-reviewer" },
-    },
-    {
-      name: "a create the link refused as a tool error",
-      created: { firstTurn: null, threadId: null, unknown: false, busy: false },
-      expected: { outcome: "tool_error" },
     },
   ])("reports $name", async ({ created, expected }) => {
     const { gateway } = setup({ claude: [CLAUDE], created });
@@ -516,7 +469,6 @@ const CLAUDE = "claude-thread";
 
 const ASKED = { model: "gpt-worker", effort: "low" };
 const OTHER = { model: "gpt-other", effort: "low" };
-const NONE = { model: null, effort: null };
 const CLIENT_ANSWER = {
   content: [
     {

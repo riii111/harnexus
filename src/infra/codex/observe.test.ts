@@ -56,6 +56,8 @@ describe("createObserver", () => {
         params: { arguments: SECRET },
       }),
       toServer({ id: "s-1", error: { code: -1, message: SECRET } }),
+      toApp({ id: 0, method: "item/tool/call", params: { arguments: SECRET } }),
+      toServer({ id: 0, result: { output: SECRET } }),
       toApp({ id: 4, error: { message: SECRET } }),
     ]);
 
@@ -100,6 +102,20 @@ describe("createObserver", () => {
         kind: "error_response",
         method: "item/tool/call",
         id: "s-1",
+      },
+      {
+        event: "rpc_message",
+        direction: "server_to_app",
+        kind: "request",
+        method: "item/tool/call",
+        id: 0,
+      },
+      {
+        event: "rpc_message",
+        direction: "app_to_server",
+        kind: "response",
+        method: "item/tool/call",
+        id: 0,
       },
       {
         event: "rpc_message",
