@@ -7,11 +7,7 @@ import type {
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
-import {
-  createModelCatalog,
-  effortRule,
-  isClaudeEffort,
-} from "../infra/claude/models.ts";
+import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import { readClaudeSession } from "../infra/claude/session.ts";
 import type { LiveTurn } from "../presentation/history.ts";
 import {
@@ -24,6 +20,7 @@ import { createHistoryRequests } from "./history-request.ts";
 import { createRouter, type RouteEvent } from "./route.ts";
 import { createSubagentRequests } from "./subagent-requests.ts";
 import { createSubagents } from "./subagents.ts";
+import { until } from "./testing/harness.ts";
 import {
   type AppRequest,
   type Mode,
@@ -152,14 +149,7 @@ describe("turn/start of a thread created by create_thread", () => {
   });
 
   test("refuses a first turn the creator did not expect without passing it to the server", () => {
-    const { router, calls, events } = setup(
-      [],
-      {},
-      "warn",
-      false,
-      false,
-      false,
-    );
+    const { router, calls, events } = setup([], { delegatedRuns: false });
 
     const routed = router.fromApp(delegatedTurn({ model: "gpt-other" }));
 
@@ -187,15 +177,10 @@ describe("turn/start of a thread created by create_thread", () => {
     paused,
     expected,
   }) => {
-    const { router, starts } = setup(
-      [],
-      {},
-      paused ? "pause" : "warn",
-      false,
-      false,
-      true,
-      "directory_unknown",
-    );
+    const { router, starts } = setup([], {
+      unverifiedCodex: paused ? "pause" : "warn",
+      startRefusal: "directory_unknown",
+    });
     if (paused) {
       router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
       await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
@@ -309,7 +294,7 @@ describe("Codex CLI version", () => {
     policy,
     expected,
   }) => {
-    const { router } = setup([], {}, policy);
+    const { router } = setup([], { unverifiedCodex: policy });
     router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
     await router.fromServer(initializeAnswer(agent));
     router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
@@ -353,7 +338,9 @@ describe("Codex CLI version", () => {
     method,
     params,
   }) => {
-    const { router, calls, events } = setup(["th-claude"], {}, "pause");
+    const { router, calls, events } = setup(["th-claude"], {
+      unverifiedCodex: "pause",
+    });
     router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
     await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
 
@@ -473,7 +460,7 @@ describe("model/list", () => {
   });
 
   test("shows the Vertex AI models in the picker only when they are switched on", async () => {
-    const { router } = setup([], {}, "warn", false, true);
+    const { router } = setup([], { vertex: true });
 
     router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
     const out = parse(await router.fromServer(modelList(2, null)));
@@ -593,7 +580,7 @@ describe("threads with a Claude model", () => {
     ]);
     expect(out.result.model).toBe(CLAUDE);
     expect(out.result.thread.model).toBe(CLAUDE);
-    expect(out.result.reasoningEffort).toBe("high");
+    expect(out.result.reasoningEffort).toBe("medium");
   });
 
   test.each([
@@ -637,7 +624,7 @@ describe("threads with a Claude model", () => {
   });
 
   test("holds the fork's response until where its source stood is fixed", async () => {
-    const { router, pinFork } = setup(["th-claude"], {}, "warn", true);
+    const { router, pinFork } = setup(["th-claude"], { holdForks: true });
     router.fromApp(
       encode({
         id: 9,
@@ -844,7 +831,7 @@ describe("threads with a Claude model", () => {
 describe("Claude subagent threads", () => {
   test("lists the agents a Claude thread started under it with the server's own", async () => {
     const { router, subagents } = setup(["th-claude"]);
-    startAgent(subagents, "th-claude", "toolu-1");
+    startAgent(subagents);
 
     const routed = router.fromApp(
       encode({
@@ -894,7 +881,7 @@ describe("Claude subagent threads", () => {
     { name: "no parent", params: {} },
   ])("leaves a thread list of $name to the server", async ({ params }) => {
     const { router, subagents } = setup(["th-claude"]);
-    startAgent(subagents, "th-claude", "toolu-1");
+    startAgent(subagents);
     const response = encode({ id: 31, result: { data: [], nextCursor: null } });
 
     router.fromApp(
@@ -913,7 +900,7 @@ describe("Claude subagent threads", () => {
 
   test("answers thread/read of an agent's thread from its parent's", async () => {
     const { router, subagents, sent, serverCalls } = setup(["th-claude"]);
-    startAgent(subagents, "th-claude", "toolu-1");
+    startAgent(subagents);
     const [child] = subagents.childrenOf("th-claude");
 
     const routed = router.fromApp(
@@ -940,7 +927,7 @@ describe("Claude subagent threads", () => {
 
   test("resumes an agent's thread through its parent with none of the app's settings when the parent was not opened", async () => {
     const { router, subagents, sent, serverCalls } = setup(["th-claude"]);
-    startAgent(subagents, "th-claude", "toolu-1");
+    startAgent(subagents);
     const [child] = subagents.childrenOf("th-claude");
 
     router.fromApp(
@@ -984,7 +971,7 @@ describe("Claude subagent threads", () => {
         result: { ...PARENT_RESUMED, thread: parentThread("th-claude") },
       }),
     );
-    startAgent(subagents, "th-claude", "toolu-1");
+    startAgent(subagents);
     const [child] = subagents.childrenOf("th-claude");
 
     router.fromApp(
@@ -1021,7 +1008,7 @@ describe("Claude subagent threads", () => {
     { name: "archived threads", params: { archived: true } },
   ])("adds no agent to $name", async ({ params }) => {
     const { router, subagents } = setup(["th-claude"]);
-    startAgent(subagents, "th-claude", "toolu-1");
+    startAgent(subagents);
     const response = encode({ id: 43, result: { data: [] } });
 
     router.fromApp(
@@ -1039,7 +1026,7 @@ describe("Claude subagent threads", () => {
 
   test("lists the agents an agent started under that agent's thread", async () => {
     const { router, subagents } = setup(["th-claude"]);
-    startAgent(subagents, "th-claude", "toolu-1");
+    startAgent(subagents);
     const [outer] = subagents.childrenOf("th-claude");
     subagents.message("th-claude", {
       type: "assistant",
@@ -1087,7 +1074,7 @@ describe("Claude subagent threads", () => {
 
   test("answers an agent's turn pages and goal itself", async () => {
     const { router, subagents, sent, serverCalls } = setup(["th-claude"]);
-    startAgent(subagents, "th-claude", "toolu-1");
+    startAgent(subagents);
     const [child] = subagents.childrenOf("th-claude");
 
     router.fromApp(
@@ -1195,7 +1182,7 @@ describe("Claude subagent threads", () => {
 
   test("refuses a turn sent to an agent's thread", async () => {
     const { router, subagents, sent, calls } = setup(["th-claude"]);
-    startAgent(subagents, "th-claude", "toolu-1");
+    startAgent(subagents);
     const [child] = subagents.childrenOf("th-claude");
 
     const routed = router.fromApp(
@@ -1347,7 +1334,7 @@ describe("thread/settings/update", () => {
         collaborationMode: { mode: "plan", settings: { model: CLAUDE } },
       }),
     );
-    const out = parse(await router.fromServer(settingsNotice("default")));
+    const out = parse(await router.fromServer(settingsNotice()));
 
     expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
     expect(calls).toEqual([["selectMode", "th-claude", "plan"]]);
@@ -1363,7 +1350,7 @@ describe("thread/settings/update", () => {
     },
     {
       name: "a model without effort",
-      change: { model: "claude-haiku-4-5", effort: "max" },
+      change: { model: "claude-haiku-4-5" },
       model: "claude-haiku-4-5",
       expected: "medium",
     },
@@ -1375,7 +1362,7 @@ describe("thread/settings/update", () => {
     const { router } = setup(["th-claude"]);
     router.fromApp(settingsUpdate(change));
 
-    const out = parse(await router.fromServer(settingsNotice("default")));
+    const out = parse(await router.fromServer(settingsNotice()));
 
     const settings = out.params.threadSettings;
     expect({
@@ -1408,7 +1395,9 @@ describe("thread/settings/update", () => {
 describe("Claude thread history", () => {
   test("resumes a Claude thread with an initial page and cursors the app can page back through without the server", async () => {
     const { router, reads, sent } = setup(["th-claude"], {
-      "th-claude": conversation(),
+      records: {
+        "th-claude": conversation(),
+      },
     });
 
     router.fromApp(
@@ -1490,7 +1479,9 @@ describe("Claude thread history", () => {
 
   test("resumes a Claude thread with an item cursor that starts from the thread's newest item", async () => {
     const { router, sent } = setup(["th-claude"], {
-      "th-claude": conversation(),
+      records: {
+        "th-claude": conversation(),
+      },
     });
 
     router.fromApp(
@@ -1525,7 +1516,9 @@ describe("Claude thread history", () => {
   });
 
   test("fills the thread's turns when the resume asks for the whole history", async () => {
-    const { router } = setup(["th-claude"], { "th-claude": conversation() });
+    const { router } = setup(["th-claude"], {
+      records: { "th-claude": conversation() },
+    });
 
     router.fromApp(
       encode({
@@ -1550,7 +1543,9 @@ describe("Claude thread history", () => {
 
   test("keeps the pick for the next resume when the server fails one", async () => {
     const { router, picked } = setup(["th-claude"], {
-      "th-claude": conversation(),
+      records: {
+        "th-claude": conversation(),
+      },
     });
     picked.add("th-claude");
     const resume = (id: number) =>
@@ -1574,7 +1569,9 @@ describe("Claude thread history", () => {
 
   test("fills the turns of the first resume after a conversation was picked, though the app excludes them", async () => {
     const { router, picked } = setup(["th-claude"], {
-      "th-claude": conversation(),
+      records: {
+        "th-claude": conversation(),
+      },
     });
     picked.add("th-claude");
     const resume = (id: number) => {
@@ -1598,7 +1595,9 @@ describe("Claude thread history", () => {
 
   test("logs the shape of the resume request and how many turns answered it, without the conversation", async () => {
     const { router, events } = setup(["th-claude"], {
-      "th-claude": conversation(),
+      records: {
+        "th-claude": conversation(),
+      },
     });
 
     router.fromApp(
@@ -1642,7 +1641,9 @@ describe("Claude thread history", () => {
 
   test("passes the resume response with the Claude model alone when the record cannot be read", async () => {
     const { router, events } = setup(["th-claude"], {
-      "th-claude": "unreadable",
+      records: {
+        "th-claude": "unreadable",
+      },
     });
 
     router.fromApp(
@@ -1667,7 +1668,9 @@ describe("Claude thread history", () => {
 
   test("answers thread/items/list with the items of the asked turn", async () => {
     const { router, sent } = setup(["th-claude"], {
-      "th-claude": conversation(),
+      records: {
+        "th-claude": conversation(),
+      },
     });
 
     router.fromApp(
@@ -1698,7 +1701,9 @@ describe("Claude thread history", () => {
 
   test("answers thread/timeline/list from the newest entry back", async () => {
     const { router, sent } = setup(["th-claude"], {
-      "th-claude": conversation(),
+      records: {
+        "th-claude": conversation(),
+      },
     });
 
     router.fromApp(
@@ -1750,7 +1755,9 @@ describe("Claude thread history", () => {
     record,
     expected,
   }) => {
-    const { router, sent } = setup(["th-claude"], { "th-claude": record });
+    const { router, sent } = setup(["th-claude"], {
+      records: { "th-claude": record },
+    });
 
     router.fromApp(
       encode({
@@ -1766,7 +1773,7 @@ describe("Claude thread history", () => {
 
   test("reads the record once for history pages asked for together and again for a later page", async () => {
     const records = { "th-claude": conversation() };
-    const { router, sent, reads } = setup(["th-claude"], records);
+    const { router, sent, reads } = setup(["th-claude"], { records });
     const askTurns = (id: number) =>
       router.fromApp(
         encode({
@@ -1802,7 +1809,9 @@ describe("Claude thread history", () => {
     params,
   }) => {
     const { router, sent, reads } = setup(["th-claude"], {
-      "th-claude": conversation(),
+      records: {
+        "th-claude": conversation(),
+      },
     });
     const request = encode({ id: 7, method: name, params });
     const response = threadResponse(7, "codex");
@@ -1819,7 +1828,9 @@ describe("Claude thread history", () => {
 describe("a Claude thread with a running turn", () => {
   test("reads the running turn in progress under its live id, then completed once it ends", async () => {
     const { router, live } = setup(["th-claude"], {
-      "th-claude": conversation(),
+      records: {
+        "th-claude": conversation(),
+      },
     });
     const read = async (id: number) => {
       router.fromApp(
@@ -1876,7 +1887,9 @@ describe("a Claude thread with a running turn", () => {
     },
   ])("lists $name as the newest turn, in progress", async ({ turn, turns }) => {
     const { router, live, sent } = setup(["th-claude"], {
-      "th-claude": conversation(),
+      records: {
+        "th-claude": conversation(),
+      },
     });
     live.set("th-claude", turn);
 
@@ -1901,7 +1914,9 @@ describe("a Claude thread with a running turn", () => {
     { name: "a resume", method: "thread/resume", params: {} },
   ])("reports the thread active on $name", async ({ method, params }) => {
     const { router, live } = setup(["th-claude"], {
-      "th-claude": conversation(),
+      records: {
+        "th-claude": conversation(),
+      },
     });
     live.set("th-claude", LIVE);
 
@@ -1918,17 +1933,19 @@ describe("a Claude thread with a running turn", () => {
 
   test("folds the turns a steer opened into the running turn", async () => {
     const { router, live } = setup(["th-claude"], {
-      "th-claude": [
-        ...conversation(),
-        prompt("u3", "also this", "2026-09-27T00:01:05.000Z"),
-        reply(
-          "a5",
-          "m4",
-          text("on it"),
-          "tool_use",
-          "2026-09-27T00:01:06.000Z",
-        ),
-      ],
+      records: {
+        "th-claude": [
+          ...conversation(),
+          prompt("u3", "also this", "2026-09-27T00:01:05.000Z"),
+          reply(
+            "a5",
+            "m4",
+            text("on it"),
+            "tool_use",
+            "2026-09-27T00:01:06.000Z",
+          ),
+        ],
+      },
     });
     live.set("th-claude", LIVE);
 
@@ -1959,7 +1976,9 @@ describe("a Claude thread with a running turn", () => {
 
   test("reads a turn that ended while the server answered as completed", async () => {
     const { router, live } = setup(["th-claude"], {
-      "th-claude": conversation(),
+      records: {
+        "th-claude": conversation(),
+      },
     });
     live.set("th-claude", LIVE);
 
@@ -1984,7 +2003,9 @@ describe("a Claude thread with a running turn", () => {
 
   test("pages on from a cursor naming the live turn after it ends", async () => {
     const { router, live, turnRecords, sent } = setup(["th-claude"], {
-      "th-claude": conversation(),
+      records: {
+        "th-claude": conversation(),
+      },
     });
     live.set("th-claude", LIVE);
     turnRecords.set(LIVE.turnId, "u2");
@@ -2017,7 +2038,9 @@ describe("a Claude thread with a running turn", () => {
   });
 
   test("passes a read without turns unchanged while no turn runs", async () => {
-    const { router } = setup(["th-claude"], { "th-claude": conversation() });
+    const { router } = setup(["th-claude"], {
+      records: { "th-claude": conversation() },
+    });
     const answer = idleThread(9);
 
     router.fromApp(
@@ -2088,7 +2111,7 @@ const initializeAnswer = (userAgent: string) =>
   encode({ id: 1, result: { userAgent, codexHome: "/fixture/.codex" } });
 const BRIDGE_REQUEST = "harnexus-1";
 
-const settingsNotice = (mode: string) =>
+const settingsNotice = () =>
   encode({
     method: "thread/settings/updated",
     params: {
@@ -2097,7 +2120,7 @@ const settingsNotice = (mode: string) =>
         model: "gpt-fixture",
         effort: "low",
         collaborationMode: {
-          mode,
+          mode: "default",
           settings: { model: "gpt-fixture", reasoning_effort: "low" },
         },
       },
@@ -2115,12 +2138,21 @@ const settingsUpdate = (change: object) =>
 // A thread named in records has a session whose record holds those messages; "unreadable" makes reading it fail.
 const setup = (
   claudeThreads: string[] = [],
-  records: Record<string, SessionMessage[] | "unreadable"> = {},
-  unverifiedCodex: "warn" | "pause" = "warn",
-  holdForks = false,
-  vertex = false,
-  delegatedRuns = true,
-  startRefusal: Refusal | null = null,
+  {
+    records = {},
+    unverifiedCodex = "warn",
+    holdForks = false,
+    vertex = false,
+    delegatedRuns = true,
+    startRefusal = null,
+  }: {
+    records?: Record<string, SessionMessage[] | "unreadable">;
+    unverifiedCodex?: "warn" | "pause";
+    holdForks?: boolean;
+    vertex?: boolean;
+    delegatedRuns?: boolean;
+    startRefusal?: Refusal | null;
+  } = {},
 ) => {
   const calls: unknown[][] = [];
   const starts: [string, string | null][] = [];
@@ -2170,12 +2202,7 @@ const setup = (
   const efforts = new Map<string, EffortLevel>();
   const catalog = createModelCatalog();
   const rule = effortRule({}, catalog.effortsOf);
-  const effortOf = (threadId: string) => {
-    const model = threads.get(threadId)?.model;
-    return model === undefined
-      ? null
-      : rule(model, efforts.get(threadId) ?? null);
-  };
+  const effortOf = (threadId: string) => efforts.get(threadId) ?? null;
   const serverCalls: [string, unknown][] = [];
   const subagentRequests = createSubagentRequests({
     subagents,
@@ -2230,7 +2257,7 @@ const setup = (
       modeOf: (threadId) => modes.get(threadId),
       selectEffort: (threadId, effort) => {
         calls.push(["selectEffort", threadId, effort]);
-        if (isClaudeEffort(effort)) efforts.set(threadId, effort);
+        efforts.set(threadId, effort as EffortLevel);
       },
       effortOf,
       effortRule: rule,
@@ -2345,15 +2372,11 @@ const PARENT_RESUMED = {
   approvalPolicy: "on-request",
 };
 
-const startAgent = (
-  subagents: ReturnType<typeof setup>["subagents"],
-  threadId: string,
-  toolUseId: string,
-) =>
+const startAgent = (subagents: ReturnType<typeof setup>["subagents"]) =>
   subagents.start({
-    threadId,
+    threadId: "th-claude",
     turnId: "turn-1",
-    toolUseId,
+    toolUseId: "toolu-1",
     taskId: "task-1",
     description: "read the README",
     agentType: "Explore",
@@ -2361,10 +2384,3 @@ const startAgent = (
     prompt: "read the README",
     depth: 1,
   });
-
-const until = async (condition: () => boolean) => {
-  for (let waited = 0; !condition(); waited += 2) {
-    if (waited > 2000) return expect.unreachable("condition never held");
-    await Bun.sleep(2);
-  }
-};
