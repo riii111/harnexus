@@ -30,7 +30,7 @@ describe("openThreadStore", () => {
     const store = await openStore();
     await store.register(ENTRY);
     await store.setSessionId("thread-1", "session-1");
-    await store.addReviewer("thread-1", "reviewer-1");
+    await store.addChild("thread-1", "reviewer-1");
     await store.setModel("thread-1", "claude-opus-5-5");
     await store.setEffort("thread-1", "max");
     await store.addMessageId("thread-1", "message-1");
@@ -46,7 +46,7 @@ describe("openThreadStore", () => {
       effort: "max",
       worktree: "/work/tree",
       connection: VERTEX,
-      reviewerThreadIds: ["reviewer-1"],
+      childThreadIds: ["reviewer-1"],
       requesterThreadIds: ["worker-1"],
       messageIds: ["message-1"],
       runState: "idle",
@@ -218,7 +218,7 @@ describe("ThreadStore", () => {
 
     const [session, reviewer] = await Promise.all([
       store.setSessionId("thread-1", "session-1"),
-      store.addReviewer("thread-1", "reviewer-1"),
+      store.addChild("thread-1", "reviewer-1"),
     ]);
 
     expect(session.isOk() && session.value.sessionId).toBe("session-1");
@@ -230,22 +230,22 @@ describe("ThreadStore", () => {
   test("keeps each reviewer once", async () => {
     const store = await openStore();
     await store.register(ENTRY);
-    await store.addReviewer("thread-1", "reviewer-1");
-    await store.addReviewer("thread-1", "reviewer-1");
+    await store.addChild("thread-1", "reviewer-1");
+    await store.addChild("thread-1", "reviewer-1");
 
-    expect(store.get("thread-1")?.reviewerThreadIds).toEqual(["reviewer-1"]);
+    expect(store.get("thread-1")?.childThreadIds).toEqual(["reviewer-1"]);
   });
 
   test("names the one worker a reviewer belongs to", async () => {
     const store = await openStore();
     await store.register(ENTRY);
     await store.register({ ...ENTRY, threadId: "thread-2" });
-    await store.addReviewer("thread-1", "reviewer-1");
-    await store.addReviewer("thread-2", "reviewer-2");
+    await store.addChild("thread-1", "reviewer-1");
+    await store.addChild("thread-2", "reviewer-2");
 
-    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
-    expect(store.reviewerOwner("reviewer-2")).toBe("thread-2");
-    expect(store.reviewerOwner("thread-1")).toBeUndefined();
+    expect(store.parentOf("reviewer-1")).toBe("thread-1");
+    expect(store.parentOf("reviewer-2")).toBe("thread-2");
+    expect(store.parentOf("thread-1")).toBeUndefined();
   });
 
   test("traces a reviewer to its worker while it is being saved and refuses it to another", async () => {
@@ -254,19 +254,17 @@ describe("ThreadStore", () => {
     await store.register(ENTRY);
     await store.register({ ...ENTRY, threadId: "thread-2" });
     const held = gated.hold();
-    const first = store.addReviewer("thread-1", "reviewer-1");
+    const first = store.addChild("thread-1", "reviewer-1");
     await held.entered;
 
-    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
-    const second = store.addReviewer("thread-2", "reviewer-1");
+    expect(store.parentOf("reviewer-1")).toBe("thread-1");
+    const second = store.addChild("thread-2", "reviewer-1");
     held.release();
 
     const [added, refused] = await Promise.all([first, second]);
-    expect(added.isOk() && added.value.reviewerThreadIds).toEqual([
-      "reviewer-1",
-    ]);
-    expect(refused.isErr() && refused.error._tag).toBe("ReviewerTaken");
-    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
+    expect(added.isOk() && added.value.childThreadIds).toEqual(["reviewer-1"]);
+    expect(refused.isErr() && refused.error._tag).toBe("ChildTaken");
+    expect(store.parentOf("reviewer-1")).toBe("thread-1");
   });
 
   test("keeps a reviewer whose save failed traced to its worker and refuses it to another", async () => {
@@ -279,13 +277,13 @@ describe("ThreadStore", () => {
     await store.register({ ...ENTRY, threadId: "thread-2" });
     failWrites = true;
 
-    const added = await store.addReviewer("thread-1", "reviewer-1");
-    const other = await store.addReviewer("thread-2", "reviewer-1");
+    const added = await store.addChild("thread-1", "reviewer-1");
+    const other = await store.addChild("thread-2", "reviewer-1");
 
     expect(added.isErr() && added.error._tag).toBe("StatePersistFailed");
-    expect(other.isErr() && other.error._tag).toBe("ReviewerTaken");
-    expect(store.get("thread-1")?.reviewerThreadIds).toEqual([]);
-    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
+    expect(other.isErr() && other.error._tag).toBe("ChildTaken");
+    expect(store.get("thread-1")?.childThreadIds).toEqual([]);
+    expect(store.parentOf("reviewer-1")).toBe("thread-1");
   });
 
   test("traces a claimed reviewer to its worker before it is added and keeps it through the add", async () => {
@@ -293,54 +291,70 @@ describe("ThreadStore", () => {
     await store.register(ENTRY);
     await store.register({ ...ENTRY, threadId: "thread-2" });
 
-    store.claimReviewer("thread-1", "reviewer-1");
-    store.claimReviewer("thread-2", "reviewer-1");
+    store.claimChild("thread-1", "reviewer-1");
+    store.claimChild("thread-2", "reviewer-1");
 
-    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
-    const refused = await store.addReviewer("thread-2", "reviewer-1");
-    const added = await store.addReviewer("thread-1", "reviewer-1");
-    expect(refused.isErr() && refused.error._tag).toBe("ReviewerTaken");
-    expect(added.isOk() && added.value.reviewerThreadIds).toEqual([
+    expect(store.parentOf("reviewer-1")).toBe("thread-1");
+    const refused = await store.addChild("thread-2", "reviewer-1");
+    const added = await store.addChild("thread-1", "reviewer-1");
+    expect(refused.isErr() && refused.error._tag).toBe("ChildTaken");
+    expect(added.isOk() && added.value.childThreadIds).toEqual(["reviewer-1"]);
+    expect(store.parentOf("reviewer-1")).toBe("thread-1");
+  });
+
+  test("claims a Claude worker for its parent", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+
+    store.claimChild("thread-2", "thread-1");
+
+    expect(store.parentOf("thread-1")).toBe("thread-2");
+  });
+
+  test("refuses to register a thread as its own child", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+
+    const added = await store.addChild("thread-1", "thread-1");
+
+    expect(added.isErr() && added.error._tag).toBe("ChildTaken");
+    expect(store.parentOf("thread-1")).toBeUndefined();
+  });
+
+  test("restores a Claude worker and its Codex reviewer with separate parents", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+    const worker = await store.addChild("thread-1", "thread-2");
+    const reviewer = await store.addChild("thread-2", "reviewer-1");
+    expect(worker.isOk() && worker.value.childThreadIds).toEqual(["thread-2"]);
+    expect(reviewer.isOk() && reviewer.value.childThreadIds).toEqual([
       "reviewer-1",
     ]);
-    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
-  });
 
-  test("never claims a Claude thread as a reviewer", async () => {
-    const store = await openStore();
-    await store.register(ENTRY);
-    await store.register({ ...ENTRY, threadId: "thread-2" });
+    const reopened = await openStore();
 
-    store.claimReviewer("thread-2", "thread-1");
-
-    expect(store.reviewerOwner("thread-1")).toBeUndefined();
-  });
-
-  test("releases the claim on a Claude thread it refused as a reviewer", async () => {
-    const store = await openStore();
-    await store.register(ENTRY);
-    await store.register({ ...ENTRY, threadId: "thread-2" });
-
-    const added = await store.addReviewer("thread-2", "thread-1");
-
-    expect(added.isErr() && added.error._tag).toBe("ReviewerTaken");
-    expect(store.reviewerOwner("thread-1")).toBeUndefined();
+    expect(reopened.parentOf("thread-2")).toBe("thread-1");
+    expect(reopened.parentOf("reviewer-1")).toBe("thread-2");
+    expect(
+      JSON.parse(await readFile(path, "utf8")).threads[0].reviewerThreadIds,
+    ).toEqual(["thread-2"]);
   });
 
   test("refuses to add another worker's reviewer and keeps it unchanged", async () => {
     const store = await openStore();
     await store.register(ENTRY);
     await store.register({ ...ENTRY, threadId: "thread-2" });
-    const first = await store.addReviewer("thread-1", "reviewer-1");
-    expect(first.isOk() && first.value.reviewerThreadIds).toEqual([
-      "reviewer-1",
-    ]);
+    const first = await store.addChild("thread-1", "reviewer-1");
+    expect(first.isOk() && first.value.childThreadIds).toEqual(["reviewer-1"]);
 
-    const added = await store.addReviewer("thread-2", "reviewer-1");
+    const added = await store.addChild("thread-2", "reviewer-1");
 
-    expect(added.isErr() && added.error._tag).toBe("ReviewerTaken");
-    expect(store.get("thread-2")?.reviewerThreadIds).toEqual([]);
-    expect(store.reviewerOwner("reviewer-1")).toBe("thread-1");
+    expect(added.isErr() && added.error._tag).toBe("ChildTaken");
+    expect(store.get("thread-2")?.childThreadIds).toEqual([]);
+    expect(store.parentOf("reviewer-1")).toBe("thread-1");
   });
 
   test("keeps each message id once and only the latest 64", async () => {
@@ -376,7 +390,7 @@ describe("ThreadStore", () => {
     const store = await openStore({ writeState: writeThenFailSyncOnce() });
 
     const updated = await store.setSessionId("thread-1", "session-1");
-    const later = await store.addReviewer("thread-1", "reviewer-1");
+    const later = await store.addChild("thread-1", "reviewer-1");
 
     expect(updated.isErr() && updated.error._tag).toBe("StatePersistFailed");
     expect(later.isOk() && later.value).toMatchObject(BOTH_UPDATES);
@@ -773,7 +787,7 @@ const VERTEX = {
 
 const BOTH_UPDATES = {
   sessionId: "session-1",
-  reviewerThreadIds: ["reviewer-1"],
+  childThreadIds: ["reviewer-1"],
 };
 
 const SAVED_RECORD = {

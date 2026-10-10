@@ -177,7 +177,7 @@ export const createTurnController = <Tag extends string>({
       delegated?.tool === "create_thread" ||
       store.get(threadId)?.requesterThreadIds.includes(source)
         ? undefined
-        : store.reviewerOwner(source);
+        : store.parentOf(source);
     if (owner !== undefined && owner !== threadId) {
       return refuse(id, "reply_to_other_worker");
     }
@@ -203,12 +203,7 @@ export const createTurnController = <Tag extends string>({
         requestedMode(params) ?? modes.get(threadId) ?? "default",
       ),
       effort: threads.pickedEffortOf(threadId),
-      requester: requesterOf(
-        threadId,
-        delegated?.sourceThreadId,
-        owner,
-        threads.threadOf,
-      ),
+      requester: requesterOf(threadId, delegated?.sourceThreadId, owner),
       startedBy: "app" as const,
     };
     // The app gives another thread's message no id to deliver again, so one with an id stays on the turn path, which saves the id before the message runs.
@@ -1014,19 +1009,13 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
   }
 };
 
-// A reviewer's reply is already answerable and the thread cannot message itself, and a Claude sender is left out since Claude-to-Claude round trips are outside O2 and would raise usage.
+// Replies from a child are already reachable through the saved parent-child relation.
 const requesterOf = (
   threadId: string,
   source: string | null | undefined,
   owner: string | undefined,
-  claudeThreadOf: (threadId: string) => Thread | undefined,
 ) =>
-  source == null ||
-  source === threadId ||
-  owner !== undefined ||
-  claudeThreadOf(source) !== undefined
-    ? null
-    : source;
+  source == null || source === threadId || owner !== undefined ? null : source;
 
 const clientMessageId = (params: Record<string, unknown>) =>
   typeof params.clientUserMessageId === "string" &&

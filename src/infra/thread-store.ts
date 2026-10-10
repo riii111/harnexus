@@ -33,8 +33,8 @@ type ThreadMapping = {
   readonly worktree: string;
   // The connection Claude Code confirmed for the conversation, or null until a session confirms one.
   readonly connection: ConnectionTarget | null;
-  readonly reviewerThreadIds: readonly string[];
-  // Threads that sent this thread work through the app, so Claude may answer them as their reviewer.
+  readonly childThreadIds: readonly string[];
+  // Threads that sent this thread work through the app, so Claude may answer them.
   readonly requesterThreadIds: readonly string[];
   // The app's clientUserMessageId of the latest turns, so a message delivered again after a reconnect or restart is not run twice.
   readonly messageIds: readonly string[];
@@ -67,9 +67,9 @@ class ThreadAlreadyRegistered extends TaggedError("ThreadAlreadyRegistered")<{
   message: string;
 }> {}
 
-class ReviewerTaken extends TaggedError("ReviewerTaken")<{
+class ChildTaken extends TaggedError("ChildTaken")<{
   threadId: string;
-  reviewerThreadId: string;
+  childThreadId: string;
   message: string;
 }> {}
 
@@ -150,8 +150,8 @@ const createThreadStore = (
   const runStates = new Map<string, RunState>(
     unknownThreadIds.map((threadId) => [threadId, "outcomeUnknown"]),
   );
-  // A reviewer is claimed as soon as its worker learns of it, so a reply arriving before or while it is saved is already traced to that worker; a claim whose save failed stays, as that worker still created the thread.
-  const claimedReviewers = new Map<string, string>();
+  // Claim before saving so early replies and failed saves cannot assign the same child to another parent.
+  const claimedChildren = new Map<string, string>();
   const threadQueue = createSerialQueue();
   const fileQueue = createSerialQueue();
 
@@ -257,7 +257,7 @@ const createThreadStore = (
               effort: entry.effort ?? null,
               sessionId: null,
               connection: null,
-              reviewerThreadIds: [],
+              childThreadIds: [],
               requesterThreadIds: [],
               messageIds: [],
             }),
@@ -278,60 +278,54 @@ const createThreadStore = (
     setConnection: (threadId: string, connection: ConnectionTarget | null) =>
       update(threadId, (mapping) => ({ ...mapping, connection })),
 
-    // A reviewer answers one worker only, so a reply can be traced back to that worker; a Claude thread is a worker of its own.
-    addReviewer: async (threadId: string, reviewerThreadId: string) => {
-      const claimed = claimedReviewers.get(reviewerThreadId);
+    // Each created thread has one parent, regardless of its model or whether it implements or reviews work.
+    addChild: async (threadId: string, childThreadId: string) => {
+      const claimed = claimedChildren.get(childThreadId);
       if (claimed === undefined) {
-        claimedReviewers.set(reviewerThreadId, threadId);
+        claimedChildren.set(childThreadId, threadId);
       }
-      const added = await persistThenCommit<ThreadNotFound | ReviewerTaken>(
+      const added = await persistThenCommit<ThreadNotFound | ChildTaken>(
         (current) => {
           const mapping = current.get(threadId);
           if (mapping === undefined) return Result.err(notFound(threadId));
-          if (mapping.reviewerThreadIds.includes(reviewerThreadId)) {
+          if (mapping.childThreadIds.includes(childThreadId)) {
             return Result.ok(mapping);
           }
-          const taken = takenReviewer(
-            current,
-            claimed,
-            threadId,
-            reviewerThreadId,
-          );
+          const taken = takenChild(current, claimed, threadId, childThreadId);
           if (taken !== null) {
             return Result.err(
-              new ReviewerTaken({
+              new ChildTaken({
                 threadId,
-                reviewerThreadId,
-                message: `thread ${reviewerThreadId} is ${taken}`,
+                childThreadId,
+                message: `thread ${childThreadId} is ${taken}`,
               }),
             );
           }
           return Result.ok({
             ...mapping,
-            reviewerThreadIds: [...mapping.reviewerThreadIds, reviewerThreadId],
+            childThreadIds: [...mapping.childThreadIds, childThreadId],
           });
         },
       );
       const refused =
         added.isErr() &&
-        (added.error._tag === "ReviewerTaken" ||
+        (added.error._tag === "ChildTaken" ||
           added.error._tag === "ThreadNotFound");
       if (added.isOk() || (refused && claimed === undefined)) {
-        claimedReviewers.delete(reviewerThreadId);
+        claimedChildren.delete(childThreadId);
       }
       return added;
     },
 
-    claimReviewer: (threadId: string, reviewerThreadId: string) => {
+    claimChild: (threadId: string, childThreadId: string) => {
       const taken =
-        claimedReviewers.has(reviewerThreadId) ||
-        takenReviewer(mappings, undefined, threadId, reviewerThreadId) !== null;
-      if (!taken) claimedReviewers.set(reviewerThreadId, threadId);
+        claimedChildren.has(childThreadId) ||
+        takenChild(mappings, undefined, threadId, childThreadId) !== null;
+      if (!taken) claimedChildren.set(childThreadId, threadId);
     },
 
-    reviewerOwner: (reviewerThreadId: string) =>
-      ownerIn(mappings, reviewerThreadId) ??
-      claimedReviewers.get(reviewerThreadId),
+    parentOf: (childThreadId: string) =>
+      ownerIn(mappings, childThreadId) ?? claimedChildren.get(childThreadId),
 
     sessionOwner: (sessionId: string) => ownerOfSession(mappings, sessionId),
 
@@ -443,17 +437,17 @@ const createThreadStore = (
   };
 };
 
-const takenReviewer = (
+const takenChild = (
   mappings: ReadonlyMap<string, ThreadMapping>,
   claimedBy: string | undefined,
   threadId: string,
-  reviewerThreadId: string,
+  childThreadId: string,
 ) => {
-  if (mappings.has(reviewerThreadId)) return "a Claude thread";
-  const owner = ownerIn(mappings, reviewerThreadId) ?? claimedBy;
+  if (childThreadId === threadId) return "the parent thread itself";
+  const owner = ownerIn(mappings, childThreadId) ?? claimedBy;
   return owner === undefined || owner === threadId
     ? null
-    : "another thread's reviewer";
+    : "another thread's child";
 };
 
 const ownerOfSession = (
@@ -468,10 +462,10 @@ const ownerOfSession = (
 
 const ownerIn = (
   mappings: ReadonlyMap<string, ThreadMapping>,
-  reviewerThreadId: string,
+  childThreadId: string,
 ) => {
   for (const mapping of mappings.values()) {
-    if (mapping.reviewerThreadIds.includes(reviewerThreadId)) {
+    if (mapping.childThreadIds.includes(childThreadId)) {
       return mapping.threadId;
     }
   }
@@ -523,7 +517,11 @@ const serializeState = (mappings: ReadonlyMap<string, ThreadMapping>) =>
   `${JSON.stringify(
     {
       version: STATE_VERSION,
-      threads: [...mappings.values()].map(pickMappingFields),
+      threads: [...mappings.values()].map((mapping) => {
+        // Keep the on-disk key so existing stores and rollback versions remain readable.
+        const { childThreadIds, ...fields } = pickMappingFields(mapping);
+        return { ...fields, reviewerThreadIds: childThreadIds };
+      }),
     },
     null,
     2,
@@ -537,6 +535,7 @@ const readState = (value: unknown): ThreadMapping[] | null => {
     isObject(thread)
       ? {
           ...thread,
+          childThreadIds: thread.reviewerThreadIds,
           ...(!("messageIds" in thread) && { messageIds: [] }),
           ...(!("effort" in thread) && { effort: null }),
           ...(!("requesterThreadIds" in thread) && { requesterThreadIds: [] }),
@@ -560,7 +559,7 @@ const pickMappingFields = (mapping: ThreadMapping): ThreadMapping => ({
   effort: mapping.effort,
   worktree: mapping.worktree,
   connection: mapping.connection === null ? null : targetOf(mapping.connection),
-  reviewerThreadIds: [...mapping.reviewerThreadIds],
+  childThreadIds: [...mapping.childThreadIds],
   requesterThreadIds: [...mapping.requesterThreadIds],
   messageIds: [...mapping.messageIds],
 });
@@ -577,8 +576,8 @@ const isThreadMapping = (value: unknown): value is ThreadMapping =>
   (value.effort === null || isNonEmptyString(value.effort)) &&
   isNonEmptyString(value.worktree) &&
   (value.connection === null || isConnectionTarget(value.connection)) &&
-  Array.isArray(value.reviewerThreadIds) &&
-  value.reviewerThreadIds.every(isNonEmptyString) &&
+  Array.isArray(value.childThreadIds) &&
+  value.childThreadIds.every(isNonEmptyString) &&
   Array.isArray(value.requesterThreadIds) &&
   value.requesterThreadIds.every(isNonEmptyString) &&
   Array.isArray(value.messageIds) &&
