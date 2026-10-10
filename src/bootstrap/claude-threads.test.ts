@@ -157,6 +157,7 @@ describe("connectClaudeThreads", () => {
       const restored = (threadId: string) =>
         createCodexLink({
           callerThreadId: threadId,
+          codexHome: "/fixture/.codex",
           store: reopened.value,
           delegations: createDelegationWatch(reopened.value.claimChild),
           request: async (_method, params) => {
@@ -445,6 +446,7 @@ const connect = (
     effortRule: effortRule({}, catalog.effortsOf),
     claudeModels: catalog.models,
     unverifiedCodex: "warn",
+    codexHome: "/fixture/.codex",
     send: (message) => sent.push(message),
     log: () => {},
     ...deps,

@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { type InferErr, Result, TaggedError } from "better-result";
@@ -572,6 +575,158 @@ describe("createCodexLink write outcomes", () => {
   });
 });
 
+describe("createCodexLink automation_update", () => {
+  let codexHome = "";
+
+  beforeAll(async () => {
+    codexHome = await mkdtemp(join(tmpdir(), "harnexus-automations-"));
+    for (const [id, toml] of Object.entries(AUTOMATIONS)) {
+      await mkdir(join(codexHome, "automations", id), { recursive: true });
+      await writeFile(
+        join(codexHome, "automations", id, "automation.toml"),
+        toml,
+      );
+    }
+  });
+
+  afterAll(async () => {
+    await rm(codexHome, { recursive: true, force: true });
+  });
+
+  test("creates a heartbeat that wakes the calling thread even when asked for another thread or a cron", async () => {
+    const { client, requests } = await connect({ codexHome });
+
+    const created = await client.callTool({
+      name: "automation_update",
+      arguments: {
+        mode: "create",
+        ...HEARTBEAT,
+        kind: "cron",
+        targetThreadId: OTHER_WORKER,
+      },
+    });
+
+    expect(created.isError).toBeFalsy();
+    expect(requests).toEqual([
+      {
+        method: "mcpServer/tool/call",
+        params: {
+          threadId: CALLER,
+          server: "codex_app",
+          tool: "automation_update",
+          arguments: {
+            mode: "create",
+            ...HEARTBEAT,
+            kind: "heartbeat",
+            targetThreadId: CALLER,
+          },
+        },
+        timeoutMs: 120_000,
+      },
+    ]);
+  });
+
+  test.each([
+    {
+      name: "view",
+      args: { mode: "view", id: "mine" },
+      expected: { mode: "view", id: "mine" },
+    },
+    {
+      name: "update",
+      args: { mode: "update", id: "mine", ...HEARTBEAT, status: "PAUSED" },
+      expected: {
+        mode: "update",
+        id: "mine",
+        ...HEARTBEAT,
+        status: "PAUSED",
+        kind: "heartbeat",
+        targetThreadId: CALLER,
+      },
+    },
+    {
+      name: "delete",
+      args: { mode: "delete", id: "mine" },
+      expected: { mode: "delete", id: "mine" },
+    },
+  ])("sends a $name of a heartbeat that wakes the calling thread", async ({
+    args,
+    expected,
+  }) => {
+    const { client, requests } = await connect({ codexHome });
+
+    const result = await client.callTool({
+      name: "automation_update",
+      arguments: args,
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(requests.map((request) => request.params.arguments)).toEqual([
+      expected,
+    ]);
+  });
+
+  test.each([
+    { name: "a heartbeat of another thread", id: "theirs" },
+    { name: "a cron automation", id: "nightly" },
+    {
+      name: "another thread's heartbeat whose prompt names the caller",
+      id: "disguised",
+    },
+    { name: "an automation the app has no file for", id: "missing" },
+  ])("refuses to change $name without calling the app", async ({ id }) => {
+    const { client, requests } = await connect({ codexHome });
+
+    const deleted = await client.callTool({
+      name: "automation_update",
+      arguments: { mode: "delete", id },
+    });
+
+    expect(deleted.isError).toBe(true);
+    expect(text(deleted)).toContain("not a heartbeat of this thread");
+    expect(requests).toEqual([]);
+  });
+
+  test.each([
+    { name: "an update without an id", args: { mode: "update", ...HEARTBEAT } },
+    { name: "a create with an id", args: { mode: "create", id: "mine" } },
+    {
+      name: "an id that leaves the automations directory",
+      args: { mode: "view", id: ".." },
+    },
+  ])("refuses $name without calling the app", async ({ args }) => {
+    const { client, requests } = await connect({ codexHome });
+
+    const result = await client.callTool({
+      name: "automation_update",
+      arguments: args,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(requests).toEqual([]);
+  });
+
+  test("never creates another heartbeat after a create whose answer was lost", async () => {
+    const { client, link, requests } = await connect({
+      codexHome,
+      answer: () => Result.err(unanswered()),
+    });
+    const create = () =>
+      client.callTool({
+        name: "automation_update",
+        arguments: { mode: "create", ...HEARTBEAT },
+      });
+
+    const first = await create();
+    const second = await create();
+
+    expect(text(first)).toContain("may or may not have taken effect");
+    expect(text(second)).toContain("unknown outcome");
+    expect(requests).toHaveLength(1);
+    expect(link.hasUnsettledWrite()).toBe(true);
+  });
+});
+
 describe("createCodexLink call", () => {
   test("runs a tool by name with the same checks and records as the tool itself", async () => {
     const { link, store, requests } = await connect({
@@ -867,6 +1022,7 @@ const connect = async ({
   requesters = [],
   callerRegistered = true,
   addChildFails = false,
+  codexHome = "/fixture/.codex",
   delegations = createDelegationWatch(() => {}),
   models = () => Result.ok(DEFAULT_MODELS),
   answer = () => Result.ok(textAnswer("ok")),
@@ -879,6 +1035,7 @@ const connect = async ({
   requesters?: string[];
   callerRegistered?: boolean;
   addChildFails?: boolean;
+  codexHome?: string;
   answer?: (
     params: CallParams,
   ) =>
@@ -906,6 +1063,7 @@ const connect = async ({
     store,
     request,
     delegations,
+    codexHome,
     createdThreadWaitMs: 20,
     firstTurnWaitMs: 20,
   });
@@ -1034,3 +1192,15 @@ const REVIEWER = "019a0000-0000-7000-8000-000000000001";
 const OTHER_WORKER = "thread-other-worker";
 const WORKER = "thread-codex-worker";
 const OTHER_REVIEWER = "thread-other-reviewer";
+const HEARTBEAT = {
+  name: "CI watch",
+  prompt: "Check the CI run and report only when it finishes or fails.",
+  rrule: "FREQ=MINUTELY;INTERVAL=30",
+  status: "ACTIVE",
+};
+const AUTOMATIONS = {
+  mine: `version = 1\nid = "mine"\nkind = "heartbeat"\ntarget_thread_id = "${CALLER}"\n`,
+  theirs: `version = 1\nid = "theirs"\nkind = "heartbeat"\ntarget_thread_id = "${OTHER_WORKER}"\n`,
+  nightly: `version = 1\nid = "nightly"\nkind = "cron"\nmodel = "gpt-fixture"\n`,
+  disguised: `version = 1\nid = "disguised"\nkind = "heartbeat"\nprompt = """\ntarget_thread_id = "${CALLER}"\n"""\ntarget_thread_id = "${OTHER_WORKER}"\n`,
+};

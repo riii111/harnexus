@@ -38,6 +38,7 @@ import {
   signalWithLog,
   stopLingeringServer,
 } from "./supervise.ts";
+import { codexHome } from "./task/request.ts";
 
 // Must match bin/harnexus-codex.
 const SERVER_OUTPUT_FD = 3;
@@ -155,6 +156,7 @@ async function withClaude(relay: {
       vertex: loadVertexModels(process.env),
     }),
     unverifiedCodex: loadUnverifiedCodexPolicy(process.env),
+    codexHome: codexHome(process.env),
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: logger.log,
   });

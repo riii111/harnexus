@@ -35,6 +35,7 @@ export const connectClaudeThreads = ({
   effortRule,
   claudeModels,
   unverifiedCodex,
+  codexHome,
   permissionMode = "auto",
   send,
   log,
@@ -52,12 +53,19 @@ export const connectClaudeThreads = ({
   claudeModels: Parameters<typeof createRouter>[0]["claudeModels"];
   permissionMode?: Runtime["permissionMode"];
   unverifiedCodex: Parameters<typeof createRouter>[0]["unverifiedCodex"];
+  codexHome: string;
   send: (message: object) => void;
   log: (event: ClaudeLogEvent | RouteEvent) => void;
 }) => {
   const delegations = createDelegationWatch(store.claimChild);
   const openLink = (callerThreadId: string) =>
-    createCodexLink({ callerThreadId, store, request, delegations });
+    createCodexLink({
+      callerThreadId,
+      store,
+      request,
+      delegations,
+      codexHome,
+    });
   const threads = createThreadValues(store, log);
   const subagents = createSubagents({ send });
   const subagentRestore = createSubagentRestore({
