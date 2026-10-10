@@ -157,6 +157,8 @@ Set `HARNEXUS_APP_PATH` if the app is installed somewhere else. `HARNEXUS_LOG_PA
 
 ## harnexus-task
 
+For the `task-*` workflow, coordinate from a Codex chat by default. To use Claude as the coordinator, select it explicitly in the app; workers still default to Claude and reviewers to Codex.
+
 `harnexus-task` launches task workers and requests reviews in the app for the `task-*` skills. It renders a fixed prompt from the installed skill templates in `$CODEX_HOME/skills`, creates the thread or sends the message through harnexus, and records each send under `~/.local/state/taskctl/` so a send with an unknown result is never repeated. Its subcommands are `launch`, `review`, `state` and `resolve`; it replaces the `taskctl` script and continues the sessions it recorded.
 
 It sends through a socket that `bun run open-app` opens beside the thread store, and runs outside the sandbox. The socket lets any process of your user create and message threads in the app; sandboxed agents reach it only through the allow-listed `harnexus-task`. To close it, open the app with `HARNEXUS_CALL_SOCKET=off bun run open-app`. Install it to `~/.local/bin/harnexus-task` with:
