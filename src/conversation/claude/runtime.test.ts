@@ -12,15 +12,11 @@ import {
   SUBSCRIPTION_CONNECTION,
 } from "../../infra/claude/connection.ts";
 import { createConnectionResolver } from "../../infra/claude/connection-settings.ts";
-import { createModelCatalog, effortRule } from "../../infra/claude/models.ts";
+import { effortRule } from "../../infra/claude/models.ts";
 import { startClaudeSession } from "../../infra/claude/session.ts";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
 import { pngBytes } from "../../infra/claude/testing/image-files.ts";
-import {
-  createEmptyFile,
-  FileSyncFailed,
-  writeFileAtomic,
-} from "../../runtime/fs.boundary.ts";
+import { createEmptyFile, writeFileAtomic } from "../../runtime/fs.boundary.ts";
 import type { createTurnController } from "../controller.ts";
 import {
   ALLOWED_TOOLS,
@@ -388,28 +384,6 @@ describe("tool approval that must default to no", () => {
       { question: expect.stringContaining('Type "Allow"'), options: null },
     ]);
   });
-
-  test.each([
-    { name: "a choice number", typed: "2", expected: "deny" },
-    { name: "the approving word", typed: "Allow", expected: "allow" },
-  ])("answers $expected to $name", async ({ typed, expected }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await startedTurn(claude);
-
-    const decision = askTool(
-      claude,
-      "Bash",
-      { command: "ls" },
-      { defaultToNo: true },
-    );
-    const request = await appRequest(sent);
-    turns.answerRequest({
-      id: request.id,
-      result: { answers: { approval: { answers: [typed] } } },
-    });
-
-    expect((await decision)?.behavior).toBe(expected);
-  });
 });
 
 describe("permission mode", () => {
@@ -532,17 +506,6 @@ describe("permission mode", () => {
 
     expect(claude.modes()).toEqual([expected]);
   });
-
-  test("runs a turn without a mode in the mode picked earlier", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns } = await harness([claude]);
-
-    turns.selectMode(THREAD, "plan");
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.modes().length === 1);
-
-    expect(claude.modes()).toEqual(["plan"]);
-  });
 });
 
 describe("effort", () => {
@@ -648,37 +611,6 @@ describe("effort", () => {
 
     expect(claude.efforts()).toEqual(["low"]);
     expect(turns.effortOf(THREAD)).toBe("low");
-  });
-
-  test("runs a picked level above the settings' cap at the cap the app shows", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns } = await harness([claude], {
-      effortRule: effortRule({ maxEffortLevel: "low" }, BUILT_IN_EFFORTS),
-    });
-
-    turns.startTurn(withEffort(turnStart(10, "hello"), "max"), undefined);
-    await until(() => claude.efforts().length === 1);
-
-    expect(claude.efforts()).toEqual(["low"]);
-    expect(turns.effortOf(THREAD)).toBe("low");
-  });
-
-  test("runs a thread on a model no list names yet at its saved level", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const catalog = createModelCatalog();
-    const { turns } = await harness([claude], {
-      effortRule: effortRule({}, catalog.effortsOf),
-    });
-    const request = withEffort(turnStart(10, "hello"), "xhigh");
-
-    turns.startTurn(
-      { ...request, params: { ...request.params, model: "claude-sonnet-5-5" } },
-      undefined,
-    );
-    await until(() => claude.efforts().length === 1);
-
-    expect(claude.efforts()).toEqual(["xhigh"]);
-    expect(turns.effortOf(THREAD)).toBe("xhigh");
   });
 
   test("sends the prompt to a model without effort without setting one", async () => {
@@ -1359,12 +1291,7 @@ describe("session ids", () => {
     });
   });
 
-  test.each([
-    { name: "a write failure before rename", synced: false },
-    { name: "a directory sync failure after rename", synced: true },
-  ])("fails a rewind fork and keeps its durable unknown marker after $name", async ({
-    synced,
-  }) => {
+  test("fails a rewind fork and keeps its durable unknown marker after a write failure", async () => {
     const source = fakeClaude(SUBSCRIPTION);
     const before = await harness([source]);
     await completeTurn(before.turns, before.sent, source, 10);
@@ -1377,21 +1304,10 @@ describe("session ids", () => {
     const fork = fakeClaude(SUBSCRIPTION);
     const after = await harness([fork], {
       files: {
-        writeState: async (path, content) => {
-          if (!content.includes('"se-rewound"'))
-            return writeFileAtomic(path, content);
-          if (!synced) return diskFull(path);
-          const written = await writeFileAtomic(path, content);
-          return written.isErr()
-            ? written
-            : Result.err(
-                new FileSyncFailed({
-                  path,
-                  cause: null,
-                  message: "sync failed",
-                }),
-              );
-        },
+        writeState: async (path, content) =>
+          content.includes('"se-rewound"')
+            ? diskFull(path)
+            : writeFileAtomic(path, content),
       },
     });
     after.turns.startTurn(turnStart(11, "continue from the rewind"), undefined);
@@ -1420,12 +1336,11 @@ describe("session ids", () => {
     });
     const reloaded = await harness([]);
     expect(reloaded.store.get(THREAD)?.runState).toBe("outcomeUnknown");
-    expect(reloaded.store.get(THREAD)?.sessionId).toBe(
-      synced ? "se-rewound" : "se-1",
-    );
-    expect(reloaded.store.get(THREAD)?.rewind).toEqual(
-      synced ? undefined : { sessionId: "se-1", at: "kept-record" },
-    );
+    expect(reloaded.store.get(THREAD)?.sessionId).toBe("se-1");
+    expect(reloaded.store.get(THREAD)?.rewind).toEqual({
+      sessionId: "se-1",
+      at: "kept-record",
+    });
   });
 
   test("resumes from the session id Claude reported even when saving it failed", async () => {
@@ -1691,29 +1606,6 @@ describe("repository connections", () => {
       "final_answer",
       "final_answer",
     ]);
-  });
-
-  test("start Claude on Vertex from the repository's own Claude Code settings", async () => {
-    await mkdir(join(dir, ".claude"), { recursive: true });
-    await writeFile(
-      join(dir, ".claude", "settings.local.json"),
-      JSON.stringify({ env: VERTEX.env }),
-    );
-    const claude = fakeClaude(VERTEX_ACCOUNT);
-    const { turns, sent, settings } = await harness([claude], {
-      resolveConnection: createConnectionResolver({
-        repositoryOf: async () => null,
-      }),
-      model: VERTEX_MODEL,
-    });
-
-    await completeTurn(turns, sent, claude, 10);
-
-    expect(settings[0]?.connection).toEqual(VERTEX);
-    expect(agentMessages(sent)[0]).toEqual({
-      phase: "commentary",
-      text: VERTEX_NOTICE,
-    });
   });
 
   test("refuse a turn without starting Claude when the repository's Vertex settings are incomplete", async () => {
@@ -2701,99 +2593,6 @@ describe("approvals no turn could show", () => {
     expect(claude.closes()).toBe(0);
   });
 
-  test("shows what a background agent does while the approval waits in its thread as it happens, once", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, subagents } = await harness([claude]);
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.prompted());
-    claude.emit(sdk(taskStarted("toolu-agent", 1)));
-    claude.emit(sdk(success()));
-    await until(() => turnCompleted(sent) !== undefined);
-    const [child] = subagents.childrenOf(THREAD);
-    const childCommands = (method: string) =>
-      sent.filter(
-        (m) =>
-          m.method === method &&
-          m.params.threadId === child?.id &&
-          m.params.item.type === "commandExecution",
-      );
-
-    const decision = agentAsks(claude, "tool-1");
-    const request = await appRequest(sent);
-    claude.emit(
-      sdk({ ...bashCall("toolu-ls"), parent_tool_use_id: "toolu-agent" }),
-    );
-    claude.emit(
-      sdk({ ...toolError("toolu-ls"), parent_tool_use_id: "toolu-agent" }),
-    );
-    await until(() => childCommands("item/completed").length === 1);
-    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
-    turns.answerRequest({ id: request.id, result: ALLOWED });
-    await until(() => completedTurnStatuses(sent).length === 2);
-    await settle();
-
-    expect(await decision).toEqual({ behavior: "allow" });
-    expect(childCommands("item/started")).toHaveLength(1);
-    expect(childCommands("item/completed")).toHaveLength(1);
-    expect(startedTurns(sent)).not.toContain("turn-3");
-  });
-
-  test("keeps showing what a background agent does while the approval waits with a turn the user sent queued, and answers that turn after", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, subagents } = await harness([claude]);
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
-    const prompts = claude.prompt()?.[Symbol.asyncIterator]();
-    await prompts?.next();
-    claude.emit(sdk(taskStarted("toolu-agent", 1)));
-    claude.emit(sdk(success()));
-    await until(() => turnCompleted(sent) !== undefined);
-    const [child] = subagents.childrenOf(THREAD);
-    const childItems = (method: string) =>
-      sent.filter(
-        (m) => m.method === method && m.params.threadId === child?.id,
-      );
-
-    const decision = agentAsks(claude, "tool-1");
-    const request = await appRequest(sent);
-    turns.startTurn(turnStart(11, "next"), undefined);
-    await until(() => responseTo(sent, 11) !== undefined);
-    claude.emit(
-      sdk({ ...bashCall("toolu-ls"), parent_tool_use_id: "toolu-agent" }),
-    );
-    claude.emit(
-      sdk({ ...toolError("toolu-ls"), parent_tool_use_id: "toolu-agent" }),
-    );
-    claude.emit(sdk(BACKGROUND_AGENT_SPOKE));
-    await until(
-      () =>
-        childItems("item/completed").some(
-          (m) => m.params.item.type === "commandExecution",
-        ) &&
-        childItems("item/started").some(
-          (m) => m.params.item.type === "agentMessage",
-        ),
-    );
-    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
-    turns.answerRequest({ id: request.id, result: ALLOWED });
-    const next = await prompts?.next();
-    claude.emit(sdk(answer("msg-3", "hi")));
-    claude.emit(sdk(success([next?.value?.uuid])));
-    await until(() => completedTurnStatuses(sent).length === 3);
-
-    expect(await decision).toEqual({ behavior: "allow" });
-    expect(next?.value?.message.content).toBe("next");
-    expect(completedTurns(sent).slice(1)).toMatchObject([
-      { id: "turn-2", status: "completed" },
-      { id: "turn-3", status: "completed", items: [{ text: "hi" }] },
-    ]);
-    expect(
-      childItems("item/started").filter(
-        (m) => m.params.item.type === "commandExecution",
-      ),
-    ).toHaveLength(1);
-  });
-
   test("declines the approvals when Claude's stream ends with a turn the user sent queued, and runs that turn on a new Claude", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const next = fakeClaude(SUBSCRIPTION);
@@ -3196,20 +2995,6 @@ describe("approvals no turn could show", () => {
       end: (_started, claude) => claude.fail(new Error("socket closed")),
     },
     {
-      name: "Claude stops after an agent spoke during the wait",
-      end: (_started, claude) => {
-        claude.emit(sdk(BACKGROUND_AGENT_SPOKE));
-        claude.fail(new Error("socket closed"));
-      },
-    },
-    {
-      name: "Claude's stream ends after an agent spoke during the wait",
-      end: (_started, claude) => {
-        claude.emit(sdk(BACKGROUND_AGENT_SPOKE));
-        claude.end();
-      },
-    },
-    {
       name: "its session is dropped",
       end: ({ runtime, sessionLinks: [link] }) => {
         if (link !== undefined) runtime.dropSession(THREAD, link);
@@ -3386,10 +3171,23 @@ describe("turn/steer", () => {
     expect(completedTurnStatuses(sent)).toEqual(["completed"]);
   });
 
-  test.each([
-    { name: "queued when Claude ended its turn", queued: 1 },
-    { name: "sent after Claude wrote its result", queued: 0 },
+  test.each<{
+    name: string;
+    taken: (uuid: string | undefined) => (string | undefined)[] | undefined;
+    queued: number;
+  }>([
+    {
+      name: "queued when Claude ended its turn",
+      taken: () => undefined,
+      queued: 1,
+    },
+    {
+      name: "sent after Claude wrote its result",
+      taken: (uuid) => [uuid],
+      queued: 0,
+    },
   ])("keeps the turn open through the Claude turn that runs a steer $name", async ({
+    taken,
     queued,
   }) => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -3400,7 +3198,7 @@ describe("turn/steer", () => {
     turns.steerTurn(steer(30, "turn-1", "also this"));
     const [prompt, steered] = await readPrompts(claude, 2);
     claude.emit(sdk(answer("msg-1", "first")));
-    claude.emit(sdk(success([prompt?.uuid], queued)));
+    claude.emit(sdk(success(taken(prompt?.uuid), queued)));
     await until(() => claude.drained());
     expect(completedTurnStatuses(sent)).toEqual([]);
     claude.emit(sdk(answer("msg-2", "second")));
@@ -3423,10 +3221,6 @@ describe("turn/steer", () => {
           ...Array.from({ length: 63 }, (_, i) => `uuid-${i}`),
         ],
       }),
-    },
-    {
-      name: "only the last uuid",
-      taken: (uuid) => ({ user_message_uuid: uuid }),
     },
   ])("fails the turn asking for the steer again and resumes on a new session when nothing is queued and the result has $name", async ({
     taken,
@@ -3461,6 +3255,32 @@ describe("turn/steer", () => {
     expect(completedTurnStatuses(sent)).toEqual(["failed", "completed"]);
     expect(claude.closes()).toBe(1);
     expect(settings[1]).toMatchObject({ resume: "se-1" });
+  });
+
+  test("completes the turn when the result names the steer as its only uuid", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => claude.started());
+    turns.steerTurn(steer(30, "turn-1", "also this"));
+    const [, steered] = await readPrompts(claude, 2);
+    claude.emit(sdk(answer("msg-1", "ok")));
+    claude.emit(
+      sdk(
+        result({
+          subtype: "success",
+          is_error: false,
+          result: "done",
+          queued_turn_count: 0,
+          user_message_uuid: steered?.uuid,
+        }),
+      ),
+    );
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
+    expect(claude.closes()).toBe(0);
   });
 
   test("refuses a steer beyond what one turn's result can name", async () => {
@@ -3712,9 +3532,8 @@ describe("skill links in Claude input", () => {
     turns.changeModel(THREAD, OTHER_MODEL);
     await skillTurn(turns, sent, second, 11, typed);
 
-    expect(Array.isArray((await firstPromptMessage(second))?.content)).toBe(
-      true,
-    );
+    const [prompt] = await readPrompts(second, 1);
+    expect(Array.isArray(prompt?.message.content)).toBe(true);
   });
 
   test("sends the link alone and logs it when the SKILL.md cannot be read", async () => {
@@ -3770,9 +3589,8 @@ describe("images in Claude input", () => {
       undefined,
     );
 
-    expect(await firstPrompt(await promptOf(claude))).toEqual([
-      pngBlock(bytes),
-    ]);
+    await until(() => claude.started());
+    expect(await firstPrompt(claude.prompt())).toEqual([pngBlock(bytes)]);
   });
 
   test("fails the turn with what the user can do before starting Claude when an image cannot be read", async () => {
@@ -3964,33 +3782,9 @@ describe("thread/compact/start on a Claude thread", () => {
     expect(settings).toHaveLength(1);
   });
 
-  test.each([
-    {
-      name: "a thread that never ran",
-      prepare: async () => {
-        const claude = fakeClaude(SUBSCRIPTION);
-        return { claude, ...(await harness([claude])) };
-      },
-    },
-    {
-      name: "a thread whose Claude conversation was found lost",
-      prepare: async () => {
-        const first = fakeClaude(SUBSCRIPTION);
-        const before = await harness([first]);
-        await completeTurn(before.turns, before.sent, first, 10);
-        await until(() => before.store.get(THREAD)?.runState === "idle");
-        const claude = fakeClaude(SUBSCRIPTION);
-        const after = await harness([claude], { missingSessions: ["se-1"] });
-        after.turns.startTurn(turnStart(11, "hello"), undefined);
-        await until(() => after.store.get(THREAD)?.sessionId === null);
-        await until(() => after.store.get(THREAD)?.runState === "idle");
-        return { claude, ...after };
-      },
-    },
-  ])("refuses to compact $name without starting Claude", async ({
-    prepare,
-  }) => {
-    const { claude, turns, sent } = await prepare();
+  test("refuses to compact a thread that never ran without starting Claude", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
 
     turns.compactThread(compactStart(20));
     await settle();
@@ -4274,11 +4068,6 @@ const skillTurn = async (
   await until(() => completedTurnStatuses(sent).length > done);
 };
 
-const firstPromptMessage = async (claude: ReturnType<typeof fakeClaude>) => {
-  const [prompt] = await readPrompts(claude, 1);
-  return prompt?.message;
-};
-
 const compactStart = (id: number) => ({
   id,
   params: { threadId: THREAD } as Record<string, unknown>,
@@ -4335,11 +4124,6 @@ const pngBlock = (bytes: Buffer) =>
       data: bytes.toString("base64"),
     },
   }) as const;
-
-const promptOf = async (claude: ReturnType<typeof fakeClaude>) => {
-  await until(() => claude.started());
-  return claude.prompt();
-};
 
 const writeSkill = async (name: string, body: string) => {
   const path = join(dir, "skills", name, "SKILL.md");

@@ -195,8 +195,6 @@ type ClaudeTurnEvent =
 export type ClaudeLogEvent = TurnEvent<ClaudeFailureTag> | ClaudeTurnEvent;
 
 // A session is not reused until its interrupt reports whether a send is still queued, which can arrive after the interrupted turn has ended.
-// attachedSkills maps each SKILL.md path this session was given to the body it was given.
-// reader is the inbox Claude's messages go to, and unclaimed says whom it waits for while no turn reads it: a turn Claude started on its own, or the turn the thread has accepted. discarding drops the rest of a turn of Claude's own that the app could not show, and backgroundTasks counts the tasks Claude runs in the background.
 type SessionSlot = {
   session: ClaudeSession;
   model: string;
@@ -210,9 +208,7 @@ type SessionSlot = {
   backgroundTasks: number;
 };
 
-// Steers wait in unsentSteers until the turn's own prompt reaches Claude, then stay in pendingSteers until a result names them as taken; sends holds the uuid of every message the turn sent Claude.
 // steering settles once the last steer accepted has been sent or refused, so a steer still reading its images keeps the ones after it waiting.
-// command is set on a turn the bridge answers itself, such as /session, and closes the question the turn asks; own marks one Claude started on its own, holdsApprovals one opened only to show approvals no other turn could, and completed one Claude ended with a successful result.
 type ClaudeTurn = {
   command: AbortController | null;
   own: boolean;
@@ -226,7 +222,6 @@ type ClaudeTurn = {
   steering: Promise<unknown>;
 };
 
-// turn stays null until the app is shown the holding turn, and ended declines every approval in it once its Claude is gone.
 type HeldApprovals = {
   turn: RunningTurn<ClaudeFailureTag> | null;
   waiting: number;
@@ -234,7 +229,6 @@ type HeldApprovals = {
   ended: AbortController;
 };
 
-// signal also ends once the held turn's Claude is gone.
 type Approval = { held: HeldApprovals | null; signal: AbortSignal };
 
 class BridgeClosing extends TaggedError("BridgeClosing")<{
@@ -277,7 +271,6 @@ class ConnectionNotSaved extends TaggedError("ConnectionNotSaved")<{
   message: string;
 }> {}
 
-// A thread keeps one Claude session across turns; a session that fails is dropped and the next turn resumes it from the stored session id.
 export const createClaudeRuntime = ({
   threads,
   startSession,
@@ -374,7 +367,12 @@ export const createClaudeRuntime = ({
     startup.link?.stopWrites();
   };
 
-  // Each worker keeps its own Claude process, so an idle one is closed; without a session id its next turn could not resume the conversation, so it stays.
+  const endCancelledStart = (turn: Turn) => {
+    if (closed) turn.fail(bridgeClosingError());
+    else turn.finish({ status: "interrupted" }, null);
+  };
+
+  // An idle session without a session id stays, since its next turn could not resume the conversation.
   // Closing would end the tasks Claude runs in the background, so the close waits until none is left.
   const scheduleIdleClose = (threadId: string) => {
     cancelIdleClose(threadId);
@@ -446,7 +444,6 @@ export const createClaudeRuntime = ({
       return;
     }
     runningTurns.set(turn.threadId, turn);
-    // A turn of Claude's own is shown only once it holds what Claude sent.
     if (turn.input.startedBy === "app") showTurn(turn.threadId);
     if (turn.input.startedBy === "claude") await streamOwn(turn, claude);
     else await stream(turn, claude);
@@ -464,7 +461,6 @@ export const createClaudeRuntime = ({
     }
   };
 
-  // The turn shows what the user typed and the bridge's reply, and nothing reaches Claude or its record.
   const answerCommand = async (
     turn: Turn,
     command: SessionCommand,
@@ -547,7 +543,6 @@ export const createClaudeRuntime = ({
     );
     if (replayed.length === 0) return;
     for (const notification of replayed) send(notification);
-    // The app now holds the turns, so a later reopen need not carry them again.
     threads.takePicked(turn.threadId);
     log({ event: "claude_turn", step: "history_replayed" });
   };
@@ -597,8 +592,7 @@ export const createClaudeRuntime = ({
       startup.controller.signal,
     );
     if (result === ABORTED) {
-      if (closed) turn.fail(bridgeClosingError());
-      else turn.finish({ status: "interrupted" }, null);
+      endCancelledStart(turn);
       return;
     }
     const advanced = result;
@@ -617,8 +611,7 @@ export const createClaudeRuntime = ({
       startup.controller.signal,
     );
     if (checked === ABORTED) {
-      if (closed) turn.fail(bridgeClosingError());
-      else turn.finish({ status: "interrupted" }, null);
+      endCancelledStart(turn);
       return;
     }
     if (checked.isErr()) {
@@ -644,8 +637,7 @@ export const createClaudeRuntime = ({
     if (startup !== null) clearSessionStart(threadId, startup);
     if (slot.isErr()) {
       if (slot.error._tag === "SessionStartCancelled") {
-        if (closed) turn.fail(bridgeClosingError());
-        else turn.finish({ status: "interrupted" }, null);
+        endCancelledStart(turn);
       } else {
         turn.fail(slot.error);
       }
@@ -691,7 +683,7 @@ export const createClaudeRuntime = ({
       return;
     }
     slot.value.link.acceptWrites();
-    // A skill this Claude session already holds goes as its link alone; a new session has lost it, so it is attached again.
+    // A new session has lost the skills an earlier one held, so they are attached again.
     const attached = slot.value.attachedSkills;
     const fresh = skills.skills.filter(
       ({ path, body }) => attached.get(path) !== body,
@@ -751,8 +743,7 @@ export const createClaudeRuntime = ({
     return true;
   };
 
-  // A turn Claude started on its own has no prompt to send; its messages wait in the inbox the session gave it until the app shows the turn.
-  // A turn the app started took them first if it came ahead of this one, which then has nothing to show.
+  // A turn the app started takes Claude's waiting messages first if it came ahead of this one, which then has nothing to show.
   const streamOwn = async (turn: Turn, claude: ClaudeTurn) => {
     const threadId = turn.threadId;
     await waitForPendingInterrupt(threadId);
@@ -773,7 +764,6 @@ export const createClaudeRuntime = ({
     turn.useLink(slot.link);
     slot.link.acceptWrites();
     showTurn(threadId);
-    // A stop that came while the turn waited to be shown reaches Claude now.
     if (turn.state().interrupting) interrupt(turn, false);
     try {
       await read(turn, claude, slot, inbox, {
@@ -786,7 +776,6 @@ export const createClaudeRuntime = ({
     }
   };
 
-  // A conversation keeps the provider, project and region it started on until the user sends /switch-connection, whatever the settings say later.
   const connectionFor = async (
     turn: Turn,
   ): Promise<
@@ -875,7 +864,6 @@ export const createClaudeRuntime = ({
     return { status: "completed" };
   };
 
-  // The last record of each fork's source when the fork was made, null when the source had said nothing yet; a fork whose source could not be read has none.
   const forkPoints = new Map<string, { at: string | null }>();
 
   const noteFork = async (threadId: string) => {
@@ -951,7 +939,7 @@ export const createClaudeRuntime = ({
         }
       }
       const message = received.value;
-      // Status and system messages follow the send at once, so the wait is measured to the first reply of the main conversation, not of a subagent, and a turn without one logs null.
+      // Status and system messages follow the send at once, so the wait is measured to the first reply of the main conversation, not of a subagent.
       if (
         (message.type === "stream_event" || message.type === "assistant") &&
         message.parent_tool_use_id === null
@@ -1058,7 +1046,6 @@ export const createClaudeRuntime = ({
     }
   };
 
-  // Messages that come while the thread has a turn accepted wait for it, as they did before the turn read the session; with none, a failure or an end leaves the session unusable, so it goes and the next turn resumes the conversation.
   const route = (
     threadId: string,
     slot: SessionSlot,
@@ -1068,7 +1055,6 @@ export const createClaudeRuntime = ({
       slot.reader.push(next);
       return slot.reader;
     }
-    // A session already dropped has nothing left for a turn to read.
     if (sessions.get(threadId) !== slot) return null;
     const own = !busyThreads.has(threadId);
     // A turn holding approvals reads nothing, so while one is open or pending only a turn Claude starts waits for the next turn, even with one queued.
@@ -1083,7 +1069,6 @@ export const createClaudeRuntime = ({
       }
       if (!startsTurn(next.value.value)) return null;
     }
-    // A turn the app cannot be shown, as when the bridge is closing, is left to Claude.
     if (own && !startOwnTurn(threadId)) return null;
     if (own) log({ event: "claude_turn", step: "own_turn" });
     const inbox = createInbox<StreamedNext>();
@@ -1104,7 +1089,6 @@ export const createClaudeRuntime = ({
     }
   };
 
-  // An agent Claude starts, in the turn or in the background, shows as a thread of its own under this one, which also gets what the agent says; one an agent starts goes under that agent's thread.
   const trackSubagents = (threadId: string, message: SDKMessage) => {
     if (message.type !== "system") {
       subagents.message(threadId, message);
@@ -1147,7 +1131,6 @@ export const createClaudeRuntime = ({
     }
   };
 
-  // Messages that came while the thread had a turn accepted, such as a turn Claude started on its own while that turn was being set up, reach the turn ahead of its reply.
   const claimReader = (slot: SessionSlot) => {
     const inbox = createInbox<StreamedNext>();
     for (const next of slot.reader?.drain() ?? []) inbox.push(next);
@@ -1156,7 +1139,6 @@ export const createClaudeRuntime = ({
     return inbox;
   };
 
-  // What came after the turn's end, such as a turn Claude started right after it, is read as if no turn had been reading.
   const releaseReader = (
     threadId: string,
     slot: SessionSlot,
@@ -1167,7 +1149,6 @@ export const createClaudeRuntime = ({
     for (const next of inbox.drain()) route(threadId, slot, next);
   };
 
-  // What waited for turns that took none of it, such as a turn Claude started right as the last one ended, is read again once the thread has no turn left.
   // A turn of Claude's own that could not run was shown as failed, so what it held is not shown again.
   const threadIdle = (threadId: string) => {
     busyThreads.delete(threadId);
@@ -1390,7 +1371,6 @@ export const createClaudeRuntime = ({
       );
     }
     const forkAt = forkPoint?.at ?? null;
-    // A fork whose source had said nothing, or whose source conversation is gone, starts a conversation of its own.
     const forkFound =
       forkFrom === null || forkAt === null
         ? false
