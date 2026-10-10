@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { buildHistory, replayHistory } from "./history.ts";
-import type { ThreadItem } from "./protocol.ts";
+import type { ThreadItem, Turn } from "./protocol.ts";
 import { RECOVERY_CONTEXT, RECOVERY_NOTICE } from "./recovery.ts";
 import {
   conversation,
@@ -85,13 +85,6 @@ describe("buildHistory", () => {
       text: "one file",
       phase: "final_answer",
     });
-  });
-
-  test("keeps the final answer as the turn's summary, as a live turn/completed does", () => {
-    const [first] = build(conversation());
-
-    expect(first?.turn.itemsView).toBe("summary");
-    expect(first?.turn.items).toEqual([first?.items[3]?.item as ThreadItem]);
   });
 
   test("marks text before a tool call as commentary", () => {
@@ -278,30 +271,140 @@ describe("buildHistory", () => {
 });
 
 describe("replayHistory", () => {
-  test("streams each turn as a finished live turn under the ids a later read rebuilds", () => {
-    const history = build(conversation());
-    const replayed = replayHistory(history, "th-fixture", 0);
-    const first = history[0];
-
-    expect(replayed.map((notification): string => notification.method)).toEqual(
-      history.flatMap(({ items }) => [
-        "turn/started",
-        ...items.flatMap(() => ["item/started", "item/completed"]),
-        "turn/completed",
-      ]),
+  test("streams each turn as a finished live turn, filling missing times from its turn or the given time", () => {
+    const replayed = replayHistory(
+      [
+        {
+          turn: TIMED_TURN,
+          items: [
+            {
+              turnId: "turn-1",
+              item: PROMPT_ITEM,
+              startedAtMs: 1_001_000,
+              completedAtMs: 1_002_000,
+            },
+            {
+              turnId: "turn-1",
+              item: COMPACTION_ITEM,
+              startedAtMs: null,
+              completedAtMs: null,
+            },
+          ],
+        },
+        { turn: UNTIMED_TURN, items: [] },
+      ],
+      "th-fixture",
+      9_000_000,
     );
-    expect(replayed[0]).toMatchObject({
-      params: {
-        threadId: "th-fixture",
-        turn: { id: first?.turn.id, status: "inProgress", items: [] },
+
+    expect(replayed).toEqual([
+      {
+        method: "turn/started",
+        params: {
+          threadId: "th-fixture",
+          turn: {
+            ...TIMED_TURN,
+            items: [],
+            itemsView: "full",
+            status: "inProgress",
+            completedAt: null,
+            durationMs: null,
+          },
+        },
+        emittedAtMs: 1_000_000,
       },
-    });
-    expect(replayed.at(-1)).toMatchObject({
-      method: "turn/completed",
-      params: { threadId: "th-fixture", turn: history.at(-1)?.turn },
-    });
+      {
+        method: "item/started",
+        params: {
+          item: PROMPT_ITEM,
+          threadId: "th-fixture",
+          turnId: "turn-1",
+          startedAtMs: 1_001_000,
+        },
+        emittedAtMs: 1_001_000,
+      },
+      {
+        method: "item/completed",
+        params: {
+          item: PROMPT_ITEM,
+          threadId: "th-fixture",
+          turnId: "turn-1",
+          completedAtMs: 1_002_000,
+        },
+        emittedAtMs: 1_002_000,
+      },
+      {
+        method: "item/started",
+        params: {
+          item: COMPACTION_ITEM,
+          threadId: "th-fixture",
+          turnId: "turn-1",
+          startedAtMs: 1_000_000,
+        },
+        emittedAtMs: 1_000_000,
+      },
+      {
+        method: "item/completed",
+        params: {
+          item: COMPACTION_ITEM,
+          threadId: "th-fixture",
+          turnId: "turn-1",
+          completedAtMs: 1_003_000,
+        },
+        emittedAtMs: 1_003_000,
+      },
+      {
+        method: "turn/completed",
+        params: { threadId: "th-fixture", turn: TIMED_TURN },
+        emittedAtMs: 1_003_000,
+      },
+      {
+        method: "turn/started",
+        params: {
+          threadId: "th-fixture",
+          turn: { ...UNTIMED_TURN, itemsView: "full", status: "inProgress" },
+        },
+        emittedAtMs: 9_000_000,
+      },
+      {
+        method: "turn/completed",
+        params: { threadId: "th-fixture", turn: UNTIMED_TURN },
+        emittedAtMs: 9_000_000,
+      },
+    ]);
   });
 });
+
+const PROMPT_ITEM: ThreadItem = {
+  type: "userMessage",
+  id: "item-1",
+  clientId: null,
+  content: [],
+};
+
+const COMPACTION_ITEM: ThreadItem = { type: "contextCompaction", id: "item-2" };
+
+const TIMED_TURN: Turn = {
+  id: "turn-1",
+  items: [],
+  itemsView: "summary",
+  status: "completed",
+  error: null,
+  startedAt: 1_000,
+  completedAt: 1_003,
+  durationMs: 3_000,
+};
+
+const UNTIMED_TURN: Turn = {
+  id: "turn-2",
+  items: [],
+  itemsView: "summary",
+  status: "interrupted",
+  error: null,
+  startedAt: null,
+  completedAt: null,
+  durationMs: null,
+};
 
 const IMAGE_BLOCK = {
   type: "image",

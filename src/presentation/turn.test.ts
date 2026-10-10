@@ -240,6 +240,7 @@ describe("renderSdkMessage tools", () => {
         type: "create",
         filePath: "/fixture/work/b.txt",
         content: "hi\n",
+        structuredPatch: [],
       }),
       success(),
     ]);
