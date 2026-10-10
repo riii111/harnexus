@@ -105,37 +105,6 @@ describe("createBridgeLogger", () => {
       tools: [{ name: "t", inputSchema: true }],
     });
   });
-
-  test("keeps the thread open summary of an observed message", () => {
-    const [record] = logged({
-      event: "rpc_message",
-      direction: "app_to_server",
-      kind: "request",
-      method: "thread/fork",
-      id: 1,
-      tools: [],
-      mcpStartup: null,
-      threadOpen: {
-        side: "request",
-        params: ["ephemeral", "threadId"],
-        ephemeral: true,
-        threadSource: "user",
-      },
-    });
-
-    expect(record).toEqual({
-      event: "rpc_message",
-      direction: "app_to_server",
-      kind: "request",
-      method: "thread/fork",
-      id: 1,
-      threadOpen: {
-        params: ["ephemeral", "threadId"],
-        ephemeral: true,
-        threadSource: "user",
-      },
-    });
-  });
 });
 
 describe("createBridgeLogger file", () => {

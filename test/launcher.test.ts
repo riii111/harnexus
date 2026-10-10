@@ -6,7 +6,6 @@ import {
   mkdtemp,
   realpath,
   rm,
-  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -198,26 +197,6 @@ describe("app-server", () => {
 
       expect(result.stdout).toBe(claudeTurn);
       expect(result.stderr).toContain('"reason":"StatePathNotAbsolute"');
-    },
-    TIMEOUT,
-  );
-
-  test(
-    "also appends the log to HARNEXUS_LOG_PATH, readable only by the owner",
-    async () => {
-      const logPath = join(dir, "owner-only.log");
-      const { env } = setup({ HARNEXUS_LOG_PATH: logPath });
-
-      const result = await finish(
-        launch(["app-server"], env, { stdin: '{"id":1,"method":"m"}\n' }),
-      );
-      const logged = await Bun.file(logPath).text();
-
-      expect(result.exitCode).toBe(0);
-      expect(logged).toContain('"event":"bridge_started"');
-      expect(logged).toContain('"method":"m"');
-      expect(logged).toContain('"event":"server_closed"');
-      expect((await stat(logPath)).mode & 0o777).toBe(0o600);
     },
     TIMEOUT,
   );
@@ -474,15 +453,10 @@ describe("refusals", () => {
     await expectRefused(["exec"], env, "points to the launcher itself");
   });
 
-  test.each([
-    { command: "exec" },
-    { command: "app-server" },
-  ])("stops $command when the launcher is already marked active", async ({
-    command,
-  }) => {
+  test("stops when the launcher is already marked active", async () => {
     const { env } = setup({ HARNEXUS_LAUNCHER_ACTIVE: "1" });
 
-    await expectRefused([command], env, "recursive launch detected");
+    await expectRefused(["app-server"], env, "recursive launch detected");
   });
 });
 

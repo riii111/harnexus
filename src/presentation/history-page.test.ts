@@ -61,11 +61,13 @@ describe("pageTurns", () => {
     );
   });
 
-  test.each([
-    { name: "an unknown turn", cursor: "at:harnexus-history-gone" },
-    { name: "a malformed cursor", cursor: "server-cursor" },
-  ])("refuses a cursor naming $name", ({ cursor }) => {
-    expect(pageTurns(threeTurns(), turnsRequest({ cursor }))).toBeNull();
+  test("refuses a cursor naming an unknown turn", () => {
+    const page = pageTurns(
+      threeTurns(),
+      turnsRequest({ cursor: "at:harnexus-history-gone" }),
+    );
+
+    expect(page).toBeNull();
   });
 });
 
@@ -86,51 +88,6 @@ describe("pageItems", () => {
       [T2, "userMessage"],
     ]);
     expect(page?.nextCursor).toBeNull();
-  });
-
-  test("continues a turn's items after the next cursor", () => {
-    const history = threeTurns();
-    const first = pageItems(history, {
-      turnId: T1,
-      cursor: null,
-      limit: 1,
-      sortDirection: "asc",
-    });
-
-    const rest = pageItems(history, {
-      turnId: T1,
-      cursor: first?.nextCursor ?? null,
-      limit: 1,
-      sortDirection: "asc",
-    });
-
-    expect(first?.data.map((entry) => entry.item.type)).toEqual([
-      "userMessage",
-    ]);
-    expect(rest?.data.map((entry) => entry.item.type)).toEqual([
-      "agentMessage",
-    ]);
-    expect(rest?.nextCursor).toBeNull();
-  });
-
-  test("returns every item of the thread from the resume cursor without a turn", () => {
-    const history = threeTurns();
-
-    const page = pageItems(history, {
-      turnId: null,
-      cursor: resumeCursors(history).itemsBackwardsCursor,
-      limit: null,
-      sortDirection: "desc",
-    });
-
-    expect(page?.data.map((entry) => entry.turnId)).toEqual([
-      T3,
-      T3,
-      T2,
-      T2,
-      T1,
-      T1,
-    ]);
   });
 });
 

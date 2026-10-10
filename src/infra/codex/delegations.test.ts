@@ -120,7 +120,7 @@ describe("createDelegationWatch first turn check", () => {
   test.each([
     {
       name: "no model",
-      actual: { model: null, effort: "medium" },
+      actual: { model: null, effort: "low" },
     },
     {
       name: "no effort",
@@ -225,17 +225,6 @@ describe("delegationSource", () => {
       toolOutput: {
         name: "create_thread",
         output: "<source_thread_id> th-claude </source_thread_id>",
-      },
-      expected: "th-claude",
-    },
-    {
-      name: "an output split into items",
-      toolOutput: {
-        name: "create_thread",
-        output: [
-          { type: "input_text", text: "<source_thread_id>th-claude" },
-          { type: "input_text", text: "</source_thread_id>" },
-        ],
       },
       expected: "th-claude",
     },

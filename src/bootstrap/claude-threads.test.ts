@@ -152,31 +152,17 @@ describe("connectClaudeThreads", () => {
 const connectWith = async (
   requests: { method: string; params: unknown }[],
   sent: Sent[],
-  {
-    listConversations,
-  }: Pick<Parameters<typeof connectClaudeThreads>[0], "listConversations">,
+  { listConversations }: Pick<ThreadsDeps, "listConversations">,
 ) => {
   const opened = await openThreadStore(join(dir, "threads.json"));
   if (opened.isErr()) return expect.unreachable(opened.error.message);
-  const catalog = createModelCatalog();
-  return connectClaudeThreads({
-    store: opened.value,
+  return connect(opened.value, sent, {
     request: async (method, params) => {
       requests.push({ method, params });
       return Result.ok({});
     },
     startSession: async () => expect.unreachable("Claude never starts"),
-    findSession: async () => Result.ok(true),
     listConversations,
-    lastRecordOf: async () => Result.ok(null),
-    resolveConnection: async () => Result.ok(SUBSCRIPTION_CONNECTION),
-    readSession: async () => Result.ok([]),
-    readSubagents: async () => Result.ok([]),
-    effortRule: effortRule({}, catalog.effortsOf),
-    claudeModels: catalog.models,
-    unverifiedCodex: "warn",
-    send: (message) => sent.push(message),
-    log: () => {},
   });
 };
 
@@ -213,29 +199,17 @@ const workerA = async () => {
       content: [{ type: "text", text: JSON.stringify(PROVISIONAL) }],
     });
   };
-  const catalog = createModelCatalog();
-  const threads = connectClaudeThreads({
-    store,
+  const threads = connect(store, sent, {
     request,
     startSession: async (session) => {
       settings.push(session);
       return startClaudeSession(session, claude.runtime);
     },
-    findSession: async () => Result.ok(true),
     listConversations: async () => Result.ok([]),
-    lastRecordOf: async () => Result.ok(null),
-    resolveConnection: async () => Result.ok(SUBSCRIPTION_CONNECTION),
-    readSession: async () => Result.ok([]),
-    readSubagents: async () => Result.ok([]),
-    effortRule: effortRule({}, catalog.effortsOf),
-    claudeModels: catalog.models,
-    unverifiedCodex: "warn",
-    send: (message) => sent.push(message),
-    log: () => {},
   });
   const fromApp = (message: object) =>
     threads.router.fromApp(Buffer.from(`${JSON.stringify(message)}\n`));
-  fromApp(workerATurn());
+  fromApp(turnOf(1, "work"));
   const createThreadAfter = async (lines: object[]) => {
     await until(() => claude.started());
     linesBeforeAnswer = lines;
@@ -267,6 +241,30 @@ const workerA = async () => {
   };
 };
 
+type ThreadsDeps = Parameters<typeof connectClaudeThreads>[0];
+
+const connect = (
+  store: ThreadsDeps["store"],
+  sent: Sent[],
+  deps: Pick<ThreadsDeps, "request" | "startSession" | "listConversations">,
+) => {
+  const catalog = createModelCatalog();
+  return connectClaudeThreads({
+    store,
+    findSession: async () => Result.ok(true),
+    lastRecordOf: async () => Result.ok(null),
+    resolveConnection: async () => Result.ok(SUBSCRIPTION_CONNECTION),
+    readSession: async () => Result.ok([]),
+    readSubagents: async () => Result.ok([]),
+    effortRule: effortRule({}, catalog.effortsOf),
+    claudeModels: catalog.models,
+    unverifiedCodex: "warn",
+    send: (message) => sent.push(message),
+    log: () => {},
+    ...deps,
+  });
+};
+
 const linkClient = async (session: ClaudeSessionSettings | undefined) => {
   const link = session?.mcpServers?.codex_link;
   if (link?.type !== "sdk") return expect.unreachable("no thread tools");
@@ -277,17 +275,6 @@ const linkClient = async (session: ClaudeSessionSettings | undefined) => {
   await client.connect(clientTransport);
   return client;
 };
-
-const workerATurn = () => ({
-  id: 1,
-  method: "turn/start",
-  params: {
-    threadId: WORKER_A,
-    model: MODEL,
-    cwd: dir,
-    input: [{ type: "text", text: "work", text_elements: [] }],
-  },
-});
 
 const reviewerFirstTurn = () => ({
   id: 2,

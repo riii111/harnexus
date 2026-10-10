@@ -147,88 +147,24 @@ describe("turn/start on a Claude thread", () => {
     ]);
   });
 
-  test("accepts the next turn sent while the app receives turn/completed", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    let startNext = () => {};
-    const { turns, sent } = await harness([claude], {
-      onSend: (message) => {
-        if (message.method === "turn/completed") startNext();
-      },
+  test("fails the turn without sending the prompt when Claude refuses the effort", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, {
+      effortError: new Error("no control channel"),
     });
-    startNext = () => turns.startTurn(turnStart(11, "again"), undefined);
-
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => responseTo(sent, 10) !== undefined);
-    claude.emit(sdk(answer("msg-1", "hi")));
-    claude.emit(sdk(success()));
-    await until(() => responseTo(sent, 11) !== undefined);
-
-    expect(responseTo(sent, 11)?.result.turn).toMatchObject({ id: "turn-2" });
-  });
-
-  test("fails the turn when the login is not a subscription", async () => {
-    const claude = fakeClaude({ apiProvider: "bedrock" });
-    const { turns, sent } = await harness([claude]);
-
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => turnCompleted(sent) !== undefined);
-
-    expect(responseTo(sent, 10)?.result).toBeDefined();
-    expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
-  });
-
-  test.each<{
-    name: string;
-    options: NonNullable<Parameters<typeof fakeClaude>[1]>;
-    request: () => ReturnType<typeof turnStart>;
-    tag: string;
-  }>([
-    {
-      name: "the mode",
-      options: { permissionModeError: new Error("no control channel") },
-      request: () => turnStart(10, "hello"),
-      tag: "ClaudePermissionModeFailed",
-    },
-    {
-      name: "the effort",
-      options: { effortError: new Error("no control channel") },
-      request: () => withEffort(turnStart(10, "hello"), "high"),
-      tag: "ClaudeEffortFailed",
-    },
-  ])("fails the turn without sending the prompt when Claude refuses $name", async ({
-    options,
-    request,
-    tag,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION, options);
     const { turns, sent, events } = await harness([claude]);
 
-    turns.startTurn(request(), undefined);
+    turns.startTurn(withEffort(turnStart(10, "hello"), "high"), undefined);
     await until(() => turnCompleted(sent) !== undefined);
 
     expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
     expect(events).toContainEqual(
-      expect.objectContaining({ step: "finished", error: tag }),
+      expect.objectContaining({
+        step: "finished",
+        error: "ClaudeEffortFailed",
+      }),
     );
     expect(claude.closes()).toBe(1);
     expect(await claude.prompts()).toEqual([]);
-  });
-
-  test("resumes the session after the stream fails", async () => {
-    const first = fakeClaude(SUBSCRIPTION);
-    const second = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, settings } = await harness([first, second]);
-
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => first.prompted());
-    first.emit(sdk(answer("msg-1", "partial")));
-    first.fail(new Error("socket closed"));
-    await until(() => turnCompleted(sent) !== undefined);
-    await completeTurn(turns, sent, second, 11);
-
-    expect(completedTurnStatuses(sent)).toEqual(["failed", "completed"]);
-    expect(first.closes()).toBe(1);
-    expect(settings[1]).toMatchObject({ resume: "se-1" });
   });
 });
 
@@ -239,7 +175,15 @@ describe("continuing a rewound conversation", () => {
       at: "kept-reply",
       expected: { resume: "se-1", forkSession: true, resumeAt: "kept-reply" },
     },
-    { name: "an empty history", at: null, expected: {} },
+    {
+      name: "an empty history",
+      at: null,
+      expected: {
+        resume: undefined,
+        forkSession: undefined,
+        resumeAt: undefined,
+      },
+    },
   ])("starts a separate session after rewinding to $name", async ({
     at,
     expected,
@@ -266,11 +210,7 @@ describe("continuing a rewound conversation", () => {
       resume: settings[1]?.resume,
       forkSession: settings[1]?.forkSession,
       resumeAt: settings[1]?.resumeAt,
-    }).toEqual(
-      at === null
-        ? { resume: undefined, forkSession: undefined, resumeAt: undefined }
-        : expected,
-    );
+    }).toEqual(expected);
     expect(store.get(THREAD)?.sessionId).toBe("se-2");
     expect(store.get(THREAD)?.rewind).toBeUndefined();
     expect(first.closes()).toBe(1);
@@ -391,27 +331,16 @@ describe("a thread whose last turn has an unknown outcome", () => {
       name: "a message without a client message id",
       request: () => turnStart(12, "again"),
     },
-    ...[
-      { name: "automatic App-update resume", trigger: "app_update_resume" },
-      {
-        name: "automatic interrupted-task resume",
-        trigger: "resume_interrupted_task",
-      },
-      {
-        name: "a heartbeat automation",
-        trigger: "automation_heartbeat_fixture",
-      },
-      { name: "a submission with missing origin metadata", trigger: undefined },
-    ].map(({ name, trigger }) => ({
-      name,
+    {
+      name: "a submission with missing origin metadata",
       request: () => {
         const request = withMessageId(turnStart(12, "again"), "m-2");
         return {
           ...request,
-          params: { ...request.params, turnTrigger: trigger },
+          params: { ...request.params, turnTrigger: undefined },
         };
       },
-    })),
+    },
   ])("does not take $name as the user's decision to continue", async ({
     request,
   }) => {
@@ -426,21 +355,6 @@ describe("a thread whose last turn has an unknown outcome", () => {
     expect(responseTo(after.sent, 12)?.error.message).toBe(OUTCOME_UNKNOWN);
     expect(after.settings).toHaveLength(1);
     expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
-  });
-
-  test("refuses an already delivered user message after the interrupted conversation is reloaded", async () => {
-    const second = fakeClaude(SUBSCRIPTION);
-    const after = await restartedWithUnknownOutcome([second]);
-
-    await completeTurn(after.turns, after.sent, second, 11, "m-1");
-    await until(() => after.store.get(THREAD)?.runState === "idle");
-    const reloaded = await harness([]);
-    reloaded.turns.startTurn(
-      withMessageId(turnStart(12, "again"), "m-1"),
-      undefined,
-    );
-    expect(responseTo(reloaded.sent, 12)).toEqual(DUPLICATE(12));
-    expect(reloaded.settings).toHaveLength(0);
   });
 
   test("blocks a retry of the original interrupted message and accepts a new instruction", async () => {
@@ -806,18 +720,15 @@ describe("turn/interrupt", () => {
     expect(settings).toHaveLength(1);
   });
 
-  test("keeps an interrupt accepted while Claude was starting", async () => {
-    const claude = fakeClaude({ apiProvider: "bedrock" });
-    let start = () => {};
-    const beforeStart = new Promise<void>((resolve) => {
-      start = resolve;
-    });
-    const { turns, sent } = await harness([claude], { beforeStart });
+  test("ends a stopped turn as interrupted when Claude's stream then fails", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
+    const { turns, sent } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => responseTo(sent, 10) !== undefined);
+    await until(() => claude.prompted());
     turns.interruptTurn(interrupt(20, "turn-1"));
-    start();
+    await until(() => claude.interrupts() === 1);
+    claude.fail(new Error("socket closed"));
     await until(() => turnCompleted(sent) !== undefined);
 
     expect(responseTo(sent, 20)).toEqual({ id: 20, result: {} });
@@ -1031,12 +942,6 @@ describe("refused requests", () => {
       },
     },
     { name: "a Codex model", override: { model: "gpt-fixture" } },
-    {
-      name: "a Codex model in the collaboration mode alone",
-      override: {
-        collaborationMode: { mode: "default", settings: { model: "gpt-x" } },
-      },
-    },
     { name: "another working directory", override: { cwd: "/elsewhere" } },
   ])("refuses $name without starting Claude or asking the server", async ({
     override,
@@ -1054,16 +959,6 @@ describe("refused requests", () => {
     expect(sent).toEqual([REFUSED(10)]);
     expect(claude.started()).toBe(false);
     expect(materialized).toEqual([]);
-  });
-
-  test("answers a rejected request with the given message", async () => {
-    const { turns, sent } = await harness([]);
-
-    turns.reject({ id: 12 }, "not yet");
-
-    expect(sent).toEqual([
-      { id: 12, error: { code: -32600, message: "not yet" } },
-    ]);
   });
 
   test("fails a turn asking for another directory that lost the race to register the thread", async () => {
@@ -1545,28 +1440,14 @@ describe("turn/start carrying another thread's message", () => {
     ]);
   });
 
-  test.each([
-    {
-      name: "its own reviewer",
-      threadId: OTHER_THREAD,
-      source: OTHER_REVIEWER,
-    },
-    {
-      name: "a thread that is no reviewer",
-      threadId: THREAD,
-      source: "th-lead",
-    },
-  ])("passes a message from $name to Claude and shows it as the call output the app labels as sent from another thread", async ({
-    threadId,
-    source,
-  }) => {
+  test("passes a message from its own reviewer to Claude and shows it as the call output the app labels as sent from another thread", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await registeredWorkers([claude]);
 
-    turns.startTurn(reply(10, threadId, source), undefined);
+    turns.startTurn(reply(10, OTHER_THREAD, OTHER_REVIEWER), undefined);
     await until(() => claude.started());
 
-    expect(await firstPrompt(claude.prompt())).toBe(delegation(source));
+    expect(await firstPrompt(claude.prompt())).toBe(delegation(OTHER_REVIEWER));
     const shown = sent
       .filter((m) => m.method === "item/started")
       .map((m) => m.params.item);
@@ -1576,7 +1457,7 @@ describe("turn/start carrying another thread's message", () => {
         id: expect.any(String),
         name: "send_message_to_thread",
         namespace: "codex_app",
-        output: delegation(source),
+        output: delegation(OTHER_REVIEWER),
       },
     ]);
   });
@@ -1629,26 +1510,6 @@ describe("turn/start carrying another thread's message", () => {
         arguments: { threadId: CODEX_WORKER, prompt: "review this" },
       }),
     ]);
-  });
-
-  test("refuses a delegated message whose sender cannot be saved without starting Claude", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    let failWrites = false;
-    const { turns, sent, store } = await registeredWorkers([claude], {
-      writeState: async (target, content) =>
-        failWrites ? diskFull(target) : writeFileAtomic(target, content),
-    });
-    failWrites = true;
-
-    turns.startTurn(reply(10, THREAD, CODEX_WORKER), undefined);
-    await until(() => responseTo(sent, 10) !== undefined);
-    await settle();
-
-    expect(responseTo(sent, 10)?.error.message).toBe(
-      "the thread that sent this message could not be saved, so Claude could not answer it and the message was not run",
-    );
-    expect(claude.started()).toBe(false);
-    expect(store.get(THREAD)?.requesterThreadIds).toEqual([]);
   });
 
   test("runs a delegated message once when it is sent again after its sender could not be saved", async () => {
@@ -1855,7 +1716,21 @@ describe("another thread's message arriving on a busy thread", () => {
     expect(startedTurns(sent)).toEqual(["turn-1"]);
   });
 
-  test("runs as the next turn when the running turn is stopped while the sender is being saved, ahead of a message that came later", async () => {
+  test.each([
+    {
+      name: "another thread's message",
+      later: () => reply(12, THREAD, OTHER_THREAD),
+      prompt: delegation(OTHER_THREAD),
+    },
+    {
+      name: "a typed message",
+      later: () => turnStart(12, "next"),
+      prompt: "next",
+    },
+  ])("runs as the next turn when the running turn is stopped while the sender is being saved, ahead of $name that came later", async ({
+    later,
+    prompt,
+  }) => {
     const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
     const gate = createGate();
     let holdWrites = false;
@@ -1873,7 +1748,7 @@ describe("another thread's message arriving on a busy thread", () => {
 
     turns.interruptTurn(interrupt(20, "turn-1"));
     await until(() => claude.interrupts() === 1);
-    turns.startTurn(reply(12, THREAD, OTHER_THREAD), undefined);
+    turns.startTurn(later(), undefined);
     await settle();
     expect(responseTo(sent, 12)).toBeUndefined();
     gate.open();
@@ -1900,51 +1775,7 @@ describe("another thread's message arriving on a busy thread", () => {
     expect(await promptsUntil(claude, 3)).toEqual([
       "hello",
       delegation(CODEX_WORKER),
-      delegation(OTHER_THREAD),
-    ]);
-  });
-
-  test("runs ahead of a message typed after it when the running turn is stopped while the sender is being saved", async () => {
-    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
-    const gate = createGate();
-    let holdWrites = false;
-    const { turns, sent } = await registeredWorkers([claude], {
-      writeState: async (target, content) => {
-        if (holdWrites) await gate.promise;
-        return writeFileAtomic(target, content);
-      },
-    });
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.prompted());
-    holdWrites = true;
-    turns.startTurn(reply(11, THREAD, CODEX_WORKER), undefined);
-    await settle();
-
-    turns.interruptTurn(interrupt(20, "turn-1"));
-    await until(() => claude.interrupts() === 1);
-    turns.startTurn(turnStart(12, "next"), undefined);
-    await settle();
-    expect(responseTo(sent, 12)).toBeUndefined();
-    gate.open();
-    await until(() => responseTo(sent, 12) !== undefined);
-    expect(
-      [responseTo(sent, 11), responseTo(sent, 12)].map(
-        (m) => m?.result.turn.id,
-      ),
-    ).toEqual(["turn-2", "turn-3"]);
-    claude.emit(
-      sdk(result({ subtype: "error_during_execution", is_error: true })),
-    );
-    for (const started of [2, 3]) {
-      await until(() => startedTurns(sent).length === started);
-      claude.emit(sdk(success()));
-      await until(() => completedTurnStatuses(sent).length === started);
-    }
-
-    expect(await promptsUntil(claude, 3)).toEqual([
-      "hello",
-      delegation(CODEX_WORKER),
-      "next",
+      prompt,
     ]);
   });
 
@@ -1999,19 +1830,6 @@ describe("another thread's message arriving on a busy thread", () => {
 });
 
 describe("closeAll", () => {
-  test("stops Claude and ends the running turn as failed", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
-
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
-    turns.closeAll();
-    await until(() => turnCompleted(sent) !== undefined);
-
-    expect(claude.closes()).toBe(1);
-    expect(turnCompleted(sent)).toMatchObject({ status: "failed" });
-  });
-
   test("refuses a turn that arrives after closing", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);

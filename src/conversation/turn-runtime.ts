@@ -8,7 +8,7 @@ import type { UserInput } from "../presentation/protocol.ts";
 import type { Rendered, TurnOutcome, TurnState } from "../presentation/turn.ts";
 import type { Mode, Refusal } from "./thread-request.ts";
 
-// What the controller hands a runtime for one turn; the runtime reads the turn's state and moves it only through apply, finish and fail, so the order in which the app is told stays with the controller.
+// A runtime reads the turn's state and moves it only through apply, finish and fail, so the order in which the app is told stays with the controller.
 export type RunningTurn<Tag extends string> = {
   threadId: string;
   turnId: string;
@@ -32,8 +32,6 @@ export type RunningTurn<Tag extends string> = {
   ) => Promise<unknown>;
 };
 
-// run sends the turn and reports its progress until it ends; threadBusy and threadIdle mark when the thread has turns accepted and when it has none left.
-// listen takes how the runtime starts a turn its agent began on its own, such as after a background task reported back or to show an approval no turn could, which answers whether the turn will be shown.
 export type TurnRuntime<Tag extends string> = {
   compactPrompt: string;
   closeSession: (threadId: string) => void;
@@ -55,7 +53,6 @@ export type TurnRuntime<Tag extends string> = {
   closeAll: () => void;
 };
 
-// The thread tool server of the session a turn ran on, read when the turn ends to see whether a write was left undecided.
 export type TurnLink = Pick<
   ReturnType<typeof createCodexLink>,
   "hasUnsettledWrite" | "stopWrites"
@@ -74,7 +71,7 @@ export type ToolOutput = NonNullable<
 >["toolOutput"];
 
 // effort is the thread's level when the turn was accepted, so a change made while it waits or runs applies to the next turn.
-// requester is the thread that delegated this turn's message, saved before the turn runs so Claude can answer it; startedBy says whether the app or the agent itself started the turn.
+// requester is the thread that delegated this turn's message, saved before the turn runs so Claude can answer it.
 export type TurnInput = MessageInput & {
   permissionMode: Mode;
   effort: EffortLevel | null;

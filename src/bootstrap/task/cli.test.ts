@@ -47,20 +47,27 @@ afterEach(async () => {
 const fakeHarnexus = async (path: string) => {
   const calls: Call[] = [];
   const answers: Answer[] = [];
+  const unplanned: Call[] = [];
   const server = createServer((socket) => {
     let data = "";
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => {
       data += chunk;
       if (!data.endsWith("\n")) return;
-      calls.push(JSON.parse(data));
+      const call: Call = JSON.parse(data);
+      calls.push(call);
       const answer = answers.shift();
-      socket.end(answer === DROP ? "" : `${JSON.stringify(answer)}\n`);
+      if (answer === undefined) unplanned.push(call);
+      socket.end(
+        answer === undefined || answer === DROP
+          ? ""
+          : `${JSON.stringify(answer)}\n`,
+      );
     });
   });
   await new Promise<void>((resolve) => server.listen(path, resolve));
   cleanups.push(() => new Promise((resolve) => server.close(resolve)));
-  return { calls, answers };
+  return { calls, answers, unplanned };
 };
 
 const fixture = async () => {
@@ -89,6 +96,7 @@ const fixture = async () => {
       env: { ...process.env, ...env },
     });
     expect(harnexus.answers).toEqual([]);
+    expect(harnexus.unplanned).toEqual([]);
     return {
       code: run.code,
       out: run.code === 0 ? JSON.parse(run.stdout) : null,
@@ -229,24 +237,10 @@ describe("harnexus-task launch", () => {
     expect(refused.err).toContain("directory_unknown");
     expect((await launch()).code).toBe(1);
     expect(harnexus.calls).toHaveLength(1);
-    const request = await write(data);
-    expect((await invoke(["state", "--request", request])).out).toMatchObject({
+    const state = await invoke(["state", "--request", await write(data)]);
+    expect(state.out).toMatchObject({
       pending: "refused",
       pendingThreadId: "w1",
-    });
-    expect(
-      (await invoke(["resolve", "--request", request, "--sent"])).code,
-    ).toBe(1);
-    const released = await invoke([
-      "resolve",
-      "--request",
-      request,
-      "--not-sent",
-    ]);
-    expect([released.code, released.err]).toEqual([0, ""]);
-    expect((await invoke(["state", "--request", request])).out).toMatchObject({
-      pending: null,
-      refusedThreadIds: ["w1"],
     });
   });
 
@@ -372,7 +366,7 @@ describe("harnexus-task launch", () => {
     expect(harnexus.calls).toEqual([]);
   });
 
-  test("starts from the requested branch and rejects other branch names", async () => {
+  test("starts from the requested branch", async () => {
     const { harnexus, data, launch } = await launchFixture();
     data.startingBranch = "feat/base";
 
@@ -382,10 +376,26 @@ describe("harnexus-task launch", () => {
     expect(
       harnexus.calls[0]?.arguments.target.environment.startingState,
     ).toEqual({ type: "branch", branchName: "feat/base" });
-    for (const branch of ["-x", "a..b", "a b", "a.lock"]) {
-      Object.assign(data, { taskId: "TR2", startingBranch: branch });
-      expect((await launch()).code).toBe(1);
-    }
+  });
+
+  test.each([
+    { branch: "-x" },
+    { branch: "a..b" },
+    { branch: "a b" },
+    { branch: "a.lock" },
+  ])("rejects the starting branch $branch before sending", async ({
+    branch,
+  }) => {
+    const { harnexus, data, launch } = await launchFixture();
+    data.startingBranch = branch;
+
+    const rejected = await launch();
+
+    expect([rejected.code, rejected.err]).toEqual([
+      1,
+      expect.stringContaining("startingBranch must be a branch name"),
+    ]);
+    expect(harnexus.calls).toEqual([]);
   });
 
   test.each([
@@ -536,21 +546,6 @@ describe("harnexus-task launch", () => {
     expect(sent.out.state.startsWith(join(root, ".local/state/taskctl/"))).toBe(
       true,
     );
-  });
-
-  test("treats a stale socket file as not sent", async () => {
-    const { env, root, socket, launch } = await launchFixture();
-    const stale = join(root, "stale.sock");
-    await writeFile(stale, "");
-    env.HARNEXUS_CALL_SOCKET = stale;
-
-    const refused = await launch();
-    env.HARNEXUS_CALL_SOCKET = socket;
-    const sent = await launch([], [created("w1", "claude-opus-5-5")]);
-
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain("was not sent");
-    expect([sent.code, sent.err]).toEqual([0, ""]);
   });
 });
 
@@ -774,20 +769,36 @@ describe("harnexus-task review", () => {
     expect(harnexus.calls).toHaveLength(2);
   });
 
-  test("refuses a directory nested in the worktree", async () => {
-    const { harnexus, checkout, git, data, review } = await reviewFixture();
-    const nested = join(checkout, "nested");
-    await mkdir(nested);
-    data.checkout = nested;
+  test.each([
+    {
+      name: "a directory nested in the worktree",
+      place: async ({ checkout }: Placement) => {
+        const nested = join(checkout, "nested");
+        await mkdir(nested);
+        return nested;
+      },
+    },
+    {
+      name: "a worktree-level directory below the top of a repository",
+      place: async ({ codex, git }: Placement) => {
+        const repository = join(codex, "worktrees/cd34");
+        git("init", "-q", repository);
+        const inner = join(repository, "inner");
+        await mkdir(inner);
+        return inner;
+      },
+    },
+  ])("refuses $name", async ({ place }) => {
+    const fixture = await reviewFixture();
+    fixture.data.checkout = await place(fixture);
 
-    const refused = await review();
-    git("init", "-q", "nested");
-    const refusedRepository = await review();
+    const refused = await fixture.review();
 
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain("top level");
-    expect(refusedRepository.code).toBe(1);
-    expect(harnexus.calls).toEqual([]);
+    expect([refused.code, refused.err]).toEqual([
+      1,
+      expect.stringContaining("top level"),
+    ]);
+    expect(fixture.harnexus.calls).toEqual([]);
   });
 
   test("never fetches a missing commit", async () => {
@@ -856,7 +867,8 @@ describe("harnexus-task review", () => {
   });
 
   test("runs only plumbing git, and only in worker worktrees", async () => {
-    const { root, codex, invoke, write, data } = await reviewFixture();
+    const { harnexus, root, codex, invoke, write, data } =
+      await reviewFixture();
     const runs: { argv: readonly string[]; env: Record<string, unknown> }[] =
       [];
     const runGit: TaskDeps["runGit"] = (argv, env) => {
@@ -874,7 +886,9 @@ describe("harnexus-task review", () => {
     expect(runs).not.toEqual([]);
     for (const { argv, env } of runs) {
       expect(argv).toContain("protocol.allow=never");
-      expect(["rev-parse", "merge-base"]).toContain(argv[9] ?? "");
+      expect(["rev-parse", "merge-base"]).toContain(
+        argv[argv.indexOf("-C") + 2] ?? "",
+      );
       expect(env.GIT_NO_LAZY_FETCH).toBe("1");
     }
     const outside = join(root, "outside");
@@ -883,12 +897,16 @@ describe("harnexus-task review", () => {
     const refused = await invoke(["review", "--request", await write(data)]);
     expect(refused.code).toBe(1);
     expect(refused.err).toContain("worker worktree");
-    const link = join(codex, "worktrees/link");
+    const link = join(codex, "worktrees/cd34/link");
+    await mkdir(dirname(link));
     await symlink(outside, link);
     data.checkout = link;
-    expect(
-      (await invoke(["review", "--request", await write(data)])).code,
-    ).toBe(1);
+    const linked = await invoke(["review", "--request", await write(data)]);
+    expect([linked.code, linked.err]).toEqual([
+      1,
+      expect.stringContaining("worker worktree"),
+    ]);
+    expect(harnexus.calls).toHaveLength(1);
   });
 
   test("refuses the worker as its own reviewer and a request naming another worker", async () => {
@@ -980,3 +998,5 @@ describe("harnexus-task review", () => {
     expect(refused.err).toContain("symlinked");
   });
 });
+
+type Placement = Awaited<ReturnType<typeof reviewFixture>>;

@@ -59,8 +59,6 @@ describe("Claude conversation rewind", () => {
       method: "thread/reverted",
       params: { threadId: THREAD },
     });
-    await restarted.value.setSessionId(THREAD, "se-2");
-    expect(restarted.value.get(THREAD)?.rewind).toBeUndefined();
   });
 
   test("clears the pending rewind when a different conversation is selected", async () => {

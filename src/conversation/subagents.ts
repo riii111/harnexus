@@ -24,7 +24,7 @@ import {
 } from "../presentation/subagent.ts";
 import type { TurnOutcome } from "../presentation/turn.ts";
 
-// The subagents each thread's agent started, kept while the bridge runs; a child's id is made from the Claude thread running it and the agent's task, so the same agent, resumed or seen again, always gets the same thread.
+// A child's id is made from the Claude thread running it and the agent's task, so the same agent, resumed or seen again, always gets the same thread.
 // Each child keeps the turns it ran, so the app can read its thread while the bridge runs.
 export const createSubagents = ({
   send,
@@ -38,7 +38,6 @@ export const createSubagents = ({
   const histories = new Map<string, HistoryTurn[]>();
   const runs = new Map<string, Run>();
 
-  // threadId is the Claude thread whose session runs the agent; an agent another agent started goes under the thread of the agent whose call started it.
   const start = ({
     threadId,
     turnId,
@@ -251,7 +250,6 @@ export const createSubagents = ({
   const childrenOf = (threadId: string) =>
     [...children.values()].filter((child) => child.parentThreadId === threadId);
 
-  // Every agent below a thread, at any depth, as the app lists them under the thread they descend from.
   const descendantsOf = (threadId: string): SubagentThread[] =>
     childrenOf(threadId).flatMap((child) => [
       child,
@@ -296,7 +294,6 @@ export const createSubagents = ({
     }
   };
 
-  // The agent a session's call started, as a parent's history names it.
   const agentRefOf =
     (threadId: string) =>
     (toolUseId: string): AgentRef | undefined => {
@@ -313,7 +310,6 @@ export const createSubagents = ({
           };
     };
 
-  // Undefined for a thread that is no agent's.
   // An agent's activity names the path its agent holds now, which a read-back agent may have changed for one a live agent held.
   const historyOf = (threadId: string): HistoryTurn[] | undefined => {
     if (!children.has(threadId)) return undefined;
@@ -384,7 +380,7 @@ export const childThreadId = (parentThreadId: string, taskId: string) => {
   ].join("-");
 };
 
-// An agent's path names its kind and its place among its parent's agents, as Codex numbers them; the first number no sibling holds is used.
+// Numbered by place among the parent's agents, as Codex numbers them.
 export const freePath = (
   parentPath: string | null,
   agentType: string | null,

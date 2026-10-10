@@ -24,9 +24,8 @@ import {
 } from "./turn.ts";
 
 // A Claude subagent is shown as a Codex subagent is: a thread of its own under the thread whose agent started it, which the app lists in its subagents panel.
-// rootThreadId is the Claude thread whose session runs the agent, and parentThreadId that thread or the agent's thread whose agent started this one, depth levels below the root.
-// calls holds every call that started the agent, the last being toolUseId, as a resumed agent runs under a call of its own; each run's activity is named after its call, so a history rebuilt from the record names it as the live turn did.
-// turnId is the parent's turn the agent last started in, which also carries its completion, as Codex does even once that turn has ended, unless the parent is an agent whose newest turn is a later one; runs counts its starts, since Claude can resume an agent that finished.
+// A resumed agent runs under a call of its own, and each run's activity is named after its call, so a history rebuilt from the record names it as the live turn did.
+// The parent's turn the agent last started in carries its completion, as Codex does even once that turn has ended, unless the parent is an agent whose newest turn is a later one.
 export type SubagentThread = {
   id: string;
   rootThreadId: string;
@@ -210,7 +209,6 @@ export const renderSubagentMessage = (
   };
 };
 
-// A call the user refused for the agent closes as declined in the agent's thread, as it does in the turn that asked.
 export const declineSubagentTool = (
   turn: SubagentTurn,
   toolUseId: string,
@@ -232,7 +230,6 @@ export const closeSubagentTurn = (
   };
 };
 
-// The calls an agent made in its turn, so an agent one of them started is placed under this one.
 export const subagentCalls = (turn: SubagentTurn) =>
   Object.keys(turn.state.tools);
 

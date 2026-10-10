@@ -2,7 +2,6 @@ type SerialQueue = {
   run: <T>(key: string, task: () => Promise<T>) => Promise<T>;
 };
 
-// Tasks with the same key run one at a time in arrival order; different keys run concurrently.
 export const createSerialQueue = (): SerialQueue => {
   const tails = new Map<string, Promise<void>>();
   return {

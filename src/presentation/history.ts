@@ -14,6 +14,7 @@ import type {
 } from "./protocol.ts";
 import { RECOVERY_CONTEXT, RECOVERY_NOTICE } from "./recovery.ts";
 import {
+  AGENT_TOOLS,
   closeTurn,
   type Rendered,
   renderNotice,
@@ -69,7 +70,6 @@ export const buildHistory = (
   return turns;
 };
 
-// The turn the bridge is running on a thread, with the record of the prompt that opened it once Claude has written it.
 export type LiveTurn = {
   turnId: string;
   record: string | null;
@@ -202,7 +202,6 @@ export const buildSubagentHistory = (
     agentThreadOf,
   );
 
-// active marks an agent still running under this call, which has not completed where the call was made.
 export type AgentRef = {
   threadId: string;
   path: string;
@@ -255,13 +254,9 @@ const noteAgents = (
   return replay;
 };
 
-// Claude Code names the tool that starts a subagent Agent, and older versions named it Task.
-const AGENT_TOOLS = ["Agent", "Task"];
-
 // Claude resumes an agent that has ended when a SendMessage call addresses it, and the agent runs under that call.
 const RESUME_TOOL = "SendMessage";
 
-// A SendMessage call that resumed an agent, naming it as the call did and, when Claude's answer says so, by its id.
 export type AgentResume = {
   toolUseId: string;
   recipient: string;

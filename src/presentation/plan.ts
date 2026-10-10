@@ -1,6 +1,7 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { isObject } from "../runtime/object.ts";
 import type { AppNotification, TurnPlanStep } from "./protocol.ts";
+import { singleCallOutput } from "./tools.ts";
 
 // A TodoWrite list has no ids, so its steps cannot be the target of a TaskUpdate.
 type PlanStep = TurnPlanStep & { id: string | null };
@@ -72,8 +73,7 @@ const applyResults = (
   const { content } = message.message;
   if (typeof content === "string") return plan;
   const results = content.filter((block) => block.type === "tool_result");
-  // The structured output belongs to a single tool, so it is used only when the message answers one call.
-  const output = results.length === 1 ? message.tool_use_result : undefined;
+  const output = singleCallOutput(content, message.tool_use_result);
   let steps = plan.steps;
   const calls = { ...plan.calls };
   for (const result of results) {
