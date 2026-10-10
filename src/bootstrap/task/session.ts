@@ -134,7 +134,6 @@ type Confirmed = (
   state: Fields | null,
 ) => Result<Fields, TaskFailed>;
 
-// The kind and thread fields of a session's state summary, read from its confirmed state and pending send.
 type Summarize = (state: Fields | null, pending: Fields | null) => Fields;
 
 const field = (record: unknown, key: string) =>
