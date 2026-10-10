@@ -21,7 +21,7 @@ import { resizeImage } from "../runtime/image.boundary.ts";
 
 type Runtime = Parameters<typeof createClaudeRuntime>[0];
 
-// The router, the turn controller and each session's thread tools share one store and one watch for created threads, so a reviewer is traced to its worker whichever of them sees it first.
+// The router, the turn controller and each session's thread tools share one store and one watch for created threads, so a child is traced to its parent whichever of them sees it first.
 export const connectClaudeThreads = ({
   store,
   request,
@@ -55,7 +55,7 @@ export const connectClaudeThreads = ({
   send: (message: object) => void;
   log: (event: ClaudeLogEvent | RouteEvent) => void;
 }) => {
-  const delegations = createDelegationWatch(store.claimReviewer);
+  const delegations = createDelegationWatch(store.claimChild);
   const openLink = (callerThreadId: string) =>
     createCodexLink({ callerThreadId, store, request, delegations });
   const threads = createThreadValues(store, log);

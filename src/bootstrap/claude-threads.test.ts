@@ -13,6 +13,8 @@ import {
   startClaudeSession,
 } from "../infra/claude/session.ts";
 import { fakeClaude } from "../infra/claude/testing/fake-claude.ts";
+import { createCodexLink } from "../infra/codex/codex-link.ts";
+import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import { connectClaudeThreads } from "./claude-threads.ts";
@@ -43,12 +45,12 @@ describe("connectClaudeThreads", () => {
     ]);
 
     expect(created.structuredContent).toEqual({ threadId: REVIEWER });
-    expect(store.get(WORKER_A)?.reviewerThreadIds).toEqual([REVIEWER]);
+    expect(store.get(WORKER_A)?.childThreadIds).toEqual([REVIEWER]);
     expect(sent).toContainEqual({
       id: REPLY_ID,
       error: {
         code: -32600,
-        message: "this message comes from a reviewer of another Claude thread",
+        message: "this message comes from a child of another Claude thread",
       },
     });
     expect(sessions()).toBe(1);
@@ -79,7 +81,7 @@ describe("connectClaudeThreads", () => {
       id: 4,
       error: { code: -32600, message: expect.stringContaining("not run") },
     });
-    expect(store.reviewerOwner(CODEX_WORKER)).toBeUndefined();
+    expect(store.parentOf(CODEX_WORKER)).toBeUndefined();
   });
 
   test("answers a Claude first turn the bridge refused with its reason instead of done", async () => {
@@ -98,6 +100,114 @@ describe("connectClaudeThreads", () => {
     });
     expect(routed).toEqual([null]);
     expect(sent).toContainEqual({ id: 5, error: expect.anything() });
+  });
+
+  test("lets a Claude parent coordinate workers and their Codex reviews after reopening the store", async () => {
+    const { threads, store, sessions, calls, start, call } =
+      await orchestration();
+    try {
+      start();
+      await until(() => sessions.has(WORKER_A));
+      const first = await call(WORKER_A, "create_thread", {
+        prompt: "work",
+        target: TARGET,
+        model: MODEL,
+      });
+      const second = await call(WORKER_A, "create_thread", {
+        prompt: "work",
+        target: TARGET,
+        model: MODEL,
+      });
+      expect(first).toMatchObject({
+        outcome: "done",
+        threadId: "child-1",
+        model: MODEL,
+      });
+      expect(second).toMatchObject({
+        outcome: "done",
+        threadId: "child-2",
+        model: MODEL,
+      });
+      await until(() => sessions.has("child-1") && sessions.has("child-2"));
+      const review = await call("child-1", "create_thread", {
+        prompt: "review",
+        target: TARGET,
+      });
+      expect(review).toMatchObject({
+        outcome: "done",
+        threadId: "child-3",
+        model: "gpt-fixture",
+      });
+
+      const sent = await call(WORKER_A, "send_message_to_thread", {
+        threadId: "child-1",
+        prompt: "continue",
+      });
+      expect(sent.outcome).toBe("done");
+      expect(store.get("child-1")?.requesterThreadIds).toEqual([WORKER_A]);
+      expect(store.get(WORKER_A)?.childThreadIds).toEqual([
+        "child-1",
+        "child-2",
+      ]);
+      expect(store.get("child-1")?.childThreadIds).toEqual(["child-3"]);
+
+      const reopened = await openThreadStore(join(dir, "orchestration.json"));
+      if (reopened.isErr()) return expect.unreachable(reopened.error.message);
+      const requests: string[] = [];
+      const restored = (threadId: string) =>
+        createCodexLink({
+          callerThreadId: threadId,
+          store: reopened.value,
+          delegations: createDelegationWatch(reopened.value.claimChild),
+          request: async (_method, params) => {
+            requests.push((params as { tool: string }).tool);
+            return Result.ok({ content: [] });
+          },
+        });
+      const parent = restored(WORKER_A);
+      const worker = restored("child-1");
+      expect(
+        (
+          await parent.call("wait_threads", {
+            targets: [{ threadId: "child-1" }, { threadId: "child-2" }],
+            timeoutMs: 0,
+          })
+        ).isError,
+      ).toBeFalsy();
+      expect(
+        (await worker.call("read_thread", { threadId: "child-3" })).isError,
+      ).toBeFalsy();
+      expect(
+        (
+          await worker.call("send_message_to_thread", {
+            threadId: WORKER_A,
+            prompt: "done",
+          })
+        ).isError,
+      ).toBeFalsy();
+      expect(
+        (
+          await worker.call("send_message_to_thread", {
+            threadId: "child-2",
+            prompt: "wrong worker",
+          })
+        ).isError,
+      ).toBe(true);
+      expect(
+        (await restored("child-2").call("read_thread", { threadId: "child-3" }))
+          .isError,
+      ).toBe(true);
+      expect(requests).toEqual([
+        "wait_threads",
+        "read_thread",
+        "send_message_to_thread",
+      ]);
+      expect(
+        calls.filter((entry) => entry.tool === "send_message_to_thread"),
+      ).toHaveLength(1);
+    } finally {
+      threads.closeAll();
+    }
   });
 
   test("starts a Claude thread's session with the thread it runs", async () => {
@@ -148,6 +258,82 @@ describe("connectClaudeThreads", () => {
     });
   });
 });
+
+const orchestration = async () => {
+  const opened = await openThreadStore(join(dir, "orchestration.json"));
+  if (opened.isErr()) return expect.unreachable(opened.error.message);
+  const store = opened.value;
+  const sessions = new Map<string, ReturnType<typeof fakeClaude>>();
+  const calls: { tool: string; arguments: Record<string, unknown> }[] = [];
+  let sequence = 0;
+  let child = 0;
+  const threads = connect(store, [], {
+    listConversations: async () => Result.ok([]),
+    startSession: async (settings) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      sessions.set(settings.threadId, claude);
+      return startClaudeSession(settings, claude.runtime);
+    },
+    request: async (method, params) => {
+      if (method === "model/list") return Result.ok(MODELS);
+      if (method !== "mcpServer/tool/call") return Result.ok({});
+      const entry = params as {
+        threadId: string;
+        tool: string;
+        arguments: Record<string, unknown>;
+      };
+      calls.push(entry);
+      const args = entry.arguments;
+      const id =
+        entry.tool === "create_thread"
+          ? `child-${++child}`
+          : String(args.threadId);
+      threads.router.fromApp(
+        Buffer.from(
+          `${JSON.stringify({
+            id: ++sequence,
+            method: "turn/start",
+            params: {
+              threadId: id,
+              model: args.model ?? store.get(id)?.model,
+              effort: args.thinking,
+              cwd: dir,
+              input: [],
+              toolOutput: {
+                name: entry.tool,
+                namespace: "codex_app",
+                output: `<codex_delegation><source_thread_id>${entry.threadId}</source_thread_id><prompt>${args.prompt}</prompt></codex_delegation>`,
+              },
+            },
+          })}\n`,
+        ),
+      );
+      return Result.ok({
+        content: [{ type: "text", text: JSON.stringify(PROVISIONAL) }],
+      });
+    },
+  });
+  return {
+    threads,
+    store,
+    sessions,
+    calls,
+    start: () =>
+      threads.router.fromApp(
+        Buffer.from(`${JSON.stringify(turnOf(++sequence, "coordinate"))}\n`),
+      ),
+    call: async (
+      threadId: string,
+      tool: string,
+      args: Record<string, unknown>,
+    ) =>
+      JSON.parse(
+        await threads.callGateway.handle(
+          JSON.stringify({ threadId, tool, arguments: args }),
+        ),
+      ),
+  };
+};
 
 const connectWith = async (
   requests: { method: string; params: unknown }[],

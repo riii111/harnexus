@@ -4,7 +4,7 @@ Use Claude in the Codex App.
 
 ## Concept
 
-Choose Claude from the model picker and work in a regular chat. Ask it to explore a project, make changes, or work with a Codex reviewer—all from the same app.
+Choose Claude from the model picker and work in a regular chat. Ask it to explore a project, make changes, or coordinate Claude workers and Codex reviewers—all from the same app.
 
 harnexus uses your Claude subscription through the official Claude Agent SDK, or Claude on Google Vertex AI for the repositories you choose. It is experimental and currently runs on macOS.
 

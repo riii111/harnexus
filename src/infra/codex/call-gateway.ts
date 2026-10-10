@@ -49,7 +49,7 @@ type Link = {
   }>;
 };
 
-// Claude threads go through their codex_link, so a reviewer they create is recorded and reachable from the Claude chat as if Claude had created it.
+// Claude threads go through their codex_link, so a child they create is recorded and reachable from the Claude chat as if Claude had created it.
 export const createCallGateway = ({
   isClaudeThread,
   openLink,

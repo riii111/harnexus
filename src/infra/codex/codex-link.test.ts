@@ -124,16 +124,20 @@ describe("createCodexLink tools", () => {
     expect(link.hasUnsettledWrite()).toBe(true);
   });
 
-  test("refuses a Claude model for a reviewer without calling the app", async () => {
-    const { client, requests, modelLists } = await connect();
+  test("creates a worker on the requested Claude model", async () => {
+    const { client, requests, modelLists, store } = await connect({
+      answer: () =>
+        Result.ok(textAnswer(JSON.stringify({ threadId: REVIEWER }))),
+    });
 
     const created = await client.callTool({
       name: "create_thread",
-      arguments: { prompt: "review", target: TARGET, model: "claude-sonnet-5" },
+      arguments: { prompt: "work", target: TARGET, model: "claude-sonnet-5" },
     });
 
-    expect(created.isError).toBe(true);
-    expect(requests).toEqual([]);
+    expect(created.structuredContent).toEqual({ threadId: REVIEWER });
+    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
+    expect(requests[0]?.params.arguments.model).toBe("claude-sonnet-5");
     expect(modelLists).toEqual([]);
   });
 
@@ -468,7 +472,7 @@ describe("createCodexLink write outcomes", () => {
 
   test("stops writing when a created thread cannot be saved as a reviewer", async () => {
     const { client, link } = await connect({
-      addReviewerFails: true,
+      addChildFails: true,
       answer: () =>
         Result.ok(textAnswer(JSON.stringify({ threadId: REVIEWER }))),
     });
@@ -650,7 +654,7 @@ describe("createCodexLink createChecked", () => {
     const delegations = createDelegationWatch(() => {});
     const { link } = await connect({
       delegations,
-      addReviewerFails: true,
+      addChildFails: true,
       answer: () => {
         delegations.observe(CALLER, REVIEWER, { model: null, effort: null });
         return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
@@ -862,7 +866,7 @@ const connect = async ({
   reviewers = {},
   requesters = [],
   callerRegistered = true,
-  addReviewerFails = false,
+  addChildFails = false,
   delegations = createDelegationWatch(() => {}),
   models = () => Result.ok(DEFAULT_MODELS),
   answer = () => Result.ok(textAnswer("ok")),
@@ -874,7 +878,7 @@ const connect = async ({
   reviewers?: Record<string, string[]>;
   requesters?: string[];
   callerRegistered?: boolean;
-  addReviewerFails?: boolean;
+  addChildFails?: boolean;
   answer?: (
     params: CallParams,
   ) =>
@@ -883,7 +887,7 @@ const connect = async ({
 } = {}) => {
   const store = fakeStore(
     callerRegistered ? { [CALLER]: [], ...reviewers } : reviewers,
-    addReviewerFails,
+    addChildFails,
     { [CALLER]: requesters },
   );
   const requests: RecordedRequest[] = [];
@@ -915,7 +919,7 @@ const connect = async ({
 
 const fakeStore = (
   initial: Record<string, string[]>,
-  addReviewerFails: boolean,
+  addChildFails: boolean,
   requesters: Record<string, string[]>,
 ) => {
   const reviewers = new Map(Object.entries(initial));
@@ -925,15 +929,15 @@ const fakeStore = (
       return ids === undefined
         ? undefined
         : {
-            reviewerThreadIds: ids,
+            childThreadIds: ids,
             requesterThreadIds: requesters[threadId] ?? [],
           };
     },
-    addReviewer: async (threadId: string, reviewerThreadId: string) => {
-      if (addReviewerFails) return Result.err(new FakeSaveFailed());
+    addChild: async (threadId: string, childThreadId: string) => {
+      if (addChildFails) return Result.err(new FakeSaveFailed());
       reviewers.set(threadId, [
         ...(reviewers.get(threadId) ?? []),
-        reviewerThreadId,
+        childThreadId,
       ]);
       return Result.ok(null);
     },

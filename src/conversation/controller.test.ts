@@ -389,7 +389,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
     );
     turns.startTurn(turnStart(10, "ask the reviewer"), undefined);
     await until(() => first.started());
-    await store.addReviewer(THREAD, NEW_REVIEWER);
+    await store.addChild(THREAD, NEW_REVIEWER);
     const lostSend = await messageReviewer(settings[0]);
     first.emit(sdk(success()));
     await until(() => store.get(THREAD)?.runState === "outcomeUnknown");
@@ -429,7 +429,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
     );
     turns.startTurn(turnStart(10, "ask the reviewer"), undefined);
     await until(() => first.started());
-    await store.addReviewer(THREAD, NEW_REVIEWER);
+    await store.addChild(THREAD, NEW_REVIEWER);
     const waiting = messageReviewer(settings[0]);
     await until(() => toolCalls.length === 1);
     turns.interruptTurn(interrupt(20, "turn-1"));
@@ -1374,8 +1374,7 @@ describe("turn/start carrying another thread's message", () => {
         id: 10,
         error: {
           code: -32600,
-          message:
-            "this message comes from a reviewer of another Claude thread",
+          message: "this message comes from a child of another Claude thread",
         },
       },
     ]);
@@ -1417,7 +1416,7 @@ describe("turn/start carrying another thread's message", () => {
       },
     });
     holdWrites = true;
-    const adding = store.addReviewer(THREAD, NEW_REVIEWER);
+    const adding = store.addChild(THREAD, NEW_REVIEWER);
 
     turns.startTurn(reply(10, OTHER_THREAD, NEW_REVIEWER), undefined);
     await settle();
@@ -1428,16 +1427,13 @@ describe("turn/start carrying another thread's message", () => {
         id: 10,
         error: {
           code: -32600,
-          message:
-            "this message comes from a reviewer of another Claude thread",
+          message: "this message comes from a child of another Claude thread",
         },
       },
     ]);
     expect(claude.started()).toBe(false);
     const added = await adding;
-    expect(added.isOk() && added.value.reviewerThreadIds).toEqual([
-      NEW_REVIEWER,
-    ]);
+    expect(added.isOk() && added.value.childThreadIds).toEqual([NEW_REVIEWER]);
   });
 
   test("passes a message from its own reviewer to Claude and shows it as the call output the app labels as sent from another thread", async () => {
@@ -1465,13 +1461,13 @@ describe("turn/start carrying another thread's message", () => {
   test.each([
     { name: "its own reviewer", source: OTHER_REVIEWER, expected: [] },
     { name: "the thread itself", source: OTHER_THREAD, expected: [] },
-    { name: "another Claude thread", source: THREAD, expected: [] },
+    { name: "another Claude thread", source: THREAD, expected: [THREAD] },
     {
       name: "a Codex thread that is no reviewer",
       source: "th-lead",
       expected: ["th-lead"],
     },
-  ])("saves the sender when it is $name only if it is a Codex thread no one reviews for", async ({
+  ])("saves $name as a requester unless it is self or an owned child", async ({
     source,
     expected,
   }) => {
@@ -1880,10 +1876,8 @@ const registeredWorkers = async (
     });
     expect(registered.isOk() && registered.value.threadId).toBe(threadId);
   }
-  const added = await started.store.addReviewer(OTHER_THREAD, OTHER_REVIEWER);
-  expect(added.isOk() && added.value.reviewerThreadIds).toEqual([
-    OTHER_REVIEWER,
-  ]);
+  const added = await started.store.addChild(OTHER_THREAD, OTHER_REVIEWER);
+  expect(added.isOk() && added.value.childThreadIds).toEqual([OTHER_REVIEWER]);
   return started;
 };
 

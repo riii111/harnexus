@@ -91,7 +91,7 @@ const REFUSAL_MESSAGES = {
   image_too_large:
     "an attached image is too large for Claude and could not be reduced; crop it or attach a smaller image",
   reply_to_other_worker:
-    "this message comes from a reviewer of another Claude thread",
+    "this message comes from a child of another Claude thread",
   duplicate_message: "this message was already delivered to the Claude thread",
   no_running_turn: "no running Claude turn matches the turn id",
   steer_not_sent: "the Claude turn ended before the steer reached it",
