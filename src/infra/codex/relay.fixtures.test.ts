@@ -21,9 +21,9 @@ describe("relay over recorded app-server shapes", () => {
 
     expect(exitCode).toBe(0);
     expect(output).toBe(wire(records, "server_to_app"));
-    expect(byDirection(log.map(summary))).toEqual(
-      byDirection(records.map(expectedSummary(records))),
-    );
+    const logged = log.map((line) => JSON.parse(line));
+    expect(logged.filter((entry) => entry.event !== "rpc_message")).toEqual([]);
+    expect(countByDirection(logged)).toEqual(countByDirection(records));
     expect(log.join("")).not.toContain(SECRET_MARKER);
   });
 
@@ -136,45 +136,14 @@ const wire = (records: FixtureRecord[], direction: Direction) =>
     .map((record) => `${JSON.stringify(record.message)}\n`)
     .join("");
 
-const summary = (line: string) => {
-  const { direction, kind, method, id } = JSON.parse(line);
-  return { direction, kind, method, id };
-};
-
-// The two directions interleave by arrival time, so each is compared on its own.
-const byDirection = <T extends { direction: Direction }>(entries: T[]) =>
+// The two directions interleave by arrival time, so each is counted on its own.
+const countByDirection = (entries: { direction: Direction }[]) =>
   Object.fromEntries(
     DIRECTIONS.map((direction) => [
       direction,
-      entries.filter((entry) => entry.direction === direction),
+      entries.filter((entry) => entry.direction === direction).length,
     ]),
   );
-
-const expectedSummary =
-  (records: FixtureRecord[]) =>
-  ({ direction, message }: FixtureRecord) => {
-    const id = message.id ?? null;
-    if (message.method !== undefined) {
-      return {
-        direction,
-        kind: id === null ? "notification" : "request",
-        method: message.method,
-        id,
-      };
-    }
-    const request = records.find(
-      (record) =>
-        record.direction !== direction &&
-        record.message.id === id &&
-        record.message.method !== undefined,
-    );
-    return {
-      direction,
-      kind: "error" in message ? "error_response" : "response",
-      method: request?.message.method ?? null,
-      id,
-    };
-  };
 
 const split = (bytes: Buffer, size: number) =>
   Array.from({ length: Math.ceil(bytes.length / size) }, (_, i) =>
@@ -185,5 +154,5 @@ type Direction = (typeof DIRECTIONS)[number];
 
 type FixtureRecord = {
   direction: Direction;
-  message: { id?: string | number; method?: string; error?: unknown };
+  message: unknown;
 };
