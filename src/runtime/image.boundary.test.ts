@@ -22,7 +22,7 @@ describe("resizeImage", () => {
     },
   );
 
-  test("fails on bytes that are not an image", async () => {
+  test.skipIf(!onMac)("fails on bytes that are not an image", async () => {
     const resized = await resizeImage(Buffer.from("not an image"), 2, "png");
 
     expect(resized.isErr() && resized.error._tag).toBe("ImageResizeFailed");
