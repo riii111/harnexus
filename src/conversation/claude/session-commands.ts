@@ -320,7 +320,6 @@ type SearchedList = {
   unmatched: string | null;
 };
 
-// A session id finds its own conversation, and words find those whose title or name holds them all in any case; finding none lists every conversation again.
 const searched = (
   all: readonly ClaudeConversation[],
   text: string | null,
