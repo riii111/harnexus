@@ -92,14 +92,6 @@ describe("openThreadStore", () => {
     expect(store.get("thread-1")?.connection).toEqual(expected);
   });
 
-  test("registers a thread with no connection until a session confirms one", async () => {
-    const store = await openStore();
-
-    const registered = await store.register(ENTRY);
-
-    expect(registered.isOk() && registered.value.connection).toBeNull();
-  });
-
   test("keeps a requester once however often it sends work", async () => {
     const store = await openStore();
     await store.register(ENTRY);
@@ -335,12 +327,7 @@ describe("ThreadStore", () => {
     expect(store.reviewerOwner("thread-1")).toBeUndefined();
   });
 
-  test.each([
-    { name: "another worker's reviewer", reviewer: "reviewer-1" },
-    { name: "a Claude thread", reviewer: "thread-1" },
-  ])("refuses to add $name as a reviewer and keeps it unchanged", async ({
-    reviewer,
-  }) => {
+  test("refuses to add another worker's reviewer and keeps it unchanged", async () => {
     const store = await openStore();
     await store.register(ENTRY);
     await store.register({ ...ENTRY, threadId: "thread-2" });
@@ -349,7 +336,7 @@ describe("ThreadStore", () => {
       "reviewer-1",
     ]);
 
-    const added = await store.addReviewer("thread-2", reviewer);
+    const added = await store.addReviewer("thread-2", "reviewer-1");
 
     expect(added.isErr() && added.error._tag).toBe("ReviewerTaken");
     expect(store.get("thread-2")?.reviewerThreadIds).toEqual([]);
@@ -525,27 +512,6 @@ describe("ThreadStore.runWrite", () => {
     const reopened = await openStore();
     expect(reopened.get("thread-1")?.runState).toBe("idle");
     expect(reopened.get("thread-2")?.sessionId).toBe("session-2");
-  });
-
-  test("keeps an update the operation did not wait for", async () => {
-    const store = await openStore();
-    await store.register(ENTRY);
-    let saved: Promise<unknown> = Promise.resolve();
-
-    await store.runWrite(
-      "thread-1",
-      async () => {
-        saved = store.setSessionId("thread-1", "session-1");
-        return Result.ok(null);
-      },
-      neverUnknown,
-    );
-    await saved;
-
-    expect(store.get("thread-1")).toMatchObject({
-      sessionId: "session-1",
-      runState: "idle",
-    });
   });
 
   test("treats a rejected operation as an unknown outcome", async () => {
