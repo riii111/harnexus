@@ -313,6 +313,7 @@ export const harness = async (
                 return linkRequest(method, params, options);
               },
               delegations: createDelegationWatch(store.claimReviewer),
+              codexHome: "/fixture/.codex",
             });
       sessionLinks.push(link);
       return link;

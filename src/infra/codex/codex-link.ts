@@ -8,6 +8,7 @@ import { z } from "zod";
 import { isObject } from "../../runtime/object.ts";
 import { createSerialQueue } from "../../runtime/serial-queue.ts";
 import { isClaudeModel } from "../claude/models.ts";
+import { readAutomationThread } from "./automations.boundary.ts";
 import {
   answeredThreadId,
   type DelegationWatch,
@@ -39,6 +40,7 @@ export const createCodexLink = ({
   store,
   request,
   delegations,
+  codexHome,
   createdThreadWaitMs = CREATED_THREAD_WAIT_MS,
   firstTurnWaitMs = FIRST_TURN_WAIT_MS,
 }: {
@@ -46,6 +48,7 @@ export const createCodexLink = ({
   store: LinkStore;
   request: ServerRequest;
   delegations: Pick<DelegationWatch, "expect">;
+  codexHome: string;
   createdThreadWaitMs?: number;
   firstTurnWaitMs?: number;
 }) => {
@@ -287,6 +290,60 @@ export const createCodexLink = ({
     } satisfies ToolResult;
   };
 
+  // Only heartbeats of this thread are reachable, since the app changes whatever automation an id names and these calls skip its approval.
+  const scheduleHeartbeat = async ({
+    mode,
+    id,
+    ...fields
+  }: z.infer<z.ZodObject<typeof HEARTBEAT_ARGS>>) => {
+    const queuedIn = currentGeneration();
+    if (mode === "create") {
+      if (id !== undefined) {
+        return failure(
+          "Leave id out to create a heartbeat; it names an existing one to view, update or delete.",
+        );
+      }
+      return write(
+        "automation_update",
+        { mode, ...fields, kind: "heartbeat", targetThreadId: callerThreadId },
+        [],
+        { queuedIn },
+      );
+    }
+    if (id === undefined) {
+      return failure(
+        `mode=${mode} needs the id of a heartbeat of this thread.`,
+      );
+    }
+    const refusal = await refuseAutomation(id);
+    if (refusal !== null) return failure(refusal);
+    if (mode === "view") return read("automation_update", { mode, id }, []);
+    return write(
+      "automation_update",
+      mode === "delete"
+        ? { mode, id }
+        : {
+            mode,
+            id,
+            ...fields,
+            kind: "heartbeat",
+            targetThreadId: callerThreadId,
+          },
+      [],
+      { queuedIn },
+    );
+  };
+
+  const refuseAutomation = async (id: string) => {
+    const thread = await readAutomationThread(codexHome, id);
+    if (thread.isErr()) {
+      return `Cannot read automation ${id} to check which thread it wakes (${thread.error.message}); nothing was sent.`;
+    }
+    return thread.value === callerThreadId
+      ? null
+      : `Automation ${id} is not a heartbeat of this thread. Only this thread's own heartbeats can be viewed, updated or deleted here; others are managed from their own thread or in the app.`;
+  };
+
   // Messaging this thread itself would start a turn behind the one making the call, so it may only be read and waited on.
   const refuseTargets = (
     targets: readonly string[],
@@ -345,6 +402,12 @@ export const createCodexLink = ({
         thinking: z.string().optional(),
       },
       (args) => write("send_message_to_thread", args, [args.threadId]),
+    ),
+    tool(
+      "automation_update",
+      "Schedule this thread to be woken later by a Codex app heartbeat automation, or view, update or delete a heartbeat of this thread. Use it when the user asks you to check back later, monitor or keep an eye on something, follow up, remind them, or keep working on a schedule. Each run arrives in this thread as a <heartbeat> message whose <instructions> hold the saved prompt and whose <automation_id> names the automation; when what it follows is done or no longer worth checking, delete it with that id and say so in your answer. Prefer updating an existing heartbeat of this thread over creating another; to find its id, look in $CODEX_HOME/automations/*/automation.toml (CODEX_HOME defaults to ~/.codex) for one whose target_thread_id is this thread and whose name or prompt matches. Automations that start a new task on each run and those of other threads cannot be reached here. The app runs heartbeats only while it is open and the Mac is awake.",
+      HEARTBEAT_ARGS,
+      (args) => scheduleHeartbeat(args),
     ),
     tool(
       "read_thread",
@@ -442,7 +505,8 @@ export const createCodexLink = ({
 type AppTool =
   | (typeof READ_TOOLS)[number]
   | "create_thread"
-  | "send_message_to_thread";
+  | "send_message_to_thread"
+  | "automation_update";
 
 const READ_TOOLS = ["list_projects", "read_thread", "wait_threads"] as const;
 
@@ -565,3 +629,48 @@ const CREATE_TARGET = z
   .describe(
     'Where the thread runs. Use a project with an environment: { type: "project", projectId, environment: { type: "local" } } runs the reviewer in the project\'s checkout, and { type: "project", projectId, environment: { type: "worktree", startingState: { type: "branch", branchName } } } runs it in a new worktree. Always include environment: the app rejects { type: "project", projectId } without one as invalid arguments. The app also defines a directory form ({ type, directoryName }). Use list_projects for project ids; if the app rejects a type value, its error lists the accepted ones.',
   );
+// The app's own schema, narrowed to heartbeats of the calling thread; it still checks the values, and update replaces every field it is given.
+const HEARTBEAT_ARGS = {
+  mode: z
+    .enum(["create", "view", "update", "delete"])
+    .describe(
+      "update saves the fields as given, so view the heartbeat first and send name, prompt, rrule and status in full with only the requested changes.",
+    ),
+  id: z
+    .string()
+    .regex(/^(?!\.\.?$)[^/\\]+$/)
+    .optional()
+    .describe(
+      "The automation id, required for view, update and delete and left out for create. A heartbeat run carries it as <automation_id>.",
+    ),
+  name: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("A short name; choose one if the user gives none."),
+  prompt: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "What each run should do, in user-visible prose without the schedule. Unless the user asks for periodic updates, tell the run to stay quiet while nothing has changed and to report only a meaningful change, completion, failure or something the user must do. Keep notification preferences out of it.",
+    ),
+  rrule: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "An RRULE in the user's local wall-clock time without DTSTART, such as FREQ=MINUTELY;INTERVAL=30 or FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0. Never show it to the user.",
+    ),
+  status: z
+    .enum(["ACTIVE", "PAUSED"])
+    .optional()
+    .describe("ACTIVE unless the user asks to start it paused."),
+  notificationPolicy: z
+    .enum(["failed_runs_only"])
+    .nullable()
+    .optional()
+    .describe(
+      "failed_runs_only when the user asks to mute notifications of completed runs, null only when they ask to unmute; leave it out to keep the current setting.",
+    ),
+};

@@ -259,6 +259,7 @@ const connect = (
     effortRule: effortRule({}, catalog.effortsOf),
     claudeModels: catalog.models,
     unverifiedCodex: "warn",
+    codexHome: "/fixture/.codex",
     send: (message) => sent.push(message),
     log: () => {},
     ...deps,
