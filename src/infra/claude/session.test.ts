@@ -343,7 +343,7 @@ describe("startClaudeSession started session", () => {
     const prompt = claude.prompt()?.[Symbol.asyncIterator]();
     const waiting = prompt?.next();
 
-    const sent = session.send("steer to the failing test");
+    const sent = session.send({ text: "steer to the failing test" });
     if (sent.isErr()) return expect.unreachable(sent.error.message);
 
     expect(await waiting).toEqual({
@@ -379,7 +379,7 @@ describe("startClaudeSession started session", () => {
     for await (const item of session.messages) {
       expect(item.isErr() && item.error._tag).toBe("ClaudeStreamFailed");
       expect(claude.closes()).toBe(1);
-      const sent = session.send("steer");
+      const sent = session.send({ text: "steer" });
       expect(sent.isErr() && sent.error._tag).toBe("ClaudeSessionClosed");
     }
   });
@@ -421,7 +421,7 @@ describe("startClaudeSession started session", () => {
     for await (const _item of session.messages) break;
 
     expect(claude.closes()).toBe(1);
-    const sent = session.send("unheard");
+    const sent = session.send({ text: "unheard" });
     expect(sent.isErr() && sent.error._tag).toBe("ClaudeSessionClosed");
   });
 
@@ -435,7 +435,7 @@ describe("startClaudeSession started session", () => {
   }>([
     {
       name: "input",
-      act: async (session) => session.send("late"),
+      act: async (session) => session.send({ text: "late" }),
       reached: (claude) => claude.prompts(),
       none: [],
     },
@@ -865,6 +865,7 @@ const SETTINGS: ClaudeSessionSettings = {
   cwd: "/work/tree",
   model: "claude-sonnet-5",
   connection: SUBSCRIPTION_CONNECTION,
+  permissionMode: "auto",
   canUseTool: async () => ({ behavior: "deny", message: "not in this test" }),
 };
 
