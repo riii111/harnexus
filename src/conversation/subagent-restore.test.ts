@@ -405,7 +405,6 @@ const AGENTS: SubagentRecord[] = [
   },
 ];
 
-// An Edit call and Claude's answer, each recorded under the uuid that follows the last.
 const edit = (
   uuid: string,
   toolUseId: string,
@@ -466,7 +465,6 @@ const EDITING_AGENTS: SubagentRecord[] = [
   },
 ];
 
-// The paths the app sums into each turn's changes, from the edits that completed.
 const appliedPaths = (history: readonly HistoryTurn[]) =>
   history.map((turn) =>
     turn.items.flatMap(({ item }) =>

@@ -549,7 +549,6 @@ const toolResultsOf = (
 const isMetaMessage = (message: SessionMessage) =>
   (message as { is_meta?: unknown }).is_meta === true;
 
-// When a record began, as its first timed message says.
 export const startOfRecord = (messages: readonly SessionMessage[]) => {
   for (const message of messages) {
     const at = timeOf(message);
@@ -566,7 +565,6 @@ const timeOf = (message: SessionMessage) => {
 
 const HISTORY_TURN_PREFIX = "harnexus-history-";
 
-// The id a history turn takes from the record of the prompt that opened it.
 export const historyTurnId = (record: string) =>
   `${HISTORY_TURN_PREFIX}${record}`;
 
