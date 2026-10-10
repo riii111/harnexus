@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Result, TaggedError } from "better-result";
 import type { SubagentRecord } from "../infra/claude/session.ts";
-import type { HistoryTurn } from "../presentation/history.ts";
+import { delegatedEditIn, type HistoryTurn } from "../presentation/history.ts";
+import type { FileChangeItem } from "../presentation/protocol.ts";
 import {
   prompt,
   reply,
@@ -86,7 +87,7 @@ describe("agents read back after a restart", () => {
     ]);
   });
 
-  test("shows a running agent as started only and numbers read-back agents past the paths live ones hold", async () => {
+  test("numbers read-back agents by their place among their parent's agents, whatever their kind", async () => {
     const { history, subagents } = setup(() =>
       Result.ok([
         AGENTS[1] as SubagentRecord,
@@ -94,32 +95,21 @@ describe("agents read back after a restart", () => {
           ...(AGENTS[1] as SubagentRecord),
           agentId: "a9",
           toolUseId: "toolu-9",
+          agentType: "general-purpose",
+          messages: underAgent(
+            [prompt("g1", "look", "2026-09-27T00:00:03.000Z")],
+            "toolu-9",
+            null,
+          ),
         },
       ]),
     );
-    subagents.start({
-      threadId: THREAD,
-      turnId: "turn-1",
-      toolUseId: "toolu-1",
-      taskId: "a1",
-      description: "live agent",
-      agentType: "Explore",
-      cwd: "/fixture/work",
-      prompt: null,
-      depth: 1,
-    });
 
-    const parentHistory = (await history.load(THREAD)).unwrap();
+    await history.load(THREAD);
 
-    expect(
-      parentHistory
-        .flatMap((turn) => turn.items.map(({ item }) => item))
-        .filter((item) => item.type === "subAgentActivity")
-        .map((item) => item.kind),
-    ).toEqual(["started"]);
     expect(subagents.childrenOf(THREAD).map((child) => child.path)).toEqual([
       "/root/explore_1",
-      "/root/explore_2",
+      "/root/general_purpose_2",
     ]);
   });
 
@@ -175,6 +165,22 @@ describe("agents read back after a restart", () => {
     ]);
   });
 
+  test("shows a nested agent's edit in the thread under the id a live turn gives it, not one per agent it passed through", async () => {
+    const { history, subagents } = setup(() => Result.ok(EDITING_AGENTS));
+
+    const parentHistory = (await history.load(THREAD)).unwrap();
+
+    const [outer] = subagents.childrenOf(THREAD);
+    const [inner] = subagents.childrenOf(outer?.id ?? "");
+    const [innerEdit] = editsOf((await history.load(inner?.id ?? "")).unwrap());
+    const [parentTurn] = parentHistory;
+    expect(innerEdit).toBeDefined();
+    expect(editsOf(parentHistory).map((edit) => edit.id)).toContain(
+      delegatedEditIn(innerEdit as FileChangeItem, parentTurn?.turn.id ?? "")
+        .id,
+    );
+  });
+
   test("shows a resumed agent's edits in the turn whose call resumed it", async () => {
     const { history } = setup(
       () =>
@@ -204,19 +210,6 @@ describe("agents read back after a restart", () => {
       ["/fixture/work/README.md"],
       ["/fixture/work/LICENSE"],
     ]);
-  });
-
-  test("shows the edits an agent made once another agent resumed it in that agent's history and the turn that started it", async () => {
-    const { history, subagents } = setup(() => Result.ok(RESUMED_BY_AGENT), {
-      parent: PARENT_OF_TWO,
-    });
-
-    const parentHistory = (await history.load(THREAD)).unwrap();
-
-    const [first] = subagents.childrenOf(THREAD);
-    const firstHistory = (await history.load(first?.id ?? "")).unwrap();
-    expect(appliedPaths(parentHistory)).toEqual([["/fixture/work/fix.ts"]]);
-    expect(appliedPaths(firstHistory)).toEqual([["/fixture/work/fix.ts"]]);
   });
 
   test("shows an agent's edit in each turn that led to it when two agents resumed each other, under one id per turn", async () => {
@@ -474,6 +467,11 @@ const appliedPaths = (history: readonly HistoryTurn[]) =>
     ),
   );
 
+const editsOf = (history: readonly HistoryTurn[]) =>
+  history
+    .flatMap((turn) => turn.items.map(({ item }) => item))
+    .filter((item): item is FileChangeItem => item.type === "fileChange");
+
 const activityIds = (history: readonly HistoryTurn[]) =>
   history
     .flatMap((turn) => turn.items.map(({ item }) => item))
@@ -566,51 +564,7 @@ const RESUMED_AGENT: SubagentRecord = {
   ),
 };
 
-// The first agent, started before the second, resumes it, and only the resumed run edits.
-const RESUMED_BY_AGENT: SubagentRecord[] = [
-  {
-    ...(AGENTS[1] as SubagentRecord),
-    messages: underAgent(
-      [
-        prompt("o1", "fix it", STARTED),
-        reply(
-          "o2",
-          "m2",
-          toolUse("toolu-wake", "SendMessage", { to: "b1", message: "fix" }),
-          "tool_use",
-          "2026-09-27T00:00:10.000Z",
-        ),
-        toolResult(
-          "o3",
-          "toolu-wake",
-          answer({ message: "Resuming agent b1", resumedAgentId: "b1" }),
-        ),
-        reply("o4", "m3", text("fixed"), "end_turn"),
-      ],
-      "toolu-1",
-      null,
-    ),
-  },
-  {
-    ...(AGENTS[1] as SubagentRecord),
-    agentId: "b1",
-    toolUseId: "toolu-b",
-    name: null,
-    messages: underAgent(
-      [
-        prompt("b1", "check", "2026-09-27T00:00:05.000Z"),
-        reply("b2", "m4", text("checked"), "end_turn"),
-        prompt("b3", "fix", "2026-09-27T00:00:11.000Z"),
-        ...edit("b4", "toolu-fix", "/fixture/work/fix.ts"),
-        reply("b6", "m5", text("fixed"), "end_turn"),
-      ],
-      "toolu-b",
-      null,
-    ),
-  },
-];
-
-// The thread starts two agents, each of which a record above has the other resume.
+// The thread starts two agents, each of which a record below has the other resume.
 const PARENT_OF_TWO: SessionMessage[] = [
   prompt("p1", "fix and check", "2026-09-27T00:00:00.000Z"),
   reply("p2", "m1", toolUse("toolu-1", "Agent", { prompt: "fix" }), "tool_use"),
