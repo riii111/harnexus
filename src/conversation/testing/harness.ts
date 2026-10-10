@@ -181,7 +181,7 @@ export const VERTEX_MODEL = vertexModelId(MODEL);
 
 export const BUILT_IN_EFFORTS = createModelCatalog().effortsOf;
 
-export const defaultRule = effortRule({}, BUILT_IN_EFFORTS);
+const defaultRule = effortRule({}, BUILT_IN_EFFORTS);
 
 export const VERTEX_ACCOUNT: AccountInfo = { apiProvider: "vertex" };
 
@@ -468,7 +468,7 @@ export const OUTCOME_UNKNOWN =
 export const claudeDir = () => join(dir, "claude-records");
 
 // A link to itself cannot be listed, as an unreadable folder cannot, and still leaves the test directory removable.
-export const unlistableConfigDir = async () => {
+const unlistableConfigDir = async () => {
   const configDir = join(dir, "claude-config");
   const project = join(configDir, "projects", "-work-tree");
   await mkdir(join(configDir, "projects"), { recursive: true });
@@ -505,18 +505,7 @@ export const firstPrompt = async (
 export const promptsUntil = async (
   claude: ReturnType<typeof fakeClaude>,
   count: number,
-) => {
-  const prompt = claude.prompt();
-  if (prompt === null) return [];
-  const iterator = prompt[Symbol.asyncIterator]();
-  const texts: unknown[] = [];
-  while (texts.length < count) {
-    const next = await iterator.next();
-    if (next.done === true) break;
-    texts.push(next.value.message.content);
-  }
-  return texts;
-};
+) => (await readPrompts(claude, count)).map((prompt) => prompt.message.content);
 
 // Reads the messages themselves, whose uuids a result names as taken; it reads only as many as were sent, since a read past them waits for the next send.
 export const readPrompts = async (
@@ -587,7 +576,7 @@ export const result = (fields: object) => ({
   ...fields,
 });
 
-export const TURN_USAGE = {
+const TURN_USAGE = {
   input_tokens: 4,
   cache_read_input_tokens: 20,
   cache_creation_input_tokens: 10,
