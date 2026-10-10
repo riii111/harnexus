@@ -367,6 +367,11 @@ export const createClaudeRuntime = ({
     startup.link?.stopWrites();
   };
 
+  const endCancelledStart = (turn: Turn) => {
+    if (closed) turn.fail(bridgeClosingError());
+    else turn.finish({ status: "interrupted" }, null);
+  };
+
   // An idle session without a session id stays, since its next turn could not resume the conversation.
   // Closing would end the tasks Claude runs in the background, so the close waits until none is left.
   const scheduleIdleClose = (threadId: string) => {
@@ -587,8 +592,7 @@ export const createClaudeRuntime = ({
       startup.controller.signal,
     );
     if (result === ABORTED) {
-      if (closed) turn.fail(bridgeClosingError());
-      else turn.finish({ status: "interrupted" }, null);
+      endCancelledStart(turn);
       return;
     }
     const advanced = result;
@@ -607,8 +611,7 @@ export const createClaudeRuntime = ({
       startup.controller.signal,
     );
     if (checked === ABORTED) {
-      if (closed) turn.fail(bridgeClosingError());
-      else turn.finish({ status: "interrupted" }, null);
+      endCancelledStart(turn);
       return;
     }
     if (checked.isErr()) {
@@ -634,8 +637,7 @@ export const createClaudeRuntime = ({
     if (startup !== null) clearSessionStart(threadId, startup);
     if (slot.isErr()) {
       if (slot.error._tag === "SessionStartCancelled") {
-        if (closed) turn.fail(bridgeClosingError());
-        else turn.finish({ status: "interrupted" }, null);
+        endCancelledStart(turn);
       } else {
         turn.fail(slot.error);
       }
