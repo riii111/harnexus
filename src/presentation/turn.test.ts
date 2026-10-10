@@ -228,6 +228,49 @@ describe("renderSdkMessage tools", () => {
     });
   });
 
+  test("keeps the proposed diffs of edits whose results come in one message", () => {
+    const edit = (id: string, path: string) =>
+      toolUse(id, "Edit", {
+        file_path: path,
+        old_string: "old\n",
+        new_string: "new\n",
+      });
+    const updated = (id: string) => ({
+      type: "tool_result",
+      tool_use_id: id,
+      content: "updated",
+      is_error: false,
+    });
+
+    const out = run([
+      assistant("msg-1", [
+        edit("tool-1", "/fixture/work/a.txt"),
+        edit("tool-2", "/fixture/work/b.txt"),
+      ]),
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [updated("tool-1"), updated("tool-2")],
+        },
+        parent_tool_use_id: null,
+        tool_use_result: {
+          filePath: "/fixture/work/a.txt",
+          structuredPatch: [
+            { oldStart: 3, oldLines: 1, newStart: 3, newLines: 1, lines: [] },
+          ],
+        },
+      },
+      success(),
+    ]);
+
+    const proposed = "@@ -1,1 +1,1 @@\n-old\n+new\n";
+    expect(completedItems(out).filter(isTool)).toMatchObject([
+      { changes: [{ path: "/fixture/work/a.txt", diff: proposed }] },
+      { changes: [{ path: "/fixture/work/b.txt", diff: proposed }] },
+    ]);
+  });
+
   test("maps Write of a new file to an added file", () => {
     const out = run([
       assistant("msg-1", [
