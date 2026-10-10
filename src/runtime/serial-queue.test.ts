@@ -35,6 +35,18 @@ describe("createSerialQueue", () => {
     expect(events).toEqual(["a:start", "a:end", "b:start", "b:end", "c:start"]);
   });
 
+  test("runs a task with another key while an earlier one is still running", async () => {
+    const queue = createSerialQueue();
+    const first = deferred();
+    const blocked = queue.run("thread-1", () => first.promise);
+
+    const other = await queue.run("thread-2", async () => "other");
+
+    expect(other).toBe("other");
+    first.resolve();
+    await blocked;
+  });
+
   test("keeps running later tasks after a task rejects", async () => {
     const queue = createSerialQueue();
 

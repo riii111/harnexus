@@ -252,7 +252,6 @@ export const entryExists = async (path: string) =>
 export const isSymlink = async (path: string) =>
   (await lstat(path).catch(() => null))?.isSymbolicLink() ?? false;
 
-// A path that cannot be resolved is kept as given, made absolute.
 export const realPathOrSelf = (path: string) =>
   realpath(resolve(path)).catch(() => resolve(path));
 
@@ -277,7 +276,6 @@ class AccessDenied extends TaggedError("AccessDenied")<{
   message: string;
 }> {}
 
-// Checks the permission without creating or changing anything at the path.
 export const checkAccess = (path: string, mode: "write" | "execute") =>
   Result.tryPromise({
     try: () => access(path, mode === "write" ? constants.W_OK : constants.X_OK),
