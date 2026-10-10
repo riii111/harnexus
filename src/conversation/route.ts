@@ -86,6 +86,24 @@ type Turns = {
   liveTurnOf: (threadId: string) => LiveTurn | null;
 };
 
+type RouterDeps = {
+  turns: Turns;
+  log: (event: RouteEvent) => void;
+  // observe answering false refuses the turn, so a created thread on an unexpected model never starts.
+  delegations: Pick<DelegationWatch, "observe" | "started">;
+  history: History;
+  claudeModels: () => ListedClaudeModels;
+  unverifiedCodex: "warn" | "pause";
+  subagents: Pick<
+    SubagentRequests,
+    "isChild" | "answer" | "withChildren" | "listedParentOf" | "remember"
+  >;
+  revert: (
+    method: "thread/revert" | "thread/rollback",
+    request: AppRequest,
+  ) => Promise<void>;
+};
+
 type RefusedMethod = (typeof REFUSED_METHODS)[number];
 
 type History = ReturnType<typeof createHistoryRequests>;
@@ -109,23 +127,16 @@ type Pending =
   | { kind: "childList"; params: Record<string, unknown> };
 
 // Lines that are not Claude requests pass as the same bytes; server requests and app responses share ids with the other direction, so only lines with a method are read as app requests and only lines without one as server responses.
-export const createRouter = (
-  turns: Turns,
-  log: (event: RouteEvent) => void,
-  // observe answering false refuses the turn, so a created thread on an unexpected model never starts.
-  delegations: Pick<DelegationWatch, "observe" | "started">,
-  history: History,
-  claudeModels: () => ListedClaudeModels,
-  unverifiedCodex: "warn" | "pause",
-  subagents: Pick<
-    SubagentRequests,
-    "isChild" | "answer" | "withChildren" | "listedParentOf" | "remember"
-  >,
-  revert?: (
-    method: "thread/revert" | "thread/rollback",
-    request: AppRequest,
-  ) => Promise<void>,
-) => {
+export const createRouter = ({
+  turns,
+  log,
+  delegations,
+  history,
+  claudeModels,
+  unverifiedCodex,
+  subagents,
+  revert,
+}: RouterDeps) => {
   const pending = new Map<AppRequest["id"], Pending>();
   // Set from the server's initialize answer; while paused the app lists no Claude model and a Claude turn is refused rather than handed to Codex, which would run it without the Claude conversation.
   let paused = false;
@@ -206,14 +217,7 @@ export const createRouter = (
       case "thread/revert":
       case "thread/rollback":
         if (!turns.isClaudeThread(params.threadId)) return line;
-        if (revert === undefined) {
-          turns.reject(
-            request,
-            "rewinding this Claude conversation is unavailable",
-          );
-        } else {
-          void revert(message.method, request);
-        }
+        void revert(message.method, request);
         return null;
       case "thread/settings/update":
         return routeSettingsUpdate(line, message, request);

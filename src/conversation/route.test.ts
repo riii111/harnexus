@@ -2219,8 +2219,8 @@ const setup = (
     history: history.load,
     send: (message) => sent.push(message),
   });
-  const router = createRouter(
-    {
+  const router = createRouter({
+    turns: {
       isClaudeThread: (threadId) =>
         typeof threadId === "string" && threads.has(threadId),
       threadOf: (threadId) => threads.get(threadId),
@@ -2263,8 +2263,8 @@ const setup = (
       effortRule: rule,
       liveTurnOf: (threadId) => live.get(threadId) ?? null,
     },
-    (event) => events.push(event),
-    {
+    log: (event) => events.push(event),
+    delegations: {
       observe: (source, threadId, asked) => {
         calls.push(["delegated", source, threadId, asked]);
         return delegatedRuns;
@@ -2272,13 +2272,13 @@ const setup = (
       started: (threadId, refusal) => starts.push([threadId, refusal]),
     },
     history,
-    () => ({ ...catalog.models(), vertex }),
+    claudeModels: () => ({ ...catalog.models(), vertex }),
     unverifiedCodex,
-    subagentRequests,
-    async (method, request) => {
+    subagents: subagentRequests,
+    revert: async (method, request) => {
       calls.push(["revert", method, request]);
     },
-  );
+  });
   return {
     router,
     calls,
