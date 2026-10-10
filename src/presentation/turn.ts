@@ -20,6 +20,7 @@ import {
   abandonToolItem,
   completeToolItem,
   declineToolItem,
+  singleCallOutput,
   startToolItem,
 } from "./tools.ts";
 
@@ -516,9 +517,7 @@ const renderToolResults = (
 ) => {
   const { content } = message.message;
   if (typeof content === "string") return;
-  // The structured output belongs to a single tool, so it is used only when the message answers one call.
-  const single =
-    content.filter((block) => block.type === "tool_result").length === 1;
+  const output = singleCallOutput(content, message.tool_use_result);
   for (const block of content) {
     if (block.type !== "tool_result") continue;
     const tool = draft.tools[block.tool_use_id];
@@ -527,7 +526,7 @@ const renderToolResults = (
       content: block.content,
       isError: block.is_error === true,
       declined: draft.declinedToolUseIds.includes(block.tool_use_id),
-      output: single ? message.tool_use_result : undefined,
+      output,
       durationMs: now - tool.startedAtMs,
     });
     draft.tools[block.tool_use_id] =
@@ -720,4 +719,4 @@ const COMPACTION_FAILED = "Claude could not compact the conversation";
 const NOT_COMPACTED = "Claude did not compact the conversation";
 
 // Claude Code names the tool that starts a subagent Agent, and older versions named it Task.
-const AGENT_TOOLS = ["Agent", "Task"];
+export const AGENT_TOOLS = ["Agent", "Task"];

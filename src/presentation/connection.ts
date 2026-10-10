@@ -33,7 +33,6 @@ export const connectionNotPickedText = (repositoryOnVertex: boolean) =>
 export const switchedText = (to: ConnectionView) =>
   `This chat now follows this repository's Claude Code settings: ${describe(to)}. Your next message starts Claude there, and Claude Code confirms the provider before anything is sent.`;
 
-// A chat that stays on the subscription gets no line, so /session reads as it did before connections existed.
 export const sessionConnectionLines = (connection: SessionConnection) => {
   const saved =
     connection.saved?.provider === "vertex"
