@@ -45,7 +45,6 @@ export const withClaudeModels = (
   return { result: { ...result, data: [...data, ...added] }, collisions };
 };
 
-// A model without effort still reports a level, which is the single entry its picker lists.
 export const shownEffort = (effort: EffortLevel | null) =>
   effort ?? NO_EFFORT_ENTRY;
 

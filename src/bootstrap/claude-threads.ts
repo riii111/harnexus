@@ -49,9 +49,9 @@ export const connectClaudeThreads = ({
   readSession: Parameters<typeof createHistoryRequests>[0]["readSession"];
   readSubagents: (sessionId: string) => ReturnType<typeof readClaudeSubagents>;
   effortRule: Runtime["effortRule"];
-  claudeModels: Parameters<typeof createRouter>[4];
+  claudeModels: Parameters<typeof createRouter>[0]["claudeModels"];
   permissionMode?: Runtime["permissionMode"];
-  unverifiedCodex: Parameters<typeof createRouter>[5];
+  unverifiedCodex: Parameters<typeof createRouter>[0]["unverifiedCodex"];
   send: (message: object) => void;
   log: (event: ClaudeLogEvent | RouteEvent) => void;
 }) => {
@@ -137,15 +137,15 @@ export const connectClaudeThreads = ({
     history: history.load,
     send,
   });
-  const router = createRouter(
+  const router = createRouter({
     turns,
     log,
     delegations,
     history,
     claudeModels,
     unverifiedCodex,
-    subagentRequests,
-    createRevertRequests({
+    subagents: subagentRequests,
+    revert: createRevertRequests({
       store,
       threads,
       turns,
@@ -154,7 +154,7 @@ export const connectClaudeThreads = ({
       request,
       send,
     }),
-  );
+  });
   const callGateway = createCallGateway({
     isClaudeThread: (threadId) => store.get(threadId) !== undefined,
     openLink,
