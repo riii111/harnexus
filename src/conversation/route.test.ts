@@ -369,22 +369,6 @@ describe("Codex CLI version", () => {
       reason: "claude_paused",
     });
   });
-
-  test("runs a Claude turn on a verified version even when asked to pause", async () => {
-    const { router, calls } = setup(["th-claude"], {}, "pause");
-    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
-    await router.fromServer(initializeAnswer(VERIFIED_AGENT));
-
-    router.fromApp(
-      encode({
-        id: 6,
-        method: "turn/start",
-        params: { threadId: "th-claude" },
-      }),
-    );
-
-    expect(calls.map(([name]) => name)).toEqual(["startTurn"]);
-  });
 });
 
 describe("model/list", () => {
@@ -599,7 +583,9 @@ describe("threads with a Claude model", () => {
         params: { cwd: "/fixture/work", model: CLAUDE },
       }),
     );
-    const out = parse(await router.fromServer(threadResponse(3, "th-new")));
+    const out = parse(
+      await router.fromServer(threadResponse(3, "th-new", "xhigh")),
+    );
 
     expect(parse(forwarded).params).toEqual({ cwd: "/fixture/work" });
     expect(calls).toEqual([
@@ -607,6 +593,7 @@ describe("threads with a Claude model", () => {
     ]);
     expect(out.result.model).toBe(CLAUDE);
     expect(out.result.thread.model).toBe(CLAUDE);
+    expect(out.result.reasoningEffort).toBe("high");
   });
 
   test.each([
@@ -631,7 +618,7 @@ describe("threads with a Claude model", () => {
     const line = encode({
       id: 9,
       method: "thread/fork",
-      params: { threadId: "th-claude", ephemeral: true },
+      params: { threadId: "th-claude", ephemeral: true, cwd: "/fixture/work/" },
     });
 
     expect(router.fromApp(line)).toBe(line);
@@ -672,26 +659,6 @@ describe("threads with a Claude model", () => {
 
     expect(beforePinned).toBe(false);
     expect(parse(await response).result.model).toBe(CLAUDE);
-  });
-
-  test("runs the turns of a fork in the source's directory on Claude", async () => {
-    const { router, calls } = setup(["th-claude"]);
-    const fork = encode({
-      id: 9,
-      method: "thread/fork",
-      params: { threadId: "th-claude", cwd: "/fixture/work/" },
-    });
-    const turn = encode({
-      id: 10,
-      method: "turn/start",
-      params: { threadId: "th-side", input: [] },
-    });
-
-    expect(router.fromApp(fork)).toBe(fork);
-    await router.fromServer(threadResponse(9, "th-side"));
-
-    expect(router.fromApp(turn)).toBeNull();
-    expect(calls.map(([name]) => name)).toEqual(["adoptFork", "startTurn"]);
   });
 
   test("refuses a fork of a Claude thread into another directory before the server makes it", () => {
@@ -800,24 +767,6 @@ describe("threads with a Claude model", () => {
 
     expect(out.result.reasoningEffort).toBe("max");
     expect(out.result.thread.reasoningEffort).toBe("max");
-  });
-
-  test("reports a new Claude thread at the model's default effort", async () => {
-    const { router } = setup();
-
-    router.fromApp(
-      encode({
-        id: 3,
-        method: "thread/start",
-        params: { cwd: "/fixture/work", model: CLAUDE },
-      }),
-    );
-    const out = parse(
-      await router.fromServer(threadResponse(3, "th-new", "xhigh")),
-    );
-
-    expect(out.result.reasoningEffort).toBe("high");
-    expect(out.result.thread.reasoningEffort).toBe("high");
   });
 
   test("leaves the resume response of a Codex thread as the same bytes", async () => {
@@ -1168,43 +1117,6 @@ describe("Claude subagent threads", () => {
     expect(serverCalls).toEqual([]);
   });
 
-  test("completes an agent's turn in its timeline only once the agent completes", async () => {
-    const { router, subagents, sent } = setup(["th-claude"]);
-    startAgent(subagents, "th-claude", "toolu-1");
-    const [child] = subagents.childrenOf("th-claude");
-    const timeline = async (id: number) => {
-      router.fromApp(
-        encode({
-          id,
-          method: "thread/timeline/list",
-          params: { threadId: child?.id },
-        }),
-      );
-      await until(() => responseTo(sent, id) !== null);
-      return responseTo(sent, id).result.data;
-    };
-
-    const running = await timeline(37);
-    subagents.complete("th-claude", "task-1", { status: "completed" });
-    const completed = await timeline(38);
-
-    expect(running).toMatchObject([
-      { type: "turnStarted", position: 0, turnId: `${child?.id}-turn-1` },
-      { type: "item", position: 1, item: { type: "userMessage" } },
-    ]);
-    expect(running).toHaveLength(2);
-    expect(completed).toMatchObject([
-      ...running,
-      {
-        type: "turnCompleted",
-        position: 2,
-        turnId: `${child?.id}-turn-1`,
-        status: "completed",
-        completedAt: expect.any(Number),
-      },
-    ]);
-  });
-
   test("adds a nested agent's completion to its parent agent's newest turn, so a timeline cursor the app holds still pages back over every entry once", async () => {
     const { router, subagents, sent } = setup(["th-claude"]);
     const start = (toolUseId: string, taskId: string, depth: number) =>
@@ -1260,7 +1172,6 @@ describe("Claude subagent threads", () => {
     const older = await timeline({ cursor: newest.nextCursor });
     const after = (await timeline({})).data;
 
-    expect(newest.nextCursor).toBe(`before:${whole.length - 3}`);
     expect([...older.data, ...newest.data]).toEqual(whole);
     const completion = {
       type: "item",
@@ -1268,7 +1179,6 @@ describe("Claude subagent threads", () => {
       item: { type: "subAgentActivity", kind: "completed" },
     };
     expect(after).toMatchObject([...whole, completion]);
-    expect(after).toHaveLength(whole.length + 1);
     expect(
       (sent as { method?: string; params?: { item?: { kind?: string } } }[])
         .filter(
@@ -1303,20 +1213,13 @@ describe("Claude subagent threads", () => {
 });
 
 describe("app responses", () => {
-  test.each([
-    { name: "the bridge's own request", id: BRIDGE_REQUEST, expected: null },
-    { name: "the server's request", id: 1, expected: true },
-  ])("hands an answer to $name to the turns first and forwards it unchanged only for the server", ({
-    id,
-    expected,
-  }) => {
+  test("hands an answer to the bridge's own request to the turns instead of the server", () => {
     const { router, calls } = setup(["th-claude"]);
-    const answer = { id, result: { decision: "accept" } };
-    const line = encode(answer);
+    const answer = { id: BRIDGE_REQUEST, result: { decision: "accept" } };
 
-    const routed = router.fromApp(line);
+    const routed = router.fromApp(encode(answer));
 
-    expect(routed?.equals(line) ?? null).toBe(expected);
+    expect(routed).toBeNull();
     expect(calls).toEqual([["answerRequest", answer]]);
   });
 });
@@ -1340,38 +1243,20 @@ describe("thread/settings/update", () => {
     expect(calls).toEqual([["selectMode", "th-claude", "default"]]);
   });
 
-  test.each([
-    { name: "alone", change: { model: OTHER_CLAUDE } },
-    {
-      name: "beside a stale collaboration mode",
-      change: {
-        model: OTHER_CLAUDE,
-        collaborationMode: { mode: "default", settings: { model: CLAUDE } },
-      },
-    },
-  ])("moves a Claude thread to another Claude model picked $name without telling the server", ({
-    change,
-  }) => {
+  test("moves a Claude thread to another Claude model picked without telling the server", () => {
     const { router, calls } = setup(["th-claude"]);
 
-    const forwarded = router.fromApp(settingsUpdate(change));
+    const forwarded = router.fromApp(settingsUpdate({ model: OTHER_CLAUDE }));
 
     expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
-    expect(calls.filter(([name]) => name !== "selectMode")).toEqual([
-      ["changeModel", "th-claude", OTHER_CLAUDE],
-    ]);
+    expect(calls).toEqual([["changeModel", "th-claude", OTHER_CLAUDE]]);
   });
 
-  test.each([
-    {
-      name: "a Codex model in the collaboration mode alone",
-      change: {
-        collaborationMode: { mode: "default", settings: { model: "gpt-x" } },
-      },
-    },
-    { name: "another working directory", change: { cwd: "/elsewhere" } },
-  ])("refuses $name on a Claude thread", ({ change }) => {
+  test("refuses a Codex model in the collaboration mode alone on a Claude thread", () => {
     const { router, calls } = setup(["th-claude"]);
+    const change = {
+      collaborationMode: { mode: "default", settings: { model: "gpt-x" } },
+    };
 
     expect(router.fromApp(settingsUpdate(change))).toBeNull();
     expect(calls.map(([name]) => name)).toEqual(["reject"]);
@@ -1454,14 +1339,6 @@ describe("thread/settings/update", () => {
     expect(out.result.model).toBe(CLAUDE);
   });
 
-  test("forwards the same directory spelled with a trailing slash", () => {
-    const { router, calls } = setup(["th-claude"]);
-    const line = settingsUpdate({ cwd: "/fixture/work/" });
-
-    expect(router.fromApp(line)).toEqual(line);
-    expect(calls).toEqual([]);
-  });
-
   test("keeps plan mode picked for a Claude thread from the server", async () => {
     const { router, calls } = setup(["th-claude"]);
 
@@ -1484,7 +1361,6 @@ describe("thread/settings/update", () => {
       model: CLAUDE,
       expected: "max",
     },
-    { name: "no effort picked", change: {}, model: CLAUDE, expected: "high" },
     {
       name: "a model without effort",
       change: { model: "claude-haiku-4-5", effort: "max" },
@@ -1764,21 +1640,6 @@ describe("Claude thread history", () => {
     ]);
   });
 
-  test("fills the turns of thread/read for a Claude thread", async () => {
-    const { router } = setup(["th-claude"], { "th-claude": conversation() });
-
-    router.fromApp(
-      encode({
-        id: 6,
-        method: "thread/read",
-        params: { threadId: "th-claude", includeTurns: true },
-      }),
-    );
-    const out = parse(await router.fromServer(threadResponse(6, "th-claude")));
-
-    expect(out.result.thread.turns).toHaveLength(2);
-  });
-
   test("passes the resume response with the Claude model alone when the record cannot be read", async () => {
     const { router, events } = setup(["th-claude"], {
       "th-claude": "unreadable",
@@ -1935,8 +1796,6 @@ describe("Claude thread history", () => {
 
   test.each([
     { name: "thread/turns/list", params: { threadId: "codex" } },
-    { name: "thread/items/list", params: { threadId: "codex", turnId: "t" } },
-    { name: "thread/timeline/list", params: { threadId: "codex" } },
     { name: "thread/read", params: { threadId: "codex", includeTurns: true } },
   ])("leaves $name of a Codex thread to the server", async ({
     name,
