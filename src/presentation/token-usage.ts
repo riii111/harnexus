@@ -1,7 +1,6 @@
 import type { ModelUsage, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AppNotification, TokenUsageBreakdown } from "./protocol.ts";
 
-// total adds up the thread's turns while the bridge runs, last is the context the latest request of the main conversation carried, and contextWindow is the window a result reported for windowModel.
 export type ThreadUsage = {
   readonly total: TokenUsageBreakdown;
   readonly last: TokenUsageBreakdown;

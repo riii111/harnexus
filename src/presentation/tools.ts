@@ -77,6 +77,15 @@ export const abandonToolItem = (item: ToolItem): ToolItem =>
     ? { ...item, status: "failed", error: { message: ABANDONED } }
     : { ...item, status: "failed" };
 
+// The structured output belongs to a single tool, so it is used only when the message answers one call.
+export const singleCallOutput = (
+  content: readonly { type: string }[],
+  output: unknown,
+): unknown =>
+  content.filter((block) => block.type === "tool_result").length === 1
+    ? output
+    : undefined;
+
 const startCommand = (
   id: string,
   command: string,

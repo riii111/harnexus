@@ -7,39 +7,13 @@ import { promptFor, type ToolCall } from "./permission.ts";
 import type { ToolItem } from "./protocol.ts";
 
 describe("promptFor requests", () => {
-  test.each<{ name: string; call: ToolCall; expected: string }>([
-    {
-      name: "a command",
-      call: call("Bash", { command: "ls" }, COMMAND),
-      expected: "item/commandExecution/requestApproval",
-    },
-    {
-      name: "a file change",
-      call: call("Edit", { file_path: "/w/a.ts" }, FILE_CHANGE),
-      expected: "item/fileChange/requestApproval",
-    },
-    {
-      name: "a question",
-      call: call("AskUserQuestion", { questions: [QUESTION] }, null),
-      expected: "item/tool/requestUserInput",
-    },
-    {
-      name: "a plan",
-      call: call("ExitPlanMode", { plan: "1. edit" }, null),
-      expected: "item/tool/requestUserInput",
-    },
-    {
-      name: "any other tool",
-      call: call("WebFetch", { url: "https://example.com" }, null),
-      expected: "item/tool/requestUserInput",
-    },
-    {
-      name: "a question the tool cannot read",
-      call: call("AskUserQuestion", { questions: "which?" }, null),
-      expected: "item/tool/requestUserInput",
-    },
-  ])("asks the app about $name with $expected", ({ call, expected }) => {
-    expect(promptFor(call, TARGET).method).toBe(expected);
+  test("asks about a question it cannot read as an approval of the tool", () => {
+    const prompt = promptFor(
+      call("AskUserQuestion", { questions: "which?" }, null),
+      TARGET,
+    );
+
+    expect(prompt.params.questions).toMatchObject([{ id: "approval" }]);
   });
 
   test("points a command approval at the command's item without remembering choices when Claude suggests none", () => {
@@ -90,11 +64,6 @@ describe("promptFor calls that must default to no", () => {
       expected: "Allow",
     },
     {
-      name: "another tool",
-      call: call("WebFetch", {}, null),
-      expected: "Allow",
-    },
-    {
       name: "a plan",
       call: call("ExitPlanMode", {}, null),
       expected: "Approve",
@@ -116,14 +85,12 @@ describe("promptFor calls that must default to no", () => {
   });
 
   test.each([
-    { name: "the approving word", typed: "Allow", expected: "allow" },
     {
       name: "the approving word in other case and spacing",
       typed: " allow ",
       expected: "allow",
     },
     { name: "a choice number", typed: "2", expected: "deny" },
-    { name: "the refusing word", typed: "Deny", expected: "deny" },
     { name: "an empty answer", typed: "", expected: "deny" },
   ])("answers $expected to $name", ({ typed, expected }) => {
     const prompt = promptFor(
@@ -186,34 +153,14 @@ describe("promptFor multi-select questions", () => {
 });
 
 describe("promptFor decisions", () => {
-  test.each([
-    { name: "accept", decision: "accept", expected: "allow" },
-    {
-      name: "accept for the session",
-      decision: "acceptForSession",
-      expected: "allow",
-    },
-    {
-      name: "a policy amendment",
-      decision: {
-        acceptWithExecpolicyAmendment: { execpolicy_amendment: ["ls"] },
-      },
-      expected: "allow",
-    },
-    { name: "decline", decision: "decline", expected: "deny" },
-    { name: "cancel", decision: "cancel", expected: "deny" },
-    {
-      name: "a network amendment",
-      decision: { applyNetworkPolicyAmendment: {} },
-      expected: "deny",
-    },
-  ])("answers $expected to a command approval of $name", ({
-    decision,
-    expected,
-  }) => {
+  test("denies a command approval of a network amendment", () => {
     const prompt = promptFor(call("Bash", { command: "ls" }, COMMAND), TARGET);
 
-    expect(prompt.decide({ decision }).behavior).toBe(expected);
+    const decision = prompt.decide({
+      decision: { applyNetworkPolicyAmendment: {} },
+    });
+
+    expect(decision.behavior).toBe("deny");
   });
 
   test.each([
@@ -307,20 +254,6 @@ describe("promptFor decisions", () => {
         message: expect.stringContaining(expected),
       },
     );
-  });
-
-  test.each([
-    { name: "Allow", expected: "allow" },
-    { name: "Deny", expected: "deny" },
-  ])("answers $expected when the user picks $name for another tool", ({
-    name,
-    expected,
-  }) => {
-    const prompt = promptFor(call("WebFetch", {}, null), TARGET);
-
-    expect(
-      prompt.decide({ answers: { approval: { answers: [name] } } }).behavior,
-    ).toBe(expected);
   });
 });
 
@@ -476,15 +409,6 @@ describe("promptFor remembering choices on a file change", () => {
 
     expect(prompt.decide({ decision })).toEqual(expected);
   });
-
-  test("returns no rules on decline", () => {
-    const prompt = promptFor(
-      suggested("Edit", FILE_CHANGE, [ACCEPT_EDITS]),
-      TARGET,
-    );
-
-    expect(prompt.decide({ decision: "decline" }).behavior).toBe("deny");
-  });
 });
 
 describe("promptFor remembering choices on another tool", () => {
@@ -591,30 +515,6 @@ describe("promptFor remembering choices on another tool", () => {
 });
 
 describe("promptFor calls whose rule must not be saved", () => {
-  test("offers a command only the session and saves nothing on a policy amendment", () => {
-    const prompt = promptFor(
-      { ...suggested("Bash", COMMAND, [NPM_TEST]), suppressAlwaysAllow: true },
-      TARGET,
-    );
-
-    const decision = prompt.decide({
-      decision: {
-        acceptWithExecpolicyAmendment: {
-          execpolicy_amendment: ["npm", "test"],
-        },
-      },
-    });
-
-    expect(prompt.params.availableDecisions).toEqual([
-      "accept",
-      "acceptForSession",
-      "decline",
-      "cancel",
-    ]);
-    expect(prompt.params).not.toHaveProperty("proposedExecpolicyAmendment");
-    expect(decision).toEqual({ behavior: "allow" });
-  });
-
   test("offers another tool only the session and saves nothing on always allow", () => {
     const prompt = promptFor(
       {

@@ -66,8 +66,6 @@ describe("renderPlan TodoWrite", () => {
 
   test.each([
     { name: "no todos", input: {} },
-    { name: "todos that are not a list", input: { todos: "Read the spec" } },
-    { name: "an entry that is not an object", input: { todos: ["Read"] } },
     {
       name: "an entry without content",
       input: { todos: [{ status: "pending" }] },
@@ -89,11 +87,16 @@ describe("renderPlan TodoWrite", () => {
         ],
       },
     },
-  ])("sends no plan for $name once the call is answered", ({ input }) => {
-    const out = feed(succeeded("tool-1", "TodoWrite", input));
+  ])("keeps the shown plan for $name once the call is answered", ({
+    input,
+  }) => {
+    const shown = feed(succeeded("tool-1", "TodoWrite", { todos: TODOS }));
 
+    const out = feed(succeeded("tool-2", "TodoWrite", input), shown.plan);
+
+    expect(shown.sent).toHaveLength(1);
     expect(out.sent).toEqual([]);
-    expect(out.plan.calls).toEqual({});
+    expect(out.plan).toEqual({ steps: shown.plan.steps, calls: {} });
   });
 });
 
