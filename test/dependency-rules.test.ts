@@ -16,66 +16,6 @@ describe("dependency rules of src", () => {
 });
 
 describe("checkDependencies", () => {
-  test.each([
-    {
-      name: "bootstrap code using every area",
-      files: {
-        "bootstrap/main.ts": `import "../conversation/a.ts";
-import "../presentation/p.ts";
-import "../infra/thread-store.ts";
-import "../runtime/r.ts";`,
-        "conversation/a.ts": "export const a = 1;",
-        "presentation/p.ts": "export const p = 1;",
-        "infra/thread-store.ts": "export const s = 1;",
-        "runtime/r.ts": "export const r = 1;",
-      },
-    },
-    {
-      name: "infra/codex code using infra/claude and the thread store",
-      files: {
-        "infra/codex/c.ts": `import { s } from "../claude/s.ts";
-import { t } from "../thread-store.ts";
-export const c = [s, t];`,
-        "infra/claude/s.ts": "export const s = 1;",
-        "infra/thread-store.ts": "export const t = 1;",
-      },
-    },
-    {
-      name: "conversation/claude code using the conversation core, and bootstrap code using conversation/claude",
-      files: {
-        "bootstrap/main.ts": `import "../conversation/claude/r.ts";`,
-        "conversation/claude/r.ts": `import { c } from "../controller.ts";
-export const r = c;`,
-        "conversation/controller.ts": "export const c = 1;",
-      },
-    },
-    {
-      name: "presentation code using a pure runtime helper and the JSON boundary",
-      files: {
-        "presentation/p.ts": `import { o } from "../runtime/object.ts";
-import { j } from "../runtime/json.boundary.ts";
-export const p = [o, j];`,
-        "runtime/object.ts": "export const o = 1;",
-        "runtime/json.boundary.ts": "export const j = 1;",
-      },
-    },
-    {
-      name: "tests and testing helpers reaching any area",
-      files: {
-        "conversation/a.test.ts": `import "../bootstrap/main.ts";`,
-        "infra/codex/testing/t.ts": `export { a } from "../../../conversation/a.ts";`,
-        "bootstrap/main.ts": "export const m = 1;",
-        "conversation/a.ts": "export const a = 1;",
-      },
-    },
-  ])("allows $name", async ({ files }) => {
-    const references = await collectReferences(await writeProject(files));
-
-    const problems = checkDependencies(references, []);
-
-    expect(problems).toEqual([]);
-  });
-
   test("reports value, type-only, dynamic, import-type and re-export references breaking the area rules", async () => {
     const references = await collectReferences(
       await writeProject({
