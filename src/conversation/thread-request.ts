@@ -90,8 +90,6 @@ const REFUSAL_MESSAGES = {
     "Claude reads PNG, JPEG, GIF and WebP images only; convert the image to one of these formats, then attach it again",
   image_too_large:
     "an attached image is too large for Claude and could not be reduced; crop it or attach a smaller image",
-  reply_to_other_worker:
-    "this message comes from a child of another Claude thread",
   duplicate_message: "this message was already delivered to the Claude thread",
   no_running_turn: "no running Claude turn matches the turn id",
   steer_not_sent: "the Claude turn ended before the steer reached it",
@@ -108,8 +106,6 @@ const REFUSAL_MESSAGES = {
   thread_not_saved: "the Claude thread could not be saved",
   message_not_saved:
     "the message id could not be saved, so the message was not run to avoid running it twice",
-  requester_not_saved:
-    "the thread that sent this message could not be saved, so Claude could not answer it and the message was not run",
   thread_busy: "the Claude thread cannot start a turn",
   outcome_unknown:
     "the previous Claude turn on this thread stopped before its outcome was known; check what that turn did, such as changed files or messages to other threads, then send a message yourself to continue",

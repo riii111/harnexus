@@ -8,21 +8,18 @@ import {
 } from "./delegations.ts";
 
 describe("createDelegationWatch", () => {
-  test("claims a thread for its caller as it is handed out and never one nobody waits for", () => {
-    const claims: string[][] = [];
-    const watch = createDelegationWatch((source, threadId) =>
-      claims.push([source, threadId]),
-    );
-    watch.expect("th-claude");
+  test("hands a caller only the first turn its own create started", async () => {
+    const watch = createDelegationWatch();
+    const created = expecting(watch, "th-claude");
 
     watch.observe("th-other", "th-foreign");
     watch.observe("th-claude", "th-reviewer-1");
 
-    expect(claims).toEqual([["th-claude", "th-reviewer-1"]]);
+    expect((await created.wait(1_000))?.threadId).toBe("th-reviewer-1");
   });
 
   test("takes no second create of a caller until the first is confirmed or cancelled", async () => {
-    const watch = createDelegationWatch(() => {});
+    const watch = createDelegationWatch();
     const first = expecting(watch, "th-claude");
 
     expect(watch.expect("th-claude")).toBeNull();
@@ -34,7 +31,7 @@ describe("createDelegationWatch", () => {
   });
 
   test("keeps a caller unconfirmed while the thread its answer named has not started", () => {
-    const watch = createDelegationWatch(() => {});
+    const watch = createDelegationWatch();
     expecting(watch, "th-claude").claim("th-reviewer");
 
     watch.observe("th-claude", "th-other-thread");
@@ -45,7 +42,7 @@ describe("createDelegationWatch", () => {
   });
 
   test("ignores a repeated first turn of a thread it already handed out", async () => {
-    const watch = createDelegationWatch(() => {});
+    const watch = createDelegationWatch();
     const first = expecting(watch, "th-claude");
     watch.observe("th-claude", "th-reviewer-1");
     expect((await first.wait(1_000))?.threadId).toBe("th-reviewer-1");
@@ -57,7 +54,7 @@ describe("createDelegationWatch", () => {
   });
 
   test("keeps a thread seen before anyone waits from answering a later create_thread when its turn comes again", async () => {
-    const watch = createDelegationWatch(() => {});
+    const watch = createDelegationWatch();
     watch.observe("th-claude", "th-unrelated");
     const waiting = expecting(watch, "th-claude");
 
@@ -69,7 +66,7 @@ describe("createDelegationWatch", () => {
 
 describe("createDelegationWatch first turn check", () => {
   test("refuses a first turn on another effort and reports it", async () => {
-    const watch = createDelegationWatch(() => {});
+    const watch = createDelegationWatch();
     const created = expecting(watch, "th-codex", { expected: EXPECTED });
     const actual = { model: "gpt-worker", effort: "high" };
 
@@ -84,7 +81,7 @@ describe("createDelegationWatch first turn check", () => {
   });
 
   test("settles a first turn the bridge runs only once it reports whether it took the turn", async () => {
-    const watch = createDelegationWatch(() => {});
+    const watch = createDelegationWatch();
     const created = expecting(watch, "th-codex", { expected: EXPECTED });
 
     expect(watch.observe("th-codex", "th-worker", EXPECTED, true)).toBe(true);
@@ -101,7 +98,7 @@ describe("createDelegationWatch first turn check", () => {
   });
 
   test("refuses a first turn the bridge refused again when the app resends it", () => {
-    const watch = createDelegationWatch(() => {});
+    const watch = createDelegationWatch();
     watch.expect("th-codex", { expected: EXPECTED });
     watch.observe("th-codex", "th-worker", EXPECTED, true);
     watch.started("th-worker", "directory_unknown");
@@ -110,7 +107,7 @@ describe("createDelegationWatch first turn check", () => {
   });
 
   test("refuses a refused thread's first turn again when the app resends it", () => {
-    const watch = createDelegationWatch(() => {});
+    const watch = createDelegationWatch();
     watch.expect("th-codex", { expected: EXPECTED });
     watch.observe("th-codex", "th-worker", MISMATCH);
 
@@ -129,7 +126,7 @@ describe("createDelegationWatch first turn check", () => {
   ])("refuses a first turn that gives $name for one that was asked", async ({
     actual,
   }) => {
-    const watch = createDelegationWatch(() => {});
+    const watch = createDelegationWatch();
     const created = expecting(watch, "th-codex", { expected: EXPECTED });
 
     expect(watch.observe("th-codex", "th-worker", actual)).toBe(false);
@@ -143,7 +140,7 @@ describe("createDelegationWatch first turn check", () => {
   });
 
   test("checks nothing a create_thread did not ask for", () => {
-    const watch = createDelegationWatch(() => {});
+    const watch = createDelegationWatch();
     watch.expect("th-codex", {
       expected: { model: "gpt-worker", effort: null },
     });
@@ -157,7 +154,7 @@ describe("createDelegationWatch first turn check", () => {
   });
 
   test("keeps the check armed after a wait times out until it is disarmed", async () => {
-    const watch = createDelegationWatch(() => {}, { armedMs: 60 });
+    const watch = createDelegationWatch({ armedMs: 60 });
     const first = expecting(watch, "th-codex", { expected: EXPECTED });
 
     expect(await first.wait(10)).toBeNull();
@@ -169,24 +166,12 @@ describe("createDelegationWatch first turn check", () => {
   });
 
   test("checks the first turn of a thread the answer already named", async () => {
-    const watch = createDelegationWatch(() => {});
+    const watch = createDelegationWatch();
     const created = expecting(watch, "th-codex", { expected: EXPECTED });
     created.claim("th-worker");
 
     expect(watch.observe("th-codex", "th-worker", MISMATCH)).toBe(false);
     expect((await created.wait(1_000))?.refused).toBe(true);
-  });
-
-  test("records nothing for a caller that asked not to be recorded", () => {
-    const claims: string[][] = [];
-    const watch = createDelegationWatch((source, threadId) =>
-      claims.push([source, threadId]),
-    );
-    watch.expect("th-codex", { record: false });
-
-    watch.observe("th-codex", "th-worker");
-
-    expect(claims).toEqual([]);
   });
 });
 

@@ -33,9 +33,6 @@ type ThreadMapping = {
   readonly worktree: string;
   // The connection Claude Code confirmed for the conversation, or null until a session confirms one.
   readonly connection: ConnectionTarget | null;
-  readonly childThreadIds: readonly string[];
-  // Threads that sent this thread work through the app, so Claude may answer them.
-  readonly requesterThreadIds: readonly string[];
   // The app's clientUserMessageId of the latest turns, so a message delivered again after a reconnect or restart is not run twice.
   readonly messageIds: readonly string[];
 };
@@ -64,12 +61,6 @@ class ThreadNotFound extends TaggedError("ThreadNotFound")<{
 
 class ThreadAlreadyRegistered extends TaggedError("ThreadAlreadyRegistered")<{
   threadId: string;
-  message: string;
-}> {}
-
-class ChildTaken extends TaggedError("ChildTaken")<{
-  threadId: string;
-  childThreadId: string;
   message: string;
 }> {}
 
@@ -150,8 +141,6 @@ const createThreadStore = (
   const runStates = new Map<string, RunState>(
     unknownThreadIds.map((threadId) => [threadId, "outcomeUnknown"]),
   );
-  // Claim before saving so early replies and failed saves cannot assign the same child to another parent.
-  const claimedChildren = new Map<string, string>();
   const threadQueue = createSerialQueue();
   const fileQueue = createSerialQueue();
 
@@ -257,8 +246,6 @@ const createThreadStore = (
               effort: entry.effort ?? null,
               sessionId: null,
               connection: null,
-              childThreadIds: [],
-              requesterThreadIds: [],
               messageIds: [],
             }),
       ),
@@ -278,55 +265,6 @@ const createThreadStore = (
     setConnection: (threadId: string, connection: ConnectionTarget | null) =>
       update(threadId, (mapping) => ({ ...mapping, connection })),
 
-    // Each created thread has one parent, regardless of its model or whether it implements or reviews work.
-    addChild: async (threadId: string, childThreadId: string) => {
-      const claimed = claimedChildren.get(childThreadId);
-      if (claimed === undefined) {
-        claimedChildren.set(childThreadId, threadId);
-      }
-      const added = await persistThenCommit<ThreadNotFound | ChildTaken>(
-        (current) => {
-          const mapping = current.get(threadId);
-          if (mapping === undefined) return Result.err(notFound(threadId));
-          if (mapping.childThreadIds.includes(childThreadId)) {
-            return Result.ok(mapping);
-          }
-          const taken = takenChild(current, claimed, threadId, childThreadId);
-          if (taken !== null) {
-            return Result.err(
-              new ChildTaken({
-                threadId,
-                childThreadId,
-                message: `thread ${childThreadId} is ${taken}`,
-              }),
-            );
-          }
-          return Result.ok({
-            ...mapping,
-            childThreadIds: [...mapping.childThreadIds, childThreadId],
-          });
-        },
-      );
-      const refused =
-        added.isErr() &&
-        (added.error._tag === "ChildTaken" ||
-          added.error._tag === "ThreadNotFound");
-      if (added.isOk() || (refused && claimed === undefined)) {
-        claimedChildren.delete(childThreadId);
-      }
-      return added;
-    },
-
-    claimChild: (threadId: string, childThreadId: string) => {
-      const taken =
-        claimedChildren.has(childThreadId) ||
-        takenChild(mappings, undefined, threadId, childThreadId) !== null;
-      if (!taken) claimedChildren.set(childThreadId, threadId);
-    },
-
-    parentOf: (childThreadId: string) =>
-      ownerIn(mappings, childThreadId) ?? claimedChildren.get(childThreadId),
-
     sessionOwner: (sessionId: string) => ownerOfSession(mappings, sessionId),
 
     // The check runs in the file queue with the write, so of two threads picking one conversation at once only the first gets it.
@@ -344,18 +282,6 @@ const createThreadStore = (
               }),
             );
       }),
-
-    // A requester that sends again moves to the end, so the cap drops the one that asked longest ago.
-    addRequester: (threadId: string, requesterThreadId: string) =>
-      update(threadId, (mapping) => ({
-        ...mapping,
-        requesterThreadIds: [
-          ...mapping.requesterThreadIds.filter(
-            (id) => id !== requesterThreadId,
-          ),
-          requesterThreadId,
-        ].slice(-REQUESTER_LIMIT),
-      })),
 
     addMessageId: (threadId: string, messageId: string) =>
       update(threadId, (mapping) =>
@@ -437,37 +363,12 @@ const createThreadStore = (
   };
 };
 
-const takenChild = (
-  mappings: ReadonlyMap<string, ThreadMapping>,
-  claimedBy: string | undefined,
-  threadId: string,
-  childThreadId: string,
-) => {
-  if (childThreadId === threadId) return "the parent thread itself";
-  const owner = ownerIn(mappings, childThreadId) ?? claimedBy;
-  return owner === undefined || owner === threadId
-    ? null
-    : "another thread's child";
-};
-
 const ownerOfSession = (
   mappings: ReadonlyMap<string, ThreadMapping>,
   sessionId: string,
 ) => {
   for (const mapping of mappings.values()) {
     if (mapping.sessionId === sessionId) return mapping.threadId;
-  }
-  return undefined;
-};
-
-const ownerIn = (
-  mappings: ReadonlyMap<string, ThreadMapping>,
-  childThreadId: string,
-) => {
-  for (const mapping of mappings.values()) {
-    if (mapping.childThreadIds.includes(childThreadId)) {
-      return mapping.threadId;
-    }
   }
   return undefined;
 };
@@ -517,11 +418,11 @@ const serializeState = (mappings: ReadonlyMap<string, ThreadMapping>) =>
   `${JSON.stringify(
     {
       version: STATE_VERSION,
-      threads: [...mappings.values()].map((mapping) => {
-        // Keep the on-disk key so existing stores and rollback versions remain readable.
-        const { childThreadIds, ...fields } = pickMappingFields(mapping);
-        return { ...fields, reviewerThreadIds: childThreadIds };
-      }),
+      // Earlier versions require this key, so the file stays readable after a rollback.
+      threads: [...mappings.values()].map((mapping) => ({
+        ...pickMappingFields(mapping),
+        reviewerThreadIds: [],
+      })),
     },
     null,
     2,
@@ -530,15 +431,13 @@ const serializeState = (mappings: ReadonlyMap<string, ThreadMapping>) =>
 const readState = (value: unknown): ThreadMapping[] | null => {
   if (!isObject(value) || value.version !== STATE_VERSION) return null;
   if (!Array.isArray(value.threads)) return null;
-  // Files written before message ids, efforts or requesters were kept have none; a conversation saved before connections were kept ran on the subscription.
+  // Files written before message ids or efforts were kept have none; a conversation saved before connections were kept ran on the subscription.
   const threads = value.threads.map((thread) =>
     isObject(thread)
       ? {
           ...thread,
-          childThreadIds: thread.reviewerThreadIds,
           ...(!("messageIds" in thread) && { messageIds: [] }),
           ...(!("effort" in thread) && { effort: null }),
-          ...(!("requesterThreadIds" in thread) && { requesterThreadIds: [] }),
           ...(!("connection" in thread) && {
             connection:
               thread.sessionId == null ? null : { provider: "subscription" },
@@ -559,8 +458,6 @@ const pickMappingFields = (mapping: ThreadMapping): ThreadMapping => ({
   effort: mapping.effort,
   worktree: mapping.worktree,
   connection: mapping.connection === null ? null : targetOf(mapping.connection),
-  childThreadIds: [...mapping.childThreadIds],
-  requesterThreadIds: [...mapping.requesterThreadIds],
   messageIds: [...mapping.messageIds],
 });
 
@@ -576,10 +473,6 @@ const isThreadMapping = (value: unknown): value is ThreadMapping =>
   (value.effort === null || isNonEmptyString(value.effort)) &&
   isNonEmptyString(value.worktree) &&
   (value.connection === null || isConnectionTarget(value.connection)) &&
-  Array.isArray(value.childThreadIds) &&
-  value.childThreadIds.every(isNonEmptyString) &&
-  Array.isArray(value.requesterThreadIds) &&
-  value.requesterThreadIds.every(isNonEmptyString) &&
   Array.isArray(value.messageIds) &&
   value.messageIds.every(isNonEmptyString);
 
@@ -591,8 +484,6 @@ const STATE_VERSION = 1;
 const MARKER_SUFFIX = ".running";
 
 const MESSAGE_ID_LIMIT = 64;
-
-const REQUESTER_LIMIT = 64;
 
 const withSession = (
   mapping: ThreadMapping,

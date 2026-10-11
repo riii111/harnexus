@@ -122,7 +122,6 @@ export const createCallGateway = ({
         model: stringOrNull(args.model),
         effort: stringOrNull(args.thinking),
       },
-      record: false,
     });
     if (created === null) return BUSY;
     const answered = await callApp(threadId, "create_thread", args);

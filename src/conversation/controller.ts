@@ -170,17 +170,6 @@ export const createTurnController = <Tag extends string>({
       return refuse(id, checked.refusal);
     }
     const delegated = delegatedMessage(params);
-    // A thread's first turn from create_thread, and later messages from the thread that created it, are its own work rather than another worker's reviewer replying, so whose reviewer the sender is does not matter.
-    const source = delegated?.sourceThreadId;
-    const owner =
-      source == null ||
-      delegated?.tool === "create_thread" ||
-      store.get(threadId)?.requesterThreadIds.includes(source)
-        ? undefined
-        : store.parentOf(source);
-    if (owner !== undefined && owner !== threadId) {
-      return refuse(id, "reply_to_other_worker");
-    }
     const input = messageInput(params.input, delegated);
     if (typeof input === "string") {
       return refuse(id, input);
@@ -203,7 +192,6 @@ export const createTurnController = <Tag extends string>({
         requestedMode(params) ?? modes.get(threadId) ?? "default",
       ),
       effort: threads.pickedEffortOf(threadId),
-      requester: requesterOf(threadId, delegated?.sourceThreadId, owner),
       startedBy: "app" as const,
     };
     // The app gives another thread's message no id to deliver again, so one with an id stays on the turn path, which saves the id before the message runs.
@@ -263,7 +251,6 @@ export const createTurnController = <Tag extends string>({
       images: [],
       permissionMode: modes.get(threadId) ?? "default",
       effort: threads.pickedEffortOf(threadId),
-      requester: null,
       startedBy: "app" as const,
     };
     afterSteers(threadId, () =>
@@ -283,7 +270,6 @@ export const createTurnController = <Tag extends string>({
       images: [],
       permissionMode: modes.get(threadId) ?? "default",
       effort: threads.pickedEffortOf(threadId),
-      requester: null,
       startedBy: "claude",
     };
     acceptTurn(null, threadId, thread, turn, null, false);
@@ -354,7 +340,6 @@ export const createTurnController = <Tag extends string>({
       : active;
   };
 
-  // The sender is saved before Claude reads the message so Claude can answer it.
   const steerMessage = (
     id: AppRequest["id"],
     threadId: string,
@@ -365,11 +350,6 @@ export const createTurnController = <Tag extends string>({
       const active = steerableTurn(threadId);
       if (active === null) {
         acceptTurn(id, threadId, thread, input, null, false);
-        return;
-      }
-      const noted = await recordRequester(threadId, input.requester);
-      if (noted.isErr()) {
-        refuse(id, "requester_not_saved", noted.error);
         return;
       }
       if (closed) {
@@ -536,19 +516,6 @@ export const createTurnController = <Tag extends string>({
               )
             : Result.ok();
         }
-        // Claude could not answer an unsaved requester, and the message id is saved after it so a refused message may be sent again.
-        const noted = await recordRequester(threadId, input.requester);
-        if (noted.isErr()) {
-          forgetMessage(threadId, messageId);
-          refuseTurn(request, queued, "requester_not_saved", noted.error);
-          return recovered
-            ? Result.err(
-                new TurnOutcomeUnknown({
-                  message: "the requester could not be saved before recovery",
-                }),
-              )
-            : Result.ok();
-        }
         // Without the saved id a restart could run the same message again, so the turn does not start.
         const saved = await recordMessage(threadId, messageId);
         if (saved.isErr()) {
@@ -697,13 +664,6 @@ export const createTurnController = <Tag extends string>({
     ids?.delete(messageId);
     if (ids?.size === 0) acceptedMessageIds.delete(threadId);
   };
-
-  // A requester already saved is not written again, so a store that cannot be written does not refuse a thread it already knows.
-  const recordRequester = async (threadId: string, requester: string | null) =>
-    requester === null ||
-    store.get(threadId)?.requesterThreadIds.includes(requester)
-      ? Result.ok()
-      : store.addRequester(threadId, requester);
 
   const recordMessage = async (threadId: string, messageId: string | null) => {
     if (messageId === null) return Result.ok();
@@ -1008,14 +968,6 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
       return { event: entry.event, step: entry.step, error: entry.error };
   }
 };
-
-// Replies from a child are already reachable through the saved parent-child relation.
-const requesterOf = (
-  threadId: string,
-  source: string | null | undefined,
-  owner: string | undefined,
-) =>
-  source == null || source === threadId || owner !== undefined ? null : source;
 
 const clientMessageId = (params: Record<string, unknown>) =>
   typeof params.clientUserMessageId === "string" &&

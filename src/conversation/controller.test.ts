@@ -6,7 +6,6 @@ import { SUBSCRIPTION_CONNECTION } from "../infra/claude/connection.ts";
 import type { ClaudeSessionSettings } from "../infra/claude/session.ts";
 import { fakeClaude } from "../infra/claude/testing/fake-claude.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
-import type { openThreadStore } from "../infra/thread-store.ts";
 import {
   FileRemoveFailed,
   removeFile,
@@ -388,8 +387,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
       },
     );
     turns.startTurn(turnStart(10, "ask the reviewer"), undefined);
-    await until(() => first.started());
-    await store.addChild(THREAD, NEW_REVIEWER);
+    await until(() => first.prompted());
     const lostSend = await messageReviewer(settings[0]);
     first.emit(sdk(success()));
     await until(() => store.get(THREAD)?.runState === "outcomeUnknown");
@@ -428,8 +426,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
       },
     );
     turns.startTurn(turnStart(10, "ask the reviewer"), undefined);
-    await until(() => first.started());
-    await store.addChild(THREAD, NEW_REVIEWER);
+    await until(() => first.prompted());
     const waiting = messageReviewer(settings[0]);
     await until(() => toolCalls.length === 1);
     turns.interruptTurn(interrupt(20, "turn-1"));
@@ -1362,81 +1359,7 @@ describe("several workers", () => {
 });
 
 describe("turn/start carrying another thread's message", () => {
-  test("refuses a message from a reviewer that another worker created", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, events } = await registeredWorkers([claude]);
-
-    turns.startTurn(reply(10, THREAD, OTHER_REVIEWER), undefined);
-    await settle();
-
-    expect(sent).toEqual([
-      {
-        id: 10,
-        error: {
-          code: -32600,
-          message: "this message comes from a child of another Claude thread",
-        },
-      },
-    ]);
-    expect(events).toContainEqual({
-      event: "claude_turn",
-      step: "refused",
-      reason: "reply_to_other_worker",
-      error: null,
-    });
-    expect(claude.started()).toBe(false);
-  });
-
-  test("starts a thread that another worker's reviewer created", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, store } = await registeredWorkers([claude]);
-
-    turns.startTurn(
-      reply(10, THREAD, OTHER_REVIEWER, "create_thread"),
-      undefined,
-    );
-    await until(() => claude.started());
-    turns.startTurn(reply(11, THREAD, OTHER_REVIEWER), undefined);
-    await settle();
-
-    expect(store.get(THREAD)?.requesterThreadIds).toEqual([OTHER_REVIEWER]);
-    expect(
-      sent.filter((message) => message.id === 11 && "error" in message),
-    ).toEqual([]);
-  });
-
-  test("refuses a message from a reviewer another worker is still saving", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const gate = createGate();
-    let holdWrites = false;
-    const { turns, sent, store } = await registeredWorkers([claude], {
-      writeState: async (target, content) => {
-        if (holdWrites) await gate.promise;
-        return writeFileAtomic(target, content);
-      },
-    });
-    holdWrites = true;
-    const adding = store.addChild(THREAD, NEW_REVIEWER);
-
-    turns.startTurn(reply(10, OTHER_THREAD, NEW_REVIEWER), undefined);
-    await settle();
-    gate.open();
-
-    expect(sent).toEqual([
-      {
-        id: 10,
-        error: {
-          code: -32600,
-          message: "this message comes from a child of another Claude thread",
-        },
-      },
-    ]);
-    expect(claude.started()).toBe(false);
-    const added = await adding;
-    expect(added.isOk() && added.value.childThreadIds).toEqual([NEW_REVIEWER]);
-  });
-
-  test("passes a message from its own reviewer to Claude and shows it as the call output the app labels as sent from another thread", async () => {
+  test("passes a message from a thread it has no relation to to Claude and shows it as the call output the app labels as sent from another thread", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await registeredWorkers([claude]);
 
@@ -1458,40 +1381,13 @@ describe("turn/start carrying another thread's message", () => {
     ]);
   });
 
-  test.each([
-    { name: "its own reviewer", source: OTHER_REVIEWER, expected: [] },
-    { name: "the thread itself", source: OTHER_THREAD, expected: [] },
-    { name: "another Claude thread", source: THREAD, expected: [THREAD] },
-    {
-      name: "a Codex thread that is no reviewer",
-      source: "th-lead",
-      expected: ["th-lead"],
-    },
-  ])("saves $name as a requester unless it is self or an owned child", async ({
-    source,
-    expected,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, store } = await registeredWorkers([claude]);
-
-    turns.startTurn(reply(10, OTHER_THREAD, source), undefined);
-    await until(() => claude.started());
-
-    expect(store.get(OTHER_THREAD)?.requesterThreadIds).toEqual(expected);
-  });
-
-  test.each([
-    { tool: "create_thread" },
-    { tool: "send_message_to_thread" },
-  ])("lets Claude message the Codex worker that delegated work by $tool but not an unrelated thread", async ({
-    tool,
-  }) => {
+  test("lets Claude message both the Codex worker that delegated work and a thread it has no relation to", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, settings, toolCalls } = await harness([claude], {
       linkRequest: async () => Result.ok(TOOL_ANSWER),
     });
 
-    turns.startTurn(reply(10, THREAD, CODEX_WORKER, tool), undefined);
+    turns.startTurn(reply(10, THREAD, CODEX_WORKER), undefined);
     await until(() => claude.started());
     const [answered, unrelated] = await messageThreads(settings[0], [
       CODEX_WORKER,
@@ -1499,79 +1395,22 @@ describe("turn/start carrying another thread's message", () => {
     ]);
 
     expect(answered?.isError).toBeFalsy();
-    expect(unrelated?.isError).toBe(true);
+    expect(unrelated?.isError).toBeFalsy();
     expect(toolCalls).toEqual([
       expect.objectContaining({
-        tool: "send_message_to_thread",
         arguments: { threadId: CODEX_WORKER, prompt: "review this" },
       }),
+      expect.objectContaining({
+        arguments: { threadId: "th-fixture-unrelated", prompt: "review this" },
+      }),
     ]);
-  });
-
-  test("runs a delegated message once when it is sent again after its sender could not be saved", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    let failWrites = false;
-    const { turns, sent, store } = await registeredWorkers([claude], {
-      writeState: async (target, content) =>
-        failWrites ? diskFull(target) : writeFileAtomic(target, content),
-    });
-    const delegated = (id: number) =>
-      withMessageId(reply(id, THREAD, CODEX_WORKER), "m-1");
-    failWrites = true;
-    turns.startTurn(delegated(10), undefined);
-    await until(() => responseTo(sent, 10) !== undefined);
-    failWrites = false;
-
-    turns.startTurn(delegated(11), undefined);
-    await until(() => claude.started());
-    turns.startTurn(delegated(12), undefined);
-    await until(() => responseTo(sent, 12) !== undefined);
-
-    expect(responseTo(sent, 10)?.error.message).toBe(
-      "the thread that sent this message could not be saved, so Claude could not answer it and the message was not run",
-    );
-    expect(responseTo(sent, 11)?.result.turn).toMatchObject({
-      status: "inProgress",
-    });
-    expect(responseTo(sent, 12)).toEqual(DUPLICATE(12));
-    expect(startedTurns(sent)).toHaveLength(1);
-    expect(store.get(THREAD)?.requesterThreadIds).toEqual([CODEX_WORKER]);
-  });
-
-  test("runs a message from a sender already saved when the store cannot be written", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    let failWrites = false;
-    const { turns, sent, store } = await registeredWorkers([claude], {
-      writeState: async (target, content) =>
-        failWrites ? diskFull(target) : writeFileAtomic(target, content),
-    });
-    turns.startTurn(reply(10, THREAD, CODEX_WORKER), undefined);
-    await until(() => claude.prompted());
-    claude.emit(sdk(success()));
-    await until(() => completedTurnStatuses(sent).length === 1);
-    turns.startTurn(reply(11, THREAD, "th-lead"), undefined);
-    await until(() => responseTo(sent, 11) !== undefined);
-    claude.emit(sdk(success()));
-    await until(() => completedTurnStatuses(sent).length === 2);
-    expect(store.get(THREAD)?.requesterThreadIds).toEqual([
-      CODEX_WORKER,
-      "th-lead",
-    ]);
-    failWrites = true;
-
-    turns.startTurn(reply(12, THREAD, CODEX_WORKER), undefined);
-    await until(() => responseTo(sent, 12) !== undefined);
-
-    expect(responseTo(sent, 12)?.result.turn).toMatchObject({
-      status: "inProgress",
-    });
   });
 });
 
 describe("another thread's message arriving on a busy thread", () => {
   test("joins the running turn as Codex steers it and lets Claude answer the sender", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, events, store, settings } = await harness([claude], {
+    const { turns, sent, events, settings } = await harness([claude], {
       linkRequest: async () => Result.ok(TOOL_ANSWER),
     });
     turns.startTurn(turnStart(10, "hello"), undefined);
@@ -1596,7 +1435,6 @@ describe("another thread's message arriving on a busy thread", () => {
       },
     });
     expect(steered?.message.content).toBe(delegation(CODEX_WORKER));
-    expect(store.get(THREAD)?.requesterThreadIds).toEqual([CODEX_WORKER]);
     expect(events).toContainEqual({ event: "claude_turn", step: "steered" });
     const shown = sent.filter(
       (m) =>
@@ -1676,105 +1514,6 @@ describe("another thread's message arriving on a busy thread", () => {
     ]);
   });
 
-  test("passes messages to Claude in the order they came while the first sender is still being saved", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const gate = createGate();
-    let holdWrites = false;
-    const { turns, sent } = await registeredWorkers([claude], {
-      writeState: async (target, content) => {
-        if (holdWrites) await gate.promise;
-        return writeFileAtomic(target, content);
-      },
-    });
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.prompted());
-    holdWrites = true;
-
-    turns.startTurn(reply(11, THREAD, CODEX_WORKER), undefined);
-    turns.startTurn(reply(12, THREAD, OTHER_THREAD), undefined);
-    await settle();
-    expect(responseTo(sent, 12)).toBeUndefined();
-    gate.open();
-    const [prompt, first, second] = await readPrompts(claude, 3);
-
-    expect([first, second].map((m) => m?.message.content)).toEqual([
-      delegation(CODEX_WORKER),
-      delegation(OTHER_THREAD),
-    ]);
-    expect(
-      [responseTo(sent, 11), responseTo(sent, 12)].map(
-        (m) => m?.result.turn.id,
-      ),
-    ).toEqual(["turn-1", "turn-1"]);
-    claude.emit(sdk(success([prompt?.uuid, first?.uuid, second?.uuid])));
-    await until(() => completedTurnStatuses(sent).length === 1);
-    await settle();
-    expect(startedTurns(sent)).toEqual(["turn-1"]);
-  });
-
-  test.each([
-    {
-      name: "another thread's message",
-      later: () => reply(12, THREAD, OTHER_THREAD),
-      prompt: delegation(OTHER_THREAD),
-    },
-    {
-      name: "a typed message",
-      later: () => turnStart(12, "next"),
-      prompt: "next",
-    },
-  ])("runs as the next turn when the running turn is stopped while the sender is being saved, ahead of $name that came later", async ({
-    later,
-    prompt,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
-    const gate = createGate();
-    let holdWrites = false;
-    const { turns, sent } = await registeredWorkers([claude], {
-      writeState: async (target, content) => {
-        if (holdWrites) await gate.promise;
-        return writeFileAtomic(target, content);
-      },
-    });
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.prompted());
-    holdWrites = true;
-    turns.startTurn(reply(11, THREAD, CODEX_WORKER), undefined);
-    await settle();
-
-    turns.interruptTurn(interrupt(20, "turn-1"));
-    await until(() => claude.interrupts() === 1);
-    turns.startTurn(later(), undefined);
-    await settle();
-    expect(responseTo(sent, 12)).toBeUndefined();
-    gate.open();
-    await until(() => responseTo(sent, 12) !== undefined);
-    expect(
-      [responseTo(sent, 11), responseTo(sent, 12)].map(
-        (m) => m?.result.turn.id,
-      ),
-    ).toEqual(["turn-2", "turn-3"]);
-    claude.emit(
-      sdk(result({ subtype: "error_during_execution", is_error: true })),
-    );
-    for (const started of [2, 3]) {
-      await until(() => startedTurns(sent).length === started);
-      claude.emit(sdk(success()));
-      await until(() => completedTurnStatuses(sent).length === started);
-    }
-
-    expect(completedTurnStatuses(sent)).toEqual([
-      "interrupted",
-      "completed",
-      "completed",
-    ]);
-    expect(await promptsUntil(claude, 3)).toEqual([
-      "hello",
-      delegation(CODEX_WORKER),
-      prompt,
-    ]);
-  });
-
   test("waits as the next turn when it carries a message id, which is saved before the message runs", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, store } = await harness([claude]);
@@ -1797,31 +1536,6 @@ describe("another thread's message arriving on a busy thread", () => {
       "hello",
       delegation(CODEX_WORKER),
     ]);
-  });
-
-  test("refuses a message whose sender cannot be saved without passing it to Claude", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    let failWrites = false;
-    const { turns, sent, store } = await registeredWorkers([claude], {
-      writeState: async (target, content) =>
-        failWrites ? diskFull(target) : writeFileAtomic(target, content),
-    });
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.prompted());
-    failWrites = true;
-
-    turns.startTurn(reply(11, THREAD, CODEX_WORKER), undefined);
-    await until(() => responseTo(sent, 11) !== undefined);
-
-    expect(responseTo(sent, 11)?.error.message).toBe(
-      "the thread that sent this message could not be saved, so Claude could not answer it and the message was not run",
-    );
-    expect(store.get(THREAD)?.requesterThreadIds).toEqual([]);
-    claude.emit(sdk(success()));
-    await until(() => completedTurnStatuses(sent).length === 1);
-    await settle();
-    expect(startedTurns(sent)).toEqual(["turn-1"]);
-    expect(await promptsUntil(claude, 1)).toEqual(["hello"]);
   });
 });
 
@@ -1860,11 +1574,8 @@ const interruptBeforeReceipt = async (
   expect(turnCompleted(sent)).toMatchObject({ status: "interrupted" });
 };
 
-const registeredWorkers = async (
-  fakes: ReturnType<typeof fakeClaude>[],
-  files: Parameters<typeof openThreadStore>[1] = {},
-) => {
-  const started = await harness(fakes, { adopt: false, files });
+const registeredWorkers = async (fakes: ReturnType<typeof fakeClaude>[]) => {
+  const started = await harness(fakes, { adopt: false });
   for (const [threadId, worktree] of [
     [THREAD, dir],
     [OTHER_THREAD, OTHER_DIR],
@@ -1876,8 +1587,6 @@ const registeredWorkers = async (
     });
     expect(registered.isOk() && registered.value.threadId).toBe(threadId);
   }
-  const added = await started.store.addChild(OTHER_THREAD, OTHER_REVIEWER);
-  expect(added.isOk() && added.value.childThreadIds).toEqual([OTHER_REVIEWER]);
   return started;
 };
 
