@@ -57,7 +57,7 @@ export const connectClaudeThreads = ({
   send: (message: object) => void;
   log: (event: ClaudeLogEvent | RouteEvent) => void;
 }) => {
-  const delegations = createDelegationWatch(store.claimChild);
+  const delegations = createDelegationWatch();
   const openLink = (callerThreadId: string) =>
     createCodexLink({
       callerThreadId,

@@ -71,11 +71,9 @@ export type ToolOutput = NonNullable<
 >["toolOutput"];
 
 // effort is the thread's level when the turn was accepted, so a change made while it waits or runs applies to the next turn.
-// requester is the thread that delegated this turn's message, saved before the turn runs so Claude can answer it.
 export type TurnInput = MessageInput & {
   permissionMode: Mode;
   effort: EffortLevel | null;
-  requester: string | null;
   startedBy: "app" | "claude";
 };
 

@@ -429,7 +429,7 @@ const setup = ({
   };
   armedMs?: number;
 } = {}) => {
-  const watch = createDelegationWatch(() => {}, { armedMs });
+  const watch = createDelegationWatch({ armedMs });
   const requests: { method: string; params: unknown; timeoutMs: number }[] = [];
   const linkCalls: { tool: string; args: unknown }[] = [];
   const opened: string[] = [];

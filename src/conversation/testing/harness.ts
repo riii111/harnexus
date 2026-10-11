@@ -312,7 +312,7 @@ export const harness = async (
                 toolCalls.push(params);
                 return linkRequest(method, params, options);
               },
-              delegations: createDelegationWatch(store.claimChild),
+              delegations: createDelegationWatch(),
               codexHome: "/fixture/.codex",
             });
       sessionLinks.push(link);

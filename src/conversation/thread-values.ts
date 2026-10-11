@@ -29,7 +29,6 @@ export type StoreTag =
   | ErrorTag<ReturnType<ThreadStore["register"]>>
   | ErrorTag<ReturnType<ThreadStore["setSessionId"]>>
   | ErrorTag<ReturnType<ThreadStore["addMessageId"]>>
-  | ErrorTag<ReturnType<ThreadStore["addRequester"]>>
   | ErrorTag<ReturnType<ThreadStore["setModel"]>>
   | ErrorTag<ReturnType<ThreadStore["setEffort"]>>
   | ErrorTag<ReturnType<ThreadStore["setConnection"]>>

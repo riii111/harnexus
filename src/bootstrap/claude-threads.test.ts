@@ -30,7 +30,7 @@ afterEach(async () => {
 });
 
 describe("connectClaudeThreads", () => {
-  test("refuses a reviewer's reply to another worker when its first turn arrives before create_thread answers", async () => {
+  test("runs a reviewer's message to another Claude worker that arrives before create_thread answers", async () => {
     const { store, sent, sessions, createThreadAfter } = await workerA();
     const registered = await store.register({
       threadId: WORKER_B,
@@ -39,25 +39,20 @@ describe("connectClaudeThreads", () => {
     });
     expect(registered.isOk() && registered.value.threadId).toBe(WORKER_B);
 
-    const created = await createThreadAfter([
-      reviewerFirstTurn(),
-      replyToWorkerB(),
-    ]);
+    const created = await createThreadAfter(
+      [reviewerFirstTurn(), replyToWorkerB()],
+      () => until(() => sessions() === 2),
+    );
 
     expect(created.structuredContent).toEqual({ threadId: REVIEWER });
-    expect(store.get(WORKER_A)?.childThreadIds).toEqual([REVIEWER]);
-    expect(sent).toContainEqual({
-      id: REPLY_ID,
-      error: {
-        code: -32600,
-        message: "this message comes from a child of another Claude thread",
-      },
-    });
-    expect(sessions()).toBe(1);
+    expect(sessions()).toBe(2);
+    expect(sent).not.toContainEqual(
+      expect.objectContaining({ id: REPLY_ID, error: expect.anything() }),
+    );
   });
 
   test("refuses the first turn of a thread a Codex thread created through the socket on another model", async () => {
-    const { store, sent, callAfter } = await workerA();
+    const { sent, callAfter } = await workerA();
 
     const { answer, routed } = await callAfter([codexWorkerFirstTurn()], {
       threadId: CODEX_CALLER,
@@ -81,7 +76,6 @@ describe("connectClaudeThreads", () => {
       id: 4,
       error: { code: -32600, message: expect.stringContaining("not run") },
     });
-    expect(store.parentOf(CODEX_WORKER)).toBeUndefined();
   });
 
   test("answers a Claude first turn the bridge refused with its reason instead of done", async () => {
@@ -102,9 +96,8 @@ describe("connectClaudeThreads", () => {
     expect(sent).toContainEqual({ id: 5, error: expect.anything() });
   });
 
-  test("lets a Claude parent coordinate workers and their Codex reviews after reopening the store", async () => {
-    const { threads, store, sessions, calls, start, call } =
-      await orchestration();
+  test("lets Claude threads coordinate their own and each other's workers and reviews after reopening the store", async () => {
+    const { threads, sessions, calls, start, call } = await orchestration();
     try {
       start();
       await until(() => sessions.has(WORKER_A));
@@ -144,12 +137,6 @@ describe("connectClaudeThreads", () => {
         prompt: "continue",
       });
       expect(sent.outcome).toBe("done");
-      expect(store.get("child-1")?.requesterThreadIds).toEqual([WORKER_A]);
-      expect(store.get(WORKER_A)?.childThreadIds).toEqual([
-        "child-1",
-        "child-2",
-      ]);
-      expect(store.get("child-1")?.childThreadIds).toEqual(["child-3"]);
 
       const reopened = await openThreadStore(join(dir, "orchestration.json"));
       if (reopened.isErr()) return expect.unreachable(reopened.error.message);
@@ -159,7 +146,7 @@ describe("connectClaudeThreads", () => {
           callerThreadId: threadId,
           codexHome: "/fixture/.codex",
           store: reopened.value,
-          delegations: createDelegationWatch(reopened.value.claimChild),
+          delegations: createDelegationWatch(),
           request: async (_method, params) => {
             requests.push((params as { tool: string }).tool);
             return Result.ok({ content: [] });
@@ -190,18 +177,20 @@ describe("connectClaudeThreads", () => {
         (
           await worker.call("send_message_to_thread", {
             threadId: "child-2",
-            prompt: "wrong worker",
+            prompt: "a change that affects you too",
           })
         ).isError,
-      ).toBe(true);
+      ).toBeFalsy();
       expect(
         (await restored("child-2").call("read_thread", { threadId: "child-3" }))
           .isError,
-      ).toBe(true);
+      ).toBeFalsy();
       expect(requests).toEqual([
         "wait_threads",
         "read_thread",
         "send_message_to_thread",
+        "send_message_to_thread",
+        "read_thread",
       ]);
       expect(
         calls.filter((entry) => entry.tool === "send_message_to_thread"),
@@ -397,7 +386,10 @@ const workerA = async () => {
   const fromApp = (message: object) =>
     threads.router.fromApp(Buffer.from(`${JSON.stringify(message)}\n`));
   fromApp(turnOf(1, "work"));
-  const createThreadAfter = async (lines: object[]) => {
+  const createThreadAfter = async (
+    lines: object[],
+    beforeClose: () => Promise<void> = async () => {},
+  ) => {
     await until(() => claude.started());
     linesBeforeAnswer = lines;
     const client = await linkClient(settings[0]);
@@ -405,6 +397,7 @@ const workerA = async () => {
       name: "create_thread",
       arguments: { prompt: "review", target: TARGET },
     });
+    await beforeClose();
     threads.closeAll();
     return created;
   };

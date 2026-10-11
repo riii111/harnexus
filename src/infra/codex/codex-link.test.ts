@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { type InferErr, Result, TaggedError } from "better-result";
+import { type InferErr, Result } from "better-result";
 import { createCodexLink } from "./codex-link.ts";
 import { createDelegationWatch } from "./delegations.ts";
 import type { ServerRequest } from "./server-requests.ts";
@@ -47,8 +47,8 @@ describe("createCodexLink tools", () => {
     ]);
   });
 
-  test("records a created thread as a reviewer and then allows messages to it", async () => {
-    const { client, store, requests } = await connect({
+  test("names the created thread so a later message can reach it", async () => {
+    const { client, requests } = await connect({
       answer: (params) =>
         Result.ok(
           params.tool === "create_thread"
@@ -57,7 +57,7 @@ describe("createCodexLink tools", () => {
         ),
     });
 
-    await client.callTool({
+    const created = await client.callTool({
       name: "create_thread",
       arguments: { prompt: "review", target: TARGET },
     });
@@ -66,7 +66,7 @@ describe("createCodexLink tools", () => {
       arguments: { threadId: REVIEWER, prompt: "again" },
     });
 
-    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
+    expect(created.structuredContent).toEqual({ threadId: REVIEWER });
     expect(sent.isError).toBeFalsy();
     expect(requests.map((request) => request.params.arguments)).toEqual([
       { prompt: "review", target: TARGET, model: "gpt-fixture" },
@@ -75,8 +75,8 @@ describe("createCodexLink tools", () => {
   });
 
   test("learns the created thread from the app's first turn on it when the answer has only a provisional id", async () => {
-    const delegations = createDelegationWatch(() => {});
-    const { client, store } = await connect({
+    const delegations = createDelegationWatch();
+    const { client } = await connect({
       delegations,
       answer: (params) => {
         if (params.tool === "create_thread") {
@@ -92,15 +92,14 @@ describe("createCodexLink tools", () => {
       arguments: { prompt: "review", target: TARGET },
     });
 
-    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
     expect(created.structuredContent).toEqual({ threadId: REVIEWER });
     expect(text(created)).toContain(REVIEWER);
   });
 
   test("never takes the late first turn of a thread an earlier answer already named", async () => {
-    const delegations = createDelegationWatch(() => {});
+    const delegations = createDelegationWatch();
     let creates = 0;
-    const { client, store, link } = await connect({
+    const { client, link } = await connect({
       delegations,
       answer: (params) => {
         if (params.tool !== "create_thread") return Result.ok(textAnswer("ok"));
@@ -113,7 +112,7 @@ describe("createCodexLink tools", () => {
       },
     });
 
-    await client.callTool({
+    const first = await client.callTool({
       name: "create_thread",
       arguments: { prompt: "review", target: TARGET },
     });
@@ -122,13 +121,14 @@ describe("createCodexLink tools", () => {
       arguments: { prompt: "review again", target: TARGET },
     });
 
+    expect(first.structuredContent).toEqual({ threadId: REVIEWER });
     expect(second.isError).toBe(true);
-    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
+    expect(second.structuredContent).toBeUndefined();
     expect(link.hasUnsettledWrite()).toBe(true);
   });
 
   test("creates a worker on the requested Claude model", async () => {
-    const { client, requests, modelLists, store } = await connect({
+    const { client, requests, modelLists } = await connect({
       answer: () =>
         Result.ok(textAnswer(JSON.stringify({ threadId: REVIEWER }))),
     });
@@ -139,7 +139,6 @@ describe("createCodexLink tools", () => {
     });
 
     expect(created.structuredContent).toEqual({ threadId: REVIEWER });
-    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
     expect(requests[0]?.params.arguments.model).toBe("claude-sonnet-5");
     expect(modelLists).toEqual([]);
   });
@@ -233,7 +232,7 @@ describe("createCodexLink tools", () => {
   });
 
   test("prefers a thread id in the structured answer over one in the text", async () => {
-    const { client, store } = await connect({
+    const { client } = await connect({
       answer: () =>
         Result.ok({
           ...textAnswer(JSON.stringify({ threadId: OTHER_REVIEWER })),
@@ -241,12 +240,12 @@ describe("createCodexLink tools", () => {
         }),
     });
 
-    await client.callTool({
+    const created = await client.callTool({
       name: "create_thread",
       arguments: { prompt: "review", target: TARGET },
     });
 
-    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
+    expect(created.structuredContent).toEqual({ threadId: REVIEWER });
   });
 
   test("refuses a target outside the forms the app defines without calling it", async () => {
@@ -263,83 +262,39 @@ describe("createCodexLink tools", () => {
 });
 
 describe("createCodexLink target checks", () => {
-  test("refuses every operation on another worker's reviewer without calling the app", async () => {
+  test("messages, reads and waits on a thread it neither created nor got work from", async () => {
     const { client, requests } = await connect({
-      reviewers: { [OTHER_WORKER]: [OTHER_REVIEWER] },
+      answer: () => Result.ok(textAnswer("ok")),
     });
 
     const results = [
       await client.callTool({
         name: "send_message_to_thread",
-        arguments: { threadId: OTHER_REVIEWER, prompt: "hi" },
+        arguments: { threadId: OTHER_REVIEWER, prompt: "a shared finding" },
       }),
       await client.callTool({
         name: "read_thread",
-        arguments: { threadId: OTHER_REVIEWER },
+        arguments: { threadId: OTHER_WORKER },
       }),
       await client.callTool({
         name: "wait_threads",
         arguments: {
           targets: [{ threadId: CALLER }, { threadId: OTHER_REVIEWER }],
+          timeoutMs: 1_000,
         },
       }),
     ];
 
-    for (const result of results) {
-      expect(result.isError).toBe(true);
-      expect(text(result)).toContain(OTHER_REVIEWER);
-    }
-    expect(requests).toEqual([]);
-  });
-
-  test("allows messaging, reading and waiting on a thread that sent it work but not an unrelated thread", async () => {
-    const { client, requests } = await connect({
-      requesters: [WORKER],
-      answer: () => Result.ok(textAnswer("ok")),
-    });
-
-    const allowed = [
-      await client.callTool({
-        name: "send_message_to_thread",
-        arguments: { threadId: WORKER, prompt: "review done" },
-      }),
-      await client.callTool({
-        name: "read_thread",
-        arguments: { threadId: WORKER },
-      }),
-      await client.callTool({
-        name: "wait_threads",
-        arguments: { targets: [{ threadId: WORKER }], timeoutMs: 1_000 },
-      }),
-    ];
-    const unrelated = await client.callTool({
-      name: "send_message_to_thread",
-      arguments: { threadId: OTHER_WORKER, prompt: "review done" },
-    });
-
-    expect(allowed.map((result) => result.isError ?? false)).toEqual([
+    expect(results.map((result) => result.isError ?? false)).toEqual([
       false,
       false,
       false,
     ]);
-    expect(unrelated.isError).toBe(true);
     expect(requests.map((request) => request.params.tool)).toEqual([
       "send_message_to_thread",
       "read_thread",
       "wait_threads",
     ]);
-  });
-
-  test("refuses messaging itself even when it is saved as a thread that sent it work", async () => {
-    const { client, requests } = await connect({ requesters: [CALLER] });
-
-    const sent = await client.callTool({
-      name: "send_message_to_thread",
-      arguments: { threadId: CALLER, prompt: "note" },
-    });
-
-    expect(sent.isError).toBe(true);
-    expect(requests).toEqual([]);
   });
 
   test("refuses everything for a caller that is not a registered Claude thread", async () => {
@@ -363,7 +318,6 @@ describe("createCodexLink target checks", () => {
 describe("createCodexLink write outcomes", () => {
   test("never sends again after a send whose answer was lost", async () => {
     const { client, link, requests } = await connect({
-      reviewers: { [CALLER]: [REVIEWER] },
       answer: () => Result.err(unanswered()),
     });
 
@@ -384,7 +338,6 @@ describe("createCodexLink write outcomes", () => {
 
   test("still allows reads after an unknown outcome so the result can be checked", async () => {
     const { client, requests } = await connect({
-      reviewers: { [CALLER]: [REVIEWER] },
       answer: (params) =>
         params.tool === "read_thread"
           ? Result.ok(textAnswer("turns"))
@@ -414,7 +367,6 @@ describe("createCodexLink write outcomes", () => {
     answer,
   }) => {
     const { client, link } = await connect({
-      reviewers: { [CALLER]: [REVIEWER] },
       answer: () => Result.ok(answer),
     });
 
@@ -427,7 +379,6 @@ describe("createCodexLink write outcomes", () => {
   test("lets a write that was never sent, or that the app refused, be tried again", async () => {
     let calls = 0;
     const { client, link, requests } = await connect({
-      reviewers: { [CALLER]: [REVIEWER] },
       answer: () => {
         calls += 1;
         return calls === 1
@@ -459,7 +410,7 @@ describe("createCodexLink write outcomes", () => {
   ])("stops writing when a created thread's answer has $name", async ({
     body,
   }) => {
-    const { client, link, store } = await connect({
+    const { client, link } = await connect({
       answer: () => Result.ok(textAnswer(body)),
     });
 
@@ -469,24 +420,7 @@ describe("createCodexLink write outcomes", () => {
     });
 
     expect(created.isError).toBe(true);
-    expect(store.reviewers(CALLER)).toEqual([]);
-    expect(link.hasUnsettledWrite()).toBe(true);
-  });
-
-  test("stops writing when a created thread cannot be saved as a reviewer", async () => {
-    const { client, link } = await connect({
-      addChildFails: true,
-      answer: () =>
-        Result.ok(textAnswer(JSON.stringify({ threadId: REVIEWER }))),
-    });
-
-    const created = await client.callTool({
-      name: "create_thread",
-      arguments: { prompt: "review", target: TARGET },
-    });
-
-    expect(created.isError).toBe(true);
-    expect(text(created)).toContain(REVIEWER);
+    expect(created.structuredContent).toBeUndefined();
     expect(link.hasUnsettledWrite()).toBe(true);
   });
 
@@ -494,7 +428,6 @@ describe("createCodexLink write outcomes", () => {
     let release: (value: Result<unknown, ServerRequestError>) => void =
       () => {};
     const { client, requests } = await connect({
-      reviewers: { [CALLER]: [REVIEWER] },
       answer: () =>
         new Promise((resolve) => {
           release = resolve;
@@ -517,7 +450,6 @@ describe("createCodexLink write outcomes", () => {
     let release: (value: Result<unknown, ServerRequestError>) => void =
       () => {};
     const { client, link, requests } = await connect({
-      reviewers: { [CALLER]: [REVIEWER] },
       answer: () =>
         new Promise((resolve) => {
           release = resolve;
@@ -538,9 +470,7 @@ describe("createCodexLink write outcomes", () => {
   });
 
   test("refuses a write that arrives after the stop until writes are accepted again", async () => {
-    const { client, link, requests } = await connect({
-      reviewers: { [CALLER]: [REVIEWER] },
-    });
+    const { client, link, requests } = await connect({});
 
     link.stopWrites();
     const late = await send(client);
@@ -557,7 +487,6 @@ describe("createCodexLink write outcomes", () => {
     let release: (value: Result<unknown, ServerRequestError>) => void =
       () => {};
     const { client, link, requests } = await connect({
-      reviewers: { [CALLER]: [REVIEWER] },
       answer: () =>
         new Promise((resolve) => {
           release = resolve;
@@ -728,8 +657,8 @@ describe("createCodexLink automation_update", () => {
 });
 
 describe("createCodexLink call", () => {
-  test("runs a tool by name with the same checks and records as the tool itself", async () => {
-    const { link, store, requests } = await connect({
+  test("runs a tool by name the same way as the tool itself", async () => {
+    const { link, requests } = await connect({
       answer: () =>
         Result.ok(textAnswer(JSON.stringify({ threadId: REVIEWER }))),
     });
@@ -739,8 +668,7 @@ describe("createCodexLink call", () => {
       target: TARGET,
     });
 
-    expect(result.isError).toBeFalsy();
-    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
+    expect(result.structuredContent).toEqual({ threadId: REVIEWER });
     expect(requests.map((request) => request.params.arguments)).toEqual([
       { prompt: "review", target: TARGET, model: "gpt-fixture" },
     ]);
@@ -775,10 +703,13 @@ describe("createCodexLink createChecked", () => {
       actual: { model: "gpt-other", effort: "low" },
       refused: true,
     },
-  ])("records the reviewer and reports $name", async ({ actual, refused }) => {
-    const delegations = createDelegationWatch(() => {});
+  ])("names the created thread and reports $name", async ({
+    actual,
+    refused,
+  }) => {
+    const delegations = createDelegationWatch();
     const runs: boolean[] = [];
-    const { link, store } = await connect({
+    const { link } = await connect({
       delegations,
       answer: () => {
         runs.push(delegations.observe(CALLER, REVIEWER, actual));
@@ -802,31 +733,11 @@ describe("createCodexLink createChecked", () => {
     });
     expect(created.result.isError === true).toBe(refused);
     expect(created.unknown).toBe(false);
-    expect(store.reviewers(CALLER)).toEqual([REVIEWER]);
-  });
-
-  test("reports a seen thread as unknown with its id when saving the reviewer fails", async () => {
-    const delegations = createDelegationWatch(() => {});
-    const { link } = await connect({
-      delegations,
-      addChildFails: true,
-      answer: () => {
-        delegations.observe(CALLER, REVIEWER, { model: null, effort: null });
-        return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
-      },
-    });
-
-    const created = await link.createChecked({
-      prompt: "review",
-      target: TARGET,
-    });
-
-    expect(created.unknown).toBe(true);
     expect(created.threadId).toBe(REVIEWER);
   });
 
   test("reports the real id the app named as unknown while its first turn is unseen", async () => {
-    const delegations = createDelegationWatch(() => {});
+    const delegations = createDelegationWatch();
     const { link } = await connect({
       delegations,
       answer: () =>
@@ -843,7 +754,7 @@ describe("createCodexLink createChecked", () => {
   });
 
   test("keeps the check armed when the first turn is not seen in time", async () => {
-    const delegations = createDelegationWatch(() => {});
+    const delegations = createDelegationWatch();
     const { link } = await connect({
       delegations,
       answer: () => Result.ok(textAnswer(JSON.stringify(PROVISIONAL))),
@@ -865,7 +776,7 @@ describe("createCodexLink createChecked", () => {
   });
 
   test("reports a refused first turn even when the app then answers with an error", async () => {
-    const delegations = createDelegationWatch(() => {});
+    const delegations = createDelegationWatch();
     const { link } = await connect({
       delegations,
       answer: () => {
@@ -887,7 +798,7 @@ describe("createCodexLink createChecked", () => {
   });
 
   test("checks the first turn of a thread the app's answer named", async () => {
-    const delegations = createDelegationWatch(() => {});
+    const delegations = createDelegationWatch();
     const { link } = await connect({
       delegations,
       answer: () => {
@@ -914,7 +825,7 @@ describe("createCodexLink createChecked", () => {
 
 describe("createCodexLink creates of one caller from two links", () => {
   test("refuses an in-chat create while a socket create of the same thread is unconfirmed", async () => {
-    const delegations = createDelegationWatch(() => {});
+    const delegations = createDelegationWatch();
     const answered = deferred();
     const socket = await connect({
       delegations,
@@ -948,7 +859,7 @@ describe("createCodexLink creates of one caller from two links", () => {
   });
 
   test("sends no socket create while an in-chat create of the same thread is unconfirmed", async () => {
-    const delegations = createDelegationWatch(() => {});
+    const delegations = createDelegationWatch();
     const answered = deferred();
     const chat = await connect({
       delegations,
@@ -979,11 +890,10 @@ describe("createCodexLink creates of one caller from two links", () => {
     expect(socket.requests).toEqual([]);
     expect(runs).toBe(true);
     expect((await inChat).structuredContent).toEqual({ threadId: REVIEWER });
-    expect(chat.store.reviewers(CALLER)).toEqual([REVIEWER]);
   });
 
   test("keeps the check of a thread named by an error answer", async () => {
-    const delegations = createDelegationWatch(() => {});
+    const delegations = createDelegationWatch();
     const { link } = await connect({
       delegations,
       answer: () =>
@@ -1018,12 +928,9 @@ const deferred = () => {
 };
 
 const connect = async ({
-  reviewers = {},
-  requesters = [],
   callerRegistered = true,
-  addChildFails = false,
   codexHome = "/fixture/.codex",
-  delegations = createDelegationWatch(() => {}),
+  delegations = createDelegationWatch(),
   models = () => Result.ok(DEFAULT_MODELS),
   answer = () => Result.ok(textAnswer("ok")),
 }: {
@@ -1031,10 +938,7 @@ const connect = async ({
   models?: (
     params: Record<string, unknown>,
   ) => Result<unknown, ServerRequestError>;
-  reviewers?: Record<string, string[]>;
-  requesters?: string[];
   callerRegistered?: boolean;
-  addChildFails?: boolean;
   codexHome?: string;
   answer?: (
     params: CallParams,
@@ -1042,11 +946,10 @@ const connect = async ({
     | Result<unknown, ServerRequestError>
     | Promise<Result<unknown, ServerRequestError>>;
 } = {}) => {
-  const store = fakeStore(
-    callerRegistered ? { [CALLER]: [], ...reviewers } : reviewers,
-    addChildFails,
-    { [CALLER]: requesters },
-  );
+  const store = {
+    get: (threadId: string) =>
+      callerRegistered && threadId === CALLER ? {} : undefined,
+  };
   const requests: RecordedRequest[] = [];
   const modelLists: unknown[] = [];
   const request: ServerRequest = async (method, params, { timeoutMs }) => {
@@ -1072,44 +975,8 @@ const connect = async ({
   await link.server.instance.connect(serverTransport);
   const client = new Client({ name: "test", version: "0" });
   await client.connect(clientTransport);
-  return { client, link, store, requests, modelLists };
+  return { client, link, requests, modelLists };
 };
-
-const fakeStore = (
-  initial: Record<string, string[]>,
-  addChildFails: boolean,
-  requesters: Record<string, string[]>,
-) => {
-  const reviewers = new Map(Object.entries(initial));
-  return {
-    get: (threadId: string) => {
-      const ids = reviewers.get(threadId);
-      return ids === undefined
-        ? undefined
-        : {
-            childThreadIds: ids,
-            requesterThreadIds: requesters[threadId] ?? [],
-          };
-    },
-    addChild: async (threadId: string, childThreadId: string) => {
-      if (addChildFails) return Result.err(new FakeSaveFailed());
-      reviewers.set(threadId, [
-        ...(reviewers.get(threadId) ?? []),
-        childThreadId,
-      ]);
-      return Result.ok(null);
-    },
-    reviewers: (threadId: string) => reviewers.get(threadId),
-  };
-};
-
-class FakeSaveFailed extends TaggedError("FakeSaveFailed")<{
-  message: string;
-}> {
-  constructor() {
-    super({ message: "disk full" });
-  }
-}
 
 const send = (client: Client) =>
   client.callTool({
@@ -1190,7 +1057,6 @@ const TARGET = {
 };
 const REVIEWER = "019a0000-0000-7000-8000-000000000001";
 const OTHER_WORKER = "thread-other-worker";
-const WORKER = "thread-codex-worker";
 const OTHER_REVIEWER = "thread-other-reviewer";
 const HEARTBEAT = {
   name: "CI watch",

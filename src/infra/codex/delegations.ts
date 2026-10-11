@@ -15,11 +15,11 @@ export type FirstTurn = {
 };
 
 // The app answers create_thread with a provisional id only; the real id first appears in the new thread's turn/start, whose tool output names the calling thread.
-// claim runs before the caller's wait resumes, so the thread is known as that caller's from the moment it is seen.
-export const createDelegationWatch = (
-  claim: (sourceThreadId: string, threadId: string) => void,
-  { armedMs = CHECK_ARMED_MS }: { armedMs?: number } = {},
-) => {
+export const createDelegationWatch = ({
+  armedMs = CHECK_ARMED_MS,
+}: {
+  armedMs?: number;
+} = {}) => {
   // At most one unconfirmed create per caller, since nothing in the first turn tells two creates of one caller apart.
   // A Codex caller's own create_thread never passes through the bridge, so a caller must not mix it with socket creates in parallel.
   const waiters = new Map<string, Waiter>();
@@ -29,7 +29,7 @@ export const createDelegationWatch = (
   const refusedThreads = new Set<string>();
   const starting = new Map<string, (refusal: string | null) => void>();
 
-  // A thread nobody waits for is ignored, so it can never become someone's reviewer; the answer is whether the turn may run.
+  // A thread nobody waits for is ignored; the answer is whether the turn may run.
   // bridgeRuns leaves the waiter to started, since the bridge can still refuse a Claude turn that passed the check.
   const observe = (
     sourceThreadId: string,
@@ -47,7 +47,6 @@ export const createDelegationWatch = (
     claimed.add(threadId);
     if (waiter === undefined || waiter.named !== null) return true;
     waiters.delete(sourceThreadId);
-    if (waiter.record) claim(sourceThreadId, threadId);
     return settle(waiter, threadId, actual, bridgeRuns);
   };
 
@@ -65,10 +64,7 @@ export const createDelegationWatch = (
   // A timed-out wait leaves the check armed, so a late first turn on the wrong model is still refused until armedMs passes or cancel is called.
   const expect = (
     sourceThreadId: string,
-    {
-      expected = NOT_GIVEN,
-      record = true,
-    }: { expected?: TurnSettings; record?: boolean } = {},
+    { expected = NOT_GIVEN }: { expected?: TurnSettings } = {},
   ) => {
     if (waiters.has(sourceThreadId)) return null;
     let resolve: (turn: FirstTurn | null) => void = () => {};
@@ -80,7 +76,6 @@ export const createDelegationWatch = (
     disarm.unref();
     const waiter: Waiter = {
       expected,
-      record,
       named: null,
       settle: (turn) => {
         settled = true;
@@ -137,7 +132,6 @@ export const createDelegationWatch = (
 
 type Waiter = {
   expected: TurnSettings;
-  record: boolean;
   // The thread the app's answer named, whose first turn alone settles this waiter.
   named: string | null;
   settle: (turn: FirstTurn | null) => void;
