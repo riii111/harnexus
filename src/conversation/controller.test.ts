@@ -387,7 +387,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
       },
     );
     turns.startTurn(turnStart(10, "ask the reviewer"), undefined);
-    await until(() => first.started());
+    await until(() => first.prompted());
     const lostSend = await messageReviewer(settings[0]);
     first.emit(sdk(success()));
     await until(() => store.get(THREAD)?.runState === "outcomeUnknown");
@@ -426,7 +426,7 @@ describe("a thread whose last turn has an unknown outcome", () => {
       },
     );
     turns.startTurn(turnStart(10, "ask the reviewer"), undefined);
-    await until(() => first.started());
+    await until(() => first.prompted());
     const waiting = messageReviewer(settings[0]);
     await until(() => toolCalls.length === 1);
     turns.interruptTurn(interrupt(20, "turn-1"));
