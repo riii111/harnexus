@@ -869,6 +869,11 @@ export const createClaudeRuntime = ({
   const noteFork = async (threadId: string) => {
     const source = threads.forkSourceOf(threadId);
     if (source === null) return;
+    const pinned = threads.forkPinOf(threadId);
+    if (pinned !== null) {
+      forkPoints.set(threadId, { at: pinned });
+      return;
+    }
     const read = await lastRecordOf(source);
     if (read.isOk()) forkPoints.set(threadId, { at: read.value });
   };

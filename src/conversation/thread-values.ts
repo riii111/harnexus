@@ -44,7 +44,10 @@ export const createThreadValues = (
 ) => {
   // Threads created with a Claude model are saved to the store only on their first turn, so a thread never used leaves nothing behind.
   const adopted = new Map<string, Thread>();
-  const forkSources = new Map<string, string>();
+  const forkSources = new Map<
+    string,
+    { sessionId: string; at: string | null }
+  >();
   const models = new Map<string, string>();
   const efforts = new Map<string, EffortLevel>();
   const sessionIds = new Map<string, string | null>();
@@ -80,12 +83,24 @@ export const createThreadValues = (
     if (store.get(threadId) === undefined) adopted.set(threadId, thread);
   };
 
-  // A source with no conversation yet leaves the fork to start one of its own.
+  // A source with no conversation yet, or one rewound to its start, leaves the fork to start one of its own; a rewound source's record still runs past where it stands, so the fork is pinned there.
   const adoptFork = (threadId: string, thread: Thread, sourceId: string) => {
     if (store.get(threadId) !== undefined) return;
     adopted.set(threadId, thread);
+    const rewind = store.get(sourceId)?.rewind;
+    if (rewind !== undefined) {
+      if (rewind.at !== null) {
+        forkSources.set(threadId, {
+          sessionId: rewind.sessionId,
+          at: rewind.at,
+        });
+      }
+      return;
+    }
     const sourceSession = sessionIdOf(sourceId);
-    if (sourceSession !== null) forkSources.set(threadId, sourceSession);
+    if (sourceSession !== null) {
+      forkSources.set(threadId, { sessionId: sourceSession, at: null });
+    }
   };
 
   // Only a fork Claude never ran is forgotten, so nothing was saved of it.
@@ -95,7 +110,12 @@ export const createThreadValues = (
   };
 
   const forkSourceOf = (threadId: string) =>
-    sessionIdOf(threadId) === null ? (forkSources.get(threadId) ?? null) : null;
+    sessionIdOf(threadId) === null
+      ? (forkSources.get(threadId)?.sessionId ?? null)
+      : null;
+
+  // Null when the fork takes its source's record as it ends when the fork is made.
+  const forkPinOf = (threadId: string) => forkSources.get(threadId)?.at ?? null;
 
   // An id set here but not saved wins over the store's, as in sessionIdOf.
   const isBound = (sessionId: string) => {
@@ -222,6 +242,7 @@ export const createThreadValues = (
     adoptFork,
     forgetFork,
     forkSourceOf,
+    forkPinOf,
     isBound,
     bindSession,
     markRegistered,
