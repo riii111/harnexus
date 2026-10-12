@@ -3,6 +3,7 @@ import { isClaudeModel } from "../infra/claude/models.ts";
 import type { readClaudeSession } from "../infra/claude/session.ts";
 import type { readLastRecordUuid } from "../infra/claude/transcripts.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
+import type { RewindPoint } from "../infra/thread-store.ts";
 import { buildHistory } from "../presentation/history.ts";
 import { sideChatBrief } from "../presentation/side-chat-brief.ts";
 import { recordUntil } from "./history-request.ts";
@@ -21,6 +22,7 @@ type SideChat = { point: ForkPoint; choice: string | null; stopped: boolean };
 
 type Deps = {
   sessionIdOf: (threadId: string) => string | null;
+  rewindOf: (threadId: string) => RewindPoint | undefined;
   lastRecordOf: (sessionId: string) => ReturnType<typeof readLastRecordUuid>;
   readSession: (sessionId: string) => ReturnType<typeof readClaudeSession>;
   inject: (threadId: string, items: object[]) => ReturnType<ServerRequest>;
@@ -32,6 +34,7 @@ type Deps = {
 // Nothing here is saved: a side chat is ephemeral, and the server, which the bridge runs, drops it on a restart.
 export const createSideChats = ({
   sessionIdOf,
+  rewindOf,
   lastRecordOf,
   readSession,
   inject,
@@ -40,7 +43,21 @@ export const createSideChats = ({
 }: Deps) => {
   const sideChats = new Map<string, SideChat>();
 
+  // A rewound conversation stands where it was rewound to until its next turn, though its record still holds the turns after.
   const pointOf = async (sourceId: string, source: Thread) => {
+    const rewind = rewindOf(sourceId);
+    if (rewind !== undefined) {
+      return Result.ok<ForkPoint>(
+        rewind.at === null
+          ? null
+          : {
+              sessionId: rewind.sessionId,
+              at: rewind.at,
+              model: source.model,
+              cwd: source.cwd,
+            },
+      );
+    }
     const sessionId = sessionIdOf(sourceId);
     if (sessionId === null) return Result.ok<ForkPoint>(null);
     const last = await lastRecordOf(sessionId);

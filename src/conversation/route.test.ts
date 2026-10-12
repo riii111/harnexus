@@ -2444,6 +2444,7 @@ const setup = (
     sideChats: createSideChats({
       sessionIdOf: (threadId) =>
         threadId in records ? `session-${threadId}` : null,
+      rewindOf: () => undefined,
       lastRecordOf: async (sessionId) => {
         const record = records[sessionId.replace("session-", "")];
         return Result.ok(

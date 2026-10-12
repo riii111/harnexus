@@ -3,6 +3,7 @@ import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { type InferErr, Result } from "better-result";
 import { readClaudeSession } from "../infra/claude/session.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
+import type { RewindPoint } from "../infra/thread-store.ts";
 import { prompt, reply, text } from "../presentation/testing/session-record.ts";
 import { createSideChats } from "./side-chat.ts";
 
@@ -18,6 +19,27 @@ describe("createSideChats.pointOf", () => {
       model: MAIN.model,
       cwd: MAIN.cwd,
     });
+  });
+
+  test("fixes the side chat where a rewound main conversation stands rather than at its record's end", async () => {
+    const { sideChats, injects, rewinds } = setup();
+    rewinds.set("th-main", { sessionId: "session-main", at: "a1" });
+
+    sideChats.remember("th-side", await pointOf(sideChats), "gpt-fixture");
+    await sideChats.beforeTurn("th-side", undefined);
+
+    const brief = briefText(injects);
+    expect(brief).toContain("first answer");
+    expect(brief).not.toContain("second question");
+  });
+
+  test("names no point for a main conversation rewound to its start", async () => {
+    const { sideChats, rewinds } = setup();
+    rewinds.set("th-main", { sessionId: "session-main", at: null });
+
+    const point = await sideChats.pointOf("th-main", MAIN);
+
+    expect(point.isOk() && point.value).toBeNull();
   });
 
   test("names no point for a main thread with no Claude conversation yet", async () => {
@@ -188,10 +210,12 @@ const setup = ({
   const injects: [string, object[]][] = [];
   const dropped: string[] = [];
   const begun = new Set<string>();
+  const rewinds = new Map<string, RewindPoint>();
   const results: Injected[] = [];
   const reading = { unreadable: false };
   const sideChats = createSideChats({
     sessionIdOf: (threadId) => sessions[threadId] ?? null,
+    rewindOf: (threadId) => rewinds.get(threadId),
     lastRecordOf: async () => Result.ok(record.at(-1)?.uuid ?? null),
     readSession: (sessionId) =>
       readClaudeSession(sessionId, {
@@ -208,7 +232,16 @@ const setup = ({
     claudeBegun: (threadId) => begun.has(threadId),
     dropFork: (threadId) => dropped.push(threadId),
   });
-  return { sideChats, injects, dropped, begun, results, reading, record };
+  return {
+    sideChats,
+    injects,
+    dropped,
+    begun,
+    rewinds,
+    results,
+    reading,
+    record,
+  };
 };
 
 const pointOf = async (sideChats: ReturnType<typeof setup>["sideChats"]) => {

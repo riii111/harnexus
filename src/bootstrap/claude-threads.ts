@@ -148,6 +148,7 @@ export const connectClaudeThreads = ({
   });
   const sideChats = createSideChats({
     sessionIdOf: turns.sessionIdOf,
+    rewindOf: turns.rewindOf,
     lastRecordOf,
     readSession,
     inject: (threadId, items) =>

@@ -32,7 +32,18 @@ describe("sideChatBrief", () => {
     expect(body).toMatch(
       /The messages after the first one through turn \d+ of 40 are left out, so instructions or constraints given there may be missing; ask the user/,
     );
-    expect(body.length).toBeLessThan(34_000);
+    expect(body.length).toBeLessThanOrEqual(32_000);
+  });
+
+  test("keeps the whole text within the budget for many short messages, labels included", () => {
+    const record = turns(1_000, 0);
+
+    const body = textOf(sideChatBrief(historyOf(record), "claude-fixture"));
+
+    expect(body.length).toBeLessThanOrEqual(32_000);
+    expect(body).toContain("[user, turn 1]\nquestion 1 ");
+    expect(body).toContain("[assistant, turn 1000]\nanswer 1000 ");
+    expect(body).toMatch(/through turn \d+ of 1000 are left out/);
   });
 
   test("cuts a huge first message so the newest exchange still fits", () => {

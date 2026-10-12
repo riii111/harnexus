@@ -2,10 +2,7 @@ import type { HistoryTurn } from "./history.ts";
 
 type Message = { turn: number; role: "user" | "assistant"; text: string };
 
-type Fitted = {
-  messages: Message[];
-  omitted: { through: number } | null;
-};
+type Fitted = { blocks: string[]; omittedThrough: number | null };
 
 // Built as the app hands a main conversation to a cloud side chat: the user's messages and the agent's replies only, as one reference-only user message; null when there is nothing to hand over.
 export const sideChatBrief = (
@@ -14,14 +11,20 @@ export const sideChatBrief = (
 ) => {
   const messages = messagesOf(history);
   if (messages.length === 0) return null;
-  const fitted = fitBudget(messages, BRIEF_BUDGET_CHARS);
+  const turns = history.length;
+  // The note on left-out turns is counted at its longest, so the whole text stays within the budget whichever turns are left out.
+  const header = headerOf(model, turns, turns).length + SEPARATOR.length;
+  const fitted = fitBudget(messages, BRIEF_BUDGET_CHARS - header);
   return {
     type: "message",
     role: "user",
     content: [
       {
         type: "input_text",
-        text: briefText(fitted, model, history.length),
+        text: [
+          headerOf(model, turns, fitted.omittedThrough),
+          ...fitted.blocks,
+        ].join(SEPARATOR),
       },
     ],
   };
@@ -50,61 +53,80 @@ const messagesOf = (history: readonly HistoryTurn[]) =>
 
 // The first message often sets the task, so it keeps up to a share of the budget and the newest messages fill the rest; the message at each edge is cut rather than dropped.
 const fitBudget = (messages: Message[], budget: number): Fitted => {
-  const total = messages.reduce((sum, { text }) => sum + text.length, 0);
+  const blocks = messages.map(blockOf);
+  const total = blocks.reduce(
+    (sum, block) => sum + block.length + SEPARATOR.length,
+    0,
+  );
   const [first, ...rest] = messages;
   if (first === undefined || total <= budget) {
-    return { messages, omitted: null };
+    return { blocks, omittedThrough: null };
   }
-  const head = keepStart(first, Math.floor(budget * FIRST_SHARE));
-  let left = budget - head.text.length;
-  const tail: Message[] = [];
+  const head = cutBlock(first, Math.floor(budget * FIRST_SHARE), "start");
+  let left = budget - (head?.length ?? 0) - SEPARATOR.length;
+  const tail: string[] = [];
+  let kept = 0;
   for (const message of [...rest].reverse()) {
-    if (left <= 0) break;
-    tail.unshift(
-      message.text.length <= left ? message : keepEnd(message, left),
-    );
-    left -= message.text.length;
+    const block = blockOf(message);
+    if (block.length + SEPARATOR.length <= left) {
+      tail.unshift(block);
+      left -= block.length + SEPARATOR.length;
+      kept += 1;
+      continue;
+    }
+    const cut = cutBlock(message, left - SEPARATOR.length, "end");
+    if (cut !== null) {
+      tail.unshift(cut);
+      kept += 1;
+    }
+    break;
   }
-  const lastDropped = rest.at(rest.length - tail.length - 1);
+  const lastLeftOut = rest.at(rest.length - kept - 1);
   return {
-    messages: [head, ...tail],
-    omitted:
-      tail.length === rest.length || lastDropped === undefined
+    blocks: [...(head === null ? [] : [head]), ...tail],
+    omittedThrough:
+      kept === rest.length || lastLeftOut === undefined
         ? null
-        : { through: lastDropped.turn },
+        : lastLeftOut.turn,
   };
 };
 
-const briefText = (
-  { messages, omitted }: Fitted,
+const headerOf = (
   model: string,
   turns: number,
+  omittedThrough: number | null,
 ) =>
   [
     PREAMBLE,
     `The main thread runs on Claude (${model}). Only the user's messages and Claude's replies up to the moment this side chat opened are included; tool calls and their output are left out.`,
-    ...(omitted === null
+    ...(omittedThrough === null
       ? []
       : [
-          `The messages after the first one through turn ${omitted.through} of ${turns} are left out, so instructions or constraints given there may be missing; ask the user when they could matter.`,
+          `The messages after the first one through turn ${omittedThrough} of ${turns} are left out, so instructions or constraints given there may be missing; ask the user when they could matter.`,
         ]),
-    ...messages.map(
-      ({ turn, role, text }) => `[${role}, turn ${turn}]\n${text}`,
-    ),
-  ].join("\n\n");
+  ].join(SEPARATOR);
 
-const keepStart = (message: Message, length: number): Message =>
-  message.text.length <= length
-    ? message
-    : {
-        ...message,
-        text: `${message.text.slice(0, length)}\n${cutMark(message.text.length - length)}`,
-      };
+const blockOf = ({ turn, role, text }: Message) =>
+  `${labelOf(turn, role)}${text}`;
 
-const keepEnd = (message: Message, length: number): Message => ({
-  ...message,
-  text: `${cutMark(message.text.length - length)}\n${message.text.slice(-length)}`,
-});
+// Null when the room cannot hold the label and the mark with any of the text.
+const cutBlock = (
+  message: Message,
+  room: number,
+  keep: "start" | "end",
+): string | null => {
+  const label = labelOf(message.turn, message.role);
+  if (label.length + message.text.length <= room) return blockOf(message);
+  const length = room - label.length - cutMark(message.text.length).length - 1;
+  if (length <= 0) return null;
+  const mark = cutMark(message.text.length - length);
+  return keep === "start"
+    ? `${label}${message.text.slice(0, length)}\n${mark}`
+    : `${label}${mark}\n${message.text.slice(-length)}`;
+};
+
+const labelOf = (turn: number, role: Message["role"]) =>
+  `[${role}, turn ${turn}]\n`;
 
 const cutMark = (length: number) => `[... ${length} characters left out ...]`;
 
@@ -112,6 +134,8 @@ const cutMark = (length: number) => `[... ${length} characters left out ...]`;
 const BRIEF_BUDGET_CHARS = 32_000;
 
 const FIRST_SHARE = 0.25;
+
+const SEPARATOR = "\n\n";
 
 // The app's own words for a main conversation it hands to a side chat.
 const PREAMBLE =
