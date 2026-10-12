@@ -83,8 +83,11 @@ const isReadableItem = (item: unknown) => {
   if (!isObject(item) || typeof item.type !== "string") return false;
   if (item.type === "agentMessage") return typeof item.text === "string";
   if (item.type !== "userMessage") return true;
-  return Array.isArray(item.content) && item.content.every(isObject);
+  return Array.isArray(item.content) && item.content.every(isReadableInput);
 };
+
+const isReadableInput = (input: unknown) =>
+  isObject(input) && (input.type !== "text" || typeof input.text === "string");
 
 const messagesOf = (history: readonly Turn[]) =>
   history.flatMap(({ items }, index): Message[] =>

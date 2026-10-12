@@ -2310,6 +2310,16 @@ describe("side chats of a Codex thread moved to Claude", () => {
       name: "a malformed turn",
       mainThread: [{ id: "turn-1", status: "completed" }],
     },
+    {
+      name: "a text input with no text",
+      mainThread: [
+        {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "userMessage", content: [{ type: "text" }] }],
+        },
+      ],
+    },
   ])("keeps a side chat whose main thread gave $name off Claude", async ({
     mainThread,
   }) => {

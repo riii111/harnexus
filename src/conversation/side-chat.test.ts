@@ -278,6 +278,32 @@ describe("createSideChats.referenceOf", () => {
     expect(text).not.toContain("were read");
   });
 
+  test("passes over inputs other than text in a user message", async () => {
+    const { sideChats, main } = setup();
+    main.desc = page(
+      [
+        {
+          id: "turn-1",
+          status: "completed",
+          items: [
+            {
+              type: "userMessage",
+              content: [
+                { type: "image", url: "file:///fixture.png" },
+                { type: "text", text: "about the image" },
+              ],
+            },
+          ],
+        },
+      ],
+      null,
+    );
+
+    const reference = await sideChats.referenceOf("th-main");
+
+    expect(reference.isOk() && reference.value).toContain("about the image");
+  });
+
   test("makes no reference from a main thread with no turns", async () => {
     const { sideChats, main } = setup();
     main.desc = page([], null);
@@ -317,6 +343,16 @@ describe("createSideChats.referenceOf", () => {
         ],
         null,
       ),
+      asc: page([], null),
+    },
+    {
+      name: "a text input with no text",
+      desc: userInputPage({ type: "text" }),
+      asc: page([], null),
+    },
+    {
+      name: "a text input whose text is no string",
+      desc: userInputPage({ type: "text", text: 123 }),
       asc: page([], null),
     },
     {
@@ -582,6 +618,18 @@ const RUNNING_TURN = {
     { type: "agentMessage", text: "unfinished reply", phase: "commentary" },
   ],
 };
+
+const userInputPage = (input: object) =>
+  page(
+    [
+      {
+        id: "turn-1",
+        status: "completed",
+        items: [{ type: "userMessage", content: [input] }],
+      },
+    ],
+    null,
+  );
 
 const STALE_REPLY = {
   type: "agentMessage",
