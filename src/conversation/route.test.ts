@@ -6,9 +6,10 @@ import type {
   SDKMessage,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { Result } from "better-result";
+import { type InferErr, Result } from "better-result";
 import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import { readClaudeSession } from "../infra/claude/session.ts";
+import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { LiveTurn } from "../presentation/history.ts";
 import {
   conversation,
@@ -18,6 +19,7 @@ import {
 } from "../presentation/testing/session-record.ts";
 import { createHistoryRequests } from "./history-request.ts";
 import { createRouter, type RouteEvent } from "./route.ts";
+import { createSideChats } from "./side-chat.ts";
 import { createSubagentRequests } from "./subagent-requests.ts";
 import { createSubagents } from "./subagents.ts";
 import { until } from "./testing/harness.ts";
@@ -72,7 +74,7 @@ describe("Codex threads", () => {
     for (const { direction, line } of fixtureLines(file)) {
       const routed =
         direction === "app_to_server"
-          ? router.fromApp(line)
+          ? await router.fromApp(line)
           : await router.fromServer(line);
       if (routed === null || !routed.equals(line)) {
         changed.push(JSON.parse(line.toString()).id);
@@ -608,7 +610,7 @@ describe("threads with a Claude model", () => {
       params: { threadId: "th-claude", ephemeral: true, cwd: "/fixture/work/" },
     });
 
-    expect(router.fromApp(line)).toBe(line);
+    expect(await router.fromApp(line)).toBe(line);
     const out = parse(await router.fromServer(threadResponse(9, "th-side")));
 
     expect(calls).toEqual([
@@ -2128,6 +2130,162 @@ const settingsNotice = () =>
   });
 const OTHER_CLAUDE = "claude-opus-5-5";
 
+describe("side chats of a Claude thread moved to Codex", () => {
+  test("opens a side chat picked on Codex as a Codex thread and hands it the conversation with its first message", async () => {
+    const { router, calls, injects } = setup(["th-claude"], {
+      records: { "th-claude": conversation() },
+    });
+    const fork = sideChatFork({ model: "gpt-fixture" });
+    const response = threadResponse(9, "th-side");
+
+    const forwarded = await router.fromApp(fork);
+    const opened = await router.fromServer(response);
+    const first = sideChatTurn({ model: "gpt-fixture" });
+    const started = await router.fromApp(first);
+
+    expect(forwarded).toBe(fork);
+    expect(opened).toBe(response);
+    expect(started).toBe(first);
+    expect(calls.map(([name]) => name)).toEqual(["dropFork"]);
+    expect(injects.map(([threadId]) => threadId)).toEqual(["th-side"]);
+    expect(JSON.stringify(injects[0]?.[1])).toContain("list the files");
+  });
+
+  test("still refuses a fork on a Codex model that is no side chat", async () => {
+    const { router, events } = setup(["th-claude"]);
+
+    const forwarded = await router.fromApp(
+      encode({
+        id: 9,
+        method: "thread/fork",
+        params: { threadId: "th-claude", model: "gpt-fixture" },
+      }),
+    );
+
+    expect(forwarded).toBeNull();
+    expect(events).toContainEqual({
+      event: "claude_request_refused",
+      method: "thread/fork",
+      reason: "codex_model",
+    });
+  });
+
+  test("moves a Claude side chat to Codex when its first message picks a Codex model", async () => {
+    const { router, calls, injects } = setup(["th-claude"], {
+      records: { "th-claude": conversation() },
+    });
+    await router.fromApp(sideChatFork());
+    await router.fromServer(threadResponse(9, "th-side"));
+    const first = sideChatTurn({ model: "gpt-fixture" });
+    const next = sideChatTurn({});
+
+    const started = await router.fromApp(first);
+    const continued = router.fromApp(next);
+
+    expect(started).toBe(first);
+    expect(continued).toBe(next);
+    expect(calls.map(([name]) => name)).toEqual(["adoptFork", "dropFork"]);
+    expect(injects).toHaveLength(1);
+  });
+
+  test("forwards nothing for a first message whose hand-over the server rejected", async () => {
+    const { router, calls, events } = setup(["th-claude"], {
+      records: { "th-claude": conversation() },
+      injected: [Result.err(REJECTED)],
+    });
+    await router.fromApp(sideChatFork({ model: "gpt-fixture" }));
+    await router.fromServer(threadResponse(9, "th-side"));
+
+    const started = await router.fromApp(sideChatTurn({}));
+
+    expect(started).toBeNull();
+    expect(calls.map(([name, , message]) => [name, message])).toEqual([
+      ["reject", refusalMessage("side_chat_not_briefed")],
+    ]);
+    expect(events).toContainEqual({
+      event: "claude_request_refused",
+      method: "turn/start",
+      reason: "side_chat_not_briefed",
+    });
+  });
+
+  test("refuses steering a side chat whose hand-over has an unknown outcome", async () => {
+    const { router, calls } = setup(["th-claude"], {
+      records: { "th-claude": conversation() },
+      injected: [Result.err(UNANSWERED)],
+    });
+    await router.fromApp(sideChatFork({ model: "gpt-fixture" }));
+    await router.fromServer(threadResponse(9, "th-side"));
+    await router.fromApp(sideChatTurn({}));
+
+    const steered = router.fromApp(
+      encode({
+        id: 11,
+        method: "turn/steer",
+        params: { threadId: "th-side", expectedTurnId: "turn-1" },
+      }),
+    );
+
+    expect(steered).toBeNull();
+    expect(calls.map(([, , message]) => message)).toEqual([
+      refusalMessage("side_chat_stopped"),
+      refusalMessage("side_chat_stopped"),
+    ]);
+  });
+
+  test("lets the server take and report a Codex model picked in a Claude side chat before its first message", async () => {
+    const { router, calls } = setup(["th-claude"], {
+      records: { "th-claude": conversation() },
+    });
+    await router.fromApp(sideChatFork());
+    await router.fromServer(threadResponse(9, "th-side"));
+    const update = encode({
+      id: 12,
+      method: "thread/settings/update",
+      params: { threadId: "th-side", model: "gpt-fixture" },
+    });
+    const updated = encode({
+      method: "thread/settings/updated",
+      params: { threadId: "th-side", threadSettings: { model: "gpt-fixture" } },
+    });
+
+    expect(router.fromApp(update)).toBe(update);
+    expect(router.fromServer(updated)).toBe(updated);
+    expect(calls.map(([name]) => name)).toEqual(["adoptFork"]);
+  });
+});
+
+const sideChatFork = (change: object = {}) =>
+  encode({
+    id: 9,
+    method: "thread/fork",
+    params: { threadId: "th-claude", ephemeral: true, ...change },
+  });
+
+const sideChatTurn = (change: object) =>
+  encode({
+    id: 10,
+    method: "turn/start",
+    params: {
+      threadId: "th-side",
+      input: [{ type: "text", text: "what did I ask first?" }],
+      ...change,
+    },
+  });
+
+const REJECTED = {
+  _tag: "ServerRequestRejected",
+  method: "thread/inject_items",
+  code: -32600,
+  message: "rejected",
+} as InferErr<Awaited<ReturnType<ServerRequest>>>;
+
+const UNANSWERED = {
+  _tag: "ServerRequestUnanswered",
+  method: "thread/inject_items",
+  message: "the server did not answer thread/inject_items within 30000ms",
+} as InferErr<Awaited<ReturnType<ServerRequest>>>;
+
 const settingsUpdate = (change: object) =>
   encode({
     id: 8,
@@ -2145,8 +2303,10 @@ const setup = (
     vertex = false,
     delegatedRuns = true,
     startRefusal = null,
+    injected = [],
   }: {
     records?: Record<string, SessionMessage[] | "unreadable">;
+    injected?: Injected[];
     unverifiedCodex?: "warn" | "pause";
     holdForks?: boolean;
     vertex?: boolean;
@@ -2154,6 +2314,16 @@ const setup = (
     startRefusal?: Refusal | null;
   } = {},
 ) => {
+  const injects: [string, object[]][] = [];
+  const readSession = (sessionId: string) =>
+    readClaudeSession(sessionId, {
+      read: async () => {
+        const record = records[sessionId.replace("session-", "")];
+        if (record !== undefined && record !== "unreadable") return record;
+        // biome-ignore lint/plugin/no-throw-try-catch: getSessionMessages rejects when the record cannot be read.
+        throw new Error("unreadable");
+      },
+    });
   const calls: unknown[][] = [];
   const starts: [string, string | null][] = [];
   const events: RouteEvent[] = [];
@@ -2186,14 +2356,7 @@ const setup = (
     },
     readSession: (sessionId) => {
       reads.push(sessionId);
-      return readClaudeSession(sessionId, {
-        read: async () => {
-          const record = records[sessionId.replace("session-", "")];
-          if (record !== undefined && record !== "unreadable") return record;
-          // biome-ignore lint/plugin/no-throw-try-catch: getSessionMessages rejects when the record cannot be read.
-          throw new Error("unreadable");
-        },
-      });
+      return readSession(sessionId);
     },
     send: (message) => sent.push(message),
     log: (event) => events.push(event),
@@ -2278,6 +2441,26 @@ const setup = (
     revert: async (method, request) => {
       calls.push(["revert", method, request]);
     },
+    sideChats: createSideChats({
+      sessionIdOf: (threadId) =>
+        threadId in records ? `session-${threadId}` : null,
+      lastRecordOf: async (sessionId) => {
+        const record = records[sessionId.replace("session-", "")];
+        return Result.ok(
+          Array.isArray(record) ? (record.at(-1)?.uuid ?? null) : null,
+        );
+      },
+      readSession,
+      inject: async (threadId, items) => {
+        injects.push([threadId, items]);
+        return injected.shift() ?? Result.ok({});
+      },
+      claudeBegun: () => false,
+      dropFork: (threadId) => {
+        calls.push(["dropFork", threadId]);
+        threads.delete(threadId);
+      },
+    }),
   });
   return {
     router,
@@ -2293,8 +2476,11 @@ const setup = (
     pinFork,
     subagents,
     serverCalls,
+    injects,
   };
 };
+
+type Injected = Awaited<ReturnType<ServerRequest>>;
 
 const fixtureLines = (file: string) =>
   readFileSync(join(FIXTURE_DIR, file), "utf8")
@@ -2348,7 +2534,9 @@ const responseTo = (sent: object[], id: number) =>
     ),
   );
 
-const parse = (line: Buffer | null) => JSON.parse(line?.toString() ?? "null");
+// A line the router still holds is a Promise, which reads as no line.
+const parse = (line: Buffer | Promise<Buffer | null> | null) =>
+  JSON.parse(line instanceof Buffer ? line.toString() : "null");
 
 const FIXTURE_DIR = join(import.meta.dir, "../../test/fixtures/app-server");
 

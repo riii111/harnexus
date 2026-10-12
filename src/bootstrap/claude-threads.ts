@@ -6,6 +6,7 @@ import { createTurnController } from "../conversation/controller.ts";
 import { createHistoryRequests } from "../conversation/history-request.ts";
 import { createRevertRequests } from "../conversation/revert-request.ts";
 import { createRouter, type RouteEvent } from "../conversation/route.ts";
+import { createSideChats } from "../conversation/side-chat.ts";
 import { createSubagentRequests } from "../conversation/subagent-requests.ts";
 import { createSubagentRestore } from "../conversation/subagent-restore.ts";
 import { createSubagents } from "../conversation/subagents.ts";
@@ -145,6 +146,19 @@ export const connectClaudeThreads = ({
     history: history.load,
     send,
   });
+  const sideChats = createSideChats({
+    sessionIdOf: turns.sessionIdOf,
+    lastRecordOf,
+    readSession,
+    inject: (threadId, items) =>
+      request(
+        "thread/inject_items",
+        { threadId, items },
+        { timeoutMs: INJECT_TIMEOUT_MS },
+      ),
+    claudeBegun: turns.claudeBegun,
+    dropFork: turns.dropFork,
+  });
   const router = createRouter({
     turns,
     log,
@@ -162,6 +176,7 @@ export const connectClaudeThreads = ({
       request,
       send,
     }),
+    sideChats,
   });
   const callGateway = createCallGateway({
     isClaudeThread: (threadId) => store.get(threadId) !== undefined,

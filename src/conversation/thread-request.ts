@@ -112,6 +112,12 @@ const REFUSAL_MESSAGES = {
   unsupported_request: "this request is not supported on a Claude thread yet",
   model_mismatch:
     "this thread's first turn asked for another model or effort than the thread that created it expected, or did not say which, so it was not run",
+  side_chat_unreadable:
+    "where the Claude conversation stands could not be read, so the side chat was not opened; open it again",
+  side_chat_not_briefed:
+    "the Claude conversation could not be handed to Codex, so the message was not sent; send it again",
+  side_chat_stopped:
+    "Harnexus could not confirm that this side chat received the Claude conversation, so it takes no more messages; open a new side chat",
   claude_paused:
     "Claude threads are paused because harnexus was not checked on this Codex CLI version; update harnexus, or unset HARNEXUS_UNVERIFIED_CODEX to run anyway",
 } as const;
