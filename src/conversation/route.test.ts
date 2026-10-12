@@ -2304,6 +2304,30 @@ describe("side chats of a Codex thread moved to Claude", () => {
     });
   });
 
+  test.each<{ name: string; mainThread: object[] | "unreadable" }>([
+    { name: "a refused read", mainThread: "unreadable" },
+    {
+      name: "a malformed turn",
+      mainThread: [{ id: "turn-1", status: "completed" }],
+    },
+  ])("keeps a side chat whose main thread gave $name off Claude", async ({
+    mainThread,
+  }) => {
+    const { router, events } = setup([], { mainThread });
+
+    const explicit = await router.fromApp(codexSideChatFork({ model: CLAUDE }));
+    await router.fromApp(codexSideChatFork());
+    await router.fromServer(threadResponse(9, "th-side"));
+    const switched = await router.fromApp(sideChatTurn({ model: CLAUDE }));
+
+    expect(explicit).toBeNull();
+    expect(switched).toBeNull();
+    expect(events.map((event) => "reason" in event && event.reason)).toEqual([
+      "side_chat_unreadable",
+      "side_chat_main_unread",
+    ]);
+  });
+
   test("still opens a side chat on Codex when the main thread cannot be read", async () => {
     const { router } = setup([], { mainThread: "unreadable" });
     const fork = codexSideChatFork();

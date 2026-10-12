@@ -105,7 +105,7 @@ export const createSideChats = ({
     );
   };
 
-  // Read as the app reads a main thread for a cloud side chat: its newest turns, and its oldest one when there are more, with no further pages. The newest page sets what is handed over, so a turn added after it is left out; pages that disagree on where the thread starts fail the read rather than hand over a mix.
+  // Read as the app reads a main thread for a cloud side chat: its newest turns, and its oldest one when there are more, with no further pages. The newest page sets what is handed over, so a turn added after it is left out; an oldest page with no turn though more were said to exist fails the read rather than hand over a mix.
   const referenceOf = async (parentId: string) => {
     const newest = await readPage(parentId, NEWEST);
     if (newest.isErr()) return Result.err(newest.error);
@@ -118,11 +118,17 @@ export const createSideChats = ({
     const oldest = await readPage(parentId, OLDEST);
     if (oldest.isErr()) return Result.err(oldest.error);
     const first = oldest.value.turns[0];
-    if (first === undefined || recent.some(({ id }) => id === first.id)) {
+    if (first === undefined) {
       return Result.err(
         new MainThreadUnreadable({
           message: "the pages of the main thread disagree on where it starts",
         }),
+      );
+    }
+    // A turn both pages hold is taken from the newest page, which then reaches the oldest turn and leaves nothing unread.
+    if (recent.some(({ id }) => id === first.id)) {
+      return Result.ok(
+        sideChatReference(recent, { agent: "Codex", model: null }),
       );
     }
     return Result.ok(

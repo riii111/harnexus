@@ -58,10 +58,15 @@ export const listedTurns = (
   if (!isObject(result) || !Array.isArray(result.data)) return null;
   const turns: ListedTurn[] = [];
   for (const turn of result.data) {
-    if (!isObject(turn) || typeof turn.id !== "string") return null;
-    const items = Array.isArray(turn.items)
-      ? (turn.items.filter(isObject) as ThreadItem[])
-      : [];
+    if (
+      !isObject(turn) ||
+      typeof turn.id !== "string" ||
+      !Array.isArray(turn.items) ||
+      !turn.items.every(isReadableItem)
+    ) {
+      return null;
+    }
+    const items = turn.items as ThreadItem[];
     turns.push({
       id: turn.id,
       items:
@@ -71,6 +76,14 @@ export const listedTurns = (
     });
   }
   return { turns, more: typeof result.nextCursor === "string" };
+};
+
+// Only the messages are read, so only they must have the shape the reference takes text from.
+const isReadableItem = (item: unknown) => {
+  if (!isObject(item) || typeof item.type !== "string") return false;
+  if (item.type === "agentMessage") return typeof item.text === "string";
+  if (item.type !== "userMessage") return true;
+  return Array.isArray(item.content) && item.content.every(isObject);
 };
 
 const messagesOf = (history: readonly Turn[]) =>

@@ -262,6 +262,22 @@ describe("createSideChats.referenceOf", () => {
     ]);
   });
 
+  test("takes a turn both pages hold from the newest page once", async () => {
+    const { sideChats, main } = setup();
+    main.desc = page([RUNNING_TURN, FINISHED_TURN], "cursor");
+    main.asc = page(
+      [{ ...FINISHED_TURN, items: [...FINISHED_TURN.items, STALE_REPLY] }],
+      "cursor",
+    );
+
+    const reference = await sideChats.referenceOf("th-main");
+
+    const text = reference.isOk() ? (reference.value ?? "") : "";
+    expect(text.match(/codex question/g)).toHaveLength(1);
+    expect(text).not.toContain("stale reply");
+    expect(text).not.toContain("were read");
+  });
+
   test("makes no reference from a main thread with no turns", async () => {
     const { sideChats, main } = setup();
     main.desc = page([], null);
@@ -285,9 +301,37 @@ describe("createSideChats.referenceOf", () => {
       asc: page([], null),
     },
     {
-      name: "an oldest turn the newest page already holds",
-      desc: page([RUNNING_TURN, FINISHED_TURN], "cursor"),
-      asc: page([FINISHED_TURN], "cursor"),
+      name: "a turn with no items",
+      desc: page([{ id: "turn-1", status: "completed" }], null),
+      asc: page([], null),
+    },
+    {
+      name: "a user message with no content",
+      desc: page(
+        [
+          {
+            id: "turn-1",
+            status: "completed",
+            items: [{ type: "userMessage" }],
+          },
+        ],
+        null,
+      ),
+      asc: page([], null),
+    },
+    {
+      name: "an agent message with no text",
+      desc: page(
+        [
+          {
+            id: "turn-1",
+            status: "completed",
+            items: [{ type: "agentMessage" }],
+          },
+        ],
+        null,
+      ),
+      asc: page([], null),
     },
   ])("fails rather than hand over an empty or mixed conversation on $name", async ({
     desc,
@@ -537,4 +581,10 @@ const RUNNING_TURN = {
     },
     { type: "agentMessage", text: "unfinished reply", phase: "commentary" },
   ],
+};
+
+const STALE_REPLY = {
+  type: "agentMessage",
+  text: "stale reply",
+  phase: "final_answer",
 };
