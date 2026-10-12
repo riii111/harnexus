@@ -88,6 +88,12 @@ export const createThreadValues = (
     if (sourceSession !== null) forkSources.set(threadId, sourceSession);
   };
 
+  // Only a fork Claude never ran is forgotten, so nothing was saved of it.
+  const forgetFork = (threadId: string) => {
+    adopted.delete(threadId);
+    forkSources.delete(threadId);
+  };
+
   const forkSourceOf = (threadId: string) =>
     sessionIdOf(threadId) === null ? (forkSources.get(threadId) ?? null) : null;
 
@@ -214,6 +220,7 @@ export const createThreadValues = (
     rewindOf: (threadId: string) => store.get(threadId)?.rewind,
     adopt,
     adoptFork,
+    forgetFork,
     forkSourceOf,
     isBound,
     bindSession,

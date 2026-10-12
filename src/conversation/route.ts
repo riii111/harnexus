@@ -24,6 +24,7 @@ import {
   shownEffort,
   withClaudeModels,
 } from "./model-list.ts";
+import type { createSideChats, ForkPoint } from "./side-chat.ts";
 import type { SubagentRequests } from "./subagent-requests.ts";
 import type { SubagentRestoreEvent } from "./subagent-restore.ts";
 
@@ -102,13 +103,16 @@ type RouterDeps = {
     method: "thread/revert" | "thread/rollback",
     request: AppRequest,
   ) => Promise<void>;
+  sideChats: SideChats;
 };
+
+type SideChats = ReturnType<typeof createSideChats>;
 
 type RefusedMethod = (typeof REFUSED_METHODS)[number];
 
 type History = ReturnType<typeof createHistoryRequests>;
 
-// createdModel is the Claude model a thread/start asked for, which the server never sees; history is the Claude thread's record being read while the server opens the thread.
+// createdModel is the Claude model a thread/start asked for, which the server never sees; history is the Claude thread's record being read while the server opens the thread; sideChat is where the main conversation stood when a side chat of a Claude thread opened.
 type Pending =
   | { kind: "initialize" }
   | { kind: "modelList" }
@@ -118,6 +122,7 @@ type Pending =
       forkOf: string | null;
       history: ReturnType<History["load"]> | null;
       params: Record<string, unknown>;
+      sideChat: { point: ForkPoint; model: string | undefined } | null;
     }
   | {
       kind: "threadRead";
@@ -136,6 +141,7 @@ export const createRouter = ({
   unverifiedCodex,
   subagents,
   revert,
+  sideChats,
 }: RouterDeps) => {
   const pending = new Map<AppRequest["id"], Pending>();
   // Set from the server's initialize answer; while paused the app lists no Claude model and a Claude turn is refused rather than handed to Codex, which would run it without the Claude conversation.
@@ -143,7 +149,7 @@ export const createRouter = ({
   // A Codex thread switched to Claude by turn/start needs a working directory that the request itself may not carry.
   const cwds = new Map<string, string>();
 
-  const fromApp = (line: Buffer): Buffer | null => {
+  const fromApp = (line: Buffer): Buffer | null | Promise<Buffer | null> => {
     const message = parseMessage(line);
     if (message === null) return line;
     // The app's answers to the bridge's own prompts never reach the server, which did not ask them.
@@ -186,6 +192,17 @@ export const createRouter = ({
         return line;
       }
       case "turn/start": {
+        const handOver =
+          typeof params.threadId === "string"
+            ? sideChats.beforeTurn(params.threadId, requestedModel(params))
+            : null;
+        if (handOver !== null) {
+          return handOver.then((refusal) => {
+            if (refusal === null) return line;
+            refuse("turn/start", request, refusal);
+            return null;
+          });
+        }
         const claude =
           isClaudeModel(requestedModel(params)) ||
           turns.isClaudeThread(params.threadId);
@@ -203,6 +220,10 @@ export const createRouter = ({
         return null;
       }
       case "turn/steer":
+        if (sideChats.isStopped(String(params.threadId))) {
+          refuse("turn/steer", request, "side_chat_stopped");
+          return null;
+        }
         if (!turns.isClaudeThread(params.threadId)) return line;
         if (paused) {
           refuse("turn/steer", request, "claude_paused");
@@ -318,6 +339,7 @@ export const createRouter = ({
       forkOf: null,
       history: reopened ? history.load(threadId) : null,
       params,
+      sideChat: null,
     });
     if (!isClaudeModel(params.model)) return line;
     const { model: _model, ...rest } = params;
@@ -325,6 +347,7 @@ export const createRouter = ({
   };
 
   // The server copies its own record of the thread, which holds none of the Claude conversation, so the fork learns of it here.
+  // A side chat opened on a Codex model stays on Codex, and is told where the Claude conversation stood, which it is handed with its first message.
   const routeFork = (line: Buffer, request: AppRequest) => {
     const { id, params } = request;
     if (!turns.isClaudeThread(params.threadId)) return line;
@@ -334,20 +357,40 @@ export const createRouter = ({
       refuse("thread/fork", request, "unsupported_request");
       return null;
     }
+    const source = turns.threadOf(sourceId);
+    const sideChat = params.ephemeral === true && source !== undefined;
+    const requested = requestedModel(params);
+    const codex =
+      sideChat && requested !== undefined && !isClaudeModel(requested);
     // Claude's conversation stays where the source runs, so a fork into another directory would work on the source's files.
-    const checked = checkThread(params, turns.threadOf(sourceId), undefined);
-    if ("refusal" in checked) {
-      refuse("thread/fork", request, checked.refusal);
-      return null;
+    if (!codex) {
+      const checked = checkThread(params, source, undefined);
+      if ("refusal" in checked) {
+        refuse("thread/fork", request, checked.refusal);
+        return null;
+      }
     }
-    pending.set(id, {
-      kind: "threadOpen",
-      createdModel: null,
-      forkOf: sourceId,
-      history: null,
-      params,
+    const open = (
+      point: { point: ForkPoint; model: string | undefined } | null,
+    ) => {
+      pending.set(id, {
+        kind: "threadOpen",
+        createdModel: null,
+        forkOf: codex ? null : sourceId,
+        history: null,
+        params,
+        sideChat: point,
+      });
+      return line;
+    };
+    if (!sideChat) return open(null);
+    // A Claude side chat whose point is unread still runs on Claude, as before; only a Codex one would start without the conversation.
+    return sideChats.pointOf(sourceId, source).then((point) => {
+      if (point.isOk()) return open({ point: point.value, model: requested });
+      if (!codex) return open(null);
+      refuse("thread/fork", request, "side_chat_unreadable");
+      return null;
     });
-    return line;
   };
 
   // Settings that do not reach Claude, such as the approval policy, still go to the server; only what Claude would have to follow is checked.
@@ -359,6 +402,12 @@ export const createRouter = ({
     const { params } = request;
     const threadId = params.threadId;
     if (typeof threadId !== "string") return line;
+    const sideChat = sideChats.beforeSettings(threadId, requestedModel(params));
+    if (sideChat === "pass") return line;
+    if (sideChat !== null) {
+      refuse("thread/settings/update", request, sideChat);
+      return null;
+    }
     const known = turns.threadOf(threadId);
     if (known === undefined && !isClaudeModel(requestedModel(params))) {
       return line;
@@ -477,6 +526,13 @@ export const createRouter = ({
     const threadId = thread.id;
     if (typeof threadId !== "string") return line;
     if (typeof result.cwd === "string") cwds.set(threadId, result.cwd);
+    if (request.sideChat !== null) {
+      sideChats.remember(
+        threadId,
+        request.sideChat.point,
+        request.sideChat.model,
+      );
+    }
     if (request.createdModel !== null && typeof result.cwd === "string") {
       turns.adopt(threadId, { model: request.createdModel, cwd: result.cwd });
     }
@@ -546,6 +602,8 @@ export const createRouter = ({
     const params = isObject(message.params) ? message.params : {};
     const threadId =
       typeof params.threadId === "string" ? params.threadId : undefined;
+    // The server already reports the Codex model a side chat was switched to before its first message.
+    if (threadId !== undefined && sideChats.showsCodex(threadId)) return null;
     const model =
       threadId === undefined ? undefined : turns.threadOf(threadId)?.model;
     const selected =

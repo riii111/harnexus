@@ -364,7 +364,7 @@ const workerA = async () => {
   const settings: ClaudeSessionSettings[] = [];
   const sent: Sent[] = [];
   let linesBeforeAnswer: object[] = [];
-  const routed: (Buffer | null)[] = [];
+  const routed: (Buffer | Promise<Buffer | null> | null)[] = [];
   const requests: { method: string; params: unknown }[] = [];
   const request: ServerRequest = async (method, params) => {
     requests.push({ method, params });

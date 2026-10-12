@@ -928,6 +928,15 @@ export const createTurnController = <Tag extends string>({
       threads.adoptFork(threadId, thread, sourceId);
       return runtime.noteFork(threadId);
     },
+    // A saved thread, a Claude conversation or a turn on its way means Claude already holds part of the thread.
+    claudeBegun: (threadId: string) =>
+      store.get(threadId) !== undefined ||
+      threads.sessionIdOf(threadId) !== null ||
+      turnsInFlight.has(threadId),
+    dropFork: (threadId: string) => {
+      threads.forgetFork(threadId);
+      modes.delete(threadId);
+    },
   };
 };
 

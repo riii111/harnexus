@@ -87,17 +87,7 @@ export const createHistoryRequests = ({
       const read = original.andThen((messages) => {
         if (rewind === undefined) return Result.ok(messages);
         if (rewind.at === null) return Result.ok([]);
-        const index = messages.findIndex(
-          (message) => message.uuid === rewind.at,
-        );
-        return index < 0
-          ? Result.err(
-              new ClaudeRecordUnreadable({
-                cause: null,
-                message: "the retained Claude record is missing",
-              }),
-            )
-          : Result.ok(messages.slice(0, index + 1));
+        return recordUntil(messages, rewind.at);
       });
       // The app's stream waits on this history, so a fault while reading back the thread's agents leaves them out rather than failing it; the next read tries again.
       if (read.isOk()) {
@@ -184,6 +174,22 @@ type SubagentsOfThread = {
 const NO_SUBAGENTS: SubagentsOfThread = {
   restore: async () => {},
   agentRefOf: () => () => undefined,
+};
+
+// A record missing the message it was cut at is no longer the conversation that was kept.
+export const recordUntil = (
+  messages: readonly SessionMessage[],
+  uuid: string,
+): Result<SessionMessage[], ClaudeRecordUnreadable> => {
+  const index = messages.findIndex((message) => message.uuid === uuid);
+  return index < 0
+    ? Result.err(
+        new ClaudeRecordUnreadable({
+          cause: null,
+          message: "the retained Claude record is missing",
+        }),
+      )
+    : Result.ok(messages.slice(0, index + 1));
 };
 
 export const isHistoryMethod = (method: string): method is HistoryMethod =>

@@ -58,6 +58,14 @@ If the app closed during Claude's work, send a new message to continue. The chat
 
 Editing or rewinding a message rewinds the conversation. Files already changed remain as they are.
 
+### Ask Codex in a side chat
+
+From a Claude chat, open a side chat and pick a Codex model, either when you open it or before its first message. The main chat stays on Claude. With its first message, Codex receives the conversation up to the moment the side chat opened as reference: your messages and Claude's replies, without tool calls or their output. Later messages in the main chat do not reach the side chat.
+
+The conversation handed to Codex is limited to about 32,000 characters. This limit counts characters, not tokens. A long conversation keeps its first message and its newest messages, and Codex is told which turns were left out; instructions given only in those turns may be missing. The conversation is handed over once, but it stays in the side chat's context, so each later turn there can also use input tokens for it.
+
+If the side chat says it takes no more messages, it could not confirm that Codex received the conversation; open a new side chat.
+
 ### Attach images
 
 Attach or paste images to ask Claude about them, including while Claude is working. Reopened chats show the images you sent.
