@@ -24,7 +24,7 @@ import {
   shownEffort,
   withClaudeModels,
 } from "./model-list.ts";
-import type { createSideChats, ForkPoint } from "./side-chat.ts";
+import type { createSideChats, Opened } from "./side-chat.ts";
 import type { SubagentRequests } from "./subagent-requests.ts";
 import type { SubagentRestoreEvent } from "./subagent-restore.ts";
 
@@ -122,7 +122,7 @@ type Pending =
       forkOf: string | null;
       history: ReturnType<History["load"]> | null;
       params: Record<string, unknown>;
-      sideChat: { point: ForkPoint; model: string | undefined } | null;
+      sideChat: Opened | null;
     }
   | {
       kind: "threadRead";
@@ -180,7 +180,7 @@ export const createRouter = ({
       case "thread/resume":
         return routeThreadOpen(line, message, request);
       case "thread/fork":
-        return routeFork(line, request);
+        return routeFork(line, message, request);
       case "thread/list": {
         const parent = subagents.listedParentOf(params);
         if (
@@ -348,18 +348,36 @@ export const createRouter = ({
 
   // The server copies its own record of the thread, which holds none of the Claude conversation, so the fork learns of it here.
   // A side chat opened on a Codex model stays on Codex, and is told where the Claude conversation stood, which it is handed with its first message.
-  const routeFork = (line: Buffer, request: AppRequest) => {
+  const routeFork = (
+    line: Buffer,
+    message: Record<string, unknown>,
+    request: AppRequest,
+  ) => {
     const { id, params } = request;
-    if (!turns.isClaudeThread(params.threadId)) return line;
+    const sideChat = params.ephemeral === true;
+    const instructions =
+      typeof params.developerInstructions === "string"
+        ? params.developerInstructions
+        : null;
+    const requested = requestedModel(params);
+    const fromTurn = params.lastTurnId != null || params.beforeTurnId != null;
+    if (!turns.isClaudeThread(params.threadId)) {
+      if (!sideChat || fromTurn || typeof params.threadId !== "string") {
+        return line;
+      }
+      return routeCodexSideChat(line, message, request, {
+        parentId: params.threadId,
+        instructions,
+        requested,
+      });
+    }
     const sourceId = String(params.threadId);
     // Claude's conversation is forked whole, so a fork from an earlier turn would carry the turns after it.
-    if (params.lastTurnId != null || params.beforeTurnId != null) {
+    if (fromTurn) {
       refuse("thread/fork", request, "unsupported_request");
       return null;
     }
     const source = turns.threadOf(sourceId);
-    const sideChat = params.ephemeral === true && source !== undefined;
-    const requested = requestedModel(params);
     const codex =
       sideChat && requested !== undefined && !isClaudeModel(requested);
     // Claude's conversation stays where the source runs, so a fork into another directory would work on the source's files.
@@ -370,26 +388,77 @@ export const createRouter = ({
         return null;
       }
     }
-    const open = (
-      point: { point: ForkPoint; model: string | undefined } | null,
-    ) => {
+    const open = (opened: Opened | null) => {
       pending.set(id, {
         kind: "threadOpen",
         createdModel: null,
         forkOf: codex ? null : sourceId,
         history: null,
         params,
-        sideChat: point,
+        sideChat: opened,
       });
       return line;
     };
-    if (!sideChat) return open(null);
+    if (!sideChat || source === undefined) return open(null);
     // A Claude side chat whose point is unread still runs on Claude, as before; only a Codex one would start without the conversation.
     return sideChats.pointOf(sourceId, source).then((point) => {
-      if (point.isOk()) return open({ point: point.value, model: requested });
-      if (!codex) return open(null);
-      refuse("thread/fork", request, "side_chat_unreadable");
+      if (point.isErr() && codex) {
+        refuse("thread/fork", request, "side_chat_unreadable");
+        return null;
+      }
+      return open({
+        parent: point.isOk()
+          ? { agent: "Claude", point: point.value }
+          : { agent: "Claude", unread: true },
+        instructions,
+        model: requested,
+      });
+    });
+  };
+
+  // The server keeps no turns of an ephemeral fork, so the main thread is read while the fork is asked for; a side chat opened on Claude is refused rather than started without it, and the server never sees the Claude model.
+  const routeCodexSideChat = (
+    line: Buffer,
+    message: Record<string, unknown>,
+    request: AppRequest,
+    {
+      parentId,
+      instructions,
+      requested,
+    }: {
+      parentId: string;
+      instructions: string | null;
+      requested: string | undefined;
+    },
+  ) => {
+    const { id, params } = request;
+    const claude = isClaudeModel(requested);
+    if (claude && paused) {
+      refuse("thread/fork", request, "claude_paused");
       return null;
+    }
+    return sideChats.referenceOf(parentId).then((reference) => {
+      if (reference.isErr() && claude) {
+        refuse("thread/fork", request, "side_chat_unreadable");
+        return null;
+      }
+      pending.set(id, {
+        kind: "threadOpen",
+        createdModel: claude ? requested : null,
+        forkOf: null,
+        history: null,
+        params,
+        sideChat: {
+          parent: reference.isOk()
+            ? { agent: "Codex", reference: reference.value }
+            : { agent: "Codex", unread: true },
+          instructions,
+          model: requested,
+        },
+      });
+      if (!claude) return line;
+      const { model: _model, ...rest } = params;
+      return encode({ ...message, params: rest });
     });
   };
 
@@ -527,11 +596,7 @@ export const createRouter = ({
     if (typeof threadId !== "string") return line;
     if (typeof result.cwd === "string") cwds.set(threadId, result.cwd);
     if (request.sideChat !== null) {
-      sideChats.remember(
-        threadId,
-        request.sideChat.point,
-        request.sideChat.model,
-      );
+      sideChats.remember(threadId, request.sideChat);
     }
     if (request.createdModel !== null && typeof result.cwd === "string") {
       turns.adopt(threadId, { model: request.createdModel, cwd: result.cwd });

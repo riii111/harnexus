@@ -933,6 +933,7 @@ export const createTurnController = <Tag extends string>({
       store.get(threadId) !== undefined ||
       threads.sessionIdOf(threadId) !== null ||
       turnsInFlight.has(threadId),
+    noteSideChat: threads.noteSideChat,
     dropFork: (threadId: string) => {
       threads.forgetFork(threadId);
       modes.delete(threadId);

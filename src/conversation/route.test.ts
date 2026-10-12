@@ -29,6 +29,7 @@ import {
   type Refusal,
   refusalMessage,
 } from "./thread-request.ts";
+import type { SideChatContext } from "./thread-values.ts";
 
 describe("Claude conversation rewind routing", () => {
   test.each([
@@ -2255,6 +2256,123 @@ describe("side chats of a Claude thread moved to Codex", () => {
   });
 });
 
+describe("side chats of a Codex thread moved to Claude", () => {
+  test("reads the main thread while the side chat is asked for and hands it to the side chat Claude runs", async () => {
+    const { router, calls, notes, mainReads } = setup();
+    const fork = codexSideChatFork();
+    const response = threadResponse(9, "th-side");
+
+    const forwarded = await router.fromApp(fork);
+    const opened = await router.fromServer(response);
+    router.fromApp(sideChatTurn({ model: CLAUDE }));
+
+    expect(forwarded).toBe(fork);
+    expect(opened).toBe(response);
+    expect(mainReads).toEqual(["th-codex"]);
+    expect(notes.get("th-side")?.instructions).toBe(SIDE_CHAT_INSTRUCTIONS);
+    expect(notes.get("th-side")?.reference).toContain("codex question");
+    expect(calls.map(([name]) => name)).toEqual(["startTurn"]);
+  });
+
+  test("opens a side chat picked on Claude as a Claude thread the server never sees the model of", async () => {
+    const { router, calls } = setup();
+
+    const forwarded = parse(
+      await router.fromApp(codexSideChatFork({ model: CLAUDE })),
+    );
+    const opened = parse(await router.fromServer(threadResponse(9, "th-side")));
+
+    expect(forwarded.params.model).toBeUndefined();
+    expect(calls).toEqual([
+      ["adopt", "th-side", { model: CLAUDE, cwd: "/fixture/work" }],
+    ]);
+    expect(opened.result.model).toBe(CLAUDE);
+  });
+
+  test("refuses a side chat picked on Claude when the main thread cannot be read rather than open it without the conversation", async () => {
+    const { router, events } = setup([], { mainThread: "unreadable" });
+
+    const forwarded = await router.fromApp(
+      codexSideChatFork({ model: CLAUDE }),
+    );
+
+    expect(forwarded).toBeNull();
+    expect(events).toContainEqual({
+      event: "claude_request_refused",
+      method: "thread/fork",
+      reason: "side_chat_unreadable",
+    });
+  });
+
+  test("still opens a side chat on Codex when the main thread cannot be read", async () => {
+    const { router } = setup([], { mainThread: "unreadable" });
+    const fork = codexSideChatFork();
+
+    expect(await router.fromApp(fork)).toBe(fork);
+  });
+
+  test("refuses moving a side chat that sent a message to Codex to Claude", async () => {
+    const { router, calls, events } = setup();
+    await router.fromApp(codexSideChatFork());
+    await router.fromServer(threadResponse(9, "th-side"));
+    const first = sideChatTurn({});
+
+    const answered = await router.fromApp(first);
+    const switched = await router.fromApp(sideChatTurn({ model: CLAUDE }));
+
+    expect(answered).toBe(first);
+    expect(switched).toBeNull();
+    expect(calls.map(([name]) => name)).toEqual(["reject"]);
+    expect(events).toContainEqual({
+      event: "claude_request_refused",
+      method: "turn/start",
+      reason: "side_chat_model_fixed",
+    });
+  });
+
+  test("leaves a fork of a Codex thread that is no side chat unread", async () => {
+    const { router, mainReads } = setup();
+    const fork = encode({
+      id: 9,
+      method: "thread/fork",
+      params: { threadId: "th-codex", model: "gpt-fixture" },
+    });
+
+    expect(router.fromApp(fork)).toBe(fork);
+    expect(mainReads).toEqual([]);
+  });
+});
+
+const codexSideChatFork = (change: object = {}) =>
+  encode({
+    id: 9,
+    method: "thread/fork",
+    params: {
+      threadId: "th-codex",
+      ephemeral: true,
+      excludeTurns: true,
+      developerInstructions: SIDE_CHAT_INSTRUCTIONS,
+      ...change,
+    },
+  });
+
+const SIDE_CHAT_INSTRUCTIONS =
+  "You are in a side conversation, not the main thread.";
+
+const CODEX_MAIN_TURNS = [
+  {
+    id: "turn-1",
+    status: "completed",
+    items: [
+      {
+        type: "userMessage",
+        content: [{ type: "text", text: "codex question" }],
+      },
+      { type: "agentMessage", text: "codex answer", phase: "final_answer" },
+    ],
+  },
+];
+
 const sideChatFork = (change: object = {}) =>
   encode({
     id: 9,
@@ -2304,9 +2422,11 @@ const setup = (
     delegatedRuns = true,
     startRefusal = null,
     injected = [],
+    mainThread = CODEX_MAIN_TURNS,
   }: {
     records?: Record<string, SessionMessage[] | "unreadable">;
     injected?: Injected[];
+    mainThread?: object[] | "unreadable";
     unverifiedCodex?: "warn" | "pause";
     holdForks?: boolean;
     vertex?: boolean;
@@ -2315,6 +2435,8 @@ const setup = (
   } = {},
 ) => {
   const injects: [string, object[]][] = [];
+  const mainReads: string[] = [];
+  const notes = new Map<string, SideChatContext>();
   const readSession = (sessionId: string) =>
     readClaudeSession(sessionId, {
       read: async () => {
@@ -2452,11 +2574,19 @@ const setup = (
         );
       },
       readSession,
+      listTurns: async (threadId) => {
+        mainReads.push(threadId);
+        return mainThread === "unreadable"
+          ? Result.err(REJECTED)
+          : Result.ok({ data: mainThread, nextCursor: null });
+      },
       inject: async (threadId, items) => {
         injects.push([threadId, items]);
         return injected.shift() ?? Result.ok({});
       },
+      isClaudeThread: (threadId) => threads.has(threadId),
       claudeBegun: () => false,
+      noteSideChat: (threadId, context) => notes.set(threadId, context),
       dropFork: (threadId) => {
         calls.push(["dropFork", threadId]);
         threads.delete(threadId);
@@ -2478,6 +2608,8 @@ const setup = (
     subagents,
     serverCalls,
     injects,
+    mainReads,
+    notes,
   };
 };
 

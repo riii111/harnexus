@@ -58,13 +58,15 @@ If the app closed during Claude's work, send a new message to continue. The chat
 
 Editing or rewinding a message rewinds the conversation. Files already changed remain as they are.
 
-### Ask Codex in a side chat
+### Side chats across Claude and Codex
 
-From a Claude chat, open a side chat and pick a Codex model, either when you open it or before its first message. The main chat stays on Claude. With its first message, Codex receives the conversation up to the moment the side chat opened as reference: your messages and Claude's replies, without tool calls or their output. Later messages in the main chat do not reach the side chat.
+From a Claude chat, you can open a side chat and pick Codex; from a Codex chat, you can open one and pick Claude. Pick the model when you open the side chat or before its first message: once its first message is sent, it stays on that model, so open a new side chat to ask the other one. The main chat keeps its own model.
 
-The conversation handed to Codex is limited to about 32,000 characters. This limit counts characters, not tokens. A long conversation keeps its first message and its newest messages, and Codex is told which turns were left out; instructions given only in those turns may be missing. The conversation is handed over once, but it stays in the side chat's context, so each later turn there can also use input tokens for it.
+The side chat receives the main conversation as reference: your messages and the main agent's finished replies, without tool calls or their output. For a Claude main chat, this is the conversation when the side chat opened. For a Codex main chat, it is what harnexus could read while the side chat was being opened, so anything added after that is left out. Later messages in the main chat do not reach the side chat. A side chat running on Claude also follows the app's side chat instructions, such as not editing files unless you ask.
 
-If the side chat says it takes no more messages, it could not confirm that Codex received the conversation; open a new side chat.
+The conversation handed over is limited to about 32,000 characters. This limit counts characters, not tokens. A long conversation keeps its first message and its newest messages, and the side chat is told which turns were left out; instructions given only in those turns may be missing. The conversation is handed over once, but it stays in the side chat's context, so each later turn there can also use input tokens for it. Opening a side chat from a Codex chat reads that chat's history on this Mac, which adds a short wait even when the side chat stays on Codex but uses no model tokens.
+
+If the main conversation could not be read, the side chat stays on the main chat's model. If a side chat says it takes no more messages, it could not confirm that Codex received the conversation; open a new side chat.
 
 ### Attach images
 

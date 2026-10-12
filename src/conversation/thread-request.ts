@@ -113,7 +113,11 @@ const REFUSAL_MESSAGES = {
   model_mismatch:
     "this thread's first turn asked for another model or effort than the thread that created it expected, or did not say which, so it was not run",
   side_chat_unreadable:
-    "where the Claude conversation stands could not be read, so the side chat was not opened; open it again",
+    "where the main conversation stands could not be read, so the side chat was not opened; open it again",
+  side_chat_main_unread:
+    "the main conversation could not be read when this side chat opened, so it stays on the main thread's agent; open a new side chat to ask the other one",
+  side_chat_model_fixed:
+    "this side chat already sent a message on another model; open a new side chat to ask that one",
   side_chat_not_briefed:
     "the Claude conversation could not be handed to Codex, so the message was not sent; send it again",
   side_chat_stopped:
