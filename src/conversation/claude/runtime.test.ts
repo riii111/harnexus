@@ -1723,6 +1723,55 @@ describe("a fork of a Claude thread", () => {
     expect(started.settings[1]).toMatchObject({ resumeAt: "a-1" });
   });
 
+  test("starts from where a rewound source stands rather than its record's end", async () => {
+    const source = fakeClaude(SUBSCRIPTION);
+    const fork = fakeClaude(SUBSCRIPTION);
+    const started = await harness([source, fork]);
+    await completeTurn(started.turns, started.sent, source, 10);
+    await writeSourceRecord(["a-1", "a-2"]);
+    const rewound = await started.store.setRewind(THREAD, {
+      sessionId: "se-1",
+      at: "a-1",
+    });
+    await started.turns.adoptFork(
+      OTHER_THREAD,
+      { model: MODEL, cwd: dir },
+      THREAD,
+    );
+
+    await forkTurn(started, fork, 11);
+
+    expect(rewound.isOk()).toBe(true);
+    expect(started.settings[1]).toMatchObject({
+      resume: "se-1",
+      forkSession: true,
+      resumeAt: "a-1",
+    });
+  });
+
+  test("starts a conversation of its own when the source was rewound to its start", async () => {
+    const source = fakeClaude(SUBSCRIPTION);
+    const fork = fakeClaude(SUBSCRIPTION);
+    const started = await harness([source, fork]);
+    await completeTurn(started.turns, started.sent, source, 10);
+    await writeSourceRecord(["a-1"]);
+    const rewound = await started.store.setRewind(THREAD, {
+      sessionId: "se-1",
+      at: null,
+    });
+    await started.turns.adoptFork(
+      OTHER_THREAD,
+      { model: MODEL, cwd: dir },
+      THREAD,
+    );
+
+    await forkTurn(started, fork, 11);
+
+    expect(rewound.isOk()).toBe(true);
+    expect(started.settings[1]?.resume).toBeUndefined();
+    expect(started.settings[1]?.forkSession).toBeUndefined();
+  });
+
   test("starts a conversation of its own when the source had said nothing when forked, even once it has", async () => {
     const source = fakeClaude(SUBSCRIPTION);
     const fork = fakeClaude(SUBSCRIPTION);
