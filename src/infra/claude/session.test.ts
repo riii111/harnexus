@@ -59,6 +59,32 @@ describe("startClaudeSession options", () => {
     expect(claude.options().resume).toBeUndefined();
   });
 
+  test.each([
+    { name: "a new conversation", fork: {}, expected: {} },
+    {
+      name: "a fork, which it keeps from recording its source's prompt",
+      fork: { resume: "session-1", forkSession: true },
+      expected: { snapshot: false },
+    },
+  ])("appends a side chat's instructions to the preset system prompt for $name", async ({
+    fork,
+    expected,
+  }) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+
+    await startClaudeSession(
+      { ...SETTINGS, ...fork, instructions: "You are in a side conversation." },
+      claude.runtime,
+    );
+
+    expect(claude.options().systemPrompt).toEqual({
+      type: "preset",
+      preset: "claude_code",
+      append: "You are in a side conversation.",
+      ...expected,
+    });
+  });
+
   test("resumes the given session with the given MCP servers and their allowed tools", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const mcpServers = { harnexus: { command: "harnexus-mcp" } };

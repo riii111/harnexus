@@ -30,7 +30,7 @@ describe("sideChatBrief", () => {
     expect(body).toContain("[assistant, turn 40]\nanswer 40 ");
     expect(body).not.toContain("question 20 ");
     expect(body).toMatch(
-      /The messages after the first one through turn \d+ of 40 are left out, so instructions or constraints given there may be missing; ask the user/,
+      /The messages after the first one through turn \d+ are left out, so instructions or constraints given there may be missing; ask the user/,
     );
     expect(body.length).toBeLessThanOrEqual(32_000);
   });
@@ -43,7 +43,7 @@ describe("sideChatBrief", () => {
     expect(body.length).toBeLessThanOrEqual(32_000);
     expect(body).toContain("[user, turn 1]\nquestion 1 ");
     expect(body).toContain("[assistant, turn 1000]\nanswer 1000 ");
-    expect(body).toMatch(/through turn \d+ of 1000 are left out/);
+    expect(body).toMatch(/through turn \d+ are left out/);
   });
 
   test("cuts a huge first message so the newest exchange still fits", () => {

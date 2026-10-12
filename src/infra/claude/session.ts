@@ -66,6 +66,8 @@ export type ClaudeSessionSettings = {
   allowedTools?: string[];
   permissionMode: "default" | "auto" | "plan";
   canUseTool: CanUseTool;
+  // The instructions the app gave a side chat, such as not to edit files unless asked.
+  instructions?: string;
 };
 
 class ClaudeSessionClosed extends TaggedError("ClaudeSessionClosed")<{
@@ -329,7 +331,7 @@ const checkRecordReadable = async (sessionId: string, configDir: string) =>
       }),
   );
 
-// Codex instructions and the app's history are never appended to the preset system prompt.
+// Codex instructions and the app's history are never appended to the preset system prompt; only the instructions the app gives a side chat are, as they set what the side chat may do.
 const sessionOptions = (
   settings: ClaudeSessionSettings,
   env: Env,
@@ -347,7 +349,16 @@ const sessionOptions = (
     settings: { env: { ...settings.connection.env } },
   }),
   settingSources: SETTING_SOURCES,
-  systemPrompt: { type: "preset", preset: "claude_code" },
+  systemPrompt:
+    settings.instructions === undefined
+      ? { type: "preset", preset: "claude_code" }
+      : {
+          type: "preset",
+          preset: "claude_code",
+          append: settings.instructions,
+          // A fork would otherwise take its source's recorded prompt, which holds no side chat instructions.
+          ...(settings.forkSession === true && { snapshot: false }),
+        },
   // The bridge selects the mode explicitly so user settings cannot silently enable bypassPermissions.
   permissionMode: settings.permissionMode,
   canUseTool: settings.canUseTool,

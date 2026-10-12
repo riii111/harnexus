@@ -151,14 +151,22 @@ export const connectClaudeThreads = ({
     rewindOf: turns.rewindOf,
     lastRecordOf,
     readSession,
+    listTurns: (threadId, page) =>
+      request(
+        "thread/turns/list",
+        { threadId, ...page, itemsView: "full" },
+        { timeoutMs: READ_TIMEOUT_MS },
+      ),
     inject: (threadId, items) =>
       request(
         "thread/inject_items",
         { threadId, items },
         { timeoutMs: INJECT_TIMEOUT_MS },
       ),
+    isClaudeThread: turns.isClaudeThread,
     claudeBegun: turns.claudeBegun,
     dropFork: turns.dropFork,
+    noteSideChat: turns.noteSideChat,
   });
   const router = createRouter({
     turns,
@@ -201,6 +209,8 @@ const THREAD_NOTE = {
 };
 
 const INJECT_TIMEOUT_MS = 30_000;
+
+const READ_TIMEOUT_MS = 30_000;
 
 const RENAME_TIMEOUT_MS = 10_000;
 

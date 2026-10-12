@@ -10,6 +10,12 @@ import type { ErrorTag } from "./turn-runtime.ts";
 
 export type ThreadValues = ReturnType<typeof createThreadValues>;
 
+// What the app gave a side chat that may run on Claude: its own instructions, and the main conversation as reference text.
+export type SideChatContext = {
+  instructions: string | null;
+  reference: string | null;
+};
+
 export type ThreadValueEvent =
   | { event: "claude_turn"; step: "model_changed" }
   | { event: "claude_turn"; step: "session_picked"; thread: string }
@@ -52,6 +58,7 @@ export const createThreadValues = (
   const efforts = new Map<string, EffortLevel>();
   const sessionIds = new Map<string, string | null>();
   const picked = new Set<string>();
+  const sideChats = new Map<string, SideChatContext>();
 
   const threadOf = (threadId: string): Thread | undefined => {
     const record = store.get(threadId);
@@ -102,6 +109,20 @@ export const createThreadValues = (
       forkSources.set(threadId, { sessionId: sourceSession, at: null });
     }
   };
+
+  // A side chat is ephemeral, so what the app gave it is kept only while the bridge runs.
+  const noteSideChat = (threadId: string, context: SideChatContext) => {
+    sideChats.set(threadId, context);
+  };
+
+  const instructionsOf = (threadId: string) =>
+    sideChats.get(threadId)?.instructions ?? null;
+
+  // Claude keeps the reference in its record once it holds a conversation, so it goes with every prompt until then, including one sent again after a turn that failed before Claude took it.
+  const referenceOf = (threadId: string) =>
+    sessionIdOf(threadId) === null
+      ? (sideChats.get(threadId)?.reference ?? null)
+      : null;
 
   // Only a fork Claude never ran is forgotten, so nothing was saved of it.
   const forgetFork = (threadId: string) => {
@@ -241,6 +262,9 @@ export const createThreadValues = (
     adopt,
     adoptFork,
     forgetFork,
+    noteSideChat,
+    instructionsOf,
+    referenceOf,
     forkSourceOf,
     forkPinOf,
     isBound,

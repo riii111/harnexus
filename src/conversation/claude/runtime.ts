@@ -713,11 +713,13 @@ export const createClaudeRuntime = ({
     images: readonly ImageBlock[],
     fresh: Awaited<ReturnType<typeof readSkills>>["skills"],
   ) => {
+    const reference = threads.referenceOf(turn.threadId);
     const sent = slot.session.send({
       text: turn.input.text,
       images,
       attachments: [
         ...(turn.recovering ? [RECOVERY_CONTEXT] : []),
+        ...(reference === null ? [] : [reference]),
         ...fresh.map(({ block }) => block),
       ],
     });
@@ -1385,6 +1387,7 @@ export const createClaudeRuntime = ({
     // Each session gets its own thread tool server, since one server instance serves one Claude process.
     const link = openLink(record.threadId);
     pending.link = link;
+    const instructions = threads.instructionsOf(record.threadId);
     const starting = startSession(
       {
         threadId: record.threadId,
@@ -1407,6 +1410,7 @@ export const createClaudeRuntime = ({
         mcpServers: { [link.server.name]: link.server },
         allowedTools: link.allowedTools,
         canUseTool: approveTool(record.threadId),
+        ...(instructions !== null && { instructions }),
       },
       pending.controller.signal,
     );
