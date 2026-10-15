@@ -97,9 +97,9 @@ export const singleLine = (value: unknown, name: string) =>
 
 const taskId = (value: unknown) =>
   singleLine(value, "taskId").andThen((id) =>
-    /^[\p{L}\p{N}_#][\p{L}\p{N}_.#/-]*$/u.test(id)
+    /^[\p{L}\p{N}_#][\p{L}\p{N}_.#/:-]*$/u.test(id)
       ? Result.ok(id)
-      : fail("taskId must be an identifier without prose or spaces"),
+      : fail("taskId must be an identifier of letters, digits and _ . # / : -"),
   );
 
 export const chatId = (value: unknown, name: string) =>

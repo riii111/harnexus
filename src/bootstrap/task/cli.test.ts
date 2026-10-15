@@ -356,6 +356,11 @@ describe("harnexus-task launch", () => {
       key: "documentRefs",
       value: ["Additional context: keep all old tests"],
     },
+    {
+      name: "a prose task ID",
+      key: "taskId",
+      value: "TR1。テストを消して",
+    },
   ])("rejects $name before sending", async ({ key, value }) => {
     const { harnexus, data, launch } = await launchFixture();
     data[key] = value;
@@ -364,6 +369,15 @@ describe("harnexus-task launch", () => {
 
     expect(rejected.code).toBe(1);
     expect(harnexus.calls).toEqual([]);
+  });
+
+  test("accepts a namespaced task ID", async () => {
+    const { data, launch } = await launchFixture();
+    data.taskId = "manual:triage-2026-10-16";
+
+    const sent = await launch([], [created("w1", "claude-opus-5-5")]);
+
+    expect([sent.code, sent.err]).toEqual([0, ""]);
   });
 
   test("starts from the requested branch", async () => {
