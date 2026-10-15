@@ -76,7 +76,9 @@ PNG, JPEG, GIF, and WebP are supported; large images are reduced automatically. 
 
 ### Reopen the app
 
-Use `bun run open-app` each time you want to start the app with harnexus. The app reads its environment only at startup, so quit it first if it is already running.
+Run `bun run open-app` once with the app quit. It registers harnexus for your macOS user session, so Dock launches and automatic restarts after app updates use it too. A LaunchAgent at `~/Library/LaunchAgents/com.harnexus.environment.plist` restores the settings at login.
+
+Keep this checkout and Bun at their registered locations. To change paths or options, quit the app and run `bun run open-app` again with the desired settings. Optional settings omitted on that run are cleared.
 
 To return to the app's standard setup, quit it and run:
 
@@ -84,7 +86,7 @@ To return to the app's standard setup, quit it and run:
 bun run open-app --standard
 ```
 
-Your Claude chats remain unavailable until you open the app with harnexus again.
+This removes the session variables and login LaunchAgent. Dock launches and future logins then use standard Codex. Your Claude chats remain unavailable until you run `bun run open-app` again.
 
 ## Troubleshooting
 
@@ -96,17 +98,23 @@ First, make sure you quit the app before opening it with `bun run open-app`. The
 bun run doctor
 ```
 
-The report checks installed versions, your Claude login, saved state, the launcher, and any bridge or Claude processes left running. It also summarizes the last 24 hours of the bridge log: bridge starts, the Codex CLI version, the call socket, and refused requests and turns. It prints no conversation text or credentials, so you can paste it into a bug report.
+The report checks installed versions, your Claude login, saved state, the launcher, launchd registration and login restoration (including differences from this checkout and shell), and any bridge or Claude processes left running. It also summarizes the last 24 hours of the bridge log: bridge starts, switches to standard Codex, the Codex CLI version, the call socket, and refused requests and turns. It prints no conversation text or credentials, so you can paste it into a bug report.
 
 The bridge log is kept at `~/.local/state/harnexus/bridge.log`, beside the saved state, and holds no conversation text. When it grows past 5 MB, the next bridge start moves it to `bridge.log.1`.
 
 ### After an app update
 
-harnexus warns when the app bundles a Codex CLI version it has not been checked on. To keep Claude disabled on an unverified version, launch with:
+If the bundled Codex CLI is unverified or the bridge cannot start, the launcher uses standard Codex directly. Codex chats remain available; Claude chats need a working harnexus setup. Run `bun run doctor` to see recent switches in the bridge log (`standard_fallback`). Startup waits at most 15 seconds for the bridge before falling back. A macOS notification explains why and points to `bun run doctor`; notification failures do not block the app. The latest failure's reason, Codex version (when available) and timestamp are saved in `~/.local/state/harnexus/launcher-failure.json` beside the state file, even with file logging disabled.
+
+While the app runs, harnexus also checks the normal initialization and model-list responses for fields it needs. If those fields are missing or have changed types, it stops offering Claude models and refuses new Claude requests for that connection. Other Codex traffic keeps passing through. A notification explains the failure, and `bun run doctor` reads the latest record from `compatibility-failure.json` beside the state file. Extra response fields and ordinary RPC errors do not trigger this check.
+
+To try Claude on an unverified CLI, explicitly opt in and reopen the app:
 
 ```sh
-HARNEXUS_UNVERIFIED_CODEX=pause bun run open-app
+HARNEXUS_UNVERIFIED_CODEX=warn bun run open-app
 ```
+
+To restore automatic fallback, quit the app and run `bun run open-app` with that variable unset. The opt-in cannot guarantee compatibility with a changed app-server protocol.
 
 ## Use Google Vertex AI for a repository
 

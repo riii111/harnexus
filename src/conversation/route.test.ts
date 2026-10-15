@@ -9,6 +9,8 @@ import type {
 import { type InferErr, Result } from "better-result";
 import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import { readClaudeSession } from "../infra/claude/session.ts";
+import { createCallGateway } from "../infra/codex/call-gateway.ts";
+import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { LiveTurn } from "../presentation/history.ts";
 import {
@@ -30,6 +32,177 @@ import {
   refusalMessage,
 } from "./thread-request.ts";
 import type { SideChatContext } from "./thread-values.ts";
+
+describe("createRouter compatibility", () => {
+  test("returns a definite incompatibility refusal through the gateway without leaving the creator busy", async () => {
+    const watch = createDelegationWatch();
+    const { router, calls } = setup([], { delegationWatch: watch });
+    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromServer(encode({ id: 1, result: { userAgent: null } }));
+    let sequence = 0;
+    const gateway = createCallGateway({
+      isClaudeThread: () => false,
+      openLink: () => expect.unreachable("a Codex creator has no Claude link"),
+      delegations: watch,
+      firstTurnWaitMs: 5,
+      request: async () => {
+        const threadId = `child-${++sequence}`;
+        expect(
+          await router.fromApp(
+            delegatedTurn({
+              threadId,
+              model: "claude-sonnet-5",
+              effort: "low",
+            }),
+          ),
+        ).toBeNull();
+        return Result.ok({ structuredContent: { threadId } });
+      },
+    });
+    const call = JSON.stringify({
+      threadId: "th-codex",
+      tool: "create_thread",
+      arguments: { model: "claude-sonnet-5", thinking: "low" },
+    });
+    expect(JSON.parse(await gateway.handle(call))).toEqual({
+      outcome: "first_turn_refused",
+      threadId: "child-1",
+      reason: "codex_incompatible",
+    });
+    expect(JSON.parse(await gateway.handle(call))).toEqual({
+      outcome: "first_turn_refused",
+      threadId: "child-2",
+      reason: "codex_incompatible",
+    });
+    expect(calls.some(([method]) => method === "startTurn")).toBe(false);
+  });
+
+  test.each([
+    {
+      name: "matching settings",
+      actual: { model: "claude-sonnet-5", effort: "low" },
+      expected: { refused: false, refusal: "codex_incompatible" },
+    },
+    {
+      name: "a different Claude model",
+      actual: { model: "claude-opus-5", effort: "low" },
+      expected: { refused: true, refusal: null },
+    },
+    {
+      name: "a different effort",
+      actual: { model: "claude-sonnet-5", effort: "high" },
+      expected: { refused: true, refusal: null },
+    },
+  ])("completes the real delegation wait on incompatible first turns with $name", async ({
+    actual,
+    expected,
+  }) => {
+    const watch = createDelegationWatch();
+    const { router, calls } = setup([], { delegationWatch: watch });
+    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromServer(encode({ id: 1, result: { userAgent: null } }));
+    const pending = watch.expect("th-codex", {
+      expected: { model: "claude-sonnet-5", effort: "low" },
+    });
+    if (pending === null)
+      return expect.unreachable("first delegation is already waiting");
+
+    expect(await router.fromApp(delegatedTurn(actual))).toBeNull();
+    expect(await pending.wait(5)).toMatchObject({
+      threadId: "th-worker",
+      actual,
+      ...expected,
+    });
+    expect(calls.some(([call]) => call === "startTurn")).toBe(false);
+    const next = watch.expect("th-codex");
+    expect(next).not.toBeNull();
+    next?.cancel();
+  });
+
+  test.each([
+    {
+      name: "initialize",
+      method: "initialize",
+      result: { userAgent: null },
+      reason: "InitializeResponseChanged",
+    },
+    {
+      name: "model list",
+      method: "model/list",
+      result: { data: {} },
+      reason: "ModelListResponseChanged",
+    },
+  ])("passes through a changed $name response and disables Claude once for the connection", async ({
+    method,
+    result,
+    reason,
+  }) => {
+    const { router, events, calls } = setup(["th-claude"]);
+    const response = encode({ id: 100, result });
+    router.fromApp(encode({ id: 100, method, params: {} }));
+    expect(await router.fromServer(response)).toEqual(response);
+    router.fromApp(encode({ id: 101, method, params: {} }));
+    await router.fromServer(encode({ id: 101, result }));
+    expect(
+      events.filter(({ event }) => event === "codex_incompatible"),
+    ).toEqual([{ event: "codex_incompatible", reason, version: null }]);
+
+    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromServer(initializeAnswer(VERIFIED_AGENT));
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    const models = modelList(2, null);
+    expect(await router.fromServer(models)).toEqual(models);
+    expect(
+      await router.fromApp(
+        encode({
+          id: 3,
+          method: "turn/start",
+          params: { threadId: "th-claude" },
+        }),
+      ),
+    ).toBeNull();
+    expect(calls).toContainEqual([
+      "reject",
+      { id: 3, params: { threadId: "th-claude" } },
+      expect.stringContaining("disabled"),
+    ]);
+    const codex = encode({
+      id: 4,
+      method: "turn/start",
+      params: { threadId: "th-codex", model: "gpt-fixture" },
+    });
+    expect(await router.fromApp(codex)).toEqual(codex);
+  });
+
+  test("retains the initialized CLI version in a later incompatibility event", async () => {
+    const { router, events } = setup();
+    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromServer(initializeAnswer(VERIFIED_AGENT));
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    await router.fromServer(encode({ id: 2, result: { data: null } }));
+    expect(events).toContainEqual({
+      event: "codex_incompatible",
+      reason: "ModelListResponseChanged",
+      version: "0.158.0-alpha.2.1",
+    });
+  });
+
+  test("keeps Claude enabled after an RPC error and an unrelated malformed response", async () => {
+    const { router, events } = setup();
+    router.fromApp(encode({ id: 100, method: "initialize", params: {} }));
+    await router.fromServer(
+      encode({ id: 100, error: { code: -32603, message: "not ready" } }),
+    );
+    await router.fromServer(encode({ id: 99, result: { data: null } }));
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    expect(
+      parse(await router.fromServer(modelList(2, null))).result.data.length,
+    ).toBeGreaterThan(1);
+    expect(
+      events.filter(({ event }) => event === "codex_incompatible"),
+    ).toEqual([]);
+  });
+});
 
 describe("Claude conversation rewind routing", () => {
   test.each([
@@ -2454,6 +2627,7 @@ const setup = (
     holdForks = false,
     vertex = false,
     delegatedRuns = true,
+    delegationWatch,
     startRefusal = null,
     injected = [],
     mainThread = CODEX_MAIN_TURNS,
@@ -2465,6 +2639,7 @@ const setup = (
     holdForks?: boolean;
     vertex?: boolean;
     delegatedRuns?: boolean;
+    delegationWatch?: Parameters<typeof createRouter>[0]["delegations"];
     startRefusal?: Refusal | null;
   } = {},
 ) => {
@@ -2583,7 +2758,7 @@ const setup = (
       liveTurnOf: (threadId) => live.get(threadId) ?? null,
     },
     log: (event) => events.push(event),
-    delegations: {
+    delegations: delegationWatch ?? {
       observe: (source, threadId, asked) => {
         calls.push(["delegated", source, threadId, asked]);
         return delegatedRuns;

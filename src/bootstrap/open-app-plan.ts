@@ -7,28 +7,45 @@ export type OpenAppPaths = {
   bun: string;
 };
 
-// An app opened with harnexus takes the launcher as its Codex CLI; the log and state paths of this shell pass through so a setup can keep its own files.
+export const registeredEnvironment = (
+  paths: OpenAppPaths,
+  env: Record<string, string | undefined>,
+): Record<string, string> => ({
+  CODEX_CLI_PATH: paths.launcher,
+  HARNEXUS_CODEX_PATH: paths.codex,
+  HARNEXUS_BUN_PATH: paths.bun,
+  ...Object.fromEntries(
+    PASSED_ENV.flatMap((name) => {
+      const value = env[name];
+      return value === undefined || value === "" ? [] : [[name, value]];
+    }),
+  ),
+});
+
 export const openArguments = (
   paths: OpenAppPaths,
   mode: "harnexus" | "standard",
   env: Record<string, string | undefined>,
-) => {
-  if (mode === "standard") return ["-a", paths.app];
-  const passed = PASSED_ENV.flatMap((name) => {
-    const value = env[name];
-    return value === undefined || value === "" ? [] : [`${name}=${value}`];
-  });
-  return [
-    "-a",
-    paths.app,
-    ...[
-      `CODEX_CLI_PATH=${paths.launcher}`,
-      `HARNEXUS_CODEX_PATH=${paths.codex}`,
-      `HARNEXUS_BUN_PATH=${paths.bun}`,
-      ...passed,
-    ].flatMap((variable) => ["--env", variable]),
-  ];
-};
+) => [
+  "-a",
+  paths.app,
+  ...(mode === "standard"
+    ? []
+    : Object.entries(registeredEnvironment(paths, env)).flatMap(
+        ([key, value]) => ["--env", `${key}=${value}`],
+      )),
+];
+
+export const REGISTERED_ENV_NAMES = [
+  "CODEX_CLI_PATH",
+  "HARNEXUS_CODEX_PATH",
+  "HARNEXUS_BUN_PATH",
+  "HARNEXUS_LOG_PATH",
+  "HARNEXUS_STATE_PATH",
+  "HARNEXUS_UNVERIFIED_CODEX",
+  "HARNEXUS_VERTEX",
+  "HARNEXUS_PERMISSION_MODE",
+] as const;
 
 // The environment reaches the app only when it starts, so a running app keeps the setup it was opened with.
 export const isAppRunning = (
@@ -39,10 +56,4 @@ export const isAppRunning = (
   return processes.some(({ command }) => command.startsWith(binary));
 };
 
-const PASSED_ENV = [
-  "HARNEXUS_LOG_PATH",
-  "HARNEXUS_STATE_PATH",
-  "HARNEXUS_UNVERIFIED_CODEX",
-  "HARNEXUS_VERTEX",
-  "HARNEXUS_PERMISSION_MODE",
-];
+const PASSED_ENV = REGISTERED_ENV_NAMES.slice(3);

@@ -12,21 +12,43 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const LAUNCHER = join(import.meta.dir, "..", "bin", "harnexus-codex");
+const SOURCE_LAUNCHER = join(import.meta.dir, "..", "bin", "harnexus-codex");
+let LAUNCHER: string;
 const BUN = process.execPath;
 const TIMEOUT = 20_000;
 
 let dir: string;
 let fakeCodex: string;
 let lingeringCodex: string;
+let hangingBun: string;
 let reports = 0;
 const launched: Bun.Subprocess[] = [];
 
 beforeAll(async () => {
   dir = await realpath(await mkdtemp(join(tmpdir(), "harnexus-launcher-")));
+  await mkdir(join(dir, "bin"));
+  LAUNCHER = join(dir, "bin", "harnexus-codex");
+  const notifier = join(dir, "notifier");
+  await writeFile(
+    notifier,
+    `#!/usr/bin/perl\nuse JSON::PP;\nuse Encode qw(decode_utf8);\nopen my $out, ">", $ENV{FAKE_NOTIFICATION_REPORT} or exit 1;\nprint $out encode_json([map { decode_utf8($_) } @ARGV]);\nclose $out;\nexit 1 if ($ENV{FAKE_NOTIFICATION_MODE} // "") eq "fail";\nif (($ENV{FAKE_NOTIFICATION_MODE} // "") eq "delay") { sleep 2; open my $done, ">", "$ENV{FAKE_NOTIFICATION_REPORT}.done"; close $done; }\n`,
+  );
+  await chmod(notifier, 0o755);
+  await writeFile(
+    LAUNCHER,
+    (await Bun.file(SOURCE_LAUNCHER).text()).replaceAll(
+      "/usr/bin/osascript",
+      notifier,
+    ),
+  );
+  await chmod(LAUNCHER, 0o755);
+  await symlink(join(import.meta.dir, "..", "src"), join(dir, "src"));
   fakeCodex = join(dir, "codex.js");
   await writeFile(fakeCodex, FAKE_CODEX);
   await chmod(fakeCodex, 0o755);
+  hangingBun = join(dir, "hung-bun");
+  await writeFile(hangingBun, "#!/bin/sh\nexec /bin/sleep 30\n");
+  await chmod(hangingBun, 0o755);
   lingeringCodex = join(dir, "codex-lingering.sh");
   await writeFile(lingeringCodex, LINGERING_CODEX);
   await chmod(lingeringCodex, 0o755);
@@ -58,6 +80,142 @@ describe("delegation to the standard Codex", () => {
       expect(report.argv).toEqual(args);
       expect(report.cwd).toBe(cwd);
       expect(report.env).toEqual({ ...env, HARNEXUS_LAUNCHER_ACTIVE: "1" });
+      expect(existsSync(env.FAKE_NOTIFICATION_REPORT as string)).toBe(false);
+    },
+    TIMEOUT,
+  );
+});
+
+describe("startup fallback", () => {
+  test(
+    "does not hold App startup while the notification is delayed",
+    async () => {
+      const { env } = setup({
+        HARNEXUS_BUN_PATH: "/usr/bin/false",
+        FAKE_NOTIFICATION_MODE: "delay",
+      });
+      const result = await finish(
+        launch(["app-server"], env, { stdin: "delayed\n" }),
+      );
+      await readNotification(env.FAKE_NOTIFICATION_REPORT as string);
+      expect(result).toMatchObject({ stdout: "delayed\n", exitCode: 0 });
+      expect(existsSync(`${env.FAKE_NOTIFICATION_REPORT}.done`)).toBe(false);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "keeps standard Codex working when the notification command fails",
+    async () => {
+      const { env } = setup({
+        HARNEXUS_BUN_PATH: "/usr/bin/false",
+        FAKE_NOTIFICATION_MODE: "fail",
+      });
+      const result = await finish(
+        launch(["app-server"], env, { stdin: "failed notification\n" }),
+      );
+      await readNotification(env.FAKE_NOTIFICATION_REPORT as string);
+      expect(result).toMatchObject({
+        stdout: "failed notification\n",
+        exitCode: 0,
+      });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "uses standard Codex when bridge startup exceeds the readiness deadline",
+    async () => {
+      const { env } = setup({ HARNEXUS_BUN_PATH: hangingBun });
+      const result = await finish(
+        launch(["app-server"], env, { stdin: "deadline\n" }),
+      );
+      expect(result).toMatchObject({ stdout: "deadline\n", exitCode: 0 });
+      expect(result.stderr).toContain('"event":"standard_fallback"');
+      expect(
+        (await readNotification(env.FAKE_NOTIFICATION_REPORT as string)).join(
+          " ",
+        ),
+      ).toContain("起動が時間内に完了しませんでした");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "uses standard Codex when a bridge dependency cannot be imported",
+    async () => {
+      const root = join(dir, "broken-install");
+      await mkdir(join(root, "bin"), { recursive: true });
+      const launcher = join(root, "bin", "harnexus-codex");
+      await writeFile(launcher, await Bun.file(LAUNCHER).text());
+      await chmod(launcher, 0o755);
+      await mkdir(join(root, "src", "bootstrap"), { recursive: true });
+      await writeFile(
+        join(root, "src", "bootstrap", "main.ts"),
+        'import "./missing-dependency.ts";',
+      );
+      const { env } = setup();
+      const proc = Bun.spawn([launcher, "app-server"], {
+        env,
+        stdin: new TextEncoder().encode("missing\n"),
+        stdout: "pipe",
+        stderr: "pipe",
+        detached: true,
+      });
+      launched.push(proc);
+      const result = await finish(proc);
+      expect(result).toMatchObject({ stdout: "missing\n", exitCode: 0 });
+      expect(result.stderr).toContain('"event":"standard_fallback"');
+    },
+    TIMEOUT,
+  );
+
+  test.each([
+    {
+      name: "an unverified Codex",
+      expectedReason: "この Codex の版はまだ確認されていません（9.0.0）",
+      expectedRecord: { reason: "UnverifiedCodex", version: "9.0.0" },
+      overrides: {
+        FAKE_CODEX_VERSION: "codex-cli 9.0.0",
+        HARNEXUS_UNVERIFIED_CODEX: undefined,
+      },
+    },
+    {
+      name: "a Bun process that exits before readiness",
+      expectedReason: "harnexus を起動できません",
+      expectedRecord: {
+        reason: "BridgeStartupFailed",
+        version: "0.158.0-alpha.2.1",
+      },
+      overrides: { HARNEXUS_BUN_PATH: "/usr/bin/false" },
+    },
+  ])(
+    "keeps every app byte and the Codex process identity on $name",
+    async ({ overrides, expectedReason, expectedRecord }) => {
+      const { env, reportPath } = setup(overrides);
+      const input = '{"id":1,"method":"initialize"}\n';
+      const proc = launch(["app-server"], env, { stdin: input });
+      const result = await finish(proc);
+      expect(result).toMatchObject({ stdout: input, exitCode: 0 });
+      expect((await readReport(reportPath)).pid).toBe(proc.pid);
+      expect(result.stderr).toContain('"event":"standard_fallback"');
+      const log = await Bun.file(env.HARNEXUS_LOG_PATH as string).text();
+      expect(log).toContain('"event":"standard_fallback"');
+      expect(log).not.toContain("initialize");
+      const record = await Bun.file(
+        join(env.HARNEXUS_STATE_PATH as string, "..", "launcher-failure.json"),
+      ).json();
+      expect(record).toMatchObject({
+        event: "standard_fallback",
+        time: expect.any(String),
+        ...expectedRecord,
+      });
+      const notification = await readNotification(
+        env.FAKE_NOTIFICATION_REPORT as string,
+      );
+      expect(notification.join(" ")).toContain("harnexus を使えません");
+      expect(notification.join(" ")).toContain("bun run doctor");
+      expect(notification.join(" ")).toContain(expectedReason);
     },
     TIMEOUT,
   );
@@ -134,7 +292,7 @@ describe("app-server", () => {
   ])(
     "hands $name to Codex without the bridge",
     async ({ args }) => {
-      const { env, reportPath } = setup();
+      const { env, reportPath } = setup({ HARNEXUS_BUN_PATH: undefined });
 
       const proc = launch(args, env);
       const result = await finish(proc);
@@ -144,6 +302,7 @@ describe("app-server", () => {
       expect(report.pid).toBe(proc.pid);
       expect(report.argv).toEqual(args);
       expect(result.stderr).not.toContain("bridge_started");
+      expect(existsSync(env.FAKE_NOTIFICATION_REPORT as string)).toBe(false);
     },
     TIMEOUT,
   );
@@ -335,6 +494,7 @@ describe("app-server shutdown", () => {
     async () => {
       const { env } = setup({
         HARNEXUS_CODEX_PATH: lingeringCodex,
+        HARNEXUS_UNVERIFIED_CODEX: "warn",
         HARNEXUS_SHUTDOWN_GRACE_MS: "50",
       });
       // An open stdin keeps the relay's disconnect timer out, so only the bridge's own shutdown can signal.
@@ -439,10 +599,19 @@ describe("refusals", () => {
     await expectRefused(["exec"], env, expected);
   });
 
-  test("requires HARNEXUS_BUN_PATH for app-server", async () => {
+  test("runs standard Codex when Bun is unavailable", async () => {
     const { env } = setup({ HARNEXUS_BUN_PATH: undefined });
 
-    await expectRefused(["app-server"], env, "HARNEXUS_BUN_PATH is not set");
+    const result = await finish(
+      launch(["app-server"], env, { stdin: "hello\n" }),
+    );
+    expect(result).toMatchObject({ stdout: "hello\n", exitCode: 0 });
+    expect(result.stderr).toContain('"event":"standard_fallback"');
+    expect(
+      (await readNotification(env.FAKE_NOTIFICATION_REPORT as string)).join(
+        " ",
+      ),
+    ).toContain("Bun を起動できません");
   });
 
   test("refuses a symlink to the launcher as the Codex path", async () => {
@@ -471,6 +640,7 @@ const setup = (overrides: Record<string, string | undefined> = {}) => {
     HARNEXUS_STATE_PATH: join(dir, `threads-${reports}.json`),
     HARNEXUS_LOG_PATH: join(dir, `bridge-${reports}.log`),
     FAKE_CODEX_REPORT: reportPath,
+    FAKE_NOTIFICATION_REPORT: `${reportPath}.notification`,
     ...overrides,
   });
   for (const [key, value] of entries) {
@@ -562,6 +732,11 @@ const finish = async (
   return { stdout, stderr, exitCode: proc.exitCode, signal: proc.signalCode };
 };
 
+const readNotification = async (path: string): Promise<string[]> => {
+  for (let i = 0; i < 200 && !existsSync(path); i++) await Bun.sleep(10);
+  return Bun.file(path).json();
+};
+
 const readReport = async (path: string): Promise<Report> => {
   for (let i = 0; i < 200 && !existsSync(path); i++) await Bun.sleep(25);
   return JSON.parse(await Bun.file(path).text());
@@ -620,6 +795,10 @@ type Report = {
 // Records how it was started (renamed into place so readReport never sees a partial write), then echoes stdin and exits with FAKE_CODEX_EXIT, or waits for a signal when FAKE_CODEX_MODE=wait.
 const FAKE_CODEX = `#!/usr/bin/env -S ${BUN} --no-env-file --config=/dev/null
 import { renameSync, writeFileSync } from "node:fs";
+if (process.argv[2] === "--version") {
+  process.stdout.write(process.env.FAKE_CODEX_VERSION ?? "codex-cli 0.158.0-alpha.2.1");
+  process.exit(0);
+}
 // Ignored before the report exists, so a test that has read the report knows SIGTERM can no longer end it.
 if (process.env.FAKE_CODEX_MODE === "wait-ignore-term") process.on("SIGTERM", () => {});
 const report = process.env.FAKE_CODEX_REPORT;

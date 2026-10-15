@@ -93,6 +93,14 @@ export const logChecks = (text: string, path: string, now: number): Check[] => {
   );
   return [
     {
+      status: of("standard_fallback").length > 0 ? "warn" : "ok",
+      name: "Standard fallback",
+      detail:
+        of("standard_fallback").length > 0
+          ? `${of("standard_fallback").length} in the last 24h; standard Codex used because the bridge was unavailable or unverified`
+          : "none in the last 24h",
+    },
+    {
       status: "ok",
       name: "Log",
       detail: `${of("bridge_started").length} bridge starts in the last 24 hours, Codex CLI ${version === undefined ? "not seen" : field(version.version)}, in ${path}`,
@@ -113,6 +121,42 @@ export const logChecks = (text: string, path: string, now: number): Check[] => {
       detail: refused.length === 0 ? "none" : refused.join("; "),
     },
   ];
+};
+
+export const fallbackCheck = (record: unknown): Check => {
+  if (record === null)
+    return {
+      status: "ok",
+      name: "Last standard fallback",
+      detail: "none recorded",
+    };
+  if (
+    !isObject(record) ||
+    typeof record.time !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T[\d:]+Z$/.test(record.time) ||
+    typeof record.reason !== "string" ||
+    ![
+      "UnverifiedCodex",
+      "BunUnavailable",
+      "BridgeStartupTimeout",
+      "BridgeStartupFailed",
+    ].includes(record.reason)
+  )
+    return {
+      status: "warn",
+      name: "Last standard fallback",
+      detail: "invalid failure record",
+    };
+  const version =
+    typeof record.version === "string" &&
+    /^\d+\.\d+\.\d+[a-zA-Z0-9.+-]{0,60}$/.test(record.version)
+      ? record.version
+      : "unknown";
+  return {
+    status: "warn",
+    name: "Last standard fallback",
+    detail: `${record.time}: ${record.reason}; Codex CLI ${version}; run bun run open-app after repairing the setup`,
+  };
 };
 
 export const formatReport = (checks: readonly Check[]) =>
