@@ -49,26 +49,25 @@ bun run open-app
 In Codex, start a new chat in your project and choose a Claude model.
 Claude chats cannot switch back to Codex; use a separate chat for Codex.
 
-Setup persists across Dock launches, app updates, and logins. Keep this checkout and
-Bun at their current paths. To change paths or options, quit the app and rerun
-`bun run open-app`; omitted options are cleared. To remove the setup, quit the app
-and run `bun run open-app --standard`.
+Setup persists across Dock launches, app updates, and logins.
+Keep this checkout and Bun at their current paths.
+To change paths or options, quit the app and rerun `bun run open-app`; omitted options are cleared.
+To remove the setup, quit the app and run `bun run open-app --standard`.
 
 ## Troubleshooting
 
-If Claude does not appear or a chat will not start, quit the app completely and reopen
-with `bun run open-app`. If the problem persists, run:
+If Claude does not appear or a chat will not start, quit the app completely and reopen with `bun run open-app`.
+If the problem persists, run:
 
 ```sh
 bun run doctor
 ```
 
-You can paste the report into a bug report; it contains no conversation text or
-credentials.
+You can paste the report into a bug report; it contains no conversation text or credentials.
 
-If the bundled Codex CLI is unverified or harnexus cannot start, the app falls back
-to standard Codex. If incompatibility is detected while running, Claude becomes
-unavailable for that connection. Run `bun run doctor` for details.
+If the bundled Codex CLI is unverified or harnexus cannot start, the app falls back to standard Codex.
+If incompatibility is detected while running, Claude becomes unavailable for that connection.
+Run `bun run doctor` for details.
 
 To try Claude on an unverified CLI, quit the app and explicitly opt in:
 
@@ -76,27 +75,26 @@ To try Claude on an unverified CLI, quit the app and explicitly opt in:
 HARNEXUS_UNVERIFIED_CODEX=warn bun run open-app
 ```
 
-Compatibility is not guaranteed. To restore automatic fallback, quit the app and
-run `bun run open-app` with that variable unset.
+Compatibility is not guaranteed.
+To restore automatic fallback, quit the app and run `bun run open-app` with that variable unset.
 
 ## Use Google Vertex AI for a repository
 
 To use Vertex AI instead of your Claude subscription:
 
-1. Configure Vertex AI in the repository's `.claude/settings.local.json`, following
-   [Claude Code on Google Vertex AI](https://code.claude.com/docs/en/google-vertex-ai).
+1. Configure Vertex AI in the repository's `.claude/settings.local.json`, following [Claude Code on Google Vertex AI](https://code.claude.com/docs/en/google-vertex-ai).
 2. Open the app with `HARNEXUS_VERTEX=on bun run open-app`.
 3. Pick a model marked `· Vertex AI` in a chat in that repository.
 
-Other repositories stay on your subscription. Vertex AI errors never fall back to
-subscription access. Keep Vertex AI settings out of `~/.claude/settings.json`,
-where they would apply to every repository.
+Other repositories stay on your subscription.
+Vertex AI errors never fall back to subscription access.
+Keep Vertex AI settings out of `~/.claude/settings.json`, where they would apply to every repository.
 
 ## Optional Settings
 
 Claude uses auto mode by default, which requires a supported model and account.
-Your `ask` and `deny` rules still apply. The app's **Approve for me** setting does
-not control Claude approvals.
+Your `ask` and `deny` rules still apply.
+The app's **Approve for me** setting does not control Claude approvals.
 
 For manual approvals, quit the app and reopen with:
 
@@ -116,14 +114,14 @@ For the `task-*` skills, install the worker and review launcher:
 bun run install:task
 ```
 
-This installs `harnexus-task` in `~/.local/bin`. It requires the `task-*` skills in
-`$CODEX_HOME/skills`. Coordinate from a Codex chat by default, or explicitly select
-Claude; workers default to Claude and reviewers to Codex.
+This installs `harnexus-task` in `~/.local/bin`.
+It requires the `task-*` skills in `$CODEX_HOME/skills`.
+Coordinate from a Codex chat by default, or explicitly select Claude; workers default to Claude and reviewers to Codex.
 
-The command runs outside the sandbox. Allow-list only the installed command, such as
-`harnexus-task launch`, without leading environment assignments. Never allow-list
-`bun run task` or the repository's `dist/` binary: sandboxed agents can modify those files.
+The command runs outside the sandbox.
+Allow-list only the installed command, such as `harnexus-task launch`, without leading environment assignments.
+Never allow-list `bun run task` or the repository's `dist/` binary: sandboxed agents can modify those files.
 Keep the installed executable outside sandbox-writable paths.
 
-The app's call socket lets processes running as your user create and message chats. To
-disable it, launch with `HARNEXUS_CALL_SOCKET=off bun run open-app`.
+The app's call socket lets processes running as your user create and message chats.
+To disable it, launch with `HARNEXUS_CALL_SOCKET=off bun run open-app`.
