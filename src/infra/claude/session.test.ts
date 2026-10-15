@@ -19,10 +19,6 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Result } from "better-result";
 import {
-  SUBSCRIPTION_CONNECTION,
-  type VertexConnection,
-} from "./connection.ts";
-import {
   type ClaudeSessionSettings,
   claudeSessionExists,
   loadClaudeModels,
@@ -217,10 +213,7 @@ describe("startClaudeSession authentication", () => {
     settingsEnv,
     expected,
   }) => {
-    const claude = fakeClaude(SUBSCRIPTION, {
-      settingsEnv,
-      userSettingsEnv: {},
-    });
+    const claude = fakeClaude(SUBSCRIPTION, { settingsEnv });
 
     const started = await startClaudeSession(SETTINGS, claude.runtime);
 
@@ -264,70 +257,6 @@ describe("startClaudeSession authentication", () => {
     });
 
     expect(started.isErr() && started.error._tag).toBe("ClaudeStartFailed");
-  });
-});
-
-describe("startClaudeSession Vertex connection", () => {
-  test("starts Claude on the repository's Vertex project once Claude Code reports Vertex", async () => {
-    const claude = fakeClaude(
-      { apiProvider: "vertex" },
-      { env: { PATH: "/usr/bin", ANTHROPIC_API_KEY: "api-key" } },
-    );
-
-    const started = await startClaudeSession(VERTEX_SETTINGS, claude.runtime);
-
-    expect(started.isOk()).toBe(true);
-    expect(claude.options().env).toEqual({
-      PATH: "/usr/bin",
-      CLAUDE_CODE_USE_VERTEX: "1",
-      ANTHROPIC_VERTEX_PROJECT_ID: "sidework-project",
-      CLOUD_ML_REGION: "global",
-    });
-  });
-
-  test("stops before starting Claude when the user's settings choose Vertex, even with the repository's values", async () => {
-    const claude = fakeClaude(
-      { apiProvider: "vertex" },
-      { settingsEnv: VERTEX.env, userSettingsEnv: VERTEX.env },
-    );
-
-    const started = await startClaudeSession(VERTEX_SETTINGS, claude.runtime);
-
-    expect(started.isErr() && started.error).toMatchObject({
-      _tag: "ClaudeSettingsOverrideAuth",
-      names: [
-        "CLAUDE_CODE_USE_VERTEX",
-        "ANTHROPIC_VERTEX_PROJECT_ID",
-        "CLOUD_ML_REGION",
-      ],
-    });
-    expect(claude.started()).toBe(false);
-  });
-
-  test("passes the repository's Vertex variables as flag settings over a worktree's shared settings", async () => {
-    const claude = fakeClaude(
-      { apiProvider: "vertex" },
-      {
-        settingsEnv: { ANTHROPIC_VERTEX_PROJECT_ID: "shared-project" },
-        userSettingsEnv: {},
-      },
-    );
-
-    const started = await startClaudeSession(VERTEX_SETTINGS, claude.runtime);
-
-    expect(started.isOk()).toBe(true);
-    expect(claude.options().settings).toEqual({ env: VERTEX.env });
-  });
-
-  test("starts when only the repository's settings repeat its Vertex values", async () => {
-    const claude = fakeClaude(
-      { apiProvider: "vertex" },
-      { settingsEnv: VERTEX.env, userSettingsEnv: {} },
-    );
-
-    const started = await startClaudeSession(VERTEX_SETTINGS, claude.runtime);
-
-    expect(started.isOk()).toBe(true);
   });
 });
 
@@ -890,25 +819,8 @@ const SETTINGS: ClaudeSessionSettings = {
   threadId: "th-fixture",
   cwd: "/work/tree",
   model: "claude-sonnet-5",
-  connection: SUBSCRIPTION_CONNECTION,
   permissionMode: "auto",
   canUseTool: async () => ({ behavior: "deny", message: "not in this test" }),
-};
-
-const VERTEX: VertexConnection = {
-  provider: "vertex",
-  projectId: "sidework-project",
-  region: "global",
-  env: {
-    CLAUDE_CODE_USE_VERTEX: "1",
-    ANTHROPIC_VERTEX_PROJECT_ID: "sidework-project",
-    CLOUD_ML_REGION: "global",
-  },
-};
-
-const VERTEX_SETTINGS: ClaudeSessionSettings = {
-  ...SETTINGS,
-  connection: VERTEX,
 };
 
 const SUBSCRIPTION: AccountInfo = {

@@ -1,6 +1,10 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import type { InferErr } from "better-result";
-import { type EffortRule, isClaudeModel } from "../infra/claude/models.ts";
+import {
+  type EffortRule,
+  isClaudeModel,
+  type ModelCatalog,
+} from "../infra/claude/models.ts";
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
 import {
   type CompatibilityEvent,
@@ -24,11 +28,7 @@ import {
   withResumeHistory,
   withTurns,
 } from "./history-request.ts";
-import {
-  type ListedClaudeModels,
-  shownEffort,
-  withClaudeModels,
-} from "./model-list.ts";
+import { shownEffort, withClaudeModels } from "./model-list.ts";
 import type { createSideChats, Opened } from "./side-chat.ts";
 import type { SubagentRequests } from "./subagent-requests.ts";
 import type { SubagentRestoreEvent } from "./subagent-restore.ts";
@@ -99,7 +99,7 @@ type RouterDeps = {
   // observe answering false refuses the turn, so a created thread on an unexpected model never starts.
   delegations: Pick<DelegationWatch, "observe" | "started">;
   history: History;
-  claudeModels: () => ListedClaudeModels;
+  claudeModels: ModelCatalog["models"];
   unverifiedCodex: "warn" | "pause";
   subagents: Pick<
     SubagentRequests,

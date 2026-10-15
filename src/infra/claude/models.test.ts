@@ -8,7 +8,6 @@ import {
   isClaudeModel,
   type ModelCatalog,
   modelsFromSdk,
-  vertexModelId,
 } from "./models.ts";
 
 describe("isClaudeModel", () => {
@@ -87,12 +86,6 @@ describe("modelsFromSdk", () => {
 });
 
 describe("createModelCatalog", () => {
-  test("gives a Vertex AI model the levels of the model it runs", () => {
-    const catalog = createModelCatalog();
-
-    expect(catalog.effortsOf(vertexModelId("claude-haiku-4-5"))).toEqual([]);
-  });
-
   test("offers the built-in models until Claude Code's list is read", () => {
     const catalog = createModelCatalog();
 

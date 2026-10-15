@@ -33,7 +33,6 @@ describe("openThreadStore", () => {
     await store.setModel("thread-1", "claude-opus-5-5");
     await store.setEffort("thread-1", "max");
     await store.addMessageId("thread-1", "message-1");
-    await store.setConnection("thread-1", VERTEX);
 
     const reopened = await openStore();
 
@@ -43,7 +42,6 @@ describe("openThreadStore", () => {
       model: "claude-opus-5-5",
       effort: "max",
       worktree: "/work/tree",
-      connection: VERTEX,
       messageIds: ["message-1"],
       runState: "idle",
     });
@@ -84,7 +82,6 @@ describe("openThreadStore", () => {
       ...ENTRY,
       sessionId: null,
       effort: null,
-      connection: null,
       messageIds: [],
       runState: "idle",
     });
@@ -100,30 +97,6 @@ describe("openThreadStore", () => {
       model: "claude-opus-5-5",
       reviewerThreadIds: [],
     });
-  });
-
-  test.each([
-    {
-      name: "a conversation as on the subscription",
-      sessionId: "session-1",
-      expected: { provider: "subscription" },
-    },
-    { name: "no conversation as unconfirmed", sessionId: null, expected: null },
-  ])("loads a thread saved before connections were kept with $name", async ({
-    sessionId,
-    expected,
-  }) => {
-    await writeFile(
-      path,
-      JSON.stringify({
-        version: 1,
-        threads: [{ ...SAVED_RECORD, sessionId }],
-      }),
-    );
-
-    const store = await openStore();
-
-    expect(store.get("thread-1")?.connection).toEqual(expected);
   });
 
   test("registers a thread with the effort it was given", async () => {
@@ -148,15 +121,6 @@ describe("openThreadStore", () => {
       content: JSON.stringify({
         version: 1,
         threads: [{ ...SAVED_RECORD, effort: 3 }],
-      }),
-    },
-    {
-      name: "has a Vertex connection without a project",
-      content: JSON.stringify({
-        version: 1,
-        threads: [
-          { ...SAVED_RECORD, connection: { provider: "vertex", region: "us" } },
-        ],
       }),
     },
     {
@@ -650,12 +614,6 @@ const ENTRY = {
   model: "claude-sonnet-5",
   worktree: "/work/tree",
 };
-
-const VERTEX = {
-  provider: "vertex",
-  projectId: "sidework-project",
-  region: "global",
-} as const;
 
 const BOTH_UPDATES = {
   sessionId: "session-1",

@@ -14,11 +14,6 @@ import {
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import { createSerialQueue } from "../runtime/serial-queue.ts";
-import {
-  type ConnectionTarget,
-  isConnectionTarget,
-  targetOf,
-} from "./claude/connection.ts";
 
 export type RewindPoint = { sessionId: string; at: string | null };
 
@@ -31,8 +26,6 @@ type ThreadMapping = {
   // The effort level the app last picked for the thread, or null to leave Claude on the user's settings.
   readonly effort: string | null;
   readonly worktree: string;
-  // The connection Claude Code confirmed for the conversation, or null until a session confirms one.
-  readonly connection: ConnectionTarget | null;
   // The app's clientUserMessageId of the latest turns, so a message delivered again after a reconnect or restart is not run twice.
   readonly messageIds: readonly string[];
 };
@@ -245,7 +238,6 @@ const createThreadStore = (
               ...entry,
               effort: entry.effort ?? null,
               sessionId: null,
-              connection: null,
               messageIds: [],
             }),
       ),
@@ -261,9 +253,6 @@ const createThreadStore = (
 
     setEffort: (threadId: string, effort: string | null) =>
       update(threadId, (mapping) => ({ ...mapping, effort })),
-
-    setConnection: (threadId: string, connection: ConnectionTarget | null) =>
-      update(threadId, (mapping) => ({ ...mapping, connection })),
 
     sessionOwner: (sessionId: string) => ownerOfSession(mappings, sessionId),
 
@@ -431,17 +420,13 @@ const serializeState = (mappings: ReadonlyMap<string, ThreadMapping>) =>
 const readState = (value: unknown): ThreadMapping[] | null => {
   if (!isObject(value) || value.version !== STATE_VERSION) return null;
   if (!Array.isArray(value.threads)) return null;
-  // Files written before message ids or efforts were kept have none; a conversation saved before connections were kept ran on the subscription.
+  // Files written before message ids or efforts were kept have none.
   const threads = value.threads.map((thread) =>
     isObject(thread)
       ? {
           ...thread,
           ...(!("messageIds" in thread) && { messageIds: [] }),
           ...(!("effort" in thread) && { effort: null }),
-          ...(!("connection" in thread) && {
-            connection:
-              thread.sessionId == null ? null : { provider: "subscription" },
-          }),
         }
       : thread,
   );
@@ -457,7 +442,6 @@ const pickMappingFields = (mapping: ThreadMapping): ThreadMapping => ({
   model: mapping.model,
   effort: mapping.effort,
   worktree: mapping.worktree,
-  connection: mapping.connection === null ? null : targetOf(mapping.connection),
   messageIds: [...mapping.messageIds],
 });
 
@@ -472,7 +456,6 @@ const isThreadMapping = (value: unknown): value is ThreadMapping =>
   isNonEmptyString(value.model) &&
   (value.effort === null || isNonEmptyString(value.effort)) &&
   isNonEmptyString(value.worktree) &&
-  (value.connection === null || isConnectionTarget(value.connection)) &&
   Array.isArray(value.messageIds) &&
   value.messageIds.every(isNonEmptyString);
 
