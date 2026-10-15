@@ -52,7 +52,7 @@ type CallSocketFailure =
   | InferErr<ReturnType<typeof loadCallSocketPath>>["_tag"]
   | InferErr<Awaited<ReturnType<typeof serveLines>>>["_tag"];
 
-type StartupFailure = "ServerPipesUnavailable";
+type StartupFailure = "ServerPipesUnavailable" | "UnverifiedCodex";
 
 type LogFileFailure =
   | "StatePathNotAbsolute"

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   failed,
+  fallbackCheck,
   formatReport,
   logChecks,
   parseProcesses,
@@ -101,6 +102,22 @@ const BRIDGE = `/usr/bin/bun --no-env-file --config=/dev/null ${REPO}/src/bootst
 const CLAUDE = `${REPO}/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`;
 
 describe("logChecks", () => {
+  test("reports standard fallback without printing its raw log fields", () => {
+    const checks = logChecks(
+      line("2026-10-09T11:00:00.000Z", {
+        event: "standard_fallback",
+        reason: "BridgeStartupFailed",
+        content: "private",
+      }),
+      "/state/bridge.log",
+      Date.parse("2026-10-09T12:00:00.000Z"),
+    );
+    expect(checks[0]).toMatchObject({
+      status: "warn",
+      name: "Standard fallback",
+    });
+    expect(JSON.stringify(checks)).not.toContain("private");
+  });
   test("summarizes starts, the latest Codex CLI, the call socket and refusals of the last 24 hours", () => {
     const checks = logChecks(
       [
@@ -148,6 +165,11 @@ describe("logChecks", () => {
     expect(checks).toEqual([
       {
         status: "ok",
+        name: "Standard fallback",
+        detail: "none in the last 24h",
+      },
+      {
+        status: "ok",
         name: "Log",
         detail:
           "2 bridge starts in the last 24 hours, Codex CLI 0.121.0, in /state/bridge.log",
@@ -174,6 +196,7 @@ describe("logChecks", () => {
     );
 
     expect(checks.map(({ status, detail }) => ({ status, detail }))).toEqual([
+      { status: "ok", detail: "none in the last 24h" },
       {
         status: "ok",
         detail:
@@ -187,3 +210,30 @@ describe("logChecks", () => {
 
 const line = (time: string, fields: object) =>
   JSON.stringify({ time, ...fields });
+
+describe("fallbackCheck", () => {
+  test("reports the failure record even when no bridge log exists", () => {
+    expect(
+      fallbackCheck({
+        time: "2026-10-16T01:00:00Z",
+        reason: "UnverifiedCodex",
+        version: "9.0.0",
+        content: "secret",
+      }),
+    ).toEqual({
+      status: "warn",
+      name: "Last standard fallback",
+      detail:
+        "2026-10-16T01:00:00Z: UnverifiedCodex; Codex CLI 9.0.0; run bun run open-app after repairing the setup",
+    });
+  });
+  test("discards unexpected text in a damaged failure record", () => {
+    expect(
+      fallbackCheck({ time: "secret", reason: "secret", version: "secret" }),
+    ).toEqual({
+      status: "warn",
+      name: "Last standard fallback",
+      detail: "invalid failure record",
+    });
+  });
+});

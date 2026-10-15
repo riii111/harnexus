@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { createReadStream, createWriteStream } from "node:fs";
+import { createReadStream, createWriteStream, writeSync } from "node:fs";
 import { Result, TaggedError } from "better-result";
 import { isObject } from "./object.ts";
 
@@ -120,3 +120,20 @@ export const runCommand = (
 const COMMAND_TIMEOUT_MS = 10_000;
 
 const COMMAND_OUTPUT_LIMIT = 16 * 1024 * 1024;
+
+// The launcher retains the app descriptors until all bridge startup work succeeds.
+export const announceBridgeStatus = (
+  status:
+    | { ready: true }
+    | { ready: false; reason: "UnverifiedCodex"; version: string | null },
+) =>
+  Result.try({
+    try: () => {
+      writeSync(5, JSON.stringify(status));
+    },
+    catch: (cause) =>
+      new ServerPipesUnavailable({
+        cause,
+        message: "launcher readiness pipe is unavailable",
+      }),
+  });

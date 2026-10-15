@@ -20,6 +20,7 @@ import { createLineRewriter } from "../infra/codex/line-rewriter.ts";
 import { createObserver } from "../infra/codex/observe.ts";
 import { type RelayObserver, relayStreams } from "../infra/codex/relay.ts";
 import { attachServerRequests } from "../infra/codex/server-requests.ts";
+import { isVerifiedCodex } from "../infra/codex/versions.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import {
   loadCallSocketPath,
@@ -29,7 +30,11 @@ import {
   loadUnverifiedCodexPolicy,
   loadVertexModels,
 } from "../runtime/config.ts";
-import { openServerPipes } from "../runtime/process.boundary.ts";
+import {
+  announceBridgeStatus,
+  openServerPipes,
+  readCommandOutput,
+} from "../runtime/process.boundary.ts";
 import { serveLinesWhenFree } from "../runtime/socket.boundary.ts";
 import { connectClaudeThreads } from "./claude-threads.ts";
 import { createBridgeLogger } from "./logging.ts";
@@ -51,6 +56,28 @@ const BRIDGE_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
 const logger = createBridgeLogger(process.env);
 const server = serverFromEnv(process.env);
 
+if (
+  process.argv.includes("--launcher") &&
+  process.env.HARNEXUS_UNVERIFIED_CODEX !== "warn"
+) {
+  const version = await readCommandOutput(
+    process.env.HARNEXUS_CODEX_PATH ?? "",
+    ["--version"],
+  );
+  const parsed = version.isOk()
+    ? (/(\d+\.\d+\.\d+\S*)/.exec(version.value)?.[1] ?? null)
+    : null;
+  if (!isVerifiedCodex(parsed)) {
+    logger.log({ event: "bridge_startup_failed", reason: "UnverifiedCodex" });
+    announceBridgeStatus({
+      ready: false,
+      reason: "UnverifiedCodex",
+      version: parsed,
+    });
+    process.exit(1);
+  }
+}
+
 const pipes = openServerPipes(SERVER_OUTPUT_FD, SERVER_INPUT_FD);
 if (pipes.isErr()) {
   logger.log({ event: "bridge_startup_failed", reason: pipes.error._tag });
@@ -66,6 +93,13 @@ const claude = await withClaude({
   ...pipes.value,
   observer: createObserver(logger.log),
 });
+if (
+  process.argv.includes("--launcher") &&
+  announceBridgeStatus({ ready: true }).isErr()
+) {
+  claude.closeAll();
+  process.exit(1);
+}
 for (const signal of BRIDGE_SIGNALS) {
   process.once(signal, () => {
     logger.log({ event: "bridge_signaled", signal });

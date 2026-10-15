@@ -15,11 +15,16 @@ import { readCommandOutput } from "../runtime/process.boundary.ts";
 import {
   type Check,
   failed,
+  fallbackCheck,
   formatReport,
   logChecks,
   parseProcesses,
   processChecks,
 } from "./doctor-report.ts";
+
+import { readLaunchd } from "./launchd.boundary.ts";
+import { registrationChecks } from "./launchd-plan.ts";
+import { registeredEnvironment } from "./open-app-plan.ts";
 
 // The checks change nothing but create the store's marker directory when it is missing, as the bridge does, so the command is safe while the app runs; nothing it prints holds conversation text or credentials.
 const REPO = join(import.meta.dir, "..", "..");
@@ -34,8 +39,10 @@ const checks: Check[] = [
   await loginCheck(),
   ...(await stateChecks()),
   await launcherCheck(),
+  ...(await launchdChecks()),
   ...(await processesChecks()),
   ...(await logSummaryChecks()),
+  await lastFallbackCheck(),
 ];
 process.stdout.write(formatReport(checks));
 process.exit(failed(checks) ? 1 : 0);
@@ -153,7 +160,6 @@ async function stateChecks(): Promise<Check[]> {
   ];
 }
 
-// The app runs the launcher only when it was opened with CODEX_CLI_PATH pointing at it, which this command cannot see.
 async function launcherCheck(): Promise<Check> {
   const launcher = join(REPO, "bin", "harnexus-codex");
   const runnable = await checkAccess(launcher, "execute");
@@ -161,7 +167,7 @@ async function launcherCheck(): Promise<Check> {
     ? {
         status: "ok",
         name: "Launcher",
-        detail: `open the app with CODEX_CLI_PATH=${launcher}, HARNEXUS_CODEX_PATH and HARNEXUS_BUN_PATH`,
+        detail: `executable at ${launcher}`,
       }
     : { status: "fail", name: "Launcher", detail: runnable.error.message };
 }
@@ -226,4 +232,50 @@ async function packageVersion(path: string) {
     typeof parsed.value.version === "string"
     ? parsed.value.version
     : null;
+}
+
+async function launchdChecks(): Promise<Check[]> {
+  const read = await readLaunchd();
+  if (read.isErr())
+    return [{ status: "fail", name: "launchd", detail: read.error.message }];
+  return registrationChecks(
+    registeredEnvironment(
+      {
+        app: APP,
+        launcher: join(REPO, "bin", "harnexus-codex"),
+        codex:
+          process.env.HARNEXUS_CODEX_PATH ||
+          join(
+            APP,
+            "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+          ),
+        bun: process.execPath,
+      },
+      process.env,
+    ),
+    read.value.env,
+    read.value.agent,
+  );
+}
+
+async function lastFallbackCheck(): Promise<Check> {
+  const state = loadStatePath(process.env);
+  if (state.isErr())
+    return {
+      status: "warn",
+      name: "Last standard fallback",
+      detail: state.error.message,
+    };
+  const read = await readTextFileIfExists(
+    join(dirname(state.value), "launcher-failure.json"),
+  );
+  if (read.isErr())
+    return {
+      status: "warn",
+      name: "Last standard fallback",
+      detail: "cannot read failure record",
+    };
+  if (read.value === null) return fallbackCheck(null);
+  const parsed = parseJson(read.value);
+  return fallbackCheck(parsed.isOk() ? parsed.value : {});
 }
