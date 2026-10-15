@@ -103,12 +103,6 @@ export const loadUnverifiedCodexPolicy = (
 ): "warn" | "pause" =>
   env[UNVERIFIED_CODEX_ENV] === "pause" ? "pause" : "warn";
 
-const VERTEX_ENV = "HARNEXUS_VERTEX";
-
-// Only "on" lists the Vertex AI models, which most users have no repository for.
-export const loadVertexModels = (env: Record<string, string | undefined>) =>
-  env[VERTEX_ENV] === "on";
-
 const CALL_SOCKET_ENV = "HARNEXUS_CALL_SOCKET";
 
 // Open beside the thread store unless "off", since harnexus-task sends through it; "off" closes it, as the socket lets any process of the user create and message threads in the app.

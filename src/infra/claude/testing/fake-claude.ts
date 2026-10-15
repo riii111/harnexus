@@ -23,7 +23,6 @@ export const fakeClaude = (
     stillQueued,
     closeEnding = { done: true, value: undefined },
     settingsEnv = {},
-    userSettingsEnv,
     models = [],
     env = { PATH: "/usr/bin" },
   }: {
@@ -37,8 +36,6 @@ export const fakeClaude = (
     stillQueued?: string[];
     closeEnding?: Delivery;
     settingsEnv?: Record<string, string> | Error;
-    // What the user's settings alone hold; without it they hold the same env as every source.
-    userSettingsEnv?: Record<string, string>;
     // "unanswered" stands for a Claude Code that never lists its models.
     models?: ModelInfo[] | Error | "unanswered";
     env?: Record<string, string | undefined>;
@@ -108,14 +105,9 @@ export const fakeClaude = (
       deliver(closeEnding);
     },
   };
-  const resolveSettings: ClaudeSdk["resolveSettings"] = async ({
-    settingSources,
-  }) => {
+  const resolveSettings: ClaudeSdk["resolveSettings"] = async () => {
     // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
     if (settingsEnv instanceof Error) throw settingsEnv;
-    if (userSettingsEnv !== undefined && settingSources.join() === "user") {
-      return { effective: { env: userSettingsEnv } };
-    }
     return { effective: { env: settingsEnv } };
   };
   const run: ClaudeSdk["query"] = (params) => {

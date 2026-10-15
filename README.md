@@ -17,7 +17,6 @@ Claude and Codex can exchange messages across chats, and Claude can create Codex
 Experimental, macOS only.
 Claude runs on your own Claude Code login through the official Claude Agent SDK; harnexus never reads or stores your credentials.
 Usage counts toward your own Claude plan under [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance).
-Google Vertex AI can be used per repository instead.
 
 ## Quick Start
 
@@ -27,8 +26,8 @@ You need:
 
 - macOS with Codex available in the ChatGPT app at `/Applications/ChatGPT.app`.
 - Bun installed. This project pins Bun 1.3.13.
-- Claude Code signed in to your Claude account, or [Google Vertex AI](#use-google-vertex-ai-for-a-repository) configured per repository.
-  API keys and other cloud providers are not supported.
+- Claude Code signed in to your Claude account.
+  API keys and cloud providers are not supported.
 
 ### Install and open
 
@@ -77,18 +76,6 @@ HARNEXUS_UNVERIFIED_CODEX=warn bun run open-app
 
 Compatibility is not guaranteed.
 To restore automatic fallback, quit the app and run `bun run open-app` with that variable unset.
-
-## Use Google Vertex AI for a repository
-
-To use Vertex AI instead of your Claude subscription:
-
-1. Configure Vertex AI in the repository's `.claude/settings.local.json`, following [Claude Code on Google Vertex AI](https://code.claude.com/docs/en/google-vertex-ai).
-2. Open the app with `HARNEXUS_VERTEX=on bun run open-app`.
-3. Pick a model marked `· Vertex AI` in a chat in that repository.
-
-Other repositories stay on your subscription.
-Vertex AI errors never fall back to subscription access.
-Keep Vertex AI settings out of `~/.claude/settings.json`, where they would apply to every repository.
 
 ## Optional Settings
 

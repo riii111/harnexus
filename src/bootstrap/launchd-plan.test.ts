@@ -17,7 +17,7 @@ describe("environmentCommands", () => {
       "CODEX_CLI_PATH",
       "/work/launcher",
     ]);
-    expect(commands).toContainEqual(["unsetenv", "HARNEXUS_VERTEX"]);
+    expect(commands).toContainEqual(["unsetenv", "HARNEXUS_PERMISSION_MODE"]);
     expect(commands.flat()).not.toContain("secret");
   });
   test("unsets every owned variable when returning to standard", () => {
@@ -28,7 +28,6 @@ describe("environmentCommands", () => {
       ["unsetenv", "HARNEXUS_LOG_PATH"],
       ["unsetenv", "HARNEXUS_STATE_PATH"],
       ["unsetenv", "HARNEXUS_UNVERIFIED_CODEX"],
-      ["unsetenv", "HARNEXUS_VERTEX"],
       ["unsetenv", "HARNEXUS_PERMISSION_MODE"],
     ]);
   });
@@ -43,7 +42,7 @@ describe("launchAgent", () => {
         codex: "/codex",
         bun: "/bun",
       },
-      { ANTHROPIC_API_KEY: "secret", HARNEXUS_VERTEX: "on" },
+      { ANTHROPIC_API_KEY: "secret", HARNEXUS_PERMISSION_MODE: "auto" },
     );
     const plist = launchAgent(env);
     expect(plist).toContain(
@@ -71,12 +70,13 @@ describe("registrationChecks", () => {
   test("names mismatched variables without exposing their values", () => {
     const checks = registrationChecks(
       ENV,
-      { ...ENV, HARNEXUS_VERTEX: "private-value" },
-      launchAgent({ ...ENV, HARNEXUS_VERTEX: "private-value" }),
+      { ...ENV, HARNEXUS_UNVERIFIED_CODEX: "private-value" },
+      launchAgent({ ...ENV, HARNEXUS_UNVERIFIED_CODEX: "private-value" }),
     );
     expect(checks[0]).toMatchObject({
       status: "warn",
-      detail: "values differ from this checkout/shell: HARNEXUS_VERTEX",
+      detail:
+        "values differ from this checkout/shell: HARNEXUS_UNVERIFIED_CODEX",
     });
     expect(checks[1]?.status).toBe("warn");
     expect(JSON.stringify(checks)).not.toContain("private-value");

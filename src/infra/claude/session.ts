@@ -21,15 +21,11 @@ import {
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 import {
-  checkAccount,
   checkSettingsEnv,
   checkSubscription,
-  checkUserSettingsEnv,
-  connectionEnv,
   type Env,
   withoutApiBilling,
 } from "./auth.ts";
-import type { Connection } from "./connection.ts";
 import { modelsFromSdk } from "./models.ts";
 import { createPromptQueue, type Prompt } from "./prompt-queue.ts";
 import {
@@ -58,7 +54,6 @@ export type ClaudeSessionSettings = {
   exposeThreadId?: boolean;
   cwd: string;
   model: string;
-  connection: Connection;
   resume?: string;
   forkSession?: boolean;
   resumeAt?: string;
@@ -86,7 +81,7 @@ class NoClaudeModelsListed extends TaggedError("NoClaudeModelsListed")<{
 
 type ClaudeRuntime = ClaudeSdk & { env: Env };
 
-// The settings and the account are checked before any prompt is sent, so a connection other than the one chosen for the repository never starts a conversation.
+// The settings and the account are checked before any prompt is sent, so a login that would bill the API never starts a conversation.
 export const startClaudeSession = (
   settings: ClaudeSessionSettings,
   runtime: ClaudeRuntime = PROCESS_RUNTIME,
@@ -97,13 +92,7 @@ export const startClaudeSession = (
     const resolved = yield* Result.await(
       readSettings(runtime.resolveSettings, settings.cwd, SETTING_SOURCES),
     );
-    yield* checkSettingsEnv(resolved.env ?? {}, settings.connection);
-    if (settings.connection.provider === "vertex") {
-      const user = yield* Result.await(
-        readSettings(runtime.resolveSettings, settings.cwd, USER_SETTINGS),
-      );
-      yield* checkUserSettingsEnv(user.env ?? {});
-    }
+    yield* checkSettingsEnv(resolved.env ?? {});
     if (signal?.aborted) return Result.err(sessionStartCancelled());
     const prompt = createPromptQueue();
     const claude = yield* openQuery(
@@ -123,7 +112,7 @@ export const startClaudeSession = (
     signal?.addEventListener("abort", closeOnAbort, { once: true });
     if (signal?.aborted) closeStartup();
     const checked = (await readAccount(claude, undefined, signal)).andThen(
-      (account) => checkAccount(account, settings.connection),
+      checkSubscription,
     );
     if (checked.isErr()) {
       closeStartup();
@@ -339,15 +328,11 @@ const sessionOptions = (
   cwd: settings.cwd,
   model: settings.model,
   env: {
-    ...connectionEnv(settings.connection, env),
+    ...withoutApiBilling(env),
     ...(settings.exposeThreadId === true && {
       CODEX_THREAD_ID: settings.threadId,
     }),
   },
-  // A worktree's own shared settings may set another project, and the flag layer outranks them as the repository's local settings do in its own checkout.
-  ...(settings.connection.provider === "vertex" && {
-    settings: { env: { ...settings.connection.env } },
-  }),
   settingSources: SETTING_SOURCES,
   systemPrompt:
     settings.instructions === undefined
