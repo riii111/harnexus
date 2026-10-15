@@ -44,8 +44,10 @@ bun run open-app
 In Codex, start a new chat in your project and choose a Claude model.
 Claude chats cannot switch back to Codex; use a separate chat for Codex.
 
-Launch with `bun run open-app` whenever you use harnexus. To return to the standard
-app, quit it and run `bun run open-app --standard`.
+Setup persists across Dock launches, app updates, and logins. Keep this checkout and
+Bun at their current paths. To change paths or options, quit the app and rerun
+`bun run open-app`; omitted options are cleared. To remove the setup, quit the app
+and run `bun run open-app --standard`.
 
 ## Troubleshooting
 
@@ -59,12 +61,18 @@ bun run doctor
 You can paste the report into a bug report; it contains no conversation text or
 credentials.
 
-After an app update, harnexus warns about unverified Codex CLI versions. To keep Claude
-disabled until the version is verified, launch with:
+If the bundled Codex CLI is unverified or harnexus cannot start, the app falls back
+to standard Codex. If incompatibility is detected while running, Claude becomes
+unavailable for that connection. Run `bun run doctor` for details.
+
+To try Claude on an unverified CLI, quit the app and explicitly opt in:
 
 ```sh
-HARNEXUS_UNVERIFIED_CODEX=pause bun run open-app
+HARNEXUS_UNVERIFIED_CODEX=warn bun run open-app
 ```
+
+Compatibility is not guaranteed. To restore automatic fallback, quit the app and
+run `bun run open-app` with that variable unset.
 
 ## Use Google Vertex AI for a repository
 

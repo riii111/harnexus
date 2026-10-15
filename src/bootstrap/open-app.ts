@@ -7,7 +7,12 @@ import {
 import { checkAccess } from "../runtime/fs.boundary.ts";
 import { readCommandOutput } from "../runtime/process.boundary.ts";
 import { parseProcesses } from "./doctor-report.ts";
-import { isAppRunning, openArguments } from "./open-app-plan.ts";
+import { configureLaunchd } from "./launchd.boundary.ts";
+import {
+  isAppRunning,
+  openArguments,
+  registeredEnvironment,
+} from "./open-app-plan.ts";
 
 // Opens the app with harnexus, or with --standard as the app normally runs; either way the app must be quit first, since it reads its environment only at start.
 const REPO = join(import.meta.dir, "..", "..");
@@ -29,6 +34,16 @@ const paths = {
 const problem = await findProblem();
 if (problem !== null) {
   process.stderr.write(`harnexus: ${problem}\n`);
+  process.exit(1);
+}
+const registered = await configureLaunchd(
+  registeredEnvironment(paths, process.env),
+  mode === "standard",
+);
+if (registered.isErr()) {
+  process.stderr.write(
+    `harnexus: ${registered.error.message}; session setup may be incomplete, rerun open-app\n`,
+  );
   process.exit(1);
 }
 const opened = await readCommandOutput(

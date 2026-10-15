@@ -4,10 +4,15 @@
 
 use strict;
 use warnings;
+use utf8;
 use Cwd qw(abs_path);
-use Fcntl qw(F_DUPFD);
+use Fcntl qw(F_DUPFD O_CREAT O_EXCL O_WRONLY);
 use File::Basename qw(dirname);
 use POSIX ();
+use IO::Select;
+use JSON::PP;
+use File::Path qw(make_path);
+use Encode qw(encode);
 
 # Options of `codex` and `codex app-server` whose value is the next argument (codex-cli 0.155).
 my %VALUE_OPTIONS = map { $_ => 1 } qw(
@@ -29,22 +34,29 @@ if ((abs_path($codex) // "") eq $self) {
 
 $ENV{HARNEXUS_LAUNCHER_ACTIVE} = "1";
 
-start_sidecar() if runs_app_server(@ARGV);
+if (runs_app_server(@ARGV)) {
+  my $failure = eval { start_sidecar() };
+  $failure = {reason => "BridgeStartupFailed", version => undef} if $@;
+  report_fallback($failure) if $failure;
+}
 
 exec { $codex } $codex, @ARGV or fail("cannot start $codex: $!");
 
 # codex_app works only while the process the app started is Codex itself, so this process becomes Codex; fds 3 (Codex stdout) and 4 (Codex stdin) must match src/bootstrap/main.ts.
 sub start_sidecar {
-  my $bun = require_executable("HARNEXUS_BUN_PATH");
-  pipe(my $from_server, my $server_stdout) or fail("cannot create a pipe: $!");
-  pipe(my $server_stdin, my $to_server) or fail("cannot create a pipe: $!");
+  my $bun = $ENV{HARNEXUS_BUN_PATH} // "";
+  return {reason => "BunUnavailable", version => undef} unless $bun =~ m{^/} && -f $bun && -x _;
+  pipe(my $ready_read, my $ready_write) or die "ready pipe";
+  pipe(my $from_server, my $server_stdout) or die("cannot create a pipe: $!");
+  pipe(my $server_stdin, my $to_server) or die("cannot create a pipe: $!");
   # This process becomes Codex, so its pid is fixed here; the bridge cannot tell it from getppid if Codex exits before the bridge starts.
   my $server_pid = $$;
-  my $pid = fork // fail("cannot fork: $!");
+  my $pid = fork // die("cannot fork: $!");
   if ($pid == 0) {
     close $server_stdout;
     close $server_stdin;
-    place_fds([$from_server, 3], [$to_server, 4]);
+    close $ready_read;
+    place_fds([$from_server, 3], [$to_server, 4], [$ready_write, 5]);
     $ENV{DO_NOT_TRACK} = "1";
     $ENV{HARNEXUS_SERVER_PID} = $server_pid;
     exec { $bun } bun_command($bun) or do {
@@ -52,12 +64,28 @@ sub start_sidecar {
       POSIX::_exit(1);
     };
   }
+  close $ready_write;
+  my $ready = "";
+  my $readable = IO::Select->new($ready_read)->can_read(15);
+  if ($readable) {
+    sysread($ready_read, $ready, 512);
+  }
+  close $ready_read;
+  my $timed_out = !$readable;
+  my $status = eval { decode_json($ready) };
+  if (!$status || !$status->{ready}) {
+    kill 'KILL', $pid;
+    waitpid($pid, 0);
+    return {reason => $status && ($status->{reason} // "") eq "UnverifiedCodex" ? "UnverifiedCodex" :
+      $timed_out ? "BridgeStartupTimeout" : "BridgeStartupFailed", version => $status ? $status->{version} : undef};
+  }
   close $from_server;
   close $to_server;
   POSIX::dup2(fileno($server_stdin), 0) // fail("cannot redirect stdin: $!");
   POSIX::dup2(fileno($server_stdout), 1) // fail("cannot redirect stdout: $!");
   close $server_stdin;
   close $server_stdout;
+  return undef;
 }
 
 # Moving every descriptor above the targets first keeps one dup2 from overwriting another's source; dup2 also clears close-on-exec, which Perl sets on its pipes.
@@ -76,7 +104,7 @@ sub place_fds {
 sub bun_command {
   my ($bun) = @_;
   return ($bun, "--no-env-file", "--config=/dev/null",
-    dirname(dirname($self)) . "/src/bootstrap/main.ts");
+    dirname(dirname($self)) . "/src/bootstrap/main.ts", "--launcher");
 }
 
 # The app puts global options before `app-server`; helper subcommands such as generate-ts and non-stdio listeners carry no app traffic, so they go straight to Codex.
@@ -119,6 +147,92 @@ sub require_executable {
   fail("$name must be an absolute path") if $path !~ m{^/};
   fail("$name is not an executable file") unless -f $path && -x _;
   return $path;
+}
+
+sub report_fallback {
+  my ($failure) = @_;
+  $failure->{version} //= probe_codex_version();
+  my $version = $failure->{version};
+  $failure->{version} = undef unless defined $version && length($version) < 80 && $version =~ /^\d+\.\d+\.\d+[a-zA-Z0-9.+-]*$/;
+  my $record = {time => POSIX::strftime("%Y-%m-%dT%H:%M:%SZ", gmtime), event => "standard_fallback", %$failure};
+  my $line = encode_json($record) . "\n";
+  print STDERR $line;
+  my $state = $ENV{HARNEXUS_STATE_PATH} || (($ENV{HOME} // "") . "/.local/state/harnexus/threads.json");
+  my $directory = dirname($state);
+  my $log = $ENV{HARNEXUS_LOG_PATH} || $directory . "/bridge.log";
+  eval {
+    if ($directory =~ m{^/}) {
+      make_path($directory, {mode => 0700});
+      my $temporary = "$directory/.launcher-failure.$$.tmp";
+      sysopen(my $out, $temporary, O_WRONLY | O_CREAT | O_EXCL, 0600) or die "record unavailable";
+      chmod 0600, $temporary;
+      print $out $line;
+      close $out or die "record write failed";
+      rename $temporary, "$directory/launcher-failure.json" or die "record rename failed";
+    }
+  };
+  eval {
+    if ($log ne "off" && $log =~ m{^/}) {
+      make_path(dirname($log), {mode => 0700});
+      open(my $out, ">>", $log) or die "log unavailable";
+      chmod 0600, $log;
+      print $out $line;
+      close $out;
+    }
+  };
+  notify_fallback($failure);
+}
+
+sub probe_codex_version {
+  pipe(my $reader, my $writer) or return undef;
+  my $pid = fork;
+  return undef unless defined $pid;
+  if ($pid == 0) {
+    close $reader;
+    open STDIN, "<", "/dev/null" or POSIX::_exit(0);
+    open STDERR, ">", "/dev/null" or POSIX::_exit(0);
+    POSIX::dup2(fileno($writer), 1);
+    exec { $codex } $codex, "--version" or POSIX::_exit(1);
+  }
+  close $writer;
+  my $output = "";
+  sysread($reader, $output, 256) if IO::Select->new($reader)->can_read(1);
+  close $reader;
+  kill 'KILL', $pid;
+  waitpid($pid, 0);
+  return $1 if $output =~ /(\d+\.\d+\.\d+[a-zA-Z0-9.+-]*)/;
+  return undef;
+}
+
+sub notify_fallback {
+  my ($failure) = @_;
+  my $pid = fork;
+  return unless defined $pid;
+  if ($pid == 0) {
+    my $detached = fork;
+    POSIX::_exit(0) if !defined $detached || $detached;
+    POSIX::setsid();
+    open STDIN, "<", "/dev/null" or POSIX::_exit(0);
+    open STDOUT, ">", "/dev/null" or POSIX::_exit(0);
+    open STDERR, ">", "/dev/null" or POSIX::_exit(0);
+    my $script = notification_script($failure);
+    exec { "/usr/bin/osascript" } "/usr/bin/osascript", "-e", encode("UTF-8", $script) or POSIX::_exit(0);
+  }
+  waitpid($pid, 0);
+}
+
+sub notification_script {
+  my ($failure) = @_;
+  my %reasons = (
+    UnverifiedCodex => "この Codex の版はまだ確認されていません",
+    BunUnavailable => "Bun を起動できません",
+    BridgeStartupTimeout => "harnexus の起動が時間内に完了しませんでした",
+    BridgeStartupFailed => "harnexus を起動できません",
+  );
+  my $reason = $reasons{$failure->{reason}} // $reasons{BridgeStartupFailed};
+  my $version = $failure->{version} // "";
+  $reason .= "（$version）" if $version =~ /^\d+\.\d+\.\d+[a-zA-Z0-9.+-]*$/;
+  return 'display notification "Claude を使わずに標準の Codex で起動しました。理由: ' . $reason . '。bun run doctor で詳細を確認できます。" with title "harnexus を使えません"';
 }
 
 sub fail {
