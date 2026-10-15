@@ -14,8 +14,10 @@ Also supported:
 
 Claude and Codex can exchange messages across chats, and Claude can create Codex chats.
 
-Experimental, macOS only. Uses your Claude subscription through the official
-Claude Agent SDK, with optional Google Vertex AI support per repository.
+Experimental, macOS only.
+Claude runs on your own Claude Code login through the official Claude Agent SDK; harnexus never reads or stores your credentials.
+Usage counts toward your own Claude plan under [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance).
+Google Vertex AI can be used per repository instead.
 
 ## Quick Start
 
@@ -25,8 +27,7 @@ You need:
 
 - macOS with Codex available in the ChatGPT app at `/Applications/ChatGPT.app`.
 - Bun installed. This project pins Bun 1.3.13.
-- Claude Code signed in with your Claude subscription, or
-  [Google Vertex AI](#use-google-vertex-ai-for-a-repository) configured per repository.
+- Claude Code signed in to your Claude account, or [Google Vertex AI](#use-google-vertex-ai-for-a-repository) configured per repository.
   API keys and other cloud providers are not supported.
 
 ### Install and open
