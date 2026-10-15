@@ -175,6 +175,10 @@ export const createRouter = ({
         turns.isClaudeThread(params.threadId) ||
         subagents.isChild(params.threadId))
     ) {
+      if (message.method === "turn/start" && !noteDelegation(params, true)) {
+        refuse("turn/start", request, "model_mismatch");
+        return null;
+      }
       refuse(message.method as RefusedMethod, request, "codex_incompatible");
       if (message.method === "turn/start")
         noteStarted(params, "codex_incompatible");
