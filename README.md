@@ -11,7 +11,8 @@ Also supported:
 - Rewind
 - Image attachments
 - Conversation resume
-- Claude workers and Codex reviewers
+- Messaging between Claude and Codex chats
+- Creating Codex chats from Claude
 
 Experimental, macOS only. Uses your Claude subscription through the official
 Claude Agent SDK, with optional Google Vertex AI support per repository.
