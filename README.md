@@ -2,6 +2,14 @@
 
 Use Claude in the Codex App.
 
+Also supported:
+
+- Side chats
+- Rewind
+- Image attachments
+- Conversation resume
+- Claude workers and Codex reviewers
+
 Experimental, macOS only. Uses your Claude subscription through the official
 Claude Agent SDK, with optional Google Vertex AI support per repository.
 
