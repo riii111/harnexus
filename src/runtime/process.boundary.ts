@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createReadStream, createWriteStream, writeSync } from "node:fs";
 import { Result, TaggedError } from "better-result";
 import { isObject } from "./object.ts";
@@ -114,6 +114,29 @@ export const runCommand = (
           isObject(cause) && cause.killed === true
             ? `${file} was stopped after ${timeoutMs} ms`
             : `cannot run ${file}`,
+      }),
+  });
+
+// No pipes or awaited exit: a notification process must not keep the relay alive or hold its protocol descriptors.
+export const startDetachedCommand = (file: string, args: readonly string[]) =>
+  Result.tryPromise({
+    try: () =>
+      new Promise<void>((resolve, reject) => {
+        const child = spawn(file, [...args], {
+          detached: true,
+          stdio: "ignore",
+        });
+        child.once("error", reject);
+        child.once("spawn", () => {
+          child.unref();
+          resolve();
+        });
+      }),
+    catch: (cause) =>
+      new CommandFailed({
+        command: file,
+        cause,
+        message: `cannot start ${file}`,
       }),
   });
 

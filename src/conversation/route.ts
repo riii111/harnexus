@@ -3,6 +3,11 @@ import type { InferErr } from "better-result";
 import { type EffortRule, isClaudeModel } from "../infra/claude/models.ts";
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
 import {
+  type CompatibilityEvent,
+  compatibilityVersion,
+  responseCompatibility,
+} from "../infra/codex/compatibility.ts";
+import {
   type DelegationWatch,
   delegationSource,
 } from "../infra/codex/delegations.ts";
@@ -45,6 +50,7 @@ import {
 } from "./thread-request.ts";
 
 export type RouteEvent =
+  | CompatibilityEvent
   | { event: "model_id_collision"; model: string }
   | { event: "codex_version"; version: string | null; verified: boolean }
   | { event: "claude_request_refused"; method: RefusedMethod; reason: Refusal }
@@ -146,6 +152,8 @@ export const createRouter = ({
   const pending = new Map<AppRequest["id"], Pending>();
   // Set from the server's initialize answer; while paused the app lists no Claude model and a Claude turn is refused rather than handed to Codex, which would run it without the Claude conversation.
   let paused = false;
+  let incompatible = false;
+  let serverVersion: string | null = null;
   // A Codex thread switched to Claude by turn/start needs a working directory that the request itself may not carry.
   const cwds = new Map<string, string>();
 
@@ -160,6 +168,18 @@ export const createRouter = ({
     if (typeof id !== "string" && typeof id !== "number") return line;
     const params = isObject(message.params) ? message.params : {};
     const request = { id, params };
+    if (
+      incompatible &&
+      REFUSED_METHODS.some((method) => method === message.method) &&
+      (isClaudeModel(requestedModel(params)) ||
+        turns.isClaudeThread(params.threadId) ||
+        subagents.isChild(params.threadId))
+    ) {
+      refuse(message.method as RefusedMethod, request, "codex_incompatible");
+      if (message.method === "turn/start")
+        noteStarted(params, "codex_incompatible");
+      return null;
+    }
     // A Claude subagent's thread exists only in the bridge.
     if (subagents.isChild(params.threadId)) {
       if (isHistoryMethod(message.method)) {
@@ -535,11 +555,23 @@ export const createRouter = ({
     const request = pending.get(id);
     if (request === undefined) return line;
     pending.delete(id);
+    if (request.kind === "initialize" || request.kind === "modelList") {
+      const reason = responseCompatibility(request.kind, message);
+      if (reason !== null) {
+        paused = true;
+        if (!incompatible) {
+          incompatible = true;
+          log({ event: "codex_incompatible", reason, version: serverVersion });
+        }
+        return line;
+      }
+    }
     if (!isObject(message.result)) return line;
     if (request.kind === "initialize") {
       const version = codexVersion(message.result.userAgent);
       const verified = isVerifiedCodex(version);
-      paused = !verified && unverifiedCodex === "pause";
+      serverVersion = compatibilityVersion(version);
+      paused = incompatible || (!verified && unverifiedCodex === "pause");
       log({ event: "codex_version", version, verified });
       return line;
     }
@@ -720,6 +752,12 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
       return { event: entry.event, method: entry.method, reason: entry.reason };
     case "model_id_collision":
       return { event: entry.event, model: entry.model };
+    case "codex_incompatible":
+      return {
+        event: entry.event,
+        reason: entry.reason,
+        version: entry.version,
+      };
     case "codex_version":
       return {
         event: entry.event,

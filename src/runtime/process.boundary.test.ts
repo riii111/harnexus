@@ -3,6 +3,7 @@ import {
   readCommandOutput,
   runCommand,
   signalProcess,
+  startDetachedCommand,
 } from "./process.boundary.ts";
 
 describe("signalProcess", () => {
@@ -63,5 +64,19 @@ describe("runCommand", () => {
     expect(ran.isErr() && ran.error.message).toBe(
       "/bin/sleep was stopped after 50 ms",
     );
+  });
+});
+
+describe("startDetachedCommand", () => {
+  test("reports an executable that cannot be started", async () => {
+    const started = await startDetachedCommand(
+      "/nonexistent/harnexus-notifier",
+      [],
+    );
+    expect(started.isErr() && started.error._tag).toBe("CommandFailed");
+  });
+  test("returns on spawn without waiting for a notification command's exit status", async () => {
+    const started = await startDetachedCommand("/usr/bin/false", []);
+    expect(started.isOk()).toBe(true);
   });
 });

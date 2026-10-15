@@ -32,6 +32,7 @@ import {
 
 type LogEvent =
   | { event: "bridge_started" }
+  | { event: "compatibility_report_failed" }
   | { event: "bridge_startup_failed"; reason: StartupFailure }
   | { event: "log_file_unavailable"; reason: LogFileFailure }
   | { event: "server_closed" }
@@ -108,6 +109,7 @@ export const createBridgeLogger = (env: NodeJS.ProcessEnv) => {
 
 const serializeLogEvent = (entry: LogEvent) => {
   switch (entry.event) {
+    case "compatibility_report_failed":
     case "bridge_started":
     case "server_closed":
     case "call_socket_listening":
@@ -133,6 +135,7 @@ const serializeLogEvent = (entry: LogEvent) => {
         : serializeTurnEvent(entry);
     case "claude_request_refused":
     case "model_id_collision":
+    case "codex_incompatible":
     case "codex_version":
     case "claude_history_served":
     case "claude_history_unreadable":

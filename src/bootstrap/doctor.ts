@@ -12,6 +12,7 @@ import {
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import { readCommandOutput } from "../runtime/process.boundary.ts";
+import { compatibilityCheck } from "./compatibility-report.ts";
 import {
   type Check,
   failed,
@@ -21,7 +22,6 @@ import {
   parseProcesses,
   processChecks,
 } from "./doctor-report.ts";
-
 import { readLaunchd } from "./launchd.boundary.ts";
 import { registrationChecks } from "./launchd-plan.ts";
 import { registeredEnvironment } from "./open-app-plan.ts";
@@ -43,6 +43,7 @@ const checks: Check[] = [
   ...(await processesChecks()),
   ...(await logSummaryChecks()),
   await lastFallbackCheck(),
+  await lastCompatibilityCheck(),
 ];
 process.stdout.write(formatReport(checks));
 process.exit(failed(checks) ? 1 : 0);
@@ -278,4 +279,26 @@ async function lastFallbackCheck(): Promise<Check> {
   if (read.value === null) return fallbackCheck(null);
   const parsed = parseJson(read.value);
   return fallbackCheck(parsed.isOk() ? parsed.value : {});
+}
+
+async function lastCompatibilityCheck(): Promise<Check> {
+  const state = loadStatePath(process.env);
+  if (state.isErr())
+    return {
+      status: "warn",
+      name: "Last protocol incompatibility",
+      detail: state.error.message,
+    };
+  const read = await readTextFileIfExists(
+    join(dirname(state.value), "compatibility-failure.json"),
+  );
+  if (read.isErr())
+    return {
+      status: "warn",
+      name: "Last protocol incompatibility",
+      detail: "cannot read failure record",
+    };
+  if (read.value === null) return compatibilityCheck(null);
+  const parsed = parseJson(read.value);
+  return compatibilityCheck(parsed.isOk() ? parsed.value : {});
 }

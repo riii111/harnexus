@@ -37,6 +37,7 @@ import {
 } from "../runtime/process.boundary.ts";
 import { serveLinesWhenFree } from "../runtime/socket.boundary.ts";
 import { connectClaudeThreads } from "./claude-threads.ts";
+import { reportCompatibilityFailure } from "./compatibility.boundary.ts";
 import { createBridgeLogger } from "./logging.ts";
 import {
   serverFromEnv,
@@ -192,7 +193,15 @@ async function withClaude(relay: {
     unverifiedCodex: loadUnverifiedCodexPolicy(process.env),
     codexHome: codexHome(process.env),
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
-    log: logger.log,
+    log: (event) => {
+      logger.log(event);
+      if (event.event === "codex_incompatible") {
+        void reportCompatibilityFailure(event, process.env).then((reported) => {
+          if (reported.isErr())
+            logger.log({ event: "compatibility_report_failed" });
+        });
+      }
+    },
   });
   // Not awaited: while another bridge holds the socket this one keeps waiting to take it over, and threads started before then go without CODEX_THREAD_ID.
   void openCallSocket(callGateway.handle).then((open) => {

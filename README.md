@@ -106,6 +106,8 @@ The bridge log is kept at `~/.local/state/harnexus/bridge.log`, beside the saved
 
 If the bundled Codex CLI is unverified or the bridge cannot start, the launcher uses standard Codex directly. Codex chats remain available; Claude chats need a working harnexus setup. Run `bun run doctor` to see recent switches in the bridge log (`standard_fallback`). Startup waits at most 15 seconds for the bridge before falling back. A macOS notification explains why and points to `bun run doctor`; notification failures do not block the app. The latest failure's reason, Codex version (when available) and timestamp are saved in `~/.local/state/harnexus/launcher-failure.json` beside the state file, even with file logging disabled.
 
+While the app runs, harnexus also checks the normal initialization and model-list responses for fields it needs. If those fields are missing or have changed types, it stops offering Claude models and refuses new Claude requests for that connection. Other Codex traffic keeps passing through. A notification explains the failure, and `bun run doctor` reads the latest record from `compatibility-failure.json` beside the state file. Extra response fields and ordinary RPC errors do not trigger this check.
+
 To try Claude on an unverified CLI, explicitly opt in and reopen the app:
 
 ```sh

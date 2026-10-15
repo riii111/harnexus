@@ -31,6 +31,92 @@ import {
 } from "./thread-request.ts";
 import type { SideChatContext } from "./thread-values.ts";
 
+describe("createRouter compatibility", () => {
+  test.each([
+    {
+      name: "initialize",
+      method: "initialize",
+      result: { userAgent: null },
+      reason: "InitializeResponseChanged",
+    },
+    {
+      name: "model list",
+      method: "model/list",
+      result: { data: {} },
+      reason: "ModelListResponseChanged",
+    },
+  ])("passes through a changed $name response and disables Claude once for the connection", async ({
+    method,
+    result,
+    reason,
+  }) => {
+    const { router, events, calls } = setup(["th-claude"]);
+    const response = encode({ id: 100, result });
+    router.fromApp(encode({ id: 100, method, params: {} }));
+    expect(await router.fromServer(response)).toEqual(response);
+    router.fromApp(encode({ id: 101, method, params: {} }));
+    await router.fromServer(encode({ id: 101, result }));
+    expect(
+      events.filter(({ event }) => event === "codex_incompatible"),
+    ).toEqual([{ event: "codex_incompatible", reason, version: null }]);
+
+    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromServer(initializeAnswer(VERIFIED_AGENT));
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    const models = modelList(2, null);
+    expect(await router.fromServer(models)).toEqual(models);
+    expect(
+      await router.fromApp(
+        encode({
+          id: 3,
+          method: "turn/start",
+          params: { threadId: "th-claude" },
+        }),
+      ),
+    ).toBeNull();
+    expect(calls).toContainEqual([
+      "reject",
+      { id: 3, params: { threadId: "th-claude" } },
+      expect.stringContaining("disabled"),
+    ]);
+    const codex = encode({
+      id: 4,
+      method: "turn/start",
+      params: { threadId: "th-codex", model: "gpt-fixture" },
+    });
+    expect(await router.fromApp(codex)).toEqual(codex);
+  });
+
+  test("retains the initialized CLI version in a later incompatibility event", async () => {
+    const { router, events } = setup();
+    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromServer(initializeAnswer(VERIFIED_AGENT));
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    await router.fromServer(encode({ id: 2, result: { data: null } }));
+    expect(events).toContainEqual({
+      event: "codex_incompatible",
+      reason: "ModelListResponseChanged",
+      version: "0.158.0-alpha.2.1",
+    });
+  });
+
+  test("keeps Claude enabled after an RPC error and an unrelated malformed response", async () => {
+    const { router, events } = setup();
+    router.fromApp(encode({ id: 100, method: "initialize", params: {} }));
+    await router.fromServer(
+      encode({ id: 100, error: { code: -32603, message: "not ready" } }),
+    );
+    await router.fromServer(encode({ id: 99, result: { data: null } }));
+    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    expect(
+      parse(await router.fromServer(modelList(2, null))).result.data.length,
+    ).toBeGreaterThan(1);
+    expect(
+      events.filter(({ event }) => event === "codex_incompatible"),
+    ).toEqual([]);
+  });
+});
+
 describe("Claude conversation rewind routing", () => {
   test.each([
     { method: "thread/revert" },
