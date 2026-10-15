@@ -52,31 +52,34 @@ Claude's response and tool activity appear in the chat. Run all `bun run` comman
 
 ### Continue a conversation
 
-Open an existing Claude chat to send another request. You can choose another Claude model in the same chat. To work with a Codex model, use a separate chat; a Claude chat cannot switch back to Codex.
+Reopen a Claude chat to continue or choose another Claude model. To use Codex, start a
+separate chat; Claude chats cannot switch back to Codex.
 
-If the app closed during Claude's work, send a new message to continue. The chat shows an interruption notice, and Claude checks the current state before proceeding. Automatic retries and messages from other chats do not resume work with an unknown outcome. If recovery is unavailable with an older App/CLI pair, update the app and reopen it with harnexus.
+If the app closed during a task, send a new message to resume. Claude checks the current
+state before proceeding. Editing or rewinding a message rewinds the conversation, but
+keeps files already changed.
 
-Editing or rewinding a message rewinds the conversation. Files already changed remain as they are.
+### Open a side chat
 
-### Side chats across Claude and Codex
+Open a side chat from Claude or Codex and choose either model before its first message.
+After that, its model is fixed.
 
-From a Claude chat, you can open a side chat and pick Codex; from a Codex chat, you can open one and pick Claude. Pick the model when you open the side chat or before its first message: once its first message is sent, it stays on that model, so open a new side chat to ask the other one. The main chat keeps its own model.
+The side chat receives a snapshot of the main conversation, without tool calls or their
+output. Later messages are not shared, and long conversations may omit turns. Restate
+any instructions it needs. Claude side chats follow the app's side chat instructions,
+including not editing files unless you ask.
 
-The side chat receives the main conversation as reference: your messages and the main agent's finished replies, without tool calls or their output. For a Claude main chat, this is the conversation when the side chat opened. For a Codex main chat, it is what harnexus could read while the side chat was being opened, so anything added after that is left out. Later messages in the main chat do not reach the side chat. A side chat running on Claude also follows the app's side chat instructions, such as not editing files unless you ask.
-
-The conversation handed over is limited to about 32,000 characters. This limit counts characters, not tokens. A long conversation keeps its beginning and its newest messages, and the side chat is told which turns were left out; instructions given only in those turns may be missing. From a Codex main chat, only its oldest turn and its newest 50 turns are read, so its beginning is that oldest turn. The conversation is handed over once, but it stays in the side chat's context, so each later turn there can also use input tokens for it. Opening a side chat from a Codex chat reads that chat's history on this Mac, which adds a short wait even when the side chat stays on Codex but uses no model tokens.
-
-If the main conversation could not be read, the side chat stays on the main chat's model. If a side chat says it takes no more messages, it could not confirm that Codex received the conversation; open a new side chat.
+If the conversation could not be read, the side chat keeps the main chat's model. If it
+stops accepting messages, open a new side chat.
 
 ### Attach images
 
-Attach or paste images to ask Claude about them, including while Claude is working. Reopened chats show the images you sent.
-
-PNG, JPEG, GIF, and WebP are supported; large images are reduced automatically. Audio and other attachments are not supported.
+Paste or attach PNG, JPEG, GIF, or WebP images, including while Claude is working. Large
+images are reduced automatically. Audio and other attachments are not supported.
 
 ### Reopen the app
 
-Use `bun run open-app` each time you want to start the app with harnexus. The app reads its environment only at startup, so quit it first if it is already running.
+Quit the app, then run `bun run open-app` each time you want to use harnexus.
 
 To return to the app's standard setup, quit it and run:
 
@@ -84,25 +87,22 @@ To return to the app's standard setup, quit it and run:
 bun run open-app --standard
 ```
 
-Your Claude chats remain unavailable until you open the app with harnexus again.
+Your Claude chats become available again when you reopen with harnexus.
 
 ## Troubleshooting
 
-### Claude does not appear or a chat will not start
-
-First, make sure you quit the app before opening it with `bun run open-app`. Then check your setup:
+If Claude does not appear or a chat will not start, quit the app completely and reopen
+with `bun run open-app`. If the problem persists, run:
 
 ```sh
 bun run doctor
 ```
 
-The report checks installed versions, your Claude login, saved state, the launcher, and any bridge or Claude processes left running. It also summarizes the last 24 hours of the bridge log: bridge starts, the Codex CLI version, the call socket, and refused requests and turns. It prints no conversation text or credentials, so you can paste it into a bug report.
+You can paste the report into a bug report; it contains no conversation text or
+credentials.
 
-The bridge log is kept at `~/.local/state/harnexus/bridge.log`, beside the saved state, and holds no conversation text. When it grows past 5 MB, the next bridge start moves it to `bridge.log.1`.
-
-### After an app update
-
-harnexus warns when the app bundles a Codex CLI version it has not been checked on. To keep Claude disabled on an unverified version, launch with:
+After an app update, harnexus warns about unverified Codex CLI versions. To keep Claude
+disabled until the version is verified, launch with:
 
 ```sh
 HARNEXUS_UNVERIFIED_CODEX=pause bun run open-app
@@ -110,9 +110,10 @@ HARNEXUS_UNVERIFIED_CODEX=pause bun run open-app
 
 ## Use Google Vertex AI for a repository
 
-Chats use your Claude subscription. To run a repository's chats on Claude through Google Vertex AI instead:
+To use Vertex AI instead of your Claude subscription:
 
-1. Set up Vertex AI in the repository's `.claude/settings.local.json`, as for `claude` in a terminal. If `claude` already runs on Vertex AI there, skip this step.
+1. Configure Vertex AI in the repository's `.claude/settings.local.json`, following
+   [Claude Code on Google Vertex AI](https://code.claude.com/docs/en/google-vertex-ai):
 
    ```json
    {
@@ -125,66 +126,58 @@ Chats use your Claude subscription. To run a repository's chats on Claude throug
    ```
 
 2. Open the app with `HARNEXUS_VERTEX=on bun run open-app`.
-3. In a chat in that repository, pick a model marked `· Vertex AI`, such as `Claude Opus 5.5 · Vertex AI`.
+3. Pick a model marked `· Vertex AI` in a chat in that repository.
 
-Before Claude's first reply, the chat shows the Google Cloud project and region it runs on. Send `/session` to see them again. Other repositories stay on your subscription.
+The chat shows the Google Cloud project and region before Claude's first reply;
+`/session` shows them again. Other repositories stay on your subscription. Vertex AI
+errors appear in the chat, without falling back to your subscription.
 
-For the Google Cloud side, see [Claude Code on Google Vertex AI](https://code.claude.com/docs/en/google-vertex-ai). Keep Vertex AI settings out of `~/.claude/settings.json`, since they would apply to every repository.
-
-harnexus never falls back to your subscription. Errors from Google Cloud, such as missing credentials or a model not enabled in your project, appear in the chat; the guide above covers them.
+Keep Vertex AI settings out of `~/.claude/settings.json`, where they would apply to
+every repository.
 
 ## Optional Settings
 
-### Automatic approvals
+### Approvals
 
-Claude chats use auto mode by default to reduce routine permission prompts. Start the app normally with `bun run open-app`.
+Claude uses auto mode by default. Explicit `ask` and `deny` rules still apply. Auto mode
+requires a supported model and account; if unavailable, the chat reports an error. Some
+blocked actions offer no approval prompt. The app's **Approve for me** setting does not
+control Claude approvals.
 
-Claude's classifier allows or blocks actions before they run. Your explicit `ask` rules still require approval, and `deny` rules still block actions. Plan mode stays available; approving a plan returns Claude to the configured approval mode.
-
-Auto mode requires a supported Claude model and an account where it is enabled. If Claude cannot enable it, the chat reports an error. Some classifier denials do not offer an approval prompt. The app's **Approve for me** setting does not control Claude approvals.
-
-To use manual approvals, quit the app and reopen it with:
+For manual approvals, quit the app and reopen with:
 
 ```sh
 HARNEXUS_PERMISSION_MODE=default bun run open-app
 ```
 
-Leaving the variable unset or setting it to `auto` uses auto mode. The choice applies to all Claude chats opened with that app launch, including resumed conversations.
+The choice applies to all Claude chats for that app launch, including resumed chats.
 
-### Claude effort
+### Effort and paths
 
-Choose the effort level in the app. A `maxEffortLevel` in your project's `.claude/settings.json` takes precedence: choosing `max` with `"maxEffortLevel": "low"` still runs Claude at `low`.
+Choose Claude's effort level in the app. Your project's `maxEffortLevel` setting takes
+precedence.
 
-### Run Explore on Haiku
-
-Claude's built-in Explore subagent uses the chat's model. To use Haiku instead, create `.claude/agents/Explore.md` in your project with `name: Explore`, `model: haiku`, and `tools: Glob, Grep, Read` in its frontmatter.
-
-Write the agent's instructions in the file body: this replaces the built-in Explore agent, including its instructions. The same file also works in Claude Code on its own.
-
-### Custom paths
-
-Set `HARNEXUS_APP_PATH` if the app is installed somewhere else. `HARNEXUS_LOG_PATH` and `HARNEXUS_STATE_PATH` set in your shell are passed to the app by `bun run open-app`; both must be absolute paths. The log is kept beside the state file unless `HARNEXUS_LOG_PATH` names another file, or is `off` to keep no log file. A file named this way also records a summary of each message relayed between the app and Codex.
+- `HARNEXUS_APP_PATH`: Use an app installed somewhere else.
+- `HARNEXUS_STATE_PATH`: Set an absolute path for saved state.
+- `HARNEXUS_LOG_PATH`: Set an absolute log path, or `off` to disable file logging.
+  By default, the log is beside the state file.
 
 ## harnexus-task
 
-For the `task-*` workflow, coordinate from a Codex chat by default. To use Claude as the coordinator, select it explicitly in the app; workers still default to Claude and reviewers to Codex.
-
-`harnexus-task` launches task workers and requests reviews in the app for the `task-*` skills. It renders a fixed prompt from the installed skill templates in `$CODEX_HOME/skills`, creates the thread or sends the message through harnexus, and records each send under `~/.local/state/taskctl/` so a send with an unknown result is never repeated. Its subcommands are `launch`, `review`, `state` and `resolve`; it replaces the `taskctl` script and continues the sessions it recorded.
-
-It sends through a socket that `bun run open-app` opens beside the thread store, and runs outside the sandbox. The socket lets any process of your user create and message threads in the app; sandboxed agents reach it only through the allow-listed `harnexus-task`. To close it, open the app with `HARNEXUS_CALL_SOCKET=off bun run open-app`. Install it to `~/.local/bin/harnexus-task` with:
+For the `task-*` skills, install the worker and review launcher:
 
 ```sh
 bun run install:task
 ```
 
-This builds a standalone executable and replaces the installed one in a single step. Agents run `launch`, `review` and `state` without approval, so allow-list only that installed command, for example `harnexus-task launch`. Never allow-list `bun run task` or the `dist/` binary in this repository: a sandboxed agent can write to the checkout, and what it changed there would then run outside the sandbox. `~/.local/bin` is outside the sandboxes' writable paths.
+This installs `harnexus-task` in `~/.local/bin`. It requires the `task-*` skills in
+`$CODEX_HOME/skills`. Coordinate from a Codex chat by default, or explicitly select
+Claude; workers default to Claude and reviewers to Codex.
 
-Allow rules must name the command itself, without environment assignments in front of it, since variables such as `BUN_OPTIONS` or `BUN_BE_BUN` make the executable run other code.
+The command runs outside the sandbox. Allow-list only the installed command, such as
+`harnexus-task launch`, without leading environment assignments. Never allow-list
+`bun run task` or the repository's `dist/` binary: sandboxed agents can modify those files.
+Keep the installed executable outside sandbox-writable paths.
 
-`harnexus-task state --request REQUEST` prints one flat JSON object for the session, with every key present and `null` for what is unknown. A review session's state file also keeps the reviewer's `settings`; the other recorded fields keep the `taskctl` layout.
-
-- Both kinds: `kind` (`launch` or `review`), `requested` and `actual` (each `{model, effort}`: what the thread was created with, or what a later send that named a model or thinking asked and got), `pending` (the status of an unresolved send, such as `unknown` or `refused`, or null), `pendingThreadId` (the thread that send named, or null), `statePath`, `prompt` (the last confirmed prompt) and `refusedThreadIds` (threads whose first turn was refused and released).
-- Launch sessions: `taskId` and `workerThreadId`.
-- Review sessions: `reviewerThreadId`, `workerThreadId`, and `base`, `head`, `baseBranch` and `prUrl` of the last confirmed send, with `pendingHead`, the head of an unresolved send, or null.
-
-Without `--request`, `state` prints every recorded file as it is stored.
+The app's call socket lets processes running as your user create and message chats. To
+disable it, launch with `HARNEXUS_CALL_SOCKET=off bun run open-app`.
