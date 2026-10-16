@@ -124,6 +124,4 @@ const REFUSAL_MESSAGES = {
     "Harnexus could not confirm that this side chat received the Claude conversation, so it takes no more messages; open a new side chat",
   codex_incompatible:
     "Claude is disabled because the Codex response format is incompatible with harnexus; run bun run doctor, update harnexus, then restart the app",
-  claude_paused:
-    "Claude threads are paused because harnexus was not checked on this Codex CLI version; update harnexus, or unset HARNEXUS_UNVERIFIED_CODEX to run anyway",
 } as const;

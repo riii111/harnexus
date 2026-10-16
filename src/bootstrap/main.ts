@@ -57,7 +57,7 @@ const server = serverFromEnv(process.env);
 
 if (
   process.argv.includes("--launcher") &&
-  process.env.HARNEXUS_UNVERIFIED_CODEX !== "warn"
+  loadUnverifiedCodexPolicy(process.env) === "fallback"
 ) {
   const version = await readCommandOutput(
     process.env.HARNEXUS_CODEX_PATH ?? "",
@@ -184,7 +184,6 @@ async function withClaude(relay: {
       catalog.effortsOf,
     ),
     claudeModels: catalog.models,
-    unverifiedCodex: loadUnverifiedCodexPolicy(process.env),
     codexHome: codexHome(process.env),
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: (event) => {

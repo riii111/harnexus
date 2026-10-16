@@ -172,7 +172,7 @@ describe("logChecks", () => {
         status: "ok",
         name: "Log",
         detail:
-          "2 bridge starts in the last 24 hours, Codex CLI 0.121.0, in /state/bridge.log",
+          "2 bridge starts in the last 24 hours, Codex CLI 0.121.0 (unchecked), in /state/bridge.log",
       },
       {
         status: "warn",

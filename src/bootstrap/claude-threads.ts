@@ -34,7 +34,6 @@ export const connectClaudeThreads = ({
   readSubagents,
   effortRule,
   claudeModels,
-  unverifiedCodex,
   codexHome,
   permissionMode = "auto",
   send,
@@ -51,7 +50,6 @@ export const connectClaudeThreads = ({
   effortRule: Runtime["effortRule"];
   claudeModels: Parameters<typeof createRouter>[0]["claudeModels"];
   permissionMode?: Runtime["permissionMode"];
-  unverifiedCodex: Parameters<typeof createRouter>[0]["unverifiedCodex"];
   codexHome: string;
   send: (message: object) => void;
   log: (event: ClaudeLogEvent | RouteEvent) => void;
@@ -171,7 +169,6 @@ export const connectClaudeThreads = ({
     delegations,
     history,
     claudeModels,
-    unverifiedCodex,
     subagents: subagentRequests,
     revert: createRevertRequests({
       store,
