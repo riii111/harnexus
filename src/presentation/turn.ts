@@ -63,6 +63,7 @@ export const renderTurnStarted = (params: {
   });
   const turn: Turn = {
     id: params.turnId,
+    rootTurnId: params.turnId,
     items: [],
     itemsView: "full",
     status: "inProgress",
@@ -88,6 +89,7 @@ export const renderTurnStarted = (params: {
 // A turn/start that joins the running turn is answered with that turn, without its items, as Codex answers one it steers.
 export const steeredTurn = (state: TurnState): Turn => ({
   id: state.turnId,
+  rootTurnId: state.turnId,
   items: [],
   itemsView: "notLoaded",
   status: "inProgress",
@@ -611,6 +613,7 @@ const finish = (draft: Draft, outcome: TurnOutcome, now: number) => {
   });
   const turn: Turn = {
     id: draft.turnId,
+    rootTurnId: draft.turnId,
     items: completed && draft.finalMessage !== null ? [draft.finalMessage] : [],
     itemsView: "summary",
     status: outcome.status,

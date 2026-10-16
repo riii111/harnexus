@@ -74,6 +74,9 @@ export const pageItems = (
     request,
   );
 
+// An item anchor is exclusive in the asked direction, so it starts the page as a next cursor after that item does.
+export const itemAnchorCursor = (itemId: string) => `${AFTER}${itemId}`;
+
 // The app reads the timeline from its newest page back, so a page holds the entries just before its cursor in record order.
 export const pageTimeline = (
   history: readonly HistoryTurn[],

@@ -12,6 +12,7 @@ import {
   withLiveTurn,
 } from "../presentation/history.ts";
 import {
+  itemAnchorCursor,
   pageItems,
   pageTimeline,
   pageTurns,
@@ -265,13 +266,20 @@ const pageFor = (
         sortDirection: directionOf(params.sortDirection, "desc"),
         itemsView: viewOf(params.itemsView),
       });
-    case "thread/items/list":
-      return pageItems(history, {
+    case "thread/items/list": {
+      const request = {
         turnId: typeof params.turnId === "string" ? params.turnId : null,
-        cursor,
         limit,
         sortDirection: directionOf(params.sortDirection, "asc"),
-      });
+      };
+      // The app can anchor on an item it streamed under the live turn's ids or one a rewind cut, which the record does not hold, so such an anchor reads from the start as before anchors existed.
+      return isItemAnchor(params.cursor)
+        ? (pageItems(history, {
+            ...request,
+            cursor: itemAnchorCursor(params.cursor.itemId),
+          }) ?? pageItems(history, { ...request, cursor: null }))
+        : pageItems(history, { ...request, cursor });
+    }
     case "thread/timeline/list": {
       const page = pageTimeline(history, { cursor, limit });
       return page === null
@@ -280,6 +288,9 @@ const pageFor = (
     }
   }
 };
+
+const isItemAnchor = (value: unknown): value is { itemId: string } =>
+  isObject(value) && value.type === "item" && typeof value.itemId === "string";
 
 const limitOf = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) ? value : null;

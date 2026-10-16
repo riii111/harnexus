@@ -407,6 +407,11 @@ describe("Codex CLI version", () => {
       expected: { version: "0.158.0-alpha.2.1", verified: true },
     },
     {
+      name: "the version bundled with app 26.1007.71326",
+      agent: "Codex Desktop/0.162.0-alpha.17.2 (Mac OS 26.5.1; arm64)",
+      expected: { version: "0.162.0-alpha.17.2", verified: true },
+    },
+    {
       name: "another version",
       agent: "Codex Desktop/0.159.0 (Mac OS 26.5.1; arm64)",
       expected: { version: "0.159.0", verified: false },
@@ -1838,6 +1843,48 @@ describe("Claude thread history", () => {
         },
       },
     ]);
+  });
+
+  test("answers thread/items/list from past an item anchor, or from the start when the record lacks it", async () => {
+    const { router, sent } = setup(["th-claude"], {
+      records: {
+        "th-claude": conversation(),
+      },
+    });
+    const list = (id: number, cursor?: unknown) =>
+      router.fromApp(
+        encode({
+          id,
+          method: "thread/items/list",
+          params: {
+            threadId: "th-claude",
+            turnId: "harnexus-history-u2",
+            sortDirection: "asc",
+            ...(cursor !== undefined && { cursor }),
+          },
+        }),
+      );
+
+    list(8);
+    await Bun.sleep(0);
+    const [question, answer] = (
+      sent[0] as { result: { data: { item: { id: string } }[] } }
+    ).result.data.map((entry) => entry.item.id);
+    list(9, { type: "item", itemId: question });
+    await Bun.sleep(0);
+
+    expect(sent[1]).toMatchObject({
+      id: 9,
+      result: { data: [{ item: { id: answer, type: "agentMessage" } }] },
+    });
+
+    list(10, { type: "item", itemId: "live-turn-item-1" });
+    await Bun.sleep(0);
+
+    expect(sent[2]).toMatchObject({
+      id: 10,
+      result: { data: [{ item: { id: question } }, { item: { id: answer } }] },
+    });
   });
 
   test("answers thread/timeline/list from the newest entry back", async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildHistory } from "./history.ts";
 import {
+  itemAnchorCursor,
   pageItems,
   pageTimeline,
   pageTurns,
@@ -88,6 +89,22 @@ describe("pageItems", () => {
       [T2, "userMessage"],
     ]);
     expect(page?.nextCursor).toBeNull();
+  });
+
+  test("starts just past an item anchor in the asked direction", () => {
+    const history = threeTurns();
+    const [question = "", answer = ""] =
+      history[1]?.items.map((entry) => entry.item.id) ?? [];
+    const pageFrom = (itemId: string, sortDirection: "asc" | "desc") =>
+      pageItems(history, {
+        turnId: T2,
+        cursor: itemAnchorCursor(itemId),
+        limit: 100,
+        sortDirection,
+      })?.data.map((entry) => entry.item.id);
+
+    expect(pageFrom(question, "asc")).toEqual([answer]);
+    expect(pageFrom(answer, "desc")).toEqual([question]);
   });
 });
 
