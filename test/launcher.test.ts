@@ -20,6 +20,7 @@ const TIMEOUT = 20_000;
 let dir: string;
 let fakeCodex: string;
 let lingeringCodex: string;
+let stdioFlagsCodex: string;
 let hangingBun: string;
 let reports = 0;
 const launched: Bun.Subprocess[] = [];
@@ -49,6 +50,9 @@ beforeAll(async () => {
   hangingBun = join(dir, "hung-bun");
   await writeFile(hangingBun, "#!/bin/sh\nexec /bin/sleep 30\n");
   await chmod(hangingBun, 0o755);
+  stdioFlagsCodex = join(dir, "codex-stdio-flags.pl");
+  await writeFile(stdioFlagsCodex, STDIO_FLAGS_CODEX);
+  await chmod(stdioFlagsCodex, 0o755);
   lingeringCodex = join(dir, "codex-lingering.sh");
   await writeFile(lingeringCodex, LINGERING_CODEX);
   await chmod(lingeringCodex, 0o755);
@@ -166,6 +170,20 @@ describe("startup fallback", () => {
       const result = await finish(proc);
       expect(result).toMatchObject({ stdout: "missing\n", exitCode: 0 });
       expect(result.stderr).toContain('"event":"standard_fallback"');
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "hands standard Codex blocking stdio after the bridge declined to start",
+    async () => {
+      const { env } = setup({
+        HARNEXUS_CODEX_PATH: stdioFlagsCodex,
+        HARNEXUS_UNVERIFIED_CODEX: undefined,
+      });
+      const result = await finish(launch(["app-server"], env));
+      expect(result.stderr).toContain('"event":"standard_fallback"');
+      expect(result.stderr).toContain("stdio-flags 0 0 0");
     },
     TIMEOUT,
   );
@@ -842,6 +860,13 @@ if (process.env.FAKE_CODEX_MODE === "burst") {
   process.stdout.write(await Bun.stdin.text());
   process.exitCode = Number(process.env.FAKE_CODEX_EXIT ?? "0");
 }
+`;
+
+// Perl, since a Bun process could change the flags it reports on; prints 1 for each of stdin, stdout and stderr left non-blocking.
+const STDIO_FLAGS_CODEX = `#!/usr/bin/perl
+use Fcntl qw(F_GETFL O_NONBLOCK);
+if (($ARGV[0] // "") eq "--version") { print "codex-cli 9.0.0\\n"; exit 0; }
+print STDERR "stdio-flags ", join(" ", map { (fcntl($_, F_GETFL, 0) & O_NONBLOCK) ? 1 : 0 } \\*STDIN, \\*STDOUT, \\*STDERR), "\\n";
 `;
 
 // Unlike closeSync(1) in Bun, which leaves the pipe open until exit, exec >&- gives the bridge EOF while Codex keeps running; the ignored SIGTERM survives exec.
