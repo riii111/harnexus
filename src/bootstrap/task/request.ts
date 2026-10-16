@@ -105,6 +105,12 @@ const taskId = (value: unknown) =>
         ),
   );
 
+// Only the thread title shows the name, so it may carry any single-line text.
+const displayName = (value: unknown) =>
+  value === undefined || value === null
+    ? Result.ok(null)
+    : singleLine(value, "displayName");
+
 export const chatId = (value: unknown, name: string) =>
   singleLine(value, name).andThen((id) =>
     hasSpace(id) || id.startsWith("client-new-thread:")
@@ -152,10 +158,11 @@ export const launchRequest = (path: string) =>
       readRequest(
         path,
         ["taskId", "documentRefs", "completionTarget", "projectId"],
-        ["startingBranch"],
+        ["startingBranch", "displayName"],
       ),
     );
     yield* taskId(data.taskId);
+    yield* displayName(data.displayName);
     yield* singleLine(data.projectId, "projectId");
     const branch = data.startingBranch;
     if (
@@ -246,10 +253,11 @@ export const reviewRequest = (path: string, env: Env, git: Git) =>
           "baseBranch",
           "documentRefs",
         ],
-        ["prUrl", "workerChatId"],
+        ["prUrl", "workerChatId", "displayName"],
       ),
     );
     yield* taskId(data.taskId);
+    yield* displayName(data.displayName);
     yield* Result.await(documentRefs(data.documentRefs));
     for (const key of ["projectId", "checkout", "baseBranch"]) {
       yield* singleLine(data[key], key);
