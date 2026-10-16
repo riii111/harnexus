@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use utf8;
 use Cwd qw(abs_path);
-use Fcntl qw(F_DUPFD O_CREAT O_EXCL O_WRONLY);
+use Fcntl qw(F_DUPFD F_GETFL F_SETFL O_CREAT O_EXCL O_NONBLOCK O_WRONLY);
 use File::Basename qw(dirname);
 use POSIX ();
 use IO::Select;
@@ -37,7 +37,10 @@ $ENV{HARNEXUS_LAUNCHER_ACTIVE} = "1";
 if (runs_app_server(@ARGV)) {
   my $failure = eval { start_sidecar() };
   $failure = {reason => "BridgeStartupFailed", version => undef} if $@;
-  report_fallback($failure) if $failure;
+  if ($failure) {
+    restore_blocking_stdio();
+    report_fallback($failure);
+  }
 }
 
 exec { $codex } $codex, @ARGV or fail("cannot start $codex: $!");
@@ -147,6 +150,14 @@ sub require_executable {
   fail("$name must be an absolute path") if $path !~ m{^/};
   fail("$name is not an executable file") unless -f $path && -x _;
   return $path;
+}
+
+# The bridge shared these descriptors with this process and Bun leaves them non-blocking; Codex reads them with blocking calls and drops the app's connection on EAGAIN.
+sub restore_blocking_stdio {
+  for my $handle (\*STDIN, \*STDOUT, \*STDERR) {
+    my $flags = fcntl($handle, F_GETFL, 0) // next;
+    fcntl($handle, F_SETFL, $flags & ~O_NONBLOCK);
+  }
 }
 
 sub report_fallback {
