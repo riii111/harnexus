@@ -179,7 +179,7 @@ describe("startup fallback", () => {
     async () => {
       const { env } = setup({
         HARNEXUS_CODEX_PATH: stdioFlagsCodex,
-        HARNEXUS_UNVERIFIED_CODEX: undefined,
+        HARNEXUS_UNVERIFIED_CODEX: "fallback",
       });
       const result = await finish(launch(["app-server"], env));
       expect(result.stderr).toContain('"event":"standard_fallback"');
