@@ -232,11 +232,6 @@ export const createRouter = ({
           return null;
         }
         if (!claude) return line;
-        if (incompatible) {
-          refuse("turn/start", request, "codex_incompatible");
-          noteStarted(params, "codex_incompatible");
-          return null;
-        }
         noteStarted(params, turns.startTurn(request, cwdOf(params)));
         return null;
       }
@@ -246,10 +241,6 @@ export const createRouter = ({
           return null;
         }
         if (!turns.isClaudeThread(params.threadId)) return line;
-        if (incompatible) {
-          refuse("turn/steer", request, "codex_incompatible");
-          return null;
-        }
         turns.steerTurn(request);
         return null;
       case "turn/interrupt":
@@ -277,10 +268,6 @@ export const createRouter = ({
       // The server would compact its own record, which holds none of the Claude conversation.
       case "thread/compact/start":
         if (!turns.isClaudeThread(params.threadId)) return line;
-        if (incompatible) {
-          refuse("thread/compact/start", request, "codex_incompatible");
-          return null;
-        }
         turns.compactThread(request);
         return null;
       // The server would run this on its own model with none of the Claude conversation.
@@ -328,14 +315,6 @@ export const createRouter = ({
     request: AppRequest,
   ) => {
     const { id, params } = request;
-    if (
-      incompatible &&
-      message.method === "thread/start" &&
-      isClaudeModel(params.model)
-    ) {
-      refuse("thread/start", request, "codex_incompatible");
-      return null;
-    }
     const threadId =
       message.method === "thread/resume" && typeof params.threadId === "string"
         ? params.threadId
@@ -454,10 +433,6 @@ export const createRouter = ({
   ) => {
     const { id, params } = request;
     const claude = isClaudeModel(requested);
-    if (claude && incompatible) {
-      refuse("thread/fork", request, "codex_incompatible");
-      return null;
-    }
     return sideChats.referenceOf(parentId).then((reference) => {
       if (reference.isErr() && claude) {
         refuse("thread/fork", request, "side_chat_unreadable");
