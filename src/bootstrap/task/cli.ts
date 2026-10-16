@@ -51,12 +51,23 @@ const worktreeTarget = (project: unknown) => ({
   environment: { type: "worktree" } as Fields,
 });
 
+const threadTitle = (kind: string, data: Fields) =>
+  truthy(data.displayName)
+    ? `${kind}｜${asText(data.displayName)}`
+    : `${kind} ${asText(data.taskId)}`;
+
+// The name is only shown, so renaming a task still finds its worker.
+const withoutName = ({ displayName: _, ...rest }: Fields) => rest;
+
+const sameTask = (recorded: unknown, data: Fields) =>
+  isObject(recorded) && jsonEqual(withoutName(recorded), withoutName(data));
+
 const launch = (args: Args, deps: TaskDeps) =>
   Result.gen(async function* () {
     const data = yield* Result.await(launchRequest(args.request ?? ""));
     const session = yield* Result.await(launchSession(data, deps));
     if (session.state !== null) {
-      if (!jsonEqual(session.state.request, data))
+      if (!sameTask(session.state.request, data))
         return fail(
           `${asText(data.taskId)} already has worker ${asText(session.state.threadId)} ` +
             "launched with a different request",
@@ -73,7 +84,7 @@ const launch = (args: Args, deps: TaskDeps) =>
     const sent: Fields = {
       prompt,
       target,
-      title: `Impl ${asText(data.taskId)}`,
+      title: threadTitle("Impl", data),
       model: args.model || "claude-opus-5-5",
       thinking: args.thinking || "medium",
     };
@@ -138,7 +149,7 @@ const review = (args: Args, deps: TaskDeps) =>
     } else {
       Object.assign(sent, {
         target: worktreeTarget(data.projectId),
-        title: `Review ${asText(data.taskId)}`,
+        title: threadTitle("Review", data),
         model: args.model || "gpt-6.1-sol",
         thinking: args.thinking || "medium",
       });

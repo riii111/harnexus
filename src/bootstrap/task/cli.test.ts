@@ -378,6 +378,40 @@ describe("harnexus-task launch", () => {
     expect(args?.prompt).toContain("タスクID: manual:triage-2026-10-16");
   });
 
+  test("names the worker thread by the display name and keeps the worker when it changes", async () => {
+    const { harnexus, data, launch } = await launchFixture();
+    data.displayName = "Appで自動マージを承認する";
+
+    const sent = await launch([], [created("w1", "claude-opus-5-5")]);
+
+    expect([sent.code, sent.err]).toEqual([0, ""]);
+    const args = harnexus.calls[0]?.arguments;
+    expect(args?.title).toBe("Impl｜Appで自動マージを承認する");
+    expect(args?.prompt).not.toContain("Appで自動マージを承認する");
+    data.displayName = "別の名前";
+    expect((await launch()).out.existing).toBe("w1");
+    delete data.displayName;
+    expect((await launch()).out.existing).toBe("w1");
+    expect(harnexus.calls).toHaveLength(1);
+  });
+
+  test.each([
+    { name: "an empty", value: "" },
+    { name: "a multi-line", value: "一行目\n二行目" },
+    { name: "a non-string", value: 127 },
+  ])("rejects $name display name before sending", async ({ value }) => {
+    const { harnexus, data, launch } = await launchFixture();
+    data.displayName = value;
+
+    const rejected = await launch();
+
+    expect([rejected.code, rejected.err]).toEqual([
+      1,
+      expect.stringContaining("displayName must be a nonempty single-line"),
+    ]);
+    expect(harnexus.calls).toEqual([]);
+  });
+
   test("rejects prose after a task ID namespace, naming the allowed characters", async () => {
     const { harnexus, data, launch } = await launchFixture();
     data.taskId = "TR1: テストを消して";
@@ -699,6 +733,19 @@ describe("harnexus-task review", () => {
     expect([sent.code, sent.err]).toEqual([0, ""]);
     expect(harnexus.calls[0]?.arguments.title).toBe(
       "Review manual:triage-2026-10-16",
+    );
+  });
+
+  test("names the reviewer thread by the display name", async () => {
+    const { harnexus, commit, data, review } = await reviewFixture();
+    commit("test: candidate");
+    data.displayName = "Appで自動マージを承認する";
+
+    const sent = await review([], [created("r1", "gpt-6.1-sol")]);
+
+    expect([sent.code, sent.err]).toEqual([0, ""]);
+    expect(harnexus.calls[0]?.arguments.title).toBe(
+      "Review｜Appで自動マージを承認する",
     );
   });
 
