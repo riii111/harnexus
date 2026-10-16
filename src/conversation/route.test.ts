@@ -407,6 +407,11 @@ describe("Codex CLI version", () => {
       expected: { version: "0.158.0-alpha.2.1", verified: true },
     },
     {
+      name: "the version bundled with app 26.1007.71326",
+      agent: "Codex Desktop/0.162.0-alpha.17.2 (Mac OS 26.5.1; arm64)",
+      expected: { version: "0.162.0-alpha.17.2", verified: true },
+    },
+    {
       name: "another version",
       agent: "Codex Desktop/0.159.0 (Mac OS 26.5.1; arm64)",
       expected: { version: "0.159.0", verified: false },
