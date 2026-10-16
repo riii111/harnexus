@@ -345,22 +345,23 @@ describe("turn/start of a thread created by create_thread", () => {
   test.each([
     {
       name: "the turn controller's refusal",
-      paused: false,
+      userAgent: VERIFIED_AGENT,
       expected: "directory_unknown",
     },
-    { name: "a pause", paused: true, expected: "claude_paused" },
+    {
+      name: "an incompatible Codex",
+      userAgent: null,
+      expected: "codex_incompatible",
+    },
   ])("reports $name of a Claude first turn to the thread that created it", async ({
-    paused,
+    userAgent,
     expected,
   }) => {
     const { router, starts } = setup([], {
-      unverifiedCodex: paused ? "pause" : "warn",
       startRefusal: "directory_unknown",
     });
-    if (paused) {
-      router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
-      await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
-    }
+    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromServer(encode({ id: 1, result: { userAgent } }));
 
     router.fromApp(delegatedTurn({ model: CLAUDE }));
 
@@ -451,47 +452,18 @@ describe("Codex CLI version", () => {
     expect(events).toEqual([{ event: "codex_version", ...expected }]);
   });
 
-  test.each<{
-    name: string;
-    agent: string;
-    policy: "warn" | "pause";
-    expected: { models: number; unchanged: boolean };
-  }>([
-    {
-      name: "an unverified version unless asked to pause",
-      agent: UNVERIFIED_AGENT,
-      policy: "warn",
-      expected: { models: 4, unchanged: false },
-    },
-    {
-      name: "an unverified version when asked to pause",
-      agent: UNVERIFIED_AGENT,
-      policy: "pause",
-      expected: { models: 1, unchanged: true },
-    },
-    {
-      name: "a verified version even when asked to pause",
-      agent: VERIFIED_AGENT,
-      policy: "pause",
-      expected: { models: 4, unchanged: false },
-    },
-  ])("appends the Claude models to model/list only as allowed on $name", async ({
-    agent,
-    policy,
-    expected,
-  }) => {
-    const { router } = setup([], { unverifiedCodex: policy });
+  test.each([
+    { name: "a verified version", agent: VERIFIED_AGENT },
+    { name: "an unverified version", agent: UNVERIFIED_AGENT },
+  ])("appends the Claude models to model/list on $name", async ({ agent }) => {
+    const { router } = setup();
     router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
     await router.fromServer(initializeAnswer(agent));
     router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
-    const line = modelList(2, null);
 
-    const out = await router.fromServer(line);
+    const out = await router.fromServer(modelList(2, null));
 
-    expect({
-      models: parse(out).result.data.length,
-      unchanged: out?.equals(line),
-    }).toEqual(expected);
+    expect(parse(out).result.data.length).toBe(4);
   });
 
   test.each([
@@ -519,27 +491,25 @@ describe("Codex CLI version", () => {
       method: "thread/start",
       params: { cwd: "/fixture/work", model: CLAUDE },
     },
-  ])("refuses $name with the reason while paused", async ({
+  ])("refuses $name with the reason after an incompatible initialize answer", async ({
     id,
     method,
     params,
   }) => {
-    const { router, calls, events } = setup(["th-claude"], {
-      unverifiedCodex: "pause",
-    });
+    const { router, calls, events } = setup(["th-claude"]);
     router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
-    await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
+    await router.fromServer(encode({ id: 1, result: { userAgent: null } }));
 
     const routed = router.fromApp(encode({ id, method, params }));
 
     expect(routed).toBeNull();
     expect(calls).toEqual([
-      ["reject", { id, params }, expect.stringContaining("paused")],
+      ["reject", { id, params }, expect.stringContaining("disabled")],
     ]);
     expect(events).toContainEqual({
       event: "claude_request_refused",
       method,
-      reason: "claude_paused",
+      reason: "codex_incompatible",
     });
   });
 });
@@ -2640,7 +2610,6 @@ const setup = (
   claudeThreads: string[] = [],
   {
     records = {},
-    unverifiedCodex = "warn",
     holdForks = false,
     delegatedRuns = true,
     delegationWatch,
@@ -2651,7 +2620,6 @@ const setup = (
     records?: Record<string, SessionMessage[] | "unreadable">;
     injected?: Injected[];
     mainThread?: object[] | "unreadable";
-    unverifiedCodex?: "warn" | "pause";
     holdForks?: boolean;
     delegatedRuns?: boolean;
     delegationWatch?: Parameters<typeof createRouter>[0]["delegations"];
@@ -2782,7 +2750,6 @@ const setup = (
     },
     history,
     claudeModels: catalog.models,
-    unverifiedCodex,
     subagents: subagentRequests,
     revert: async (method, request) => {
       calls.push(["revert", method, request]);

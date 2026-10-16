@@ -97,11 +97,11 @@ export const loadShutdownGraceMs = (
 
 const UNVERIFIED_CODEX_ENV = "HARNEXUS_UNVERIFIED_CODEX";
 
-// "pause" keeps Claude threads from running on a Codex CLI the bridge was not checked on; anything else only warns.
+// The app bundles a new Codex CLI almost daily, so only "fallback" refuses an unverified one.
 export const loadUnverifiedCodexPolicy = (
   env: Record<string, string | undefined>,
-): "warn" | "pause" =>
-  env[UNVERIFIED_CODEX_ENV] === "pause" ? "pause" : "warn";
+): "run" | "fallback" =>
+  env[UNVERIFIED_CODEX_ENV] === "fallback" ? "fallback" : "run";
 
 const CALL_SOCKET_ENV = "HARNEXUS_CALL_SOCKET";
 

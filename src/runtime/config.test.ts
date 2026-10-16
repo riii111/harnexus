@@ -112,9 +112,9 @@ describe("loadShutdownGraceMs", () => {
 
 describe("loadUnverifiedCodexPolicy", () => {
   test.each([
-    { name: "pause", value: "pause", expected: "pause" },
-    { name: "an unset variable", value: undefined, expected: "warn" },
-    { name: "another value", value: "stop", expected: "warn" },
+    { name: "fallback", value: "fallback", expected: "fallback" },
+    { name: "an unset variable", value: undefined, expected: "run" },
+    { name: "the former pause", value: "pause", expected: "run" },
   ])("reads $name as $expected", ({ value, expected }) => {
     expect(
       loadUnverifiedCodexPolicy({ HARNEXUS_UNVERIFIED_CODEX: value }),

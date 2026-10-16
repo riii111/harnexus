@@ -103,7 +103,7 @@ export const logChecks = (text: string, path: string, now: number): Check[] => {
     {
       status: "ok",
       name: "Log",
-      detail: `${of("bridge_started").length} bridge starts in the last 24 hours, Codex CLI ${version === undefined ? "not seen" : field(version.version)}, in ${path}`,
+      detail: `${of("bridge_started").length} bridge starts in the last 24 hours, Codex CLI ${cliVersion(version)}, in ${path}`,
     },
     {
       status: unavailable.size === 0 ? "ok" : "warn",
@@ -190,6 +190,12 @@ const tally = (keys: readonly string[]) => {
 
 const field = (value: unknown) =>
   typeof value === "string" ? value : "unknown";
+
+const cliVersion = (entry: LogEntry | undefined) => {
+  if (entry === undefined) return "not seen";
+  const version = field(entry.version);
+  return entry.verified === false ? `${version} (unchecked)` : version;
+};
 
 const LOG_WINDOW_MS = 24 * 60 * 60 * 1000;
 

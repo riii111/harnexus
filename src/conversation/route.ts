@@ -100,7 +100,6 @@ type RouterDeps = {
   delegations: Pick<DelegationWatch, "observe" | "started">;
   history: History;
   claudeModels: ModelCatalog["models"];
-  unverifiedCodex: "warn" | "pause";
   subagents: Pick<
     SubagentRequests,
     "isChild" | "answer" | "withChildren" | "listedParentOf" | "remember"
@@ -144,14 +143,12 @@ export const createRouter = ({
   delegations,
   history,
   claudeModels,
-  unverifiedCodex,
   subagents,
   revert,
   sideChats,
 }: RouterDeps) => {
   const pending = new Map<AppRequest["id"], Pending>();
-  // Set from the server's initialize answer; while paused the app lists no Claude model and a Claude turn is refused rather than handed to Codex, which would run it without the Claude conversation.
-  let paused = false;
+  // While set, a Claude turn is refused rather than handed to Codex, which would run it without the Claude conversation.
   let incompatible = false;
   let serverVersion: string | null = null;
   // A Codex thread switched to Claude by turn/start needs a working directory that the request itself may not carry.
@@ -235,11 +232,6 @@ export const createRouter = ({
           return null;
         }
         if (!claude) return line;
-        if (paused) {
-          refuse("turn/start", request, "claude_paused");
-          noteStarted(params, "claude_paused");
-          return null;
-        }
         noteStarted(params, turns.startTurn(request, cwdOf(params)));
         return null;
       }
@@ -249,10 +241,6 @@ export const createRouter = ({
           return null;
         }
         if (!turns.isClaudeThread(params.threadId)) return line;
-        if (paused) {
-          refuse("turn/steer", request, "claude_paused");
-          return null;
-        }
         turns.steerTurn(request);
         return null;
       case "turn/interrupt":
@@ -280,10 +268,6 @@ export const createRouter = ({
       // The server would compact its own record, which holds none of the Claude conversation.
       case "thread/compact/start":
         if (!turns.isClaudeThread(params.threadId)) return line;
-        if (paused) {
-          refuse("thread/compact/start", request, "claude_paused");
-          return null;
-        }
         turns.compactThread(request);
         return null;
       // The server would run this on its own model with none of the Claude conversation.
@@ -331,14 +315,6 @@ export const createRouter = ({
     request: AppRequest,
   ) => {
     const { id, params } = request;
-    if (
-      paused &&
-      message.method === "thread/start" &&
-      isClaudeModel(params.model)
-    ) {
-      refuse("thread/start", request, "claude_paused");
-      return null;
-    }
     const threadId =
       message.method === "thread/resume" && typeof params.threadId === "string"
         ? params.threadId
@@ -457,10 +433,6 @@ export const createRouter = ({
   ) => {
     const { id, params } = request;
     const claude = isClaudeModel(requested);
-    if (claude && paused) {
-      refuse("thread/fork", request, "claude_paused");
-      return null;
-    }
     return sideChats.referenceOf(parentId).then((reference) => {
       if (reference.isErr() && claude) {
         refuse("thread/fork", request, "side_chat_unreadable");
@@ -562,7 +534,6 @@ export const createRouter = ({
     if (request.kind === "initialize" || request.kind === "modelList") {
       const reason = responseCompatibility(request.kind, message);
       if (reason !== null) {
-        paused = true;
         if (!incompatible) {
           incompatible = true;
           log({ event: "codex_incompatible", reason, version: serverVersion });
@@ -575,12 +546,11 @@ export const createRouter = ({
       const version = codexVersion(message.result.userAgent);
       const verified = isVerifiedCodex(version);
       serverVersion = compatibilityVersion(version);
-      paused = incompatible || (!verified && unverifiedCodex === "pause");
       log({ event: "codex_version", version, verified });
       return line;
     }
     if (request.kind === "modelList") {
-      if (paused) return line;
+      if (incompatible) return line;
       const listed = withClaudeModels(
         message.result,
         claudeModels(),

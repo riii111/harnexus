@@ -64,18 +64,15 @@ bun run doctor
 
 You can paste the report into a bug report; it contains no conversation text or credentials.
 
-If the bundled Codex CLI is unverified or harnexus cannot start, the app falls back to standard Codex.
+If harnexus cannot start, the app falls back to standard Codex.
 If incompatibility is detected while running, Claude becomes unavailable for that connection.
 Run `bun run doctor` for details.
 
-To try Claude on an unverified CLI, quit the app and explicitly opt in:
+To use standard Codex whenever the bundled Codex CLI is unverified, quit the app and run:
 
 ```sh
-HARNEXUS_UNVERIFIED_CODEX=warn bun run open-app
+HARNEXUS_UNVERIFIED_CODEX=fallback bun run open-app
 ```
-
-Compatibility is not guaranteed.
-To restore automatic fallback, quit the app and run `bun run open-app` with that variable unset.
 
 ## Optional Settings
 

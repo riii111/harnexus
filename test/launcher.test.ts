@@ -179,7 +179,7 @@ describe("startup fallback", () => {
     async () => {
       const { env } = setup({
         HARNEXUS_CODEX_PATH: stdioFlagsCodex,
-        HARNEXUS_UNVERIFIED_CODEX: undefined,
+        HARNEXUS_UNVERIFIED_CODEX: "fallback",
       });
       const result = await finish(launch(["app-server"], env));
       expect(result.stderr).toContain('"event":"standard_fallback"');
@@ -190,12 +190,12 @@ describe("startup fallback", () => {
 
   test.each([
     {
-      name: "an unverified Codex",
+      name: "an unverified Codex when asked to fall back",
       expectedReason: "この Codex の版はまだ確認されていません（9.0.0）",
       expectedRecord: { reason: "UnverifiedCodex", version: "9.0.0" },
       overrides: {
         FAKE_CODEX_VERSION: "codex-cli 9.0.0",
-        HARNEXUS_UNVERIFIED_CODEX: undefined,
+        HARNEXUS_UNVERIFIED_CODEX: "fallback",
       },
     },
     {
@@ -289,6 +289,21 @@ describe("app-server", () => {
       expect(report.pid).toBe(proc.pid);
       expect(report.argv).toEqual(args);
       expect(result.stderr).toContain('"event":"bridge_started"');
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "relays through the bridge on an unverified Codex without notifying",
+    async () => {
+      const { env } = setup({ FAKE_CODEX_VERSION: "codex-cli 9.0.0" });
+
+      const result = await finish(launch(["app-server"], env));
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain('"event":"bridge_started"');
+      expect(result.stderr).not.toContain("standard_fallback");
+      expect(existsSync(env.FAKE_NOTIFICATION_REPORT as string)).toBe(false);
     },
     TIMEOUT,
   );
@@ -512,7 +527,6 @@ describe("app-server shutdown", () => {
     async () => {
       const { env } = setup({
         HARNEXUS_CODEX_PATH: lingeringCodex,
-        HARNEXUS_UNVERIFIED_CODEX: "warn",
         HARNEXUS_SHUTDOWN_GRACE_MS: "50",
       });
       // An open stdin keeps the relay's disconnect timer out, so only the bridge's own shutdown can signal.
