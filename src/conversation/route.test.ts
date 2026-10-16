@@ -1845,7 +1845,7 @@ describe("Claude thread history", () => {
     ]);
   });
 
-  test("answers thread/items/list from past an item anchor", async () => {
+  test("answers thread/items/list from past an item anchor, or from the start when the record lacks it", async () => {
     const { router, sent } = setup(["th-claude"], {
       records: {
         "th-claude": conversation(),
@@ -1876,6 +1876,14 @@ describe("Claude thread history", () => {
     expect(sent[1]).toMatchObject({
       id: 9,
       result: { data: [{ item: { id: answer, type: "agentMessage" } }] },
+    });
+
+    list(10, { type: "item", itemId: "live-turn-item-1" });
+    await Bun.sleep(0);
+
+    expect(sent[2]).toMatchObject({
+      id: 10,
+      result: { data: [{ item: { id: question } }, { item: { id: answer } }] },
     });
   });
 

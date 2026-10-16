@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildHistory } from "./history.ts";
 import {
+  itemAnchorCursor,
   pageItems,
   pageTimeline,
   pageTurns,
@@ -97,21 +98,13 @@ describe("pageItems", () => {
     const pageFrom = (itemId: string, sortDirection: "asc" | "desc") =>
       pageItems(history, {
         turnId: T2,
-        cursor: { type: "item", itemId },
+        cursor: itemAnchorCursor(itemId),
         limit: 100,
         sortDirection,
       })?.data.map((entry) => entry.item.id);
 
     expect(pageFrom(question, "asc")).toEqual([answer]);
     expect(pageFrom(answer, "desc")).toEqual([question]);
-    expect(
-      pageItems(history, {
-        turnId: T2,
-        cursor: { type: "item", itemId: "missing" },
-        limit: 100,
-        sortDirection: "asc",
-      }),
-    ).toBeNull();
   });
 });
 
