@@ -89,6 +89,30 @@ describe("pageItems", () => {
     ]);
     expect(page?.nextCursor).toBeNull();
   });
+
+  test("starts just past an item anchor in the asked direction", () => {
+    const history = threeTurns();
+    const [question = "", answer = ""] =
+      history[1]?.items.map((entry) => entry.item.id) ?? [];
+    const pageFrom = (itemId: string, sortDirection: "asc" | "desc") =>
+      pageItems(history, {
+        turnId: T2,
+        cursor: { type: "item", itemId },
+        limit: 100,
+        sortDirection,
+      })?.data.map((entry) => entry.item.id);
+
+    expect(pageFrom(question, "asc")).toEqual([answer]);
+    expect(pageFrom(answer, "desc")).toEqual([question]);
+    expect(
+      pageItems(history, {
+        turnId: T2,
+        cursor: { type: "item", itemId: "missing" },
+        limit: 100,
+        sortDirection: "asc",
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("pageTimeline", () => {

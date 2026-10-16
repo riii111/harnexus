@@ -55,11 +55,12 @@ export const pageTurns = (
 };
 
 // The app starts every turn's item pages from the thread's newest item, so a cursor may name an item of another turn and the turn filter applies after it.
+// An item anchor is exclusive in the asked direction, so it starts the page as a next cursor after that item does.
 export const pageItems = (
   history: readonly HistoryTurn[],
   request: {
     turnId: string | null;
-    cursor: string | null;
+    cursor: string | ItemAnchor | null;
     limit: number | null;
     sortDirection: SortDirection;
   },
@@ -71,8 +72,16 @@ export const pageItems = (
     ),
     (entry) => entry.item.id,
     (entry) => request.turnId === null || entry.turnId === request.turnId,
-    request,
+    {
+      ...request,
+      cursor:
+        typeof request.cursor === "object" && request.cursor !== null
+          ? `${AFTER}${request.cursor.itemId}`
+          : request.cursor,
+    },
   );
+
+export type ItemAnchor = { type: "item"; itemId: string };
 
 // The app reads the timeline from its newest page back, so a page holds the entries just before its cursor in record order.
 export const pageTimeline = (

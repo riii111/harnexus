@@ -12,6 +12,7 @@ import {
   withLiveTurn,
 } from "../presentation/history.ts";
 import {
+  type ItemAnchor,
   pageItems,
   pageTimeline,
   pageTurns,
@@ -268,7 +269,7 @@ const pageFor = (
     case "thread/items/list":
       return pageItems(history, {
         turnId: typeof params.turnId === "string" ? params.turnId : null,
-        cursor,
+        cursor: isItemAnchor(params.cursor) ? params.cursor : cursor,
         limit,
         sortDirection: directionOf(params.sortDirection, "asc"),
       });
@@ -280,6 +281,9 @@ const pageFor = (
     }
   }
 };
+
+const isItemAnchor = (value: unknown): value is ItemAnchor =>
+  isObject(value) && value.type === "item" && typeof value.itemId === "string";
 
 const limitOf = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) ? value : null;

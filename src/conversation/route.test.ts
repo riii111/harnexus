@@ -1840,6 +1840,40 @@ describe("Claude thread history", () => {
     ]);
   });
 
+  test("answers thread/items/list from past an item anchor", async () => {
+    const { router, sent } = setup(["th-claude"], {
+      records: {
+        "th-claude": conversation(),
+      },
+    });
+    const list = (id: number, cursor?: unknown) =>
+      router.fromApp(
+        encode({
+          id,
+          method: "thread/items/list",
+          params: {
+            threadId: "th-claude",
+            turnId: "harnexus-history-u2",
+            sortDirection: "asc",
+            ...(cursor !== undefined && { cursor }),
+          },
+        }),
+      );
+
+    list(8);
+    await Bun.sleep(0);
+    const [question, answer] = (
+      sent[0] as { result: { data: { item: { id: string } }[] } }
+    ).result.data.map((entry) => entry.item.id);
+    list(9, { type: "item", itemId: question });
+    await Bun.sleep(0);
+
+    expect(sent[1]).toMatchObject({
+      id: 9,
+      result: { data: [{ item: { id: answer, type: "agentMessage" } }] },
+    });
+  });
+
   test("answers thread/timeline/list from the newest entry back", async () => {
     const { router, sent } = setup(["th-claude"], {
       records: {
