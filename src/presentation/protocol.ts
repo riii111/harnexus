@@ -55,6 +55,8 @@ export type TurnPlanStep = {
 
 export type Turn = {
   id: string;
+  // Codex makes a turn started without a parent turn its own root, as every Claude turn is.
+  rootTurnId: string | null;
   items: ThreadItem[];
   itemsView: "full" | "summary" | "notLoaded";
   status: "inProgress" | "completed" | "failed" | "interrupted";

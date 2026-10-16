@@ -1084,7 +1084,10 @@ const normalize = (notifications: unknown[]) => {
     if (key !== null && TIME_KEYS.has(key) && typeof value === "number") {
       return 0;
     }
-    if ((key === "id" || key === "itemId") && typeof value === "string") {
+    if (
+      (key === "id" || key === "itemId" || key === "rootTurnId") &&
+      typeof value === "string"
+    ) {
       if (!ids.has(value)) ids.set(value, `id-${ids.size + 1}`);
       return ids.get(value);
     }

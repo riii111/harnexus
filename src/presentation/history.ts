@@ -96,6 +96,7 @@ export const withLiveTurn = (
       {
         turn: {
           id: live.turnId,
+          rootTurnId: live.turnId,
           items: [],
           itemsView: "summary",
           status: "inProgress",
@@ -114,6 +115,7 @@ export const withLiveTurn = (
       turn: {
         ...first.turn,
         id: live.turnId,
+        rootTurnId: live.turnId,
         items: [],
         status: "inProgress",
         error: null,

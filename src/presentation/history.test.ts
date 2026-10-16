@@ -386,6 +386,7 @@ const COMPACTION_ITEM: ThreadItem = { type: "contextCompaction", id: "item-2" };
 
 const TIMED_TURN: Turn = {
   id: "turn-1",
+  rootTurnId: "turn-1",
   items: [],
   itemsView: "summary",
   status: "completed",
@@ -397,6 +398,7 @@ const TIMED_TURN: Turn = {
 
 const UNTIMED_TURN: Turn = {
   id: "turn-2",
+  rootTurnId: "turn-2",
   items: [],
   itemsView: "summary",
   status: "interrupted",

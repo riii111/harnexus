@@ -1398,6 +1398,7 @@ describe("another thread's message arriving on a busy thread", () => {
       result: {
         turn: {
           id: "turn-1",
+          rootTurnId: "turn-1",
           items: [],
           itemsView: "notLoaded",
           status: "inProgress",
