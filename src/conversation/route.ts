@@ -148,7 +148,7 @@ export const createRouter = ({
   sideChats,
 }: RouterDeps) => {
   const pending = new Map<AppRequest["id"], Pending>();
-  // Set by an incompatible initialize or model/list answer; the app then lists no Claude model and a Claude turn is refused rather than handed to Codex, which would run it without the Claude conversation.
+  // While set, a Claude turn is refused rather than handed to Codex, which would run it without the Claude conversation.
   let incompatible = false;
   let serverVersion: string | null = null;
   // A Codex thread switched to Claude by turn/start needs a working directory that the request itself may not carry.

@@ -191,7 +191,6 @@ const tally = (keys: readonly string[]) => {
 const field = (value: unknown) =>
   typeof value === "string" ? value : "unknown";
 
-// An unchecked CLI is shown but not warned about, since the app bundles a new one almost daily.
 const cliVersion = (entry: LogEntry | undefined) => {
   if (entry === undefined) return "not seen";
   const version = field(entry.version);

@@ -97,7 +97,7 @@ export const loadShutdownGraceMs = (
 
 const UNVERIFIED_CODEX_ENV = "HARNEXUS_UNVERIFIED_CODEX";
 
-// The app bundles a new Codex CLI almost daily, so an unchecked one runs by default and an incompatible answer is what stops Claude; "fallback" opens standard Codex instead.
+// The app bundles a new Codex CLI almost daily, so only "fallback" refuses an unverified one.
 export const loadUnverifiedCodexPolicy = (
   env: Record<string, string | undefined>,
 ): "run" | "fallback" =>
