@@ -95,11 +95,14 @@ export const singleLine = (value: unknown, name: string) =>
     ? fail(`${name} must be a nonempty single-line string`)
     : Result.ok(value);
 
+// The ID is pasted into worker and reviewer prompts, so it may not carry spaces or prose.
 const taskId = (value: unknown) =>
   singleLine(value, "taskId").andThen((id) =>
     /^[\p{L}\p{N}_#][\p{L}\p{N}_.#/:-]*$/u.test(id)
       ? Result.ok(id)
-      : fail("taskId must be an identifier of letters, digits and _ . # / : -"),
+      : fail(
+          "taskId must start with a letter, digit, _ or # and contain only letters, digits and _ . # / : -",
+        ),
   );
 
 export const chatId = (value: unknown, name: string) =>
