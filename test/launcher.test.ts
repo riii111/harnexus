@@ -32,7 +32,7 @@ beforeAll(async () => {
   const notifier = join(dir, "notifier");
   await writeFile(
     notifier,
-    `#!/usr/bin/perl\nuse JSON::PP;\nuse Encode qw(decode_utf8);\nopen my $out, ">", $ENV{FAKE_NOTIFICATION_REPORT} or exit 1;\nprint $out encode_json([map { decode_utf8($_) } @ARGV]);\nclose $out;\nexit 1 if ($ENV{FAKE_NOTIFICATION_MODE} // "") eq "fail";\nif (($ENV{FAKE_NOTIFICATION_MODE} // "") eq "delay") { sleep 2; open my $done, ">", "$ENV{FAKE_NOTIFICATION_REPORT}.done"; close $done; }\n`,
+    `#!/usr/bin/perl\nuse JSON::PP;\nuse Encode qw(decode_utf8);\nopen my $out, ">", "$ENV{FAKE_NOTIFICATION_REPORT}.tmp" or exit 1;\nprint $out encode_json([map { decode_utf8($_) } @ARGV]);\nclose $out;\nrename "$ENV{FAKE_NOTIFICATION_REPORT}.tmp", $ENV{FAKE_NOTIFICATION_REPORT} or exit 1;\nexit 1 if ($ENV{FAKE_NOTIFICATION_MODE} // "") eq "fail";\nif (($ENV{FAKE_NOTIFICATION_MODE} // "") eq "delay") { sleep 2; open my $done, ">", "$ENV{FAKE_NOTIFICATION_REPORT}.done"; close $done; }\n`,
   );
   await chmod(notifier, 0o755);
   await writeFile(
