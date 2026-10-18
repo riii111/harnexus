@@ -41,6 +41,7 @@ import {
   type AppRequest,
   checkThread,
   type Mode,
+  pinDirectory,
   type Refusal,
   refusalMessage,
   requestedEffort,
@@ -308,18 +309,23 @@ export const createRouter = ({
     }
   };
 
-  // The server creates the thread on its default model, so a Claude model never reaches it; a resume that would move a Claude thread is refused, since Claude keeps running where the thread started.
+  // The server creates the thread on its default model, so a Claude model never reaches it; a resumed Claude thread stays where it started, and the server is told that directory.
   const routeThreadOpen = (
     line: Buffer,
     message: Record<string, unknown>,
     request: AppRequest,
   ) => {
-    const { id, params } = request;
+    const { id } = request;
     const threadId =
-      message.method === "thread/resume" && typeof params.threadId === "string"
-        ? params.threadId
+      message.method === "thread/resume" &&
+      typeof request.params.threadId === "string"
+        ? request.params.threadId
         : undefined;
     const known = threadId === undefined ? undefined : turns.threadOf(threadId);
+    const params =
+      known === undefined
+        ? request.params
+        : pinDirectory(request.params, known);
     if (threadId !== undefined && known !== undefined) {
       const checked = checkThread(params, known, undefined);
       if ("refusal" in checked) {
@@ -341,7 +347,9 @@ export const createRouter = ({
       params,
       sideChat: null,
     });
-    if (!isClaudeModel(params.model)) return line;
+    if (!isClaudeModel(params.model)) {
+      return params === request.params ? line : encode({ ...message, params });
+    }
     const { model: _model, ...rest } = params;
     return encode({ ...message, params: rest });
   };
@@ -380,9 +388,11 @@ export const createRouter = ({
     const source = turns.threadOf(sourceId);
     const codex =
       sideChat && requested !== undefined && !isClaudeModel(requested);
-    // Claude's conversation stays where the source runs, so a fork into another directory would work on the source's files.
+    // Claude's conversation stays where the source runs, so a Claude fork opens there whatever directory the app sends.
+    const forked =
+      codex || source === undefined ? params : pinDirectory(params, source);
     if (!codex) {
-      const checked = checkThread(params, source, undefined);
+      const checked = checkThread(forked, source, undefined);
       if ("refusal" in checked) {
         refuse("thread/fork", request, checked.refusal);
         return null;
@@ -394,10 +404,10 @@ export const createRouter = ({
         createdModel: null,
         forkOf: codex ? null : sourceId,
         history: null,
-        params,
+        params: forked,
         sideChat: opened,
       });
-      return line;
+      return forked === params ? line : encode({ ...message, params: forked });
     };
     if (!sideChat || source === undefined) return open(null);
     // A Claude side chat whose point is unread still runs on Claude, as before; only a Codex one would start without the conversation.
