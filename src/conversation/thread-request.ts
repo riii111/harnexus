@@ -51,6 +51,15 @@ export const checkThread = (
     : { thread: { model, cwd } };
 };
 
+// The app reopens a thread in the first folder of the project it is assigned to, which can differ from where Claude runs (App 26.1013), so a reopen keeps Claude's directory instead of refusing the thread.
+export const pinDirectory = (
+  params: Record<string, unknown>,
+  thread: Thread,
+): Record<string, unknown> =>
+  typeof params.cwd === "string" && !isSameDirectory(params.cwd, thread.cwd)
+    ? { ...params, cwd: thread.cwd }
+    : params;
+
 // A turn checked before another turn saved the thread would otherwise run in the directory that turn saved; a different model is a model change, which the turn applies itself.
 export const savedThreadChange = (
   requested: Thread,

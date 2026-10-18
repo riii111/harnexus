@@ -769,21 +769,23 @@ describe("threads with a Claude model", () => {
     expect(parse(await response).result.model).toBe(CLAUDE);
   });
 
-  test("refuses a fork of a Claude thread into another directory before the server makes it", () => {
+  test("forks a Claude thread asked into another directory where its source runs", () => {
     const { router, calls, events } = setup(["th-claude"]);
-    const line = encode({
-      id: 9,
-      method: "thread/fork",
-      params: { threadId: "th-claude", cwd: "/elsewhere" },
-    });
 
-    expect(router.fromApp(line)).toBeNull();
-    expect(calls.map(([name]) => name)).toEqual(["reject"]);
-    expect(events).toContainEqual({
-      event: "claude_request_refused",
-      method: "thread/fork",
-      reason: "directory_change",
+    const forwarded = router.fromApp(
+      encode({
+        id: 9,
+        method: "thread/fork",
+        params: { threadId: "th-claude", cwd: "/elsewhere" },
+      }),
+    );
+
+    expect(parse(forwarded).params).toEqual({
+      threadId: "th-claude",
+      cwd: "/fixture/work",
     });
+    expect(calls).toEqual([]);
+    expect(events).toEqual([]);
   });
 
   test.each([
@@ -822,23 +824,24 @@ describe("threads with a Claude model", () => {
     expect(calls).toEqual([]);
   });
 
-  test("refuses a resume of a Claude thread in another working directory", () => {
+  // The app reopens a thread in the first folder of the project it is assigned to, as observed with App 26.1013.
+  test("resumes a Claude thread asked into another directory where it started", () => {
     const { router, calls, events } = setup(["th-claude"]);
-    const line = encode({
-      id: 4,
-      method: "thread/resume",
-      params: { threadId: "th-claude", cwd: "/elsewhere" },
-    });
 
-    expect(router.fromApp(line)).toBeNull();
-    expect(calls.map(([name]) => name)).toEqual(["reject"]);
-    expect(events).toEqual([
-      {
-        event: "claude_request_refused",
+    const forwarded = router.fromApp(
+      encode({
+        id: 4,
         method: "thread/resume",
-        reason: "directory_change",
-      },
-    ]);
+        params: { threadId: "th-claude", cwd: "/elsewhere" },
+      }),
+    );
+
+    expect(parse(forwarded).params).toEqual({
+      threadId: "th-claude",
+      cwd: "/fixture/work",
+    });
+    expect(calls).toEqual([]);
+    expect(events).toEqual([]);
   });
 
   test("moves a resumed Claude thread to the Claude model it names and hides it from the server", async () => {
