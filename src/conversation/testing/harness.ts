@@ -30,6 +30,7 @@ import {
 import { createCodexLink } from "../../infra/codex/codex-link.ts";
 import { createDelegationWatch } from "../../infra/codex/delegations.ts";
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
+import { createMemoryCronRecord } from "../../infra/codex/testing/cron-record.ts";
 import { openThreadStore } from "../../infra/thread-store.ts";
 import { FileWriteFailed } from "../../runtime/fs.boundary.ts";
 
@@ -289,6 +290,7 @@ export const harness = async (
               },
               delegations: createDelegationWatch(),
               codexHome: "/fixture/.codex",
+              cronRecord: createMemoryCronRecord(),
             });
       sessionLinks.push(link);
       return link;

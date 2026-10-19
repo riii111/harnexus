@@ -35,6 +35,7 @@ export const connectClaudeThreads = ({
   effortRule,
   claudeModels,
   codexHome,
+  cronRecord,
   permissionMode = "auto",
   send,
   log,
@@ -51,6 +52,7 @@ export const connectClaudeThreads = ({
   claudeModels: Parameters<typeof createRouter>[0]["claudeModels"];
   permissionMode?: Runtime["permissionMode"];
   codexHome: string;
+  cronRecord: Parameters<typeof createCodexLink>[0]["cronRecord"];
   send: (message: object) => void;
   log: (event: ClaudeLogEvent | RouteEvent) => void;
 }) => {
@@ -62,6 +64,7 @@ export const connectClaudeThreads = ({
       request,
       delegations,
       codexHome,
+      cronRecord,
     });
   const threads = createThreadValues(store, log);
   const subagents = createSubagents({ send });

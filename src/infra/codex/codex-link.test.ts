@@ -8,6 +8,7 @@ import { type InferErr, Result } from "better-result";
 import { createCodexLink } from "./codex-link.ts";
 import { createDelegationWatch } from "./delegations.ts";
 import type { ServerRequest } from "./server-requests.ts";
+import { createMemoryCronRecord } from "./testing/cron-record.ts";
 
 describe("createCodexLink tools", () => {
   test("lets only the read tools run without asking", async () => {
@@ -522,7 +523,18 @@ describe("createCodexLink automation_update", () => {
     await rm(codexHome, { recursive: true, force: true });
   });
 
-  test("creates a heartbeat that wakes the calling thread even when asked for another thread or a cron", async () => {
+  const saveAutomation = async (id: string, toml: string) => {
+    await mkdir(join(codexHome, "automations", id), { recursive: true });
+    await writeFile(
+      join(codexHome, "automations", id, "automation.toml"),
+      toml,
+    );
+  };
+
+  const removeAutomation = (id: string) =>
+    rm(join(codexHome, "automations", id), { recursive: true, force: true });
+
+  test("creates a heartbeat that wakes the calling thread even when asked for another thread", async () => {
     const { client, requests } = await connect({ codexHome });
 
     const created = await client.callTool({
@@ -530,7 +542,6 @@ describe("createCodexLink automation_update", () => {
       arguments: {
         mode: "create",
         ...HEARTBEAT,
-        kind: "cron",
         targetThreadId: OTHER_WORKER,
       },
     });
@@ -597,14 +608,18 @@ describe("createCodexLink automation_update", () => {
 
   test.each([
     { name: "a heartbeat of another thread", id: "theirs" },
-    { name: "a cron automation", id: "nightly" },
+    { name: "a cron automation no Claude thread created", id: "nightly" },
     {
       name: "another thread's heartbeat whose prompt names the caller",
       id: "disguised",
     },
     { name: "an automation the app has no file for", id: "missing" },
   ])("refuses to change $name without calling the app", async ({ id }) => {
-    const { client, requests } = await connect({ codexHome });
+    // Being recorded is not enough for a file that is not a cron.
+    const { client, requests } = await connect({
+      codexHome,
+      cronRecord: createMemoryCronRecord(["theirs", "disguised", "missing"]),
+    });
 
     const deleted = await client.callTool({
       name: "automation_update",
@@ -612,7 +627,7 @@ describe("createCodexLink automation_update", () => {
     });
 
     expect(deleted.isError).toBe(true);
-    expect(text(deleted)).toContain("not a heartbeat of this thread");
+    expect(text(deleted)).toContain("neither a heartbeat of this thread");
     expect(requests).toEqual([]);
   });
 
@@ -633,6 +648,176 @@ describe("createCodexLink automation_update", () => {
 
     expect(result.isError).toBe(true);
     expect(requests).toEqual([]);
+  });
+
+  test("creates a cron that starts a new thread, never one that wakes a given thread, and records its id", async () => {
+    const cronRecord = createMemoryCronRecord();
+    const { client, requests } = await connect({
+      codexHome,
+      cronRecord,
+      answer: async () => {
+        await saveAutomation("made", CRON_TOML);
+        await saveAutomation("unrelated", CRON_TOML.replace("Plan", "Other"));
+        return Result.ok(textAnswer("created"));
+      },
+    });
+
+    const created = await client.callTool({
+      name: "automation_update",
+      arguments: {
+        mode: "create",
+        kind: "cron",
+        ...CRON,
+        targetThreadId: OTHER_WORKER,
+        runSettings: RUN_SETTINGS,
+      },
+    });
+    await removeAutomation("made");
+    await removeAutomation("unrelated");
+
+    expect(created.isError).toBeFalsy();
+    expect(text(created)).toContain("Created cron automation made.");
+    expect(cronRecord.ids()).toEqual(["made"]);
+    expect(requests.map((request) => request.params.arguments)).toEqual([
+      { mode: "create", ...RUN_SETTINGS, ...CRON, kind: "cron" },
+    ]);
+  });
+
+  test("tells a created cron it cannot tell apart that it cannot be changed here, and records nothing", async () => {
+    const cronRecord = createMemoryCronRecord();
+    const { client } = await connect({ codexHome, cronRecord });
+
+    const created = await client.callTool({
+      name: "automation_update",
+      arguments: { mode: "create", kind: "cron", ...CRON },
+    });
+
+    expect(created.isError).toBeFalsy();
+    expect(text(created)).toContain("Do not create it again");
+    expect(cronRecord.ids()).toEqual([]);
+  });
+
+  test.each([
+    {
+      name: "view",
+      args: { mode: "view", id: "nightly" },
+      expected: { mode: "view", id: "nightly" },
+      kept: ["nightly"],
+    },
+    {
+      name: "update",
+      args: {
+        mode: "update",
+        id: "nightly",
+        ...CRON,
+        status: "PAUSED",
+        runSettings: RUN_SETTINGS,
+      },
+      expected: {
+        mode: "update",
+        id: "nightly",
+        ...RUN_SETTINGS,
+        ...CRON,
+        status: "PAUSED",
+        kind: "cron",
+      },
+      kept: ["nightly"],
+    },
+    {
+      name: "delete",
+      args: { mode: "delete", id: "nightly" },
+      expected: { mode: "delete", id: "nightly" },
+      kept: [],
+    },
+  ])("sends a $name of a cron a Claude thread created", async ({
+    args,
+    expected,
+    kept,
+  }) => {
+    const cronRecord = createMemoryCronRecord(["nightly"]);
+    const { client, requests } = await connect({ codexHome, cronRecord });
+
+    const result = await client.callTool({
+      name: "automation_update",
+      arguments: args,
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(requests.map((request) => request.params.arguments)).toEqual([
+      expected,
+    ]);
+    expect(cronRecord.ids()).toEqual(kept);
+  });
+
+  test.each([
+    {
+      name: "runSettings holding a target thread",
+      args: {
+        mode: "create",
+        kind: "cron",
+        ...CRON,
+        runSettings: { targetThreadId: OTHER_WORKER },
+      },
+    },
+    {
+      name: "runSettings holding a snake_case target thread",
+      args: {
+        mode: "create",
+        kind: "cron",
+        ...CRON,
+        runSettings: { target_thread_id: OTHER_WORKER },
+      },
+    },
+    {
+      name: "a cron create without a prompt",
+      args: { mode: "create", kind: "cron", name: "Plan" },
+    },
+    {
+      name: "a kind that the automation does not have",
+      args: { mode: "update", id: "mine", kind: "cron", ...HEARTBEAT },
+    },
+    {
+      name: "runSettings for a cron view",
+      args: { mode: "view", id: "nightly", runSettings: RUN_SETTINGS },
+    },
+    {
+      name: "runSettings for a heartbeat create",
+      args: { mode: "create", ...HEARTBEAT, runSettings: RUN_SETTINGS },
+    },
+    {
+      name: "runSettings for a heartbeat update",
+      args: {
+        mode: "update",
+        id: "mine",
+        ...HEARTBEAT,
+        runSettings: RUN_SETTINGS,
+      },
+    },
+  ])("refuses $name without calling the app", async ({ args }) => {
+    const { client, requests } = await connect({
+      codexHome,
+      cronRecord: createMemoryCronRecord(["nightly"]),
+    });
+
+    const result = await client.callTool({
+      name: "automation_update",
+      arguments: args,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(requests).toEqual([]);
+  });
+
+  test("drops a recorded id whose automation is gone", async () => {
+    const cronRecord = createMemoryCronRecord(["missing", "nightly"]);
+    const { client } = await connect({ codexHome, cronRecord });
+
+    await client.callTool({
+      name: "automation_update",
+      arguments: { mode: "view", id: "missing" },
+    });
+
+    expect(cronRecord.ids()).toEqual(["nightly"]);
   });
 
   test("never creates another heartbeat after a create whose answer was lost", async () => {
@@ -930,6 +1115,7 @@ const deferred = () => {
 const connect = async ({
   callerRegistered = true,
   codexHome = "/fixture/.codex",
+  cronRecord = createMemoryCronRecord(),
   delegations = createDelegationWatch(),
   models = () => Result.ok(DEFAULT_MODELS),
   answer = () => Result.ok(textAnswer("ok")),
@@ -940,6 +1126,7 @@ const connect = async ({
   ) => Result<unknown, ServerRequestError>;
   callerRegistered?: boolean;
   codexHome?: string;
+  cronRecord?: ReturnType<typeof createMemoryCronRecord>;
   answer?: (
     params: CallParams,
   ) =>
@@ -967,6 +1154,7 @@ const connect = async ({
     request,
     delegations,
     codexHome,
+    cronRecord,
     createdThreadWaitMs: 20,
     firstTurnWaitMs: 20,
   });
@@ -1063,6 +1251,17 @@ const HEARTBEAT = {
   prompt: "Check the CI run and report only when it finishes or fails.",
   rrule: "FREQ=MINUTELY;INTERVAL=30",
   status: "ACTIVE",
+};
+const CRON = {
+  name: "Plan",
+  prompt: "$task-dispatch 予定",
+  rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=17;BYMINUTE=0",
+  status: "ACTIVE",
+};
+const CRON_TOML = `version = 1\nid = "made"\nkind = "cron"\nname = "Plan"\nprompt = "$task-dispatch 予定"\n`;
+const RUN_SETTINGS = {
+  model: "claude-fixture",
+  target: { type: "project", projectId: "project-1" },
 };
 const AUTOMATIONS = {
   mine: `version = 1\nid = "mine"\nkind = "heartbeat"\ntarget_thread_id = "${CALLER}"\n`,
