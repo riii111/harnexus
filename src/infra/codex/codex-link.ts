@@ -8,7 +8,11 @@ import { z } from "zod";
 import { isObject } from "../../runtime/object.ts";
 import { createSerialQueue } from "../../runtime/serial-queue.ts";
 import { isClaudeModel } from "../claude/models.ts";
-import { readAutomationThread } from "./automations.boundary.ts";
+import {
+  type CronRecord,
+  listAutomationIds,
+  readAutomation,
+} from "./automations.boundary.ts";
 import {
   answeredThreadId,
   type DelegationWatch,
@@ -32,6 +36,7 @@ export const createCodexLink = ({
   request,
   delegations,
   codexHome,
+  cronRecord,
   createdThreadWaitMs = CREATED_THREAD_WAIT_MS,
   firstTurnWaitMs = FIRST_TURN_WAIT_MS,
 }: {
@@ -40,6 +45,7 @@ export const createCodexLink = ({
   request: ServerRequest;
   delegations: Pick<DelegationWatch, "expect">;
   codexHome: string;
+  cronRecord: Pick<CronRecord, "has" | "add" | "remove">;
   createdThreadWaitMs?: number;
   firstTurnWaitMs?: number;
 }) => {
@@ -267,19 +273,33 @@ export const createCodexLink = ({
     } satisfies ToolResult;
   };
 
-  // Only heartbeats of this thread are reachable, since the app changes whatever automation an id names and these calls skip its approval.
-  const scheduleHeartbeat = async ({
+  // A heartbeat is reachable only when it wakes this thread and a cron only when a Claude thread created it here, since the app changes whatever automation an id names and these calls skip its approval.
+  const updateAutomation = async ({
     mode,
     id,
+    kind = "heartbeat",
+    runSettings,
     ...fields
-  }: z.infer<z.ZodObject<typeof HEARTBEAT_ARGS>>) => {
+  }: z.infer<z.ZodObject<typeof AUTOMATION_ARGS>>) => {
     const queuedIn = currentGeneration();
+    const reserved = Object.keys(runSettings ?? {}).filter((key) =>
+      RESERVED_RUN_SETTINGS.has(key),
+    );
+    if (reserved.length > 0) {
+      return failure(
+        `runSettings cannot hold ${reserved.join(", ")}; give the schedule and its text as their own arguments.`,
+      );
+    }
     if (mode === "create") {
       if (id !== undefined) {
         return failure(
-          "Leave id out to create a heartbeat; it names an existing one to view, update or delete.",
+          "Leave id out to create an automation; it names an existing one to view, update or delete.",
         );
       }
+      if (kind === "cron") {
+        return createCron({ ...(runSettings ?? {}), ...fields }, queuedIn);
+      }
+      if (runSettings !== undefined) return failure(RUN_SETTINGS_ONLY_FOR_CRON);
       return write(
         "automation_update",
         { mode, ...fields, kind: "heartbeat", targetThreadId: callerThreadId },
@@ -289,16 +309,28 @@ export const createCodexLink = ({
     }
     if (id === undefined) {
       return failure(
-        `mode=${mode} needs the id of a heartbeat of this thread.`,
+        `mode=${mode} needs the id of a heartbeat of this thread or of a cron automation created from a Claude thread.`,
       );
     }
-    const refusal = await refuseAutomation(id);
-    if (refusal !== null) return failure(refusal);
+    const reached = await reachAutomation(id);
+    if ("refusal" in reached) return failure(reached.refusal);
+    if (reached.kind === "heartbeat" && runSettings !== undefined) {
+      return failure(RUN_SETTINGS_ONLY_FOR_CRON);
+    }
     if (mode === "view") return read("automation_update", { mode, id }, []);
+    if (mode === "delete") {
+      return write("automation_update", { mode, id }, [], {
+        queuedIn,
+        onSuccess: async (result) => {
+          if (reached.kind === "cron") await cronRecord.remove(id);
+          return result;
+        },
+      });
+    }
     return write(
       "automation_update",
-      mode === "delete"
-        ? { mode, id }
+      reached.kind === "cron"
+        ? { mode, id, ...(runSettings ?? {}), ...fields, kind: "cron" }
         : {
             mode,
             id,
@@ -311,14 +343,86 @@ export const createCodexLink = ({
     );
   };
 
-  const refuseAutomation = async (id: string) => {
-    const thread = await readAutomationThread(codexHome, id);
-    if (thread.isErr()) {
-      return `Cannot read automation ${id} to check which thread it wakes (${thread.error.message}); nothing was sent.`;
+  // The app's answer does not reliably name the automation it made, so the new one is found as the cron with the same name and prompt that was not there before the call.
+  const createCron = async (
+    fields: Record<string, unknown>,
+    queuedIn: number | null,
+  ) => {
+    const before = await listAutomationIds(codexHome);
+    if (before.isErr()) {
+      return failure(
+        `Cannot list the automations to record the new one (${before.error.message}); nothing was sent.`,
+      );
     }
-    return thread.value === callerThreadId
-      ? null
-      : `Automation ${id} is not a heartbeat of this thread. Only this thread's own heartbeats can be viewed, updated or deleted here; others are managed from their own thread or in the app.`;
+    const existing = new Set(before.value);
+    return write(
+      "automation_update",
+      { mode: "create", ...fields, kind: "cron" },
+      [],
+      {
+        queuedIn,
+        onSuccess: async (result) => {
+          const created = await findCreatedCron(existing, fields);
+          const recorded =
+            created === null ? null : await cronRecord.add(created);
+          const note =
+            created !== null && recorded?.isOk() === true
+              ? `Created cron automation ${created}. Claude threads can view, update or delete it with this id.`
+              : `The cron automation was created, but ${created === null ? "it could not be told apart from the other automations" : `automation ${created} could not be recorded`}, so it cannot be viewed, updated or deleted from Claude threads. Do not create it again; ask the user to manage it in the app.`;
+          return {
+            ...result,
+            content: [...result.content, { type: "text", text: note }],
+          };
+        },
+      },
+    );
+  };
+
+  const findCreatedCron = async (
+    existing: ReadonlySet<string>,
+    fields: Record<string, unknown>,
+  ) => {
+    const after = await listAutomationIds(codexHome);
+    if (after.isErr()) return null;
+    const matches: string[] = [];
+    for (const id of after.value.filter((name) => !existing.has(name))) {
+      const saved = await readAutomation(codexHome, id);
+      if (
+        saved.isOk() &&
+        saved.value?.kind === "cron" &&
+        (fields.name === undefined || saved.value.name === fields.name) &&
+        (fields.prompt === undefined || saved.value.prompt === fields.prompt)
+      ) {
+        matches.push(id);
+      }
+    }
+    return matches.length === 1 ? (matches[0] ?? null) : null;
+  };
+
+  const reachAutomation = async (
+    id: string,
+  ): Promise<{ kind: "heartbeat" | "cron" } | { refusal: string }> => {
+    const saved = await readAutomation(codexHome, id);
+    if (saved.isErr()) {
+      return {
+        refusal: `Cannot read automation ${id} to check what it runs (${saved.error.message}); nothing was sent.`,
+      };
+    }
+    if (saved.value?.targetThreadId === callerThreadId) {
+      return { kind: "heartbeat" };
+    }
+    if (saved.value?.kind === "cron") {
+      const recorded = await cronRecord.has(id);
+      if (recorded.isErr()) {
+        return {
+          refusal: `Cannot read the record of cron automations created from Claude threads (${recorded.error.message}); nothing was sent.`,
+        };
+      }
+      if (recorded.value) return { kind: "cron" };
+    }
+    return {
+      refusal: `Automation ${id} is neither a heartbeat of this thread nor a cron automation created from a Claude thread. Only those can be viewed, updated or deleted here; others are managed from their own thread or in the app.`,
+    };
   };
 
   // Messaging this thread itself would start a turn behind the one making the call and could wake itself without end, so it may only be read and waited on.
@@ -374,9 +478,9 @@ export const createCodexLink = ({
     ),
     tool(
       "automation_update",
-      "Schedule this thread to be woken later by a Codex app heartbeat automation, or view, update or delete a heartbeat of this thread. Use it when the user asks you to check back later, monitor or keep an eye on something, follow up, remind them, or keep working on a schedule. Each run arrives in this thread as a <heartbeat> message whose <instructions> hold the saved prompt and whose <automation_id> names the automation; when what it follows is done or no longer worth checking, delete it with that id and say so in your answer. Prefer updating an existing heartbeat of this thread over creating another; to find its id, look in $CODEX_HOME/automations/*/automation.toml (CODEX_HOME defaults to ~/.codex) for one whose target_thread_id is this thread and whose name or prompt matches. Automations that start a new task on each run and those of other threads cannot be reached here. The app runs heartbeats only while it is open and the Mac is awake.",
-      HEARTBEAT_ARGS,
-      (args) => scheduleHeartbeat(args),
+      "Schedule this thread to be woken later by a Codex app heartbeat automation, or schedule a cron automation that starts a new thread on each run; view, update or delete a heartbeat of this thread or a cron automation created from a Claude thread. Use a heartbeat when the user asks you to check back later, monitor or keep an eye on something, follow up, remind them, or keep working on a schedule in this thread. Each heartbeat run arrives in this thread as a <heartbeat> message whose <instructions> hold the saved prompt and whose <automation_id> names the automation; when what it follows is done or no longer worth checking, delete it with that id and say so in your answer. Prefer updating an existing heartbeat of this thread over creating another; to find its id, look in $CODEX_HOME/automations/*/automation.toml (CODEX_HOME defaults to ~/.codex) for one whose target_thread_id is this thread and whose name or prompt matches. Use kind=cron only when the user asks for a scheduled task that runs in a new thread each time; creating one answers with its id, which any Claude thread can later use to view, update or delete it, so write it down where the later run will find it. Cron automations made in the app or by Codex threads, and heartbeats of other threads, cannot be reached here. The app runs automations only while it is open and the Mac is awake.",
+      AUTOMATION_ARGS,
+      (args) => updateAutomation(args),
     ),
     tool(
       "read_thread",
@@ -565,6 +669,21 @@ const failure = (text: string): ToolResult => ({
 });
 
 const CODEX_APP_SERVER = "codex_app";
+// A cron never wakes a thread, and the call's own fields are given as arguments, so none of them may come in through runSettings.
+const RESERVED_RUN_SETTINGS = new Set([
+  "mode",
+  "id",
+  "kind",
+  "targetThreadId",
+  "destination",
+  "name",
+  "prompt",
+  "rrule",
+  "status",
+  "notificationPolicy",
+]);
+const RUN_SETTINGS_ONLY_FOR_CRON =
+  "runSettings applies only to cron automations; leave it out for a heartbeat.";
 const CALL_TIMEOUT_MS = 60_000;
 const WRITE_TIMEOUT_MS = 120_000;
 const MAX_WAIT_MS = 600_000;
@@ -598,19 +717,31 @@ const CREATE_TARGET = z
   .describe(
     'Where the thread runs. Use a project with an environment: { type: "project", projectId, environment: { type: "local" } } runs the child thread in the project\'s checkout, and { type: "project", projectId, environment: { type: "worktree", startingState: { type: "branch", branchName } } } runs it in a new worktree. Always include environment: the app rejects { type: "project", projectId } without one as invalid arguments. The app also defines a directory form ({ type, directoryName }). Use list_projects for project ids; if the app rejects a type value, its error lists the accepted ones.',
   );
-// The app's own schema, narrowed to heartbeats of the calling thread; it still checks the values, and update replaces every field it is given.
-const HEARTBEAT_ARGS = {
+// The app's own schema, narrowed to heartbeats of the calling thread and crons created from Claude threads; it still checks the values, and update replaces every field it is given.
+const AUTOMATION_ARGS = {
   mode: z
     .enum(["create", "view", "update", "delete"])
     .describe(
-      "update saves the fields as given, so view the heartbeat first and send name, prompt, rrule and status in full with only the requested changes.",
+      "update saves the fields as given, so view the automation first and send name, prompt, rrule, status and, for a cron, runSettings in full with only the requested changes.",
     ),
   id: z
     .string()
     .regex(/^(?!\.\.?$)[^/\\]+$/)
     .optional()
     .describe(
-      "The automation id, required for view, update and delete and left out for create. A heartbeat run carries it as <automation_id>.",
+      "The automation id, required for view, update and delete and left out for create. A heartbeat run carries it as <automation_id>; creating a cron answers with it.",
+    ),
+  kind: z
+    .enum(["heartbeat", "cron"])
+    .optional()
+    .describe(
+      "Only for create: heartbeat (the default) wakes this thread, cron starts a new thread on each run. An existing automation keeps its kind.",
+    ),
+  runSettings: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe(
+      "Only for a cron: the app's own fields for where and how each run starts, such as its target project, model and reasoning effort, sent to the app as given. The app saves them in snake_case in automation.toml and takes them in camelCase; if it rejects them, its error names what it expects.",
     ),
   name: z
     .string()

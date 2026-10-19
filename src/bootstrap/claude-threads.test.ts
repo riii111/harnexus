@@ -15,6 +15,7 @@ import { fakeClaude } from "../infra/claude/testing/fake-claude.ts";
 import { createCodexLink } from "../infra/codex/codex-link.ts";
 import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
+import { createMemoryCronRecord } from "../infra/codex/testing/cron-record.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import { connectClaudeThreads } from "./claude-threads.ts";
 
@@ -144,6 +145,7 @@ describe("connectClaudeThreads", () => {
         createCodexLink({
           callerThreadId: threadId,
           codexHome: "/fixture/.codex",
+          cronRecord: createMemoryCronRecord(),
           store: reopened.value,
           delegations: createDelegationWatch(),
           request: async (_method, params) => {
@@ -437,6 +439,7 @@ const connect = (
     effortRule: effortRule({}, catalog.effortsOf),
     claudeModels: catalog.models,
     codexHome: "/fixture/.codex",
+    cronRecord: createMemoryCronRecord(),
     send: (message) => sent.push(message),
     log: () => {},
     ...deps,

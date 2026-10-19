@@ -1,6 +1,5 @@
 import { constants } from "node:os";
 import type { Readable, Writable } from "node:stream";
-import { Result } from "better-result";
 import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import {
   claudeSessionExists,
@@ -14,6 +13,10 @@ import {
   listClaudeConversations,
   readLastRecordUuid,
 } from "../infra/claude/transcripts.ts";
+import {
+  cronRecordPath,
+  openCronRecord,
+} from "../infra/codex/automations.boundary.ts";
 import { createLineInjector } from "../infra/codex/inject.ts";
 import { createLineRewriter } from "../infra/codex/line-rewriter.ts";
 import { createObserver } from "../infra/codex/observe.ts";
@@ -123,10 +126,12 @@ async function withClaude(relay: {
     streams: { appInput: process.stdin, appOutput: process.stdout, ...relay },
     closeAll: () => {},
   };
-  const store = await Result.andThenAsync(
-    loadStatePath(process.env),
-    openThreadStore,
-  );
+  const statePath = loadStatePath(process.env);
+  if (statePath.isErr()) {
+    logger.log({ event: "claude_unavailable", reason: statePath.error._tag });
+    return plain;
+  }
+  const store = await openThreadStore(statePath.value);
   if (store.isErr()) {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
     return plain;
@@ -185,6 +190,7 @@ async function withClaude(relay: {
     ),
     claudeModels: catalog.models,
     codexHome: codexHome(process.env),
+    cronRecord: openCronRecord(cronRecordPath(statePath.value)),
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: (event) => {
       logger.log(event);
