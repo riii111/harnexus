@@ -141,11 +141,14 @@ describe("harnexus-task launch", () => {
   test("creates the worker once and reports the actual model", async () => {
     const { harnexus, invoke, write, data, launch } = await launchFixture();
 
-    const first = await launch([], [created("w1", "claude-opus-5-5")]);
+    const first = await launch(
+      [],
+      [created("w1", "claude-sonnet-5-5", "high")],
+    );
 
     expect([first.code, first.err]).toEqual([0, ""]);
     expect(first.out.threadId).toBe("w1");
-    expect(first.out.model).toBe("claude-opus-5-5");
+    expect(first.out.model).toBe("claude-sonnet-5-5");
     const [call] = harnexus.calls;
     if (call === undefined) return expect.unreachable("nothing was sent");
     expect(call.threadId).toBe("caller");
@@ -154,7 +157,7 @@ describe("harnexus-task launch", () => {
     expect(args.title).toBe("Impl TR1");
     expect(args.target.environment.type).toBe("worktree");
     expect(args.target.projectId).toBe("project");
-    expect([args.model, args.thinking]).toEqual(["claude-opus-5-5", "medium"]);
+    expect([args.model, args.thinking]).toEqual(["claude-sonnet-5-5", "high"]);
     for (const reference of data.documentRefs as string[])
       expect(args.prompt).toContain(reference);
     expect(args.prompt).toContain("Draft PR・CI成功まで");
@@ -175,8 +178,8 @@ describe("harnexus-task launch", () => {
       kind: "launch",
       taskId: "TR1",
       workerThreadId: "w1",
-      requested: { model: "claude-opus-5-5", effort: "medium" },
-      actual: { model: "claude-opus-5-5", effort: "medium" },
+      requested: { model: "claude-sonnet-5-5", effort: "high" },
+      actual: { model: "claude-sonnet-5-5", effort: "high" },
       pending: null,
       pendingThreadId: null,
       statePath: first.out.state,
@@ -219,7 +222,10 @@ describe("harnexus-task launch", () => {
       pending: null,
       refusedThreadIds: ["w1"],
     });
-    const retried = await launch([], [created("w2", "claude-opus-5-5")]);
+    const retried = await launch(
+      [],
+      [created("w2", "claude-sonnet-5-5", "high")],
+    );
     expect([retried.code, retried.out.threadId]).toEqual([0, "w2"]);
   });
 
@@ -246,7 +252,7 @@ describe("harnexus-task launch", () => {
 
   test("names a first turn that did not say its model as such", async () => {
     const { launch } = await launchFixture();
-    const settings = (model: string | null) => ({ model, effort: "medium" });
+    const settings = (model: string | null) => ({ model, effort: "high" });
 
     const refused = await launch(
       [],
@@ -254,14 +260,14 @@ describe("harnexus-task launch", () => {
         {
           outcome: "model_mismatch",
           threadId: "w1",
-          expected: settings("claude-opus-5-5"),
+          expected: settings("claude-sonnet-5-5"),
           actual: settings(null),
         },
       ],
     );
 
     expect(refused.err).toContain(
-      "did not say which model (expected claude-opus-5-5)",
+      "did not say which model (expected claude-sonnet-5-5)",
     );
     expect(refused.err).not.toContain("null");
   });
@@ -321,7 +327,7 @@ describe("harnexus-task launch", () => {
       expect(refused.code).toBe(1);
       expect(refused.err).toContain("was not sent");
     }
-    const sent = await launch([], [created("w1", "claude-opus-5-5")]);
+    const sent = await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
 
     expect([sent.code, sent.err]).toEqual([0, ""]);
   });
@@ -332,7 +338,7 @@ describe("harnexus-task launch", () => {
 
     const missing = await launch();
     env.HARNEXUS_CALL_SOCKET = socket;
-    const sent = await launch([], [created("w1", "claude-opus-5-5")]);
+    const sent = await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
 
     expect(missing.code).toBe(1);
     expect(missing.err).toContain("HARNEXUS_CALL_SOCKET=off");
@@ -370,7 +376,7 @@ describe("harnexus-task launch", () => {
     const { harnexus, data, launch } = await launchFixture();
     data.taskId = "manual:triage-2026-10-16";
 
-    const sent = await launch([], [created("w1", "claude-opus-5-5")]);
+    const sent = await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
 
     expect([sent.code, sent.err]).toEqual([0, ""]);
     const args = harnexus.calls[0]?.arguments;
@@ -382,7 +388,7 @@ describe("harnexus-task launch", () => {
     const { harnexus, data, launch } = await launchFixture();
     data.displayName = "Appで自動マージを承認する";
 
-    const sent = await launch([], [created("w1", "claude-opus-5-5")]);
+    const sent = await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
 
     expect([sent.code, sent.err]).toEqual([0, ""]);
     const args = harnexus.calls[0]?.arguments;
@@ -429,7 +435,7 @@ describe("harnexus-task launch", () => {
     const { harnexus, data, launch } = await launchFixture();
     data.startingBranch = "feat/base";
 
-    const sent = await launch([], [created("w1", "claude-opus-5-5")]);
+    const sent = await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
 
     expect(sent.code).toBe(0);
     expect(
@@ -532,8 +538,8 @@ describe("harnexus-task launch", () => {
         prompt: expect.any(String),
         target: workspace,
         title: "Impl TR9",
-        model: "claude-opus-5-5",
-        thinking: "medium",
+        model: "claude-sonnet-5-5",
+        thinking: "high",
       },
       request: data,
       workspace,
@@ -545,7 +551,7 @@ describe("harnexus-task launch", () => {
   test("records a confirmed launch in the Python state layout", async () => {
     const { data, launch } = await launchFixture();
 
-    const sent = await launch([], [created("w1", "claude-opus-5-5")]);
+    const sent = await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
     const state = JSON.parse(await readFile(sent.out.state, "utf8"));
 
     expect(state).toEqual({
@@ -554,14 +560,14 @@ describe("harnexus-task launch", () => {
       sent: {
         tool: "create_thread",
         prompt: expect.any(String),
-        expected: { model: "claude-opus-5-5", effort: "medium" },
-        actual: { model: "claude-opus-5-5", effort: "medium" },
+        expected: { model: "claude-sonnet-5-5", effort: "high" },
+        actual: { model: "claude-sonnet-5-5", effort: "high" },
         workspace: {
           type: "project",
           projectId: "project",
           environment: { type: "worktree" },
         },
-        answer: created("w1", "claude-opus-5-5"),
+        answer: created("w1", "claude-sonnet-5-5", "high"),
       },
     });
   });
@@ -599,7 +605,7 @@ describe("harnexus-task launch", () => {
       XDG_STATE_HOME: "harnexus-task-relative-state",
     });
 
-    const sent = await launch([], [created("w1", "claude-opus-5-5")]);
+    const sent = await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
 
     expect([sent.code, sent.err]).toEqual([0, ""]);
     expect(sent.out.state.startsWith(join(root, ".local/state/taskctl/"))).toBe(

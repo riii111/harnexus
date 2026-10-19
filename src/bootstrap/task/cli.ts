@@ -85,8 +85,8 @@ const launch = (args: Args, deps: TaskDeps) =>
       prompt,
       target,
       title: threadTitle("Impl", data),
-      model: args.model || "claude-opus-5-5",
-      thinking: args.thinking || "medium",
+      model: args.model || "claude-sonnet-5-5",
+      thinking: args.thinking || "high",
     };
     if (truthy(data.startingBranch))
       target.environment.startingState = {
