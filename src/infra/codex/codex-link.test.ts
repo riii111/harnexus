@@ -760,6 +760,27 @@ describe("createCodexLink automation_update", () => {
       },
     },
     {
+      name: "runSettings holding a snake_case target thread",
+      args: {
+        mode: "create",
+        kind: "cron",
+        ...CRON,
+        runSettings: { target_thread_id: OTHER_WORKER },
+      },
+    },
+    {
+      name: "a cron create without a prompt",
+      args: { mode: "create", kind: "cron", name: "Plan" },
+    },
+    {
+      name: "a kind that the automation does not have",
+      args: { mode: "update", id: "mine", kind: "cron", ...HEARTBEAT },
+    },
+    {
+      name: "runSettings for a cron view",
+      args: { mode: "view", id: "nightly", runSettings: RUN_SETTINGS },
+    },
+    {
       name: "runSettings for a heartbeat create",
       args: { mode: "create", ...HEARTBEAT, runSettings: RUN_SETTINGS },
     },
@@ -773,7 +794,10 @@ describe("createCodexLink automation_update", () => {
       },
     },
   ])("refuses $name without calling the app", async ({ args }) => {
-    const { client, requests } = await connect({ codexHome });
+    const { client, requests } = await connect({
+      codexHome,
+      cronRecord: createMemoryCronRecord(["nightly"]),
+    });
 
     const result = await client.callTool({
       name: "automation_update",
@@ -782,6 +806,18 @@ describe("createCodexLink automation_update", () => {
 
     expect(result.isError).toBe(true);
     expect(requests).toEqual([]);
+  });
+
+  test("drops a recorded id whose automation is gone", async () => {
+    const cronRecord = createMemoryCronRecord(["missing", "nightly"]);
+    const { client } = await connect({ codexHome, cronRecord });
+
+    await client.callTool({
+      name: "automation_update",
+      arguments: { mode: "view", id: "missing" },
+    });
+
+    expect(cronRecord.ids()).toEqual(["nightly"]);
   });
 
   test("never creates another heartbeat after a create whose answer was lost", async () => {

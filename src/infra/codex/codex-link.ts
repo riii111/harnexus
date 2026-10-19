@@ -99,7 +99,7 @@ export const createCodexLink = ({
     }: {
       queuedIn?: number | null;
       onSuccess?: (result: ToolResult) => Promise<ToolResult>;
-      beforeSend?: () => string | null;
+      beforeSend?: () => string | null | Promise<string | null>;
     } = {},
   ) =>
     writes.run(CODEX_APP_SERVER, async () => {
@@ -112,7 +112,7 @@ export const createCodexLink = ({
       if (queuedIn !== generation) return notSentAfterStop(name);
       const refusal = refuseTargets(targets, { allowSelf: false });
       if (refusal !== null) return failure(refusal);
-      const unsendable = beforeSend();
+      const unsendable = await beforeSend();
       if (unsendable !== null) return failure(unsendable);
       writesInFlight += 1;
       try {
@@ -277,13 +277,14 @@ export const createCodexLink = ({
   const updateAutomation = async ({
     mode,
     id,
-    kind = "heartbeat",
+    kind,
     runSettings,
     ...fields
   }: z.infer<z.ZodObject<typeof AUTOMATION_ARGS>>) => {
     const queuedIn = currentGeneration();
+    // Compared without case or separators, so a snake_case spelling of a field cannot slip past.
     const reserved = Object.keys(runSettings ?? {}).filter((key) =>
-      RESERVED_RUN_SETTINGS.has(key),
+      RESERVED_RUN_SETTINGS.has(key.replace(/[-_]/g, "").toLowerCase()),
     );
     if (reserved.length > 0) {
       return failure(
@@ -297,6 +298,11 @@ export const createCodexLink = ({
         );
       }
       if (kind === "cron") {
+        if (fields.name === undefined || fields.prompt === undefined) {
+          return failure(
+            "A cron automation needs a name and a prompt, by which the new automation is told apart from others; nothing was sent.",
+          );
+        }
         return createCron({ ...(runSettings ?? {}), ...fields }, queuedIn);
       }
       if (runSettings !== undefined) return failure(RUN_SETTINGS_ONLY_FOR_CRON);
@@ -314,16 +320,34 @@ export const createCodexLink = ({
     }
     const reached = await reachAutomation(id);
     if ("refusal" in reached) return failure(reached.refusal);
-    if (reached.kind === "heartbeat" && runSettings !== undefined) {
-      return failure(RUN_SETTINGS_ONLY_FOR_CRON);
+    if (kind !== undefined && kind !== reached.kind) {
+      return failure(
+        `Automation ${id} is a ${reached.kind}, and an existing automation keeps its kind; nothing was sent.`,
+      );
+    }
+    if (
+      runSettings !== undefined &&
+      (reached.kind === "heartbeat" || mode !== "update")
+    ) {
+      return failure(
+        reached.kind === "heartbeat"
+          ? RUN_SETTINGS_ONLY_FOR_CRON
+          : `runSettings applies only to create and update; leave it out for mode=${mode}.`,
+      );
     }
     if (mode === "view") return read("automation_update", { mode, id }, []);
     if (mode === "delete") {
       return write("automation_update", { mode, id }, [], {
         queuedIn,
         onSuccess: async (result) => {
-          if (reached.kind === "cron") await cronRecord.remove(id);
-          return result;
+          if (reached.kind !== "cron") return result;
+          const removed = await cronRecord.remove(id);
+          return removed.isOk()
+            ? result
+            : withNote(
+                result,
+                `Automation ${id} was deleted, but its id could not be dropped from the record of crons created from Claude threads (${removed.error.message}).`,
+              );
         },
       });
     }
@@ -348,31 +372,32 @@ export const createCodexLink = ({
     fields: Record<string, unknown>,
     queuedIn: number | null,
   ) => {
-    const before = await listAutomationIds(codexHome);
-    if (before.isErr()) {
-      return failure(
-        `Cannot list the automations to record the new one (${before.error.message}); nothing was sent.`,
-      );
-    }
-    const existing = new Set(before.value);
+    // Listed inside the write queue just before the send, so only automations made while the call runs look new.
+    let existing: ReadonlySet<string> = new Set();
     return write(
       "automation_update",
       { mode: "create", ...fields, kind: "cron" },
       [],
       {
         queuedIn,
+        beforeSend: async () => {
+          const before = await listAutomationIds(codexHome);
+          if (before.isErr()) {
+            return `Cannot list the automations to record the new one (${before.error.message}); nothing was sent.`;
+          }
+          existing = new Set(before.value);
+          return null;
+        },
         onSuccess: async (result) => {
           const created = await findCreatedCron(existing, fields);
           const recorded =
             created === null ? null : await cronRecord.add(created);
-          const note =
+          return withNote(
+            result,
             created !== null && recorded?.isOk() === true
               ? `Created cron automation ${created}. Claude threads can view, update or delete it with this id.`
-              : `The cron automation was created, but ${created === null ? "it could not be told apart from the other automations" : `automation ${created} could not be recorded`}, so it cannot be viewed, updated or deleted from Claude threads. Do not create it again; ask the user to manage it in the app.`;
-          return {
-            ...result,
-            content: [...result.content, { type: "text", text: note }],
-          };
+              : `The cron automation was created, but ${created === null ? "it could not be told apart from the other automations" : `automation ${created} could not be recorded`}, so it cannot be viewed, updated or deleted from Claude threads. Do not create it again; ask the user to manage it in the app.`,
+          );
         },
       },
     );
@@ -384,18 +409,19 @@ export const createCodexLink = ({
   ) => {
     const after = await listAutomationIds(codexHome);
     if (after.isErr()) return null;
-    const matches: string[] = [];
-    for (const id of after.value.filter((name) => !existing.has(name))) {
-      const saved = await readAutomation(codexHome, id);
-      if (
-        saved.isOk() &&
-        saved.value?.kind === "cron" &&
-        (fields.name === undefined || saved.value.name === fields.name) &&
-        (fields.prompt === undefined || saved.value.prompt === fields.prompt)
-      ) {
-        matches.push(id);
-      }
-    }
+    const added = after.value.filter((name) => !existing.has(name));
+    const saved = await Promise.all(
+      added.map((id) => readAutomation(codexHome, id)),
+    );
+    const matches = added.filter((_id, index) => {
+      const automation = saved[index];
+      return (
+        automation?.isOk() === true &&
+        automation.value?.kind === "cron" &&
+        automation.value.name === fields.name &&
+        automation.value.prompt === fields.prompt
+      );
+    });
     return matches.length === 1 ? (matches[0] ?? null) : null;
   };
 
@@ -408,9 +434,14 @@ export const createCodexLink = ({
         refusal: `Cannot read automation ${id} to check what it runs (${saved.error.message}); nothing was sent.`,
       };
     }
-    if (saved.value?.targetThreadId === callerThreadId) {
+    if (
+      saved.value?.kind !== "cron" &&
+      saved.value?.targetThreadId === callerThreadId
+    ) {
       return { kind: "heartbeat" };
     }
+    // A recorded id whose automation is gone is dropped, so a later automation the app gives the same id is not taken for it.
+    if (saved.value === null) await cronRecord.remove(id);
     if (saved.value?.kind === "cron") {
       const recorded = await cronRecord.has(id);
       if (recorded.isErr()) {
@@ -660,6 +691,11 @@ const readModelPage = (value: unknown) => {
   };
 };
 
+const withNote = (result: ToolResult, note: string): ToolResult => ({
+  ...result,
+  content: [...result.content, { type: "text", text: note }],
+});
+
 const notSentAfterStop = (name: AppTool) =>
   failure(`The turn was stopped before ${name} was sent, so it was not sent.`);
 
@@ -674,13 +710,13 @@ const RESERVED_RUN_SETTINGS = new Set([
   "mode",
   "id",
   "kind",
-  "targetThreadId",
+  "targetthreadid",
   "destination",
   "name",
   "prompt",
   "rrule",
   "status",
-  "notificationPolicy",
+  "notificationpolicy",
 ]);
 const RUN_SETTINGS_ONLY_FOR_CRON =
   "runSettings applies only to cron automations; leave it out for a heartbeat.";
@@ -735,7 +771,7 @@ const AUTOMATION_ARGS = {
     .enum(["heartbeat", "cron"])
     .optional()
     .describe(
-      "Only for create: heartbeat (the default) wakes this thread, cron starts a new thread on each run. An existing automation keeps its kind.",
+      "Only for create: heartbeat (the default) wakes this thread, cron starts a new thread on each run and needs a name and a prompt. An existing automation keeps its kind.",
     ),
   runSettings: z
     .record(z.string(), z.unknown())
