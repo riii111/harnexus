@@ -509,7 +509,7 @@ export const createCodexLink = ({
     ),
     tool(
       "automation_update",
-      "Schedule this thread to be woken later by a Codex app heartbeat automation, or schedule a cron automation that starts a new thread on each run; view, update or delete a heartbeat of this thread or a cron automation created from a Claude thread. Use a heartbeat when the user asks you to check back later, monitor or keep an eye on something, follow up, remind them, or keep working on a schedule in this thread. Each heartbeat run arrives in this thread as a <heartbeat> message whose <instructions> hold the saved prompt and whose <automation_id> names the automation; when what it follows is done or no longer worth checking, delete it with that id and say so in your answer. Prefer updating an existing heartbeat of this thread over creating another; to find its id, look in $CODEX_HOME/automations/*/automation.toml (CODEX_HOME defaults to ~/.codex) for one whose target_thread_id is this thread and whose name or prompt matches. Use kind=cron only when the user asks for a scheduled task that runs in a new thread each time; creating one answers with its id, which any Claude thread can later use to view, update or delete it, so write it down where the later run will find it. Cron automations made in the app or by Codex threads, and heartbeats of other threads, cannot be reached here. The app runs automations only while it is open and the Mac is awake.",
+      "Schedule this thread to be woken later by a Codex app heartbeat automation, or view, update or delete a heartbeat of this thread. Use it when the user asks you to check back later, monitor or keep an eye on something, follow up, remind them, or keep working on a schedule. Each run arrives in this thread as a <heartbeat> message whose <instructions> hold the saved prompt and whose <automation_id> names the automation; when what it follows is done or no longer worth checking, delete it with that id and say so in your answer. Prefer updating an existing heartbeat of this thread over creating another; to find its id, look in $CODEX_HOME/automations/*/automation.toml (CODEX_HOME defaults to ~/.codex) for one whose target_thread_id is this thread and whose name or prompt matches. kind=cron instead starts a new thread on each run; only crons created from Claude threads can be reached here. The app runs automations only while it is open and the Mac is awake.",
       AUTOMATION_ARGS,
       (args) => updateAutomation(args),
     ),
@@ -758,26 +758,26 @@ const AUTOMATION_ARGS = {
   mode: z
     .enum(["create", "view", "update", "delete"])
     .describe(
-      "update saves the fields as given, so view the automation first and send name, prompt, rrule, status and, for a cron, runSettings in full with only the requested changes.",
+      "update saves the fields as given, so view the automation first and send its fields in full with only the requested changes.",
     ),
   id: z
     .string()
     .regex(/^(?!\.\.?$)[^/\\]+$/)
     .optional()
     .describe(
-      "The automation id, required for view, update and delete and left out for create. A heartbeat run carries it as <automation_id>; creating a cron answers with it.",
+      "The automation id, required for view, update and delete and left out for create. A heartbeat run carries it as <automation_id>.",
     ),
   kind: z
     .enum(["heartbeat", "cron"])
     .optional()
     .describe(
-      "Only for create: heartbeat (the default) wakes this thread, cron starts a new thread on each run and needs a name and a prompt. An existing automation keeps its kind.",
+      "Only for create; heartbeat by default. A cron needs a name and a prompt.",
     ),
   runSettings: z
     .record(z.string(), z.unknown())
     .optional()
     .describe(
-      "Only for a cron: the app's own fields for where and how each run starts, such as its target project, model and reasoning effort, sent to the app as given. The app saves them in snake_case in automation.toml and takes them in camelCase; if it rejects them, its error names what it expects.",
+      "Only for a cron: the app's other fields, such as its target and model, sent as given.",
     ),
   name: z
     .string()
