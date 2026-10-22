@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { Result, TaggedError } from "better-result";
+import type { CallOutcome } from "../../infra/codex/call-gateway.ts";
 import { isObject } from "../../runtime/object.ts";
 import { runCommand } from "../../runtime/process.boundary.ts";
 import { type OptionTypes, parseOptions } from "./args.boundary.ts";
@@ -21,6 +22,8 @@ import {
   workerPrompt,
 } from "./request.ts";
 import {
+  callApp,
+  launchOfThread,
   launchSession,
   listState,
   reviewSession,
@@ -43,6 +46,7 @@ type Args = {
   updateBase: boolean;
   sent: boolean;
   threadId?: string;
+  pr?: string;
 };
 
 const worktreeTarget = (project: unknown) => ({
@@ -191,7 +195,29 @@ const resolve = (args: Args, deps: TaskDeps) =>
     return await session.resolve(args.sent, thread);
   });
 
-const COMMANDS = { launch, review, state, resolve };
+const PR_NUMBER =
+  /^(?:https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/)?#?([1-9][0-9]*)\/?$/;
+
+// The number goes last so the title still reads as the task, while a search for the PR finds the worker.
+const name = (args: Args, deps: TaskDeps) =>
+  Result.gen(async function* () {
+    const number = PR_NUMBER.exec(args.pr ?? "")?.[1];
+    if (number === undefined)
+      return fail("--pr must be a pull request URL or number");
+    const worker = yield* callerId(deps.env);
+    const request = yield* Result.await(launchOfThread(deps.env, worker));
+    if (request === null)
+      return fail(`no ${NAME} launch recorded thread ${worker} as its worker`);
+    const title = `${threadTitle("Impl", request)} PR#${number}`;
+    const answer = await callApp(deps.env, worker, "name_thread", {
+      name: title,
+    });
+    if (answer.outcome !== ("done" satisfies CallOutcome))
+      return fail(`name_thread was not applied: ${JSON.stringify(answer)}`);
+    return Result.ok<Fields>({ threadId: worker, title });
+  });
+
+const COMMANDS = { launch, review, state, resolve, name };
 
 type Command = keyof typeof COMMANDS;
 
@@ -237,6 +263,7 @@ const OPTIONS: Record<Command, OptionTypes> = {
     "not-sent": { type: "boolean" },
     "thread-id": { type: "string" },
   },
+  name: { pr: { type: "string" } },
 };
 
 const USAGE = {
@@ -246,6 +273,7 @@ const USAGE = {
   state: "state [--request REQUEST]",
   resolve:
     "resolve --request REQUEST (--sent | --not-sent) [--thread-id THREAD_ID]",
+  name: "name --pr PR",
 } satisfies Record<Command, string>;
 
 const usageOf = (commands: readonly Command[]) =>
@@ -288,7 +316,11 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
   };
   const request = text("request");
   if (request !== undefined) args.request = request;
-  else if (command !== "state") return shown("--request is required");
+  else if (command !== "state" && command !== "name")
+    return shown("--request is required");
+  const pr = text("pr");
+  if (pr !== undefined) args.pr = pr;
+  else if (command === "name") return shown("--pr is required");
   if (command === "resolve" && values.sent === values["not-sent"])
     return shown("exactly one of --sent and --not-sent is required");
   const model = text("model");

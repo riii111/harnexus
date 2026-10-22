@@ -31,6 +31,7 @@ type Call = {
     model?: string;
     thinking?: string;
     threadId?: string;
+    name?: string;
     target: {
       projectId: string;
       environment: { type: string; startingState?: unknown };
@@ -611,6 +612,76 @@ describe("harnexus-task launch", () => {
     expect(sent.out.state.startsWith(join(root, ".local/state/taskctl/"))).toBe(
       true,
     );
+  });
+});
+
+describe("harnexus-task name", () => {
+  test("appends the PR number to the worker's launch title from the worker thread", async () => {
+    const { harnexus, env, invoke, data, launch } = await launchFixture();
+    data.displayName = "決済を再送する";
+    await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
+    env.CODEX_THREAD_ID = "w1";
+
+    const named = await invoke(
+      ["name", "--pr", "https://github.com/org/pay/pull/141"],
+      [{ outcome: "done", result: {} }],
+    );
+    const again = await invoke(["name", "--pr", "142"], [{ outcome: "done" }]);
+
+    expect([named.code, named.err]).toEqual([0, ""]);
+    expect(named.out).toEqual({
+      threadId: "w1",
+      title: "Impl｜決済を再送する PR#141",
+    });
+    expect(again.out.title).toBe("Impl｜決済を再送する PR#142");
+    expect(
+      harnexus.calls
+        .slice(1)
+        .map((call) => [call.threadId, call.tool, call.arguments.name]),
+    ).toEqual([
+      ["w1", "name_thread", "Impl｜決済を再送する PR#141"],
+      ["w1", "name_thread", "Impl｜決済を再送する PR#142"],
+    ]);
+  });
+
+  test("refuses a thread no launch recorded and a value that is not a PR", async () => {
+    const { harnexus, invoke, launch } = await launchFixture();
+    await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
+
+    const unknown = await invoke(["name", "--pr", "141"]);
+    const prose = await invoke(["name", "--pr", "PR 141"]);
+    const issue = await invoke([
+      "name",
+      "--pr",
+      "https://github.com/org/pay/issues/141",
+    ]);
+
+    expect([unknown.code, unknown.err]).toEqual([
+      1,
+      expect.stringContaining("no harnexus-task launch recorded thread caller"),
+    ]);
+    for (const refused of [prose, issue])
+      expect([refused.code, refused.err]).toEqual([
+        1,
+        expect.stringContaining("--pr must be a pull request URL or number"),
+      ]);
+    expect(harnexus.calls).toHaveLength(1);
+  });
+
+  test("reports a name the app did not apply", async () => {
+    const { env, invoke, launch } = await launchFixture();
+    await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
+    env.CODEX_THREAD_ID = "w1";
+
+    const failed = await invoke(
+      ["name", "--pr", "141"],
+      [{ outcome: "not_sent", message: "closed" }],
+    );
+
+    expect([failed.code, failed.err]).toEqual([
+      1,
+      expect.stringContaining("name_thread was not applied"),
+    ]);
   });
 });
 

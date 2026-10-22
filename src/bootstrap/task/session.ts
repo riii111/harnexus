@@ -485,5 +485,22 @@ export const listState = (env: Env) =>
     return Result.ok(listed);
   });
 
+// The worker learns its own launch from the thread it runs in, since it is never told the request's path.
+export const launchOfThread = (env: Env, thread: string) =>
+  Result.gen(async function* () {
+    const root = join(stateRoot(env), "launch");
+    for (const key of (yield* Result.await(namesIn(root))).sort()) {
+      const path = join(root, key, "state.json");
+      const state = yield* asRecord(yield* Result.await(load(path)), path);
+      if (
+        state !== null &&
+        state.threadId === thread &&
+        isObject(state.request)
+      )
+        return Result.ok<Fields | null>(state.request);
+    }
+    return Result.ok<Fields | null>(null);
+  });
+
 const namesIn = async (path: string) =>
   (await io(listDirectoryIfExists(path))).map((names) => names ?? []);

@@ -123,6 +123,55 @@ describe("createCallGateway", () => {
   });
 
   test.each([
+    { kind: "Codex", threadId: CODEX },
+    { kind: "Claude", threadId: CLAUDE },
+  ])("names the calling $kind thread through the app server", async ({
+    threadId,
+  }) => {
+    const { gateway, requests, linkCalls } = setup({ claude: [CLAUDE] });
+
+    const answer = await gateway.handle(
+      JSON.stringify({
+        threadId,
+        tool: "name_thread",
+        arguments: { name: "Impl｜決済を再送する PR#12" },
+      }),
+    );
+
+    expect(JSON.parse(answer)).toEqual({
+      outcome: "done",
+      result: { content: [] },
+    });
+    expect(requests).toEqual([
+      {
+        method: "thread/name/set",
+        params: { threadId, name: "Impl｜決済を再送する PR#12" },
+        timeoutMs: 60_000,
+      },
+    ]);
+    expect(linkCalls).toEqual([]);
+  });
+
+  test.each([
+    { name: "an empty", value: " " },
+    { name: "a multi-line", value: "a\nb" },
+    { name: "a missing", value: undefined },
+  ])("refuses $name thread name without calling the app", async ({ value }) => {
+    const { gateway, requests } = setup();
+
+    const answer = await gateway.handle(
+      JSON.stringify({
+        threadId: CODEX,
+        tool: "name_thread",
+        arguments: { name: value },
+      }),
+    );
+
+    expect(JSON.parse(answer).outcome).toBe("invalid");
+    expect(requests).toEqual([]);
+  });
+
+  test.each([
     { name: "text that is not JSON", line: "create" },
     {
       name: "a tool the app does not offer",
