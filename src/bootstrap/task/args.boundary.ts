@@ -7,7 +7,7 @@ class ArgumentsInvalid extends TaggedError("ArgumentsInvalid")<{
 
 export type OptionTypes = Record<
   string,
-  { type: "string" | "boolean"; short?: string }
+  { type: "string" | "boolean"; short?: string; multiple?: boolean }
 >;
 
 // Strict, so an unknown option or a stray argument stops the run instead of being ignored.

@@ -81,7 +81,7 @@ export const saveJson: SaveJson = (path, data, { exclusive }) =>
       : fail(`another ${NAME} run is sending; inspect ${path}`);
   });
 
-const load = (path: string) =>
+export const load = (path: string) =>
   Result.gen(async function* () {
     const text = yield* Result.await(io(readTextFileIfExists(path)));
     if (text === null) return Result.ok(null);
@@ -539,5 +539,5 @@ export const launchOfThread = (env: Env, thread: string) =>
     return Result.ok<Fields | null>(null);
   });
 
-const namesIn = async (path: string) =>
+export const namesIn = async (path: string) =>
   (await io(listDirectoryIfExists(path))).map((names) => names ?? []);

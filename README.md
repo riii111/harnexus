@@ -116,3 +116,30 @@ Keep the installed executable outside sandbox-writable paths.
 
 The app's call socket lets processes running as your user create and message chats.
 To disable it, launch with `HARNEXUS_CALL_SOCKET=off bun run open-app`.
+
+### Watching PRs
+
+`harnexus-task watch` runs until stopped and tells the worker of each PR named with `name --pr` what needs its attention: review comments, a finished CodeRabbit review, a conflict with the base, and a failed required check.
+It sends one message per PR from the worker's reviewer chat, with each item's kind, place and link but not its text.
+It never writes to GitHub.
+
+It waits while the worker's turn runs, for five minutes after you talk to the worker, and during the quiet hours.
+It watches open PRs that are not drafts, ends with a merge or close, and stops for a worker chat that no longer exists.
+Only comments made after the PR was named are reported.
+If it cannot confirm that a message arrived, it stops sending for that PR; check the worker chat, then run `harnexus-task watch --release <PR URL>` to resume.
+
+Configure it in `~/.config/harnexus/pr-watch.json`:
+
+```json
+{
+  "repositories": { "owner/repo": { "account": "your-login" } },
+  "ignore": [{ "author": "github-actions[bot]", "kind": "issue_comment" }]
+}
+```
+
+- `repositories`: the gh account that reads each repository, so switching the active account never breaks the watch.
+  That account's own comments are never reported.
+- `ignore`: comments to skip by `author`, optionally narrowed by `kind` (`inline`, `review` or `issue_comment`) and `bodyIncludes`.
+- `pollIntervalSeconds` (60), `idleIntervalSeconds` (600) after `idleAfterHours` (72) without changes, and `quietHours` (`{"start": "22:00", "end": "05:00"}`, or `null`).
+
+To see what would be sent without sending anything, run `harnexus-task watch --dry-run`, optionally with `--pr <URL>` for each PR to check.
