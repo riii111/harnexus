@@ -195,13 +195,15 @@ const resolve = (args: Args, deps: TaskDeps) =>
     return await session.resolve(args.sent, thread);
   });
 
+// A PR URL may carry a tab, query or fragment after its number, as when copied from the browser.
 const PR_NUMBER =
-  /^(?:https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/)?#?([1-9][0-9]*)\/?$/;
+  /^(?:#?([1-9][0-9]*)|https:\/\/\S+\/pull\/([1-9][0-9]*)(?:[/?#]\S*)?)$/;
 
 // The number goes last so the title still reads as the task, while a search for the PR finds the worker.
 const name = (args: Args, deps: TaskDeps) =>
   Result.gen(async function* () {
-    const number = PR_NUMBER.exec(args.pr ?? "")?.[1];
+    const matched = PR_NUMBER.exec(args.pr ?? "");
+    const number = matched?.[1] ?? matched?.[2];
     if (number === undefined)
       return fail("--pr must be a pull request URL or number");
     const worker = yield* callerId(deps.env);

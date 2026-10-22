@@ -626,7 +626,10 @@ describe("harnexus-task name", () => {
       ["name", "--pr", "https://github.com/org/pay/pull/141"],
       [{ outcome: "done", result: {} }],
     );
-    const again = await invoke(["name", "--pr", "142"], [{ outcome: "done" }]);
+    const again = await invoke(
+      ["name", "--pr", "https://github.com/org/pay/pull/142/files?w=1"],
+      [{ outcome: "done" }],
+    );
 
     expect([named.code, named.err]).toEqual([0, ""]);
     expect(named.out).toEqual({
@@ -645,8 +648,12 @@ describe("harnexus-task name", () => {
   });
 
   test("refuses a thread no launch recorded and a value that is not a PR", async () => {
-    const { harnexus, invoke, launch } = await launchFixture();
+    const { harnexus, invoke, launch, env } = await launchFixture();
     await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
+    const launches = join(env.XDG_STATE_HOME ?? "", "taskctl/launch");
+    await writeFile(join(launches, ".DS_Store"), "");
+    await mkdir(join(launches, "broken"));
+    await writeFile(join(launches, "broken/state.json"), "{");
 
     const unknown = await invoke(["name", "--pr", "141"]);
     const prose = await invoke(["name", "--pr", "PR 141"]);

@@ -109,7 +109,7 @@ export const createCallGateway = ({
     return failedCall(answered.error);
   };
 
-  // Only the caller's own thread, so a worker cannot rename the chats it did not start.
+  // Names the thread the call came from; harnexus-task sends only the worker's own thread.
   const nameThread = async (
     threadId: string,
     args: Record<string, unknown>,
