@@ -47,21 +47,52 @@ export const senderOf = async (env: Env, worker: string) => {
 };
 
 // Null means the app could not be asked, as while it is closed or the Mac sleeps; the next cycle asks again.
+// While an answer to a message sent at sentAt is awaited, older pages are read until they reach it, so later talk in the chat cannot hide the answer.
 export const readThread = async (
   callApp: AppCall,
   caller: string,
   thread: string,
+  sentAt: string | null,
 ): Promise<ThreadView | null> => {
+  const first = await readPage(callApp, caller, thread, null);
+  if (first === null || first.gone) return first;
+
+  const turns = [...first.turns];
+  const after = sentAt === null ? null : turnsAfter(sentAt);
+  let cursor = first.nextCursor;
+  for (let page = 1; page < MAX_PAGES; page++) {
+    const oldest = turns.at(-1)?.startedAt ?? null;
+    if (after === null || cursor === null || oldest === null || oldest < after)
+      break;
+
+    const older = await readPage(callApp, caller, thread, cursor);
+    if (older === null || older.gone) return older;
+    turns.push(...older.turns);
+    cursor = older.nextCursor;
+  }
+  return { gone: false, active: first.active, turns };
+};
+
+// A runaway cursor stops here; the answer wait then gives up as for a lost turn.
+const MAX_PAGES = 20;
+
+const readPage = async (
+  callApp: AppCall,
+  caller: string,
+  thread: string,
+  cursor: string | null,
+) => {
   // A Codex thread shows a delegation only in the call's output, so outputs are read but cut short.
   const answer = await callApp(caller, "read_thread", {
     threadId: thread,
     turnLimit: 5,
     includeOutputs: true,
     maxOutputCharsPerItem: OUTPUT_CHARS,
+    ...(cursor === null ? {} : { cursor }),
   });
   const text = resultText(answer);
   if (answer.outcome === "tool_error" && text.includes(NO_THREAD))
-    return { gone: true };
+    return { gone: true as const };
   if (answer.outcome !== "done") return null;
 
   const parsed = parseJson(text);
@@ -72,7 +103,17 @@ export const readThread = async (
   const turns = (Array.isArray(read.turns) ? read.turns : [])
     .filter(isObject)
     .map(turnOf);
-  return { gone: false, active: status === "active", turns };
+  const page = isObject(read.page) ? read.page : {};
+  const nextCursor =
+    page.hasMore === true && typeof page.nextCursor === "string"
+      ? page.nextCursor
+      : null;
+  return {
+    gone: false as const,
+    active: status === "active",
+    turns,
+    nextCursor,
+  };
 };
 
 const OUTPUT_CHARS = 2000;
@@ -197,7 +238,7 @@ export const answerTo = (
   turns: readonly Turn[],
   sent: { at: string; sender: string; prompt: string },
 ) => {
-  const after = Date.parse(sent.at) / 1000 - CLOCK_SKEW_SECONDS;
+  const after = turnsAfter(sent.at);
   return turns
     .filter(
       (turn) =>
@@ -213,6 +254,9 @@ export const answerTo = (
 // A Codex thread's copy may be cut short, so a nonempty start of the prompt counts as the prompt.
 const isPromptOf = (input: string, prompt: string) =>
   input.trim() !== "" && prompt.startsWith(input.trimEnd());
+
+const turnsAfter = (sentAt: string) =>
+  Date.parse(sentAt) / 1000 - CLOCK_SKEW_SECONDS;
 
 // The app stamps turns in whole seconds.
 const CLOCK_SKEW_SECONDS = 5;

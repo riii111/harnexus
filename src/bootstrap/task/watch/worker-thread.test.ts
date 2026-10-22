@@ -44,6 +44,7 @@ describe("readThread", () => {
       },
       "reviewer",
       "worker",
+      null,
     );
 
     expect(calls).toEqual([
@@ -63,6 +64,35 @@ describe("readThread", () => {
       prompt,
     });
     expect([turn?.origin, turn?.answer]).toEqual(["delegated", "指摘なし"]);
+  });
+
+  test("reads older pages until it reaches the answer to the sent message", async () => {
+    const sent = {
+      at: new Date(100_000).toISOString(),
+      sender: "reviewer",
+      prompt: "$task-worker\nPR",
+    };
+    const app = pagedApp([
+      [ownerTurn(400), ownerTurn(390)],
+      [ownerTurn(300), delegatedTurn(100, sent.prompt)],
+      [ownerTurn(50)],
+      [ownerTurn(10)],
+    ]);
+
+    const view = await readThread(app.call, "reviewer", "worker", sent.at);
+
+    const turns = view !== null && !view.gone ? view.turns : [];
+    expect(answerTo(turns, sent)?.answer).toBe("answered");
+    expect(app.cursors).toEqual([undefined, "page:1", "page:2"]);
+  });
+
+  test("reads only the latest page while no answer is awaited", async () => {
+    const app = pagedApp([[ownerTurn(400)], [ownerTurn(300)]]);
+
+    const view = await readThread(app.call, "reviewer", "worker", null);
+
+    expect(view !== null && !view.gone && view.turns.length).toBe(1);
+    expect(app.cursors).toEqual([undefined]);
   });
 
   test.each([
@@ -85,7 +115,12 @@ describe("readThread", () => {
       expected: null,
     },
   ])("reports $name", async ({ answer, expected }) => {
-    const view = await readThread(async () => answer, "reviewer", "worker");
+    const view = await readThread(
+      async () => answer,
+      "reviewer",
+      "worker",
+      null,
+    );
 
     expect(view).toEqual(expected);
   });
@@ -138,4 +173,40 @@ describe("busyReason", () => {
   ])("tells $name", ({ active, latest, expected }) => {
     expect(busyReason({ active, turns: [latest] }, now)).toBe(expected);
   });
+});
+
+const pagedApp = (pages: Fields[][]) => {
+  const cursors: unknown[] = [];
+  const call = async (_caller: string, _tool: string, args: Fields) => {
+    cursors.push(args.cursor);
+    const index =
+      typeof args.cursor === "string" ? Number(args.cursor.slice(5)) : 0;
+    const hasMore = index + 1 < pages.length;
+    return answered({
+      thread: { status: { type: "idle" } },
+      turns: pages[index] ?? [],
+      page: { hasMore, nextCursor: hasMore ? `page:${index + 1}` : null },
+    })();
+  };
+  return { call, cursors };
+};
+
+const ownerTurn = (startedAt: number) => ({
+  status: "completed",
+  startedAt,
+  completedAt: startedAt,
+  items: [{ type: "userMessage", content: [{ type: "text", text: "hi" }] }],
+});
+
+const delegatedTurn = (startedAt: number, input: string) => ({
+  status: "completed",
+  startedAt,
+  completedAt: startedAt,
+  items: [
+    {
+      type: "userMessage",
+      codexDelegation: { sourceThreadId: "reviewer", input },
+    },
+    { type: "agentMessage", phase: "final_answer", text: "answered" },
+  ],
 });

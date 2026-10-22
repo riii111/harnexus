@@ -226,7 +226,12 @@ const deliver = async (
     return;
   }
 
-  const view = await readThread(deps.callApp, sender, link.worker);
+  const view = await readThread(
+    deps.callApp,
+    sender,
+    link.worker,
+    state.delivered?.at ?? null,
+  );
   if (view === null) return;
   if (view.gone) {
     state.status = "stopped";
