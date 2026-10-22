@@ -485,5 +485,24 @@ export const listState = (env: Env) =>
     return Result.ok(listed);
   });
 
+// The worker learns its own launch from the thread it runs in, since it is never told the request's path.
+// Another task's unreadable state is skipped, so it cannot stop every worker from finding its own.
+export const launchOfThread = (env: Env, thread: string) =>
+  Result.gen(async function* () {
+    const root = join(stateRoot(env), "launch");
+    for (const key of (yield* Result.await(namesIn(root))).sort()) {
+      if (!(await isDirectory(join(root, key)))) continue;
+      const loaded = await load(join(root, key, "state.json"));
+      const state = loaded.isOk() ? loaded.value : null;
+      if (
+        isObject(state) &&
+        state.threadId === thread &&
+        isObject(state.request)
+      )
+        return Result.ok<Fields | null>(state.request);
+    }
+    return Result.ok<Fields | null>(null);
+  });
+
 const namesIn = async (path: string) =>
   (await io(listDirectoryIfExists(path))).map((names) => names ?? []);
