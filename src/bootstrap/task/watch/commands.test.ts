@@ -169,26 +169,34 @@ describe("release", () => {
   });
 });
 
+// The lock comes from macOS's O_EXLOCK, which other systems do not have.
+const onMac = process.platform === "darwin";
+
 describe("watchForever", () => {
-  test("refuses to start while another watch holds the lock", async () => {
-    const { env } = await fixture();
-    await mkdir(join(env.XDG_STATE_HOME, "taskctl/watch"), { recursive: true });
-    expect(holdProcessLock(lockPath(env)).unwrap()).toBe(true);
+  test.skipIf(!onMac)(
+    "refuses to start while another watch holds the lock",
+    async () => {
+      const { env } = await fixture();
+      await mkdir(join(env.XDG_STATE_HOME, "taskctl/watch"), {
+        recursive: true,
+      });
+      expect(holdProcessLock(lockPath(env)).unwrap()).toBe(true);
 
-    const ran = await watchForever(
-      {
-        env,
-        saveJson,
-        github: github([]),
-        callApp: async () => ({ outcome: "done" }),
-        now: () => new Date(),
-        log: () => {},
-      },
-      async () => {},
-    );
+      const ran = await watchForever(
+        {
+          env,
+          saveJson,
+          github: github([]),
+          callApp: async () => ({ outcome: "done" }),
+          now: () => new Date(),
+          log: () => {},
+        },
+        async () => {},
+      );
 
-    expect(ran.isErr() && ran.error.message).toBe(
-      "another harnexus-task watch is running",
-    );
-  });
+      expect(ran.isErr() && ran.error.message).toBe(
+        "another harnexus-task watch is running",
+      );
+    },
+  );
 });

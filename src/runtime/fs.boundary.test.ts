@@ -217,16 +217,22 @@ describe("createEmptyFile", () => {
   });
 });
 
+// The lock comes from macOS's O_EXLOCK, which other systems do not have.
+const onMac = process.platform === "darwin";
+
 describe("holdProcessLock", () => {
-  test("refuses a second holder while the first keeps the lock, and records the holder", async () => {
-    const path = join(dir, "watch.lock");
+  test.skipIf(!onMac)(
+    "refuses a second holder while the first keeps the lock, and records the holder",
+    async () => {
+      const path = join(dir, "watch.lock");
 
-    const first = holdProcessLock(path);
-    const second = holdProcessLock(path);
+      const first = holdProcessLock(path);
+      const second = holdProcessLock(path);
 
-    expect([first.unwrap(), second.unwrap()]).toEqual([true, false]);
-    expect(await readFile(path, "utf8")).toBe(`${process.pid}\n`);
-  });
+      expect([first.unwrap(), second.unwrap()]).toEqual([true, false]);
+      expect(await readFile(path, "utf8")).toBe(`${process.pid}\n`);
+    },
+  );
 });
 
 describe("removeFile", () => {
