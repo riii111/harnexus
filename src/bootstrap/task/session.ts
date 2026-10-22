@@ -125,6 +125,41 @@ export const callApp = async (
   return parsed.value;
 };
 
+const projectsIn = (result: unknown): unknown[] => {
+  if (!isObject(result)) return [];
+  const texts = Array.isArray(result.content)
+    ? result.content.flatMap((item) =>
+        isObject(item) && item.type === "text" && typeof item.text === "string"
+          ? [parseJson(item.text).unwrapOr(null)]
+          : [],
+      )
+    : [];
+  for (const listed of [result.structuredContent, result, ...texts])
+    if (isObject(listed) && Array.isArray(listed.projects))
+      return listed.projects;
+  return [];
+};
+
+// A reviewer reads the worker's checkout by its path, so it runs in an empty project rather than a worktree of its own that counts toward the app's worktree limit.
+export const reviewProject = async (
+  env: Env,
+  caller: string,
+): Promise<Result<string, TaskFailed>> => {
+  const home = await realPathOrSelf(join(homeOf(env), "review-home"));
+  const answer = await callApp(env, caller, "list_projects", {});
+  if (answer.outcome !== ("done" satisfies CallOutcome))
+    return fail(`list_projects failed: ${JSON.stringify(answer)}`);
+  for (const project of projectsIn(answer.result)) {
+    if (!isObject(project)) continue;
+    const { path, projectId } = project;
+    if (typeof path !== "string" || typeof projectId !== "string") continue;
+    if ((await realPathOrSelf(path)) === home) return Result.ok(projectId);
+  }
+  return fail(
+    `add ${home} to the Codex app as a project, so reviewers run there instead of in a worktree of their own`,
+  );
+};
+
 export type SessionDeps = { env: Env; saveJson: SaveJson };
 
 type Confirmed = (
@@ -483,6 +518,25 @@ export const listState = (env: Env) =>
       listed[path] = yield* Result.await(load(path));
     }
     return Result.ok(listed);
+  });
+
+// The worker learns its own launch from the thread it runs in, since it is never told the request's path.
+// Another task's unreadable state is skipped, so it cannot stop every worker from finding its own.
+export const launchOfThread = (env: Env, thread: string) =>
+  Result.gen(async function* () {
+    const root = join(stateRoot(env), "launch");
+    for (const key of (yield* Result.await(namesIn(root))).sort()) {
+      if (!(await isDirectory(join(root, key)))) continue;
+      const loaded = await load(join(root, key, "state.json"));
+      const state = loaded.isOk() ? loaded.value : null;
+      if (
+        isObject(state) &&
+        state.threadId === thread &&
+        isObject(state.request)
+      )
+        return Result.ok<Fields | null>(state.request);
+    }
+    return Result.ok<Fields | null>(null);
   });
 
 const namesIn = async (path: string) =>

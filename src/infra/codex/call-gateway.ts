@@ -82,10 +82,11 @@ export const createCallGateway = ({
     if (!call.success) {
       return {
         outcome: "invalid",
-        message: `expected {"threadId","tool","arguments"} with tool one of ${APP_TOOLS.join(", ")}`,
+        message: `expected {"threadId","tool","arguments"} with tool one of ${TOOLS.join(", ")}`,
       };
     }
     const { threadId, tool, arguments: args } = call.data;
+    if (tool === "name_thread") return nameThread(threadId, args);
     if (tool === "create_thread") {
       return creates.run(threadId, () => createThread(threadId, args));
     }
@@ -106,6 +107,27 @@ export const createCallGateway = ({
       };
     }
     return failedCall(answered.error);
+  };
+
+  // Names the thread the call came from; harnexus-task sends only the worker's own thread.
+  const nameThread = async (
+    threadId: string,
+    args: Record<string, unknown>,
+  ): Promise<GatewayAnswer> => {
+    const name = args.name;
+    if (typeof name !== "string" || name.trim() === "" || /[\r\n]/.test(name))
+      return {
+        outcome: "invalid",
+        message: "name_thread expects a nonempty single-line name",
+      };
+    const named = await request(
+      "thread/name/set",
+      { threadId, name },
+      { timeoutMs: CALL_TIMEOUT_MS },
+    );
+    return named.isOk()
+      ? { outcome: "done", result: named.value }
+      : failedCall(named.error);
   };
 
   const createThread = async (
@@ -256,9 +278,12 @@ const APP_TOOLS = [
 
 type AppTool = (typeof APP_TOOLS)[number];
 
+// name_thread is answered by the gateway itself, since the app offers no tool that renames a thread.
+const TOOLS = [...APP_TOOLS, "name_thread"] as const;
+
 const CALL = z.strictObject({
   threadId: z.string().min(1),
-  tool: z.enum(APP_TOOLS),
+  tool: z.enum(TOOLS),
   arguments: z.record(z.string(), z.unknown()).default({}),
 });
 

@@ -101,6 +101,8 @@ bun run install:task
 This installs `harnexus-task` in `~/.local/bin`.
 It requires the `task-*` skills in `$CODEX_HOME/skills`.
 Coordinate from a Codex chat by default, or explicitly select Claude; workers default to Claude and reviewers to Codex.
+A worker that opened its PR runs `harnexus-task name --pr <URL>`, which keeps its chat's launch title and appends `PR#<number>` so a search for the PR finds it.
+Reviewers read the worker's checkout and run in `~/review-home` instead of a worktree of their own, so create that empty folder and add it to the Codex app as a project before the first review.
 
 The command runs outside the sandbox.
 Allow-list only the installed command, such as `harnexus-task launch`, without leading environment assignments.
