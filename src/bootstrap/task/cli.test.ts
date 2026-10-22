@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runTask, TASK_DEPS, type TaskDeps } from "./cli.ts";
 import { callApp, type SaveJson, saveJson } from "./session.ts";
+import { listLinks } from "./watch/store.ts";
 
 const SKILLS = join(import.meta.dir, "../../../test/fixtures/task-skills");
 const README = join(import.meta.dir, "../../../README.md");
@@ -636,8 +637,10 @@ describe("harnexus-task name", () => {
     expect(named.out).toEqual({
       threadId: "w1",
       title: "Impl｜決済を再送する PR#141",
+      watched: "https://github.com/org/pay/pull/141",
     });
     expect(again.out.title).toBe("Impl｜決済を再送する PR#142");
+    expect(again.out.watched).toBe("https://github.com/org/pay/pull/142");
     expect(
       harnexus.calls
         .slice(1)
@@ -676,6 +679,38 @@ describe("harnexus-task name", () => {
     expect(harnexus.calls).toHaveLength(1);
   });
 
+  test("links the PR to the worker for the watch and keeps the first link time", async () => {
+    const { env, invoke, launch } = await launchFixture();
+    await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
+    env.CODEX_THREAD_ID = "w1";
+
+    await invoke(
+      ["name", "--pr", "https://github.com/org/pay/pull/141"],
+      [{ outcome: "done" }],
+    );
+    const first = await listLinks(env);
+    await invoke(
+      ["name", "--pr", "https://github.com/org/pay/pull/141#top"],
+      [{ outcome: "done" }],
+    );
+    const numberOnly = await invoke(
+      ["name", "--pr", "142"],
+      [{ outcome: "done" }],
+    );
+
+    const links = (await listLinks(env)).unwrap();
+    expect(links).toEqual([
+      {
+        repo: "org/pay",
+        number: 141,
+        url: "https://github.com/org/pay/pull/141",
+        worker: "w1",
+        linkedAt: first.unwrap()[0]?.linkedAt ?? "",
+      },
+    ]);
+    expect(numberOnly.out.watched).toBeNull();
+  });
+
   test("reports a name the app did not apply", async () => {
     const { env, invoke, launch } = await launchFixture();
     await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
@@ -689,6 +724,30 @@ describe("harnexus-task name", () => {
     expect([failed.code, failed.err]).toEqual([
       1,
       expect.stringContaining("name_thread was not applied"),
+    ]);
+  });
+});
+
+describe("harnexus-task watch", () => {
+  test.each([
+    {
+      name: "--pr without --dry-run",
+      args: ["--pr", "https://github.com/org/pay/pull/1"],
+      message: "--pr is only for --dry-run",
+    },
+    {
+      name: "--release with --dry-run",
+      args: ["--dry-run", "--release", "https://github.com/org/pay/pull/1"],
+      message: "--release cannot be combined with --dry-run",
+    },
+  ])("refuses $name", async ({ args, message }) => {
+    const { invoke } = await fixture();
+
+    const refused = await invoke(["watch", ...args]);
+
+    expect([refused.code, refused.err]).toEqual([
+      2,
+      expect.stringContaining(message),
     ]);
   });
 });

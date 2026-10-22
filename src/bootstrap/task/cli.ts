@@ -31,12 +31,24 @@ import {
   type SaveJson,
   saveJson,
 } from "./session.ts";
+import { dryRun, release, watchForever } from "./watch/commands.ts";
+import { createGitHub } from "./watch/github.ts";
+import { githubPr, listLinks, recordLink } from "./watch/store.ts";
 
-export type TaskDeps = { env: Env; runGit: GitRunner; saveJson: SaveJson };
+export type TaskDeps = {
+  env: Env;
+  runGit: GitRunner;
+  saveJson: SaveJson;
+  // Only the watch writes as it runs, since it never returns.
+  print: (line: string) => void;
+};
 
 export const TASK_DEPS = {
   runGit: (argv, env) => runCommand(argv[0] ?? "git", argv.slice(1), env),
   saveJson,
+  print: (line) => {
+    process.stdout.write(line);
+  },
 } satisfies Omit<TaskDeps, "env">;
 
 type Args = {
@@ -48,6 +60,9 @@ type Args = {
   sent: boolean;
   threadId?: string;
   pr?: string;
+  prs: string[];
+  dryRun: boolean;
+  release?: string;
 };
 
 const worktreeTarget = (project: unknown) => ({
@@ -218,16 +233,61 @@ const name = (args: Args, deps: TaskDeps) =>
     const request = yield* Result.await(launchOfThread(deps.env, worker));
     if (request === null)
       return fail(`no ${NAME} launch recorded thread ${worker} as its worker`);
+    const watched = yield* Result.await(linkPr(deps, args.pr ?? "", worker));
     const title = `${threadTitle("Impl", request)} PR#${number}`;
     const answer = await callApp(deps.env, worker, "name_thread", {
       name: title,
     });
     if (answer.outcome !== ("done" satisfies CallOutcome))
       return fail(`name_thread was not applied: ${JSON.stringify(answer)}`);
-    return Result.ok<Fields>({ threadId: worker, title });
+    return Result.ok<Fields>({ threadId: worker, title, watched });
   });
 
-const COMMANDS = { launch, review, state, resolve, name };
+// Kept apart from the title, so the watch finds the worker of a PR without reading thread names.
+const linkPr = (deps: TaskDeps, value: string, worker: string) =>
+  Result.gen(async function* () {
+    const pr = githubPr(value);
+    if (pr === null) return Result.ok(null);
+    const links = yield* Result.await(listLinks(deps.env));
+    const known = links.find(
+      (link) =>
+        link.worker === worker &&
+        link.repo.toLowerCase() === pr.repo.toLowerCase() &&
+        link.number === pr.number,
+    );
+    yield* Result.await(
+      recordLink(deps.env, deps.saveJson, {
+        ...pr,
+        worker,
+        // Naming the same PR again keeps its start, so comments made since are still reported.
+        linkedAt: known?.linkedAt ?? new Date().toISOString(),
+      }),
+    );
+    return Result.ok(pr.url);
+  });
+
+const watch = (args: Args, deps: TaskDeps) => {
+  if (args.release !== undefined)
+    return release(deps.env, deps.saveJson, args.release);
+  const github = createGitHub(deps.runGit, deps.env);
+  if (args.dryRun) return dryRun({ env: deps.env, github }, args.prs);
+  return watchForever(
+    {
+      env: deps.env,
+      saveJson: deps.saveJson,
+      github,
+      callApp: (caller, tool, sent) => callApp(deps.env, caller, tool, sent),
+      now: () => new Date(),
+      log: (entry) =>
+        deps.print(
+          `${JSON.stringify({ time: new Date().toISOString(), ...entry })}\n`,
+        ),
+    },
+    (ms) => Bun.sleep(ms),
+  );
+};
+
+const COMMANDS = { launch, review, state, resolve, name, watch };
 
 type Command = keyof typeof COMMANDS;
 
@@ -274,6 +334,11 @@ const OPTIONS: Record<Command, OptionTypes> = {
     "thread-id": { type: "string" },
   },
   name: { pr: { type: "string" } },
+  watch: {
+    "dry-run": { type: "boolean" },
+    pr: { type: "string", multiple: true },
+    release: { type: "string" },
+  },
 };
 
 const USAGE = {
@@ -284,6 +349,7 @@ const USAGE = {
   resolve:
     "resolve --request REQUEST (--sent | --not-sent) [--thread-id THREAD_ID]",
   name: "name --pr PR",
+  watch: "watch [--dry-run [--pr PR]... | --release PR]",
 } satisfies Record<Command, string>;
 
 const usageOf = (commands: readonly Command[]) =>
@@ -323,14 +389,22 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
     command,
     updateBase: values["update-base"] === true,
     sent: values.sent === true,
+    dryRun: values["dry-run"] === true,
+    prs: command === "watch" && Array.isArray(values.pr) ? values.pr : [],
   };
   const request = text("request");
   if (request !== undefined) args.request = request;
-  else if (command !== "state" && command !== "name")
+  else if (!["state", "name", "watch"].includes(command))
     return shown("--request is required");
   const pr = text("pr");
   if (pr !== undefined) args.pr = pr;
   else if (command === "name") return shown("--pr is required");
+  const released = text("release");
+  if (released !== undefined) args.release = released;
+  if (args.prs.length > 0 && !args.dryRun)
+    return shown("--pr is only for --dry-run");
+  if (released !== undefined && args.dryRun)
+    return shown("--release cannot be combined with --dry-run");
   if (command === "resolve" && values.sent === values["not-sent"])
     return shown("exactly one of --sent and --not-sent is required");
   const model = text("model");
