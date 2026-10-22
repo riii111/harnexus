@@ -305,4 +305,5 @@ const PROJECT = "/work/fixture-project";
 const PROJECT_FOLDER = "-work-fixture-project";
 const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
-const NOW = Date.now();
+// Whole seconds, since utimes takes seconds as a float that does not always round back to the same millisecond.
+const NOW = Math.floor(Date.now() / 1000) * 1000;
