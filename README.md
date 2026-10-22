@@ -25,7 +25,7 @@ Usage counts toward your own Claude plan under [Anthropic's terms](https://code.
 You need:
 
 - macOS with Codex available in the ChatGPT app at `/Applications/ChatGPT.app`.
-- Bun installed. This project pins Bun 1.3.13.
+- Bun installed. This project pins Bun 1.4.4.
 - Claude Code signed in to your Claude account.
   API keys and cloud providers are not supported.
 
@@ -52,6 +52,9 @@ Setup persists across Dock launches, app updates, and logins.
 Keep this checkout and Bun at their current paths.
 To change paths or options, quit the app and rerun `bun run open-app`; omitted options are cleared.
 To remove the setup, quit the app and run `bun run open-app --standard`.
+
+After updating Bun or the Claude Agent SDK, wait for running tasks to finish,
+then quit and reopen the app with `bun run open-app` to use the updated runtime and dependencies.
 
 ## Troubleshooting
 
@@ -99,6 +102,8 @@ bun run install:task
 ```
 
 This installs `harnexus-task` in `~/.local/bin`.
+The executable includes the Bun runtime used to build it. Run `bun run install:task`
+again with the pinned Bun version after a runtime security update.
 It requires the `task-*` skills in `$CODEX_HOME/skills`.
 Coordinate from a Codex chat by default, or explicitly select Claude; workers default to Claude and reviewers to Codex.
 A worker that opened its PR runs `harnexus-task name --pr <URL>`, which keeps its chat's launch title and appends `PR#<number>` so a search for the PR finds it.
