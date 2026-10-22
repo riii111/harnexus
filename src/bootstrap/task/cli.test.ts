@@ -33,6 +33,7 @@ type Call = {
     threadId?: string;
     name?: string;
     target: {
+      type?: string;
       projectId: string;
       environment: { type: string; startingState?: unknown };
     };
@@ -748,6 +749,10 @@ const reviewFixture = async () => {
   const initial = commit("test: initial");
   git("branch", "base");
   base.env.CODEX_THREAD_ID = "worker";
+  base.env.HOME = base.root;
+  const home = join(base.root, "review-home");
+  await mkdir(home);
+  const listed = projectsListed({ projectId: "review-home", path: home });
   const data: Record<string, unknown> = {
     taskId: "example",
     workerAI: "Codex",
@@ -762,23 +767,39 @@ const reviewFixture = async () => {
       ["review", "--request", await base.write(data), ...extra],
       answers,
     );
-  return { ...base, checkout, git, commit, initial, data, review };
+  return { ...base, checkout, git, commit, initial, data, review, listed };
 };
+
+const projectsListed = (...projects: Record<string, unknown>[]) => ({
+  outcome: "done",
+  result: {
+    content: [{ type: "text", text: JSON.stringify({ projects }) }],
+  },
+});
 
 describe("harnexus-task review", () => {
   test("sends each head once, re-reviews going to the same reviewer", async () => {
-    const { harnexus, checkout, git, commit, initial, data, review } =
+    const { harnexus, checkout, git, commit, initial, data, review, listed } =
       await reviewFixture();
     const head = commit("test: candidate");
     const before = (await readdir(checkout)).sort();
 
-    const first = await review([], [created("r1", "gpt-6.1-sol")]);
+    const first = await review([], [listed, created("r1", "gpt-6.1-sol")]);
 
     expect([first.code, first.err]).toEqual([0, ""]);
-    const [call] = harnexus.calls;
+    const [lookup, call] = harnexus.calls;
     if (call === undefined) return expect.unreachable("nothing was sent");
+    expect([lookup?.threadId, lookup?.tool]).toEqual([
+      "worker",
+      "list_projects",
+    ]);
     expect([call.threadId, call.tool]).toEqual(["worker", "create_thread"]);
     const args = call.arguments;
+    expect(args.target).toEqual({
+      type: "project",
+      projectId: "review-home",
+      environment: { type: "local" },
+    });
     expect([args.model, args.thinking]).toEqual(["gpt-6.1-sol", "medium"]);
     expect(args.title).toBe("Review example");
     expect(args.prompt).toContain(`${initial}...${head}`);
@@ -803,40 +824,54 @@ describe("harnexus-task review", () => {
     expect(last?.arguments.prompt).toContain(`${initial}...${fixed}`);
     expect(last?.arguments.prompt).toContain(String(data.prUrl));
     expect((await review()).code).toBe(1);
-    expect(harnexus.calls).toHaveLength(2);
+    expect(harnexus.calls).toHaveLength(3);
     expect((await readdir(checkout)).sort()).toEqual(before);
   });
 
   test("accepts a namespaced task ID", async () => {
-    const { harnexus, commit, data, review } = await reviewFixture();
+    const { harnexus, commit, data, review, listed } = await reviewFixture();
     commit("test: candidate");
     data.taskId = "manual:triage-2026-10-16";
 
-    const sent = await review([], [created("r1", "gpt-6.1-sol")]);
+    const sent = await review([], [listed, created("r1", "gpt-6.1-sol")]);
 
     expect([sent.code, sent.err]).toEqual([0, ""]);
-    expect(harnexus.calls[0]?.arguments.title).toBe(
+    expect(harnexus.calls[1]?.arguments.title).toBe(
       "Review manual:triage-2026-10-16",
     );
   });
 
   test("names the reviewer thread by the display name", async () => {
-    const { harnexus, commit, data, review } = await reviewFixture();
+    const { harnexus, commit, data, review, listed } = await reviewFixture();
     commit("test: candidate");
     data.displayName = "Appで自動マージを承認する";
 
-    const sent = await review([], [created("r1", "gpt-6.1-sol")]);
+    const sent = await review([], [listed, created("r1", "gpt-6.1-sol")]);
 
     expect([sent.code, sent.err]).toEqual([0, ""]);
-    expect(harnexus.calls[0]?.arguments.title).toBe(
+    expect(harnexus.calls[1]?.arguments.title).toBe(
       "Review｜Appで自動マージを承認する",
     );
   });
 
+  test("creates no reviewer until the review home is a project", async () => {
+    const { harnexus, root, commit, review } = await reviewFixture();
+    commit("test: candidate");
+    const elsewhere = projectsListed({ projectId: "other", path: root });
+
+    const refused = await review([], [elsewhere]);
+
+    expect([refused.code, refused.err]).toEqual([
+      1,
+      expect.stringContaining("as a project"),
+    ]);
+    expect(harnexus.calls.map((call) => call.tool)).toEqual(["list_projects"]);
+  });
+
   test("states a review session in flat fields, keeping the reviewer's settings and a pending send apart", async () => {
-    const { invoke, write, commit, initial, data, review } =
+    const { invoke, write, commit, initial, data, review, listed } =
       await reviewFixture();
-    await review([], [created("r1", "gpt-6.1-sol")]);
+    await review([], [listed, created("r1", "gpt-6.1-sol")]);
     const fixed = commit("test: fix");
     data.prUrl = "https://github.com/example/repo/pull/1";
     const sent = await review([], [{ outcome: "done" }]);
@@ -874,9 +909,9 @@ describe("harnexus-task review", () => {
   });
 
   test("keeps a reviewer it cannot accept pending as unknown", async () => {
-    const { invoke, write, data, review } = await reviewFixture();
+    const { invoke, write, data, review, listed } = await reviewFixture();
 
-    const itself = await review([], [created("worker", "gpt-6.1-sol")]);
+    const itself = await review([], [listed, created("worker", "gpt-6.1-sol")]);
     const state = await invoke(["state", "--request", await write(data)]);
     const blocked = await review();
 
@@ -891,9 +926,9 @@ describe("harnexus-task review", () => {
   });
 
   test("records a confirmed review in the Python state layout", async () => {
-    const { checkout, initial, data, review } = await reviewFixture();
+    const { checkout, initial, data, review, listed } = await reviewFixture();
 
-    const sent = await review([], [created("r1", "gpt-6.1-sol")]);
+    const sent = await review([], [listed, created("r1", "gpt-6.1-sol")]);
     const state = JSON.parse(await readFile(sent.out.state, "utf8"));
 
     expect(state).toEqual({
@@ -921,8 +956,10 @@ describe("harnexus-task review", () => {
   });
 
   test("keeps a re-review tool_error unknown", async () => {
-    const { harnexus, commit, review } = await reviewFixture();
-    expect((await review([], [created("r1", "gpt-6.1-sol")])).code).toBe(0);
+    const { harnexus, commit, review, listed } = await reviewFixture();
+    expect(
+      (await review([], [listed, created("r1", "gpt-6.1-sol")])).code,
+    ).toBe(0);
     commit("test: fix");
 
     const failed = await review(
@@ -935,7 +972,7 @@ describe("harnexus-task review", () => {
     expect(failed.err).toContain("never resend");
     expect(again.code).toBe(1);
     expect(again.err).toContain("never resend");
-    expect(harnexus.calls).toHaveLength(2);
+    expect(harnexus.calls).toHaveLength(3);
   });
 
   test.each([
@@ -991,9 +1028,11 @@ describe("harnexus-task review", () => {
   });
 
   test("blocks a resend after a lost re-review answer", async () => {
-    const { harnexus, invoke, write, commit, data, review } =
+    const { harnexus, invoke, write, commit, data, review, listed } =
       await reviewFixture();
-    expect((await review([], [created("r1", "gpt-6.1-sol")])).code).toBe(0);
+    expect(
+      (await review([], [listed, created("r1", "gpt-6.1-sol")])).code,
+    ).toBe(0);
     commit("test: fix");
 
     const lost = await review([], [DROP]);
@@ -1003,7 +1042,7 @@ describe("harnexus-task review", () => {
     expect(lost.code).toBe(1);
     expect(blocked.code).toBe(1);
     expect(blocked.err).toContain("never resend");
-    expect(harnexus.calls).toHaveLength(2);
+    expect(harnexus.calls).toHaveLength(3);
     const resolved = await invoke([
       "resolve",
       "--request",
@@ -1015,8 +1054,11 @@ describe("harnexus-task review", () => {
   });
 
   test("keeps the base until it is updated explicitly", async () => {
-    const { harnexus, git, commit, data, review } = await reviewFixture();
-    expect((await review([], [created("r1", "gpt-6.1-sol")])).code).toBe(0);
+    const { harnexus, git, commit, data, review, listed } =
+      await reviewFixture();
+    expect(
+      (await review([], [listed, created("r1", "gpt-6.1-sol")])).code,
+    ).toBe(0);
     git("checkout", "-qb", "upstream");
     const upstream = commit("test: upstream");
     git("checkout", "-q", "-");
@@ -1036,7 +1078,7 @@ describe("harnexus-task review", () => {
   });
 
   test("runs only plumbing git, and only in worker worktrees", async () => {
-    const { harnexus, root, codex, invoke, write, data } =
+    const { harnexus, root, codex, invoke, write, data, listed } =
       await reviewFixture();
     const runs: { argv: readonly string[]; env: Record<string, unknown> }[] =
       [];
@@ -1047,7 +1089,7 @@ describe("harnexus-task review", () => {
 
     const sent = await invoke(
       ["review", "--request", await write(data)],
-      [created("r1", "gpt-6.1-sol")],
+      [listed, created("r1", "gpt-6.1-sol")],
       { runGit },
     );
 
@@ -1075,13 +1117,13 @@ describe("harnexus-task review", () => {
       1,
       expect.stringContaining("worker worktree"),
     ]);
-    expect(harnexus.calls).toHaveLength(1);
+    expect(harnexus.calls).toHaveLength(2);
   });
 
   test("refuses the worker as its own reviewer and a request naming another worker", async () => {
-    const { invoke, write, data, review } = await reviewFixture();
+    const { invoke, write, data, review, listed } = await reviewFixture();
     data.workerChatId = "worker";
-    expect((await review([], [DROP])).code).toBe(1);
+    expect((await review([], [listed, DROP])).code).toBe(1);
 
     const itself = await invoke([
       "resolve",

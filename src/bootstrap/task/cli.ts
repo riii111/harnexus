@@ -26,6 +26,7 @@ import {
   launchOfThread,
   launchSession,
   listState,
+  reviewProject,
   reviewSession,
   type SaveJson,
   saveJson,
@@ -151,8 +152,15 @@ const review = (args: Args, deps: TaskDeps) =>
       if (args.model !== undefined) sent.model = args.model;
       if (args.thinking !== undefined) sent.thinking = args.thinking;
     } else {
+      const project = yield* Result.await(
+        reviewProject(deps.env, String(data.workerChatId)),
+      );
       Object.assign(sent, {
-        target: worktreeTarget(data.projectId),
+        target: {
+          type: "project",
+          projectId: project,
+          environment: { type: "local" },
+        },
         title: threadTitle("Review", data),
         model: args.model || "gpt-6.1-sol",
         thinking: args.thinking || "medium",
