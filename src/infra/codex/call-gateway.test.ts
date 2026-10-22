@@ -84,6 +84,51 @@ describe("createCallGateway", () => {
     expect(JSON.parse(answer)).toEqual({ outcome, message: "failed" });
   });
 
+  test("loads a Codex caller the app server has unloaded and sends its call again", async () => {
+    const answers = [
+      Result.err({
+        _tag: "ServerRequestRejected",
+        message: `thread not found: ${CODEX}`,
+      }),
+      Result.ok({}),
+      Result.ok({ content: [{ type: "text", text: "sent" }] }),
+    ];
+    const { gateway, requests } = setup({
+      answer: () => answers.shift() ?? Result.ok({}),
+    });
+
+    const answer = await gateway.handle(
+      JSON.stringify({
+        threadId: CODEX,
+        tool: "send_message_to_thread",
+        arguments: { threadId: "worker", prompt: "hi" },
+      }),
+    );
+
+    expect(JSON.parse(answer).outcome).toBe("done");
+    expect(requests.map(({ method, params }) => [method, params])).toEqual([
+      [
+        "mcpServer/tool/call",
+        {
+          threadId: CODEX,
+          server: "codex_app",
+          tool: "send_message_to_thread",
+          arguments: { threadId: "worker", prompt: "hi" },
+        },
+      ],
+      ["thread/resume", { threadId: CODEX, excludeTurns: true }],
+      [
+        "mcpServer/tool/call",
+        {
+          threadId: CODEX,
+          server: "codex_app",
+          tool: "send_message_to_thread",
+          arguments: { threadId: "worker", prompt: "hi" },
+        },
+      ],
+    ]);
+  });
+
   test("sends a Claude thread's calls through one link of that thread", async () => {
     const { gateway, requests, linkCalls, opened } = setup({
       claude: [CLAUDE],

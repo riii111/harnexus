@@ -177,7 +177,24 @@ export const createCallGateway = ({
     return failedCall(answered.error);
   };
 
-  const callApp = (
+  const callApp = async (
+    threadId: string,
+    tool: AppTool,
+    args: Record<string, unknown>,
+  ) => {
+    const called = await callTool(threadId, tool, args);
+    if (called.isOk() || !isUnloaded(called.error, threadId)) return called;
+
+    // The app server forgets an idle Codex thread and then rejects it as a caller; loading it again starts no turn.
+    const loaded = await request(
+      "thread/resume",
+      { threadId, excludeTurns: true },
+      { timeoutMs: CALL_TIMEOUT_MS },
+    );
+    return loaded.isOk() ? callTool(threadId, tool, args) : called;
+  };
+
+  const callTool = (
     threadId: string,
     tool: AppTool,
     args: Record<string, unknown>,
@@ -209,6 +226,11 @@ const failedCall = (error: ServerRequestError): GatewayAnswer => {
       return { outcome: "rejected", message: error.message };
   }
 };
+
+// A rejected call never ran, so it can be sent again once the caller is loaded.
+const isUnloaded = (error: ServerRequestError, threadId: string) =>
+  error._tag === "ServerRequestRejected" &&
+  error.message.includes(`thread not found: ${threadId}`);
 
 // A thread known to exist is never answered as an error, since the caller would then create another.
 const createdAnswer = ({
