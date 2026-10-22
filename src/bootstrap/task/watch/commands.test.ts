@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result } from "better-result";
+import { holdProcessLock } from "../../../runtime/fs.boundary.ts";
 import { saveJson } from "../session.ts";
 import { dryRun, release, watchForever } from "./commands.ts";
 import type { GitHub, PrDetail } from "./github.ts";
@@ -172,7 +173,7 @@ describe("watchForever", () => {
   test("refuses to start while another watch holds the lock", async () => {
     const { env } = await fixture();
     await mkdir(join(env.XDG_STATE_HOME, "taskctl/watch"), { recursive: true });
-    await writeFile(lockPath(env), JSON.stringify({ pid: process.ppid }));
+    expect(holdProcessLock(lockPath(env)).unwrap()).toBe(true);
 
     const ran = await watchForever(
       {
@@ -186,8 +187,8 @@ describe("watchForever", () => {
       async () => {},
     );
 
-    expect(ran.isErr() && ran.error.message).toContain(
-      `another harnexus-task watch runs as pid ${process.ppid}`,
+    expect(ran.isErr() && ran.error.message).toBe(
+      "another harnexus-task watch is running",
     );
   });
 });

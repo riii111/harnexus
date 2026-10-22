@@ -74,15 +74,20 @@ const turn = (fields: Fields = {}): Turn => ({
   ...fields,
 });
 
-const delegatedTurn = (startedAt: Date, answer: string, status = "completed") =>
+// A turn another thread started, as a Claude worker shows it.
+const delegatedTurn = (
+  startedAt: Date,
+  input: unknown,
+  answer: string,
+  source = "reviewer",
+) =>
   turn({
-    status,
     startedAt: Math.floor(startedAt.getTime() / 1000),
     completedAt: Math.floor(startedAt.getTime() / 1000) + 60,
     items: [
       {
         type: "userMessage",
-        codexDelegation: { sourceThreadId: "reviewer" },
+        codexDelegation: { sourceThreadId: source, input: String(input) },
         content: [{ type: "text", text: "<codex_delegation>" }],
       },
       { type: "agentMessage", phase: "final_answer", text: answer },
@@ -259,7 +264,9 @@ describe("runCycle", () => {
     await cycle();
     expect(calls.sent).toHaveLength(1);
 
-    world.turns = [delegatedTurn(NOON, `1. ${PR}#discussion_r1 直す`)];
+    world.turns = [
+      delegatedTurn(NOON, calls.sent[0]?.prompt, `1. ${PR}#discussion_r1 直す`),
+    ];
     later(1);
     await cycle();
 
@@ -277,11 +284,19 @@ describe("runCycle", () => {
     ];
     await cycle();
 
-    world.turns = [delegatedTurn(NOON, `${PR}#discussion_r1 のみ判定`)];
+    world.turns = [
+      delegatedTurn(
+        NOON,
+        calls.sent[0]?.prompt,
+        `${PR}#discussion_r1 のみ判定`,
+      ),
+    ];
     later(1);
     await cycle();
-    const followUpAt = world.now;
-    world.turns = [delegatedTurn(followUpAt, "判定できません"), ...world.turns];
+    world.turns = [
+      delegatedTurn(world.now, calls.sent[1]?.prompt, "判定できません"),
+      ...world.turns,
+    ];
     later(1);
     await cycle();
 
@@ -291,6 +306,42 @@ describe("runCycle", () => {
     );
     expect(String(calls.sent[1]?.prompt)).toContain("discussion_r2");
     expect(String(calls.sent[1]?.prompt)).not.toContain("discussion_r1");
+  });
+
+  test("takes only the turn our message started as its answer", async () => {
+    const { world, calls, cycle, later } = await fixture();
+    world.comments = [comment({})];
+    await cycle();
+    const sent = calls.sent[0]?.prompt;
+    later(1);
+    world.comments = [
+      comment({}),
+      comment({
+        id: "issue:5",
+        kind: "issue_comment",
+        author: "tanaka",
+        url: `${PR}#issuecomment-5`,
+        createdAt: world.now.toISOString(),
+      }),
+    ];
+
+    world.turns = [
+      delegatedTurn(NOON, sent, "unrelated", "coordinator"),
+      delegatedTurn(NOON, "another message", "unrelated"),
+      delegatedTurn(new Date(NOON.getTime() - 60_000), sent, "earlier"),
+    ];
+    await cycle();
+    expect(calls.sent).toHaveLength(1);
+
+    world.turns = [
+      delegatedTurn(NOON, sent, `${PR}#discussion_r1`),
+      ...world.turns,
+    ];
+    later(1);
+    await cycle();
+
+    expect(calls.sent).toHaveLength(2);
+    expect(String(calls.sent[1]?.prompt)).toContain("issuecomment-5");
   });
 
   test("holds CodeRabbit's findings while its review runs and sends a person's comment at once", async () => {
@@ -316,7 +367,9 @@ describe("runCycle", () => {
     expect(String(calls.sent[0]?.prompt)).toContain("[tanaka]");
     expect(String(calls.sent[0]?.prompt)).not.toContain("discussion_r1");
 
-    world.turns = [delegatedTurn(NOON, `${PR}#discussion_r9`)];
+    world.turns = [
+      delegatedTurn(NOON, calls.sent[0]?.prompt, `${PR}#discussion_r9`),
+    ];
     world.summary = summary({ updatedAt: "2026-10-23T02:00:00Z" });
     later(1);
     await cycle();
@@ -487,7 +540,7 @@ describe("runCycle", () => {
     };
     await cycle();
 
-    world.turns = [delegatedTurn(NOON, "ok")];
+    world.turns = [delegatedTurn(NOON, calls.sent[0]?.prompt, "ok")];
     later(1);
     await cycle();
 

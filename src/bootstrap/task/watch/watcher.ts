@@ -240,6 +240,7 @@ const deliver = async (
     const checked = checkAnswer(deps, state, view.turns, pr, now);
     if (!checked) return;
   }
+
   if (state.pending.length === 0 && state.followUp.length === 0) return;
   if (inQuietHours(now, config.quietHours)) return;
   if (busyReason(view, now) !== null) return;
@@ -265,7 +266,7 @@ const checkAnswer = (
   const delivered = state.delivered;
   if (delivered === null) return true;
 
-  const turn = answerTo(turns, delivered.at);
+  const turn = answerTo(turns, delivered);
   if (turn === undefined) {
     if (since(delivered.at, now) < ANSWER_WAIT_MS) return false;
     deps.log({ event: "answer_not_seen", pr });
@@ -333,6 +334,8 @@ const send = async (
   // Compared against the mark, so whatever the outcome the state is written again.
   entry.before = sending;
 
+  // Taken just before the call, so a turn started while the cycle read GitHub is never taken for the answer.
+  const sentAt = iso(deps.now());
   const answer = await deps.callApp(sender, "send_message_to_thread", {
     threadId: link.worker,
     prompt,
@@ -341,7 +344,7 @@ const send = async (
   if (outcome === "done") {
     if (followUp) state.followUp = [];
     else state.pending = [];
-    state.delivered = { at: iso(now), findings, followUp };
+    state.delivered = { at: sentAt, sender, prompt, findings, followUp };
     deps.log({
       event: "sent",
       pr,

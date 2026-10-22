@@ -4,9 +4,12 @@ import {
   chmodSync,
   constants,
   type Dirent,
+  ftruncateSync,
   mkdirSync,
+  openSync,
   renameSync,
   statSync,
+  writeSync,
 } from "node:fs";
 import {
   access,
@@ -381,6 +384,30 @@ export const createEmptyFile = (path: string) =>
     );
     return Result.ok();
   });
+
+// False while another process holds the lock. macOS takes the lock with the open itself, and the kernel drops it when the holder exits, so a crash never leaves it behind.
+// The descriptor is never closed, so the lock lasts as long as the process.
+export const holdProcessLock = (path: string) =>
+  Result.try({
+    try: () => {
+      try {
+        const fd = openSync(path, LOCK_FLAGS, OWNER_ONLY);
+        ftruncateSync(fd);
+        writeSync(fd, `${process.pid}\n`);
+        return true;
+      } catch (cause) {
+        if (isObject(cause) && cause.code === "EAGAIN") return false;
+        throw cause;
+      }
+    },
+    catch: (cause) =>
+      new FileWriteFailed({ path, cause, message: `cannot lock ${path}` }),
+  });
+
+const O_EXLOCK = 0x20;
+
+const LOCK_FLAGS =
+  constants.O_RDWR | constants.O_CREAT | constants.O_NONBLOCK | O_EXLOCK;
 
 // FileSyncFailed means the file is gone but may come back after a crash; a missing file counts as removed.
 export const removeFile = (path: string) =>

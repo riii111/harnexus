@@ -48,16 +48,6 @@ export const signalProcess = (pid: number, signal: Signal) =>
       }),
   });
 
-// Signal 0 delivers nothing and only checks the process; EPERM means it exists under another user.
-export const processExists = (pid: number) =>
-  Result.try({
-    try: () => process.kill(pid, 0),
-    catch: (cause) => cause,
-  }).match({
-    ok: () => true,
-    err: (cause) => isObject(cause) && cause.code === "EPERM",
-  });
-
 export class CommandFailed extends TaggedError("CommandFailed")<{
   command: string;
   cause: unknown;

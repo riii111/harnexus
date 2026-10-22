@@ -15,6 +15,7 @@ import { join } from "node:path";
 import {
   checkAccess,
   createEmptyFile,
+  holdProcessLock,
   listFileNames,
   openLogSink,
   prepareDirectory,
@@ -213,6 +214,18 @@ describe("createEmptyFile", () => {
     expect(first.isOk()).toBe(true);
     expect(again.isErr() && again.error._tag).toBe("FileWriteFailed");
     expect(await readdir(markers)).toEqual(["a.running"]);
+  });
+});
+
+describe("holdProcessLock", () => {
+  test("refuses a second holder while the first keeps the lock, and records the holder", async () => {
+    const path = join(dir, "watch.lock");
+
+    const first = holdProcessLock(path);
+    const second = holdProcessLock(path);
+
+    expect([first.unwrap(), second.unwrap()]).toEqual([true, false]);
+    expect(await readFile(path, "utf8")).toBe(`${process.pid}\n`);
   });
 });
 

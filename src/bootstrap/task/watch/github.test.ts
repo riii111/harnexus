@@ -178,6 +178,112 @@ describe("createGitHub", () => {
     ]).toEqual(["Review completed", true]);
   });
 
+  test("reads every later page of threads, their comments, reviews, comments and checks", async () => {
+    const more = { hasNextPage: true, endCursor: "next" };
+    const last = { hasNextPage: false, endCursor: null };
+    const inline = (id: number, replyTo: number | null) => ({
+      databaseId: id,
+      url: `${PR}#discussion_r${id}`,
+      createdAt: "2026-10-23T00:00:00Z",
+      body: "",
+      path: "a.kt",
+      line: 1,
+      author: { __typename: "User", login: "tanaka" },
+      replyTo: replyTo === null ? null : { databaseId: replyTo },
+    });
+    const plain = (id: number) => ({
+      databaseId: id,
+      url: `${PR}#c${id}`,
+      createdAt: "2026-10-23T00:00:00Z",
+      body: "x",
+      author: { __typename: "User", login: "tanaka" },
+    });
+    const run = (name: string) => ({
+      __typename: "CheckRun",
+      name,
+      conclusion: "FAILURE",
+      isRequired: true,
+    });
+    const pages: Record<string, unknown> = {
+      pr: {
+        reviewThreads: {
+          nodes: [
+            {
+              id: "t2",
+              isResolved: false,
+              comments: { nodes: [inline(2, null)], pageInfo: last },
+            },
+          ],
+          pageInfo: last,
+        },
+        reviews: { nodes: [plain(21)], pageInfo: last },
+        comments: { nodes: [plain(31)], pageInfo: last },
+      },
+      t1: { comments: { nodes: [inline(12, 11)], pageInfo: last } },
+      rollup: { contexts: { nodes: [run("e2e")], pageInfo: last } },
+    };
+    const first = {
+      ...pull,
+      id: "pr",
+      checks: {
+        nodes: [
+          {
+            commit: {
+              statusCheckRollup: {
+                id: "rollup",
+                contexts: { nodes: [run("build")], pageInfo: more },
+              },
+            },
+          },
+        ],
+      },
+      reviewThreads: {
+        nodes: [
+          {
+            id: "t1",
+            isResolved: false,
+            comments: { nodes: [inline(11, null)], pageInfo: more },
+          },
+        ],
+        pageInfo: more,
+      },
+      reviews: { nodes: [plain(20)], pageInfo: more },
+      comments: { nodes: [plain(30)], pageInfo: more },
+    };
+    const asked: unknown[] = [];
+    const github = createGitHub(
+      async () => Result.ok({ status: 0, stdout: "token\n", stderr: "" }),
+      {},
+      async (_token, _query, variables) => {
+        asked.push(variables.id ?? "detail");
+        const data =
+          variables.id === undefined
+            ? { repository: { pullRequest: first } }
+            : { node: pages[String(variables.id)] };
+        return Result.ok({ status: 200, text: JSON.stringify({ data }) });
+      },
+    );
+
+    const detail = (
+      await github.detail("owner", { repo: "org/pay", number: 7 })
+    ).unwrap();
+
+    expect(detail.comments.map((comment) => comment.id)).toEqual([
+      "inline:11",
+      "inline:12",
+      "inline:2",
+      "review:20",
+      "review:21",
+      "issue:30",
+      "issue:31",
+    ]);
+    expect(detail.failedRequired.map((check) => check.name)).toEqual([
+      "build",
+      "e2e",
+    ]);
+    expect(asked).toEqual(["detail", "pr", "t1", "rollup", "pr", "pr"]);
+  });
+
   test("reads every PR of an account in one aliased query", async () => {
     const { github, posts } = fake({
       data: {

@@ -21,6 +21,8 @@ export type Turn = {
   startedAt: number | null;
   completedAt: number | null;
   origin: "owner" | "delegated" | "other";
+  // The thread and message of a delegated turn, which tell our message apart from any other thread's.
+  delegation: { source: string; input: string } | null;
   answer: string;
 };
 
@@ -50,10 +52,12 @@ export const readThread = async (
   caller: string,
   thread: string,
 ): Promise<ThreadView | null> => {
+  // A Codex thread shows a delegation only in the call's output, so outputs are read but cut short.
   const answer = await callApp(caller, "read_thread", {
     threadId: thread,
     turnLimit: 5,
-    includeOutputs: false,
+    includeOutputs: true,
+    maxOutputCharsPerItem: OUTPUT_CHARS,
   });
   const text = resultText(answer);
   if (answer.outcome === "tool_error" && text.includes(NO_THREAD))
@@ -71,6 +75,8 @@ export const readThread = async (
   return { gone: false, active: status === "active", turns };
 };
 
+const OUTPUT_CHARS = 2000;
+
 // What the app answers for a thread that was deleted or never existed.
 const NO_THREAD = "No Codex thread found";
 
@@ -87,33 +93,70 @@ const resultText = (answer: Fields) => {
 
 const turnOf = (turn: Record<string, unknown>): Turn => {
   const items = Array.isArray(turn.items) ? turn.items : [];
+  const delegation = delegationOf(items[0]);
   return {
     status: String(turn.status ?? ""),
     startedAt: numberOrNull(turn.startedAt),
     completedAt: numberOrNull(turn.completedAt),
-    origin: originOf(items),
+    origin:
+      delegation !== null
+        ? "delegated"
+        : isObject(items[0]) && items[0].type === "userMessage"
+          ? "owner"
+          : "other",
+    delegation,
     answer: answerOf(items),
   };
 };
 
 // A Claude thread shows a message from another thread as a user message carrying the delegation, and a Codex thread as the output of the call that sent it.
-const originOf = (items: unknown[]): Turn["origin"] => {
-  const first = items[0];
-  if (!isObject(first)) return "other";
-  if (first.type === "functionCallOutput")
-    return DELEGATING.has(String(first.name)) ? "delegated" : "other";
-  if (first.type !== "userMessage") return "other";
-  if (isObject(first.codexDelegation)) return "delegated";
+const delegationOf = (first: unknown) => {
+  if (!isObject(first)) return null;
 
-  const content = Array.isArray(first.content) ? first.content : [];
-  const delegated = content.some(
-    (part) =>
-      isObject(part) &&
-      typeof part.text === "string" &&
-      part.text.trimStart().startsWith("<codex_delegation>"),
-  );
-  return delegated ? "delegated" : "owner";
+  const carried = first.codexDelegation;
+  if (
+    isObject(carried) &&
+    typeof carried.sourceThreadId === "string" &&
+    typeof carried.input === "string"
+  )
+    return { source: carried.sourceThreadId, input: carried.input };
+
+  if (first.type === "functionCallOutput" && DELEGATING.has(String(first.name)))
+    return parseDelegation(isObject(first.output) ? first.output.text : null);
+  if (first.type === "userMessage" && Array.isArray(first.content))
+    return parseDelegation(
+      first.content.find(
+        (part) => isObject(part) && typeof part.text === "string",
+      )?.text,
+    );
+  return null;
 };
+
+// The app writes the delegation as escaped XML, which a cut output may end inside.
+const parseDelegation = (text: unknown) => {
+  if (
+    typeof text !== "string" ||
+    !text.trimStart().startsWith("<codex_delegation>")
+  )
+    return null;
+
+  const source = /<source_thread_id>\s*([^<\s]+)\s*<\/source_thread_id>/.exec(
+    text,
+  )?.[1];
+  const input = /<input>([\s\S]*?)(?:<\/input>|$)/.exec(text)?.[1];
+  return {
+    source: source ?? "",
+    input: unescapeXml(input ?? ""),
+  };
+};
+
+const unescapeXml = (text: string) =>
+  text
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&amp;", "&");
 
 const DELEGATING = new Set(["send_message_to_thread", "create_thread"]);
 
@@ -149,18 +192,27 @@ export const busyReason = (
 // A worker the owner just talked to may still be in that conversation, so a message waits this long after the owner's turn.
 const OWNER_GRACE_MS = 5 * 60_000;
 
-// The first turn a message from another thread started after ours was sent; the read lists turns newest first.
-export const answerTo = (turns: readonly Turn[], sentAt: string) => {
-  const after = Date.parse(sentAt) / 1000 - CLOCK_SKEW_SECONDS;
+// The turn our message started: sent from our thread with our text, no earlier than we sent it. The read lists turns newest first.
+export const answerTo = (
+  turns: readonly Turn[],
+  sent: { at: string; sender: string; prompt: string },
+) => {
+  const after = Date.parse(sent.at) / 1000 - CLOCK_SKEW_SECONDS;
   return turns
     .filter(
       (turn) =>
-        turn.origin === "delegated" &&
+        turn.delegation !== null &&
+        turn.delegation.source === sent.sender &&
+        isPromptOf(turn.delegation.input, sent.prompt) &&
         turn.startedAt !== null &&
         turn.startedAt >= after,
     )
     .at(-1);
 };
+
+// A Codex thread's copy may be cut short, so a nonempty start of the prompt counts as the prompt.
+const isPromptOf = (input: string, prompt: string) =>
+  input.trim() !== "" && prompt.startsWith(input.trimEnd());
 
 // The app stamps turns in whole seconds.
 const CLOCK_SKEW_SECONDS = 5;

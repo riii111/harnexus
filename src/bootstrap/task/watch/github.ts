@@ -115,6 +115,82 @@ export const createGitHub = (
       return Result.ok(body.data);
     });
 
+  // Every page of every list, so a PR with more items than one page holds still has each of them read.
+  const readAllPages = (
+    account: string,
+    ref: PrRef,
+    pull: Record<string, unknown>,
+  ) =>
+    Result.gen(async function* () {
+      const nodes = (page: Page, owner: unknown, connection: unknown) =>
+        allNodes(account, ref, page, owner, connection);
+
+      const threads = yield* Result.await(
+        nodes("reviewThreads", pull.id, pull.reviewThreads),
+      );
+      for (const thread of threads)
+        thread.comments = {
+          nodes: yield* Result.await(
+            nodes("threadComments", thread.id, thread.comments),
+          ),
+        };
+
+      const rollup = lastCommit(pull.checks).statusCheckRollup;
+      const contexts = isObject(rollup)
+        ? yield* Result.await(nodes("contexts", rollup.id, rollup.contexts))
+        : [];
+
+      return Result.ok({
+        ...pull,
+        reviewThreads: { nodes: threads },
+        reviews: {
+          nodes: yield* Result.await(nodes("reviews", pull.id, pull.reviews)),
+        },
+        comments: {
+          nodes: yield* Result.await(nodes("comments", pull.id, pull.comments)),
+        },
+        checks: {
+          nodes: [
+            {
+              commit: { statusCheckRollup: { contexts: { nodes: contexts } } },
+            },
+          ],
+        },
+      });
+    });
+
+  const allNodes = (
+    account: string,
+    ref: PrRef,
+    page: Page,
+    owner: unknown,
+    first: unknown,
+  ) =>
+    Result.gen(async function* () {
+      const nodes = nodesOf(first);
+      let info = pageInfoOf(first);
+      for (let read = 1; info.next !== null; read += 1) {
+        if (read >= MAX_PAGES)
+          return fail(
+            `${ref.repo}#${ref.number} has more than ${MAX_PAGES} pages of ${page}`,
+          );
+
+        const data = yield* Result.await(
+          query(account, PAGE_QUERIES[page], {
+            id: owner,
+            after: info.next,
+            ...(page === "contexts" && { number: ref.number }),
+          }),
+        );
+        const connection = isObject(data.node)
+          ? data.node[PAGES[page].field]
+          : null;
+        nodes.push(...nodesOf(connection));
+        info = pageInfoOf(connection);
+      }
+      return Result.ok(nodes);
+    });
+
   return {
     summaries: (account, refs) =>
       Result.gen(async function* () {
@@ -140,7 +216,9 @@ export const createGitHub = (
         const pull = pullOf(data.repository);
         if (pull === null)
           return fail(`${ref.repo}#${ref.number} is not visible to ${account}`);
-        return Result.ok(detailOf(pull));
+        return Result.ok(
+          detailOf(yield* Result.await(readAllPages(account, ref, pull))),
+        );
       }),
 
     openPulls: (account, repo) =>
@@ -201,22 +279,73 @@ const summaryQuery = (refs: readonly PrRef[]) => {
   };
 };
 
+const COMMENT_NODE = `databaseId url createdAt body path line originalLine
+  author { __typename login } replyTo { databaseId }`;
+
+const PAGE_INFO = "pageInfo { hasNextPage endCursor }";
+
+const THREAD_NODE = `id isResolved comments(first: 100) { nodes { ${COMMENT_NODE} } ${PAGE_INFO} }`;
+
+const PLAIN_NODE = "databaseId url createdAt body author { __typename login }";
+
+const CONTEXT_NODE = `__typename
+  ... on StatusContext { context state targetUrl isRequired(pullRequestNumber: $number) }
+  ... on CheckRun { name conclusion detailsUrl isRequired(pullRequestNumber: $number) }`;
+
 const DETAIL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { pullRequest(number: $number) {
-    url title ${SUMMARY_FIELDS}
-    checks: commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
-      __typename
-      ... on StatusContext { context state targetUrl isRequired(pullRequestNumber: $number) }
-      ... on CheckRun { name conclusion detailsUrl isRequired(pullRequestNumber: $number) }
-    } } } } } }
-    reviewThreads(first: 100) { nodes { isResolved comments(first: 100) { nodes {
-      databaseId url createdAt body path line originalLine
-      author { __typename login } replyTo { databaseId }
+    id url title ${SUMMARY_FIELDS}
+    checks: commits(last: 1) { nodes { commit { statusCheckRollup {
+      id contexts(first: 100) { nodes { ${CONTEXT_NODE} } ${PAGE_INFO} }
     } } } }
-    reviews(last: 100) { nodes { databaseId url createdAt body author { __typename login } } }
-    comments(last: 100) { nodes { databaseId url createdAt body author { __typename login } } }
+    reviewThreads(first: 100) { nodes { ${THREAD_NODE} } ${PAGE_INFO} }
+    reviews(first: 100) { nodes { ${PLAIN_NODE} } ${PAGE_INFO} }
+    comments(first: 100) { nodes { ${PLAIN_NODE} } ${PAGE_INFO} }
   } }
 }`;
+
+// Each later page is read through the node that owns the list.
+const PAGES = {
+  reviewThreads: {
+    on: "PullRequest",
+    field: "reviewThreads",
+    node: THREAD_NODE,
+  },
+  reviews: { on: "PullRequest", field: "reviews", node: PLAIN_NODE },
+  comments: { on: "PullRequest", field: "comments", node: PLAIN_NODE },
+  threadComments: {
+    on: "PullRequestReviewThread",
+    field: "comments",
+    node: COMMENT_NODE,
+  },
+  contexts: { on: "StatusCheckRollup", field: "contexts", node: CONTEXT_NODE },
+} as const;
+
+type Page = keyof typeof PAGES;
+
+const PAGE_QUERIES = Object.fromEntries(
+  Object.entries(PAGES).map(([page, { on, field, node }]) => [
+    page,
+    `query($id: ID!, $after: String!${page === "contexts" ? ", $number: Int!" : ""}) {
+  node(id: $id) { ... on ${on} { ${field}(first: 100, after: $after) { nodes { ${node} } ${PAGE_INFO} } } }
+}`,
+  ]),
+) as Record<Page, string>;
+
+// A bound on the reads for one PR, so a list that never ends cannot keep the watch reading.
+const MAX_PAGES = 50;
+
+const pageInfoOf = (connection: unknown) => {
+  const info = isObject(connection) ? connection.pageInfo : null;
+  return {
+    next:
+      isObject(info) &&
+      info.hasNextPage === true &&
+      typeof info.endCursor === "string"
+        ? info.endCursor
+        : null,
+  };
+};
 
 const OPEN_QUERY = `query($search: String!) {
   search(query: $search, type: ISSUE, first: 50) { nodes { ... on PullRequest { number } } }

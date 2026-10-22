@@ -1,14 +1,9 @@
 import { dirname } from "node:path";
 import { Result } from "better-result";
 import {
+  holdProcessLock,
   prepareDirectory,
-  readTextFileIfExists,
-  writeFileAtomic,
-  writeFileExclusive,
 } from "../../../runtime/fs.boundary.ts";
-import { parseJson } from "../../../runtime/json.boundary.ts";
-import { isObject } from "../../../runtime/object.ts";
-import { processExists } from "../../../runtime/process.boundary.ts";
 import { type Fields, fail, type TaskFailed } from "../format.ts";
 import { type Env, ioFailed, NAME } from "../request.ts";
 import type { SaveJson } from "../session.ts";
@@ -47,30 +42,19 @@ export const watchForever = (
 
 const RETRY_MS = 60_000;
 
-// One watch at a time, so two never send the same event; a lock left by a watch that died is taken over.
+// One watch at a time, so two never send the same event.
 const acquireLock = (env: Env): Promise<Result<void, TaskFailed>> =>
   Result.gen(async function* () {
     const path = lockPath(env);
-    yield* Result.await(io(prepareDirectory(dirname(path))));
+    yield* Result.await(prepareDirectory(dirname(path)).then(io));
 
-    const content = JSON.stringify({ pid: process.pid });
-    if (yield* Result.await(io(writeFileExclusive(path, content))))
-      return Result.ok();
-
-    const held = parseJson(
-      (yield* Result.await(io(readTextFileIfExists(path)))) ?? "",
-    );
-    const pid = held.isOk() && isObject(held.value) ? held.value.pid : null;
-    if (typeof pid === "number" && pid !== process.pid && processExists(pid))
-      return fail(`another ${NAME} watch runs as pid ${pid}`);
-
-    yield* Result.await(io(writeFileAtomic(path, content)));
-    return Result.ok();
+    const held = yield* io(holdProcessLock(path));
+    return held ? Result.ok() : fail(`another ${NAME} watch is running`);
   });
 
-const io = async <T>(
-  pending: Promise<Result<T, { message: string; cause?: unknown }>>,
-): Promise<Result<T, TaskFailed>> => (await pending).mapError(ioFailed);
+const io = <T>(
+  result: Result<T, { message: string; cause?: unknown }>,
+): Result<T, TaskFailed> => result.mapError(ioFailed);
 
 // Reads every comment as if the PR had just been linked, so the verdicts can be checked against GitHub before anything is sent.
 export const dryRun = (

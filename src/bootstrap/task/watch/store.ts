@@ -79,6 +79,8 @@ export type WatchState = {
 
 export type Delivered = {
   at: string;
+  sender: string;
+  prompt: string;
   findings: Finding[];
   followUp: boolean;
 };
