@@ -143,9 +143,14 @@ describe("classify", () => {
       expected: "empty review",
     },
     {
-      name: "a comment in a resolved thread",
-      fields: { resolved: true },
-      expected: "resolved thread",
+      name: "a CodeRabbit finding in a resolved thread",
+      fields: { author: "coderabbitai[bot]", resolved: true },
+      expected: "resolved CodeRabbit thread",
+    },
+    {
+      name: "a reviewer's reply in a resolved thread",
+      fields: { reply: true, resolved: true },
+      expected: "notified",
     },
   ] satisfies {
     name: string;

@@ -41,12 +41,13 @@ const ignoredReason = (
     if (comment.kind === "inline" && comment.reply) return "CodeRabbit reply";
     if (comment.kind === "review" && !comment.body.includes(ACTIONABLE))
       return "CodeRabbit review without actionable comments";
+    // A CodeRabbit finding resolved before the watch read it was already handled; a person's reply there still reopens the talk.
+    if (comment.kind === "inline" && comment.resolved)
+      return "resolved CodeRabbit thread";
   }
 
   if (comment.kind === "review" && comment.body.trim() === "")
     return "empty review";
-  // A thread resolved before the watch read it was already handled.
-  if (comment.kind === "inline" && comment.resolved) return "resolved thread";
   return null;
 };
 
