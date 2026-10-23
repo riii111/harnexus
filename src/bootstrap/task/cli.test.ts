@@ -688,6 +688,50 @@ describe("harnexus-task templates", () => {
     );
   });
 
+  test("splits the anchor before filling and resolves beside a symlinked template's real file", async () => {
+    const { root, env, harnexus, data, launch } = await launchFixture();
+    data.taskId = "#42";
+    const source = join(root, "source");
+    await mkdir(join(source, "notes"), { recursive: true });
+    await writeFile(join(source, "notes/#42.md"), "");
+    await writeFile(
+      join(source, "worker.md"),
+      "[note](notes/{task_id}.md#{task_id}) [id]({task_id})\n",
+    );
+    await mkdir(join(root, "linked"));
+    const template = join(root, "linked/worker.md");
+    await symlink(join(source, "worker.md"), template);
+    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
+      templates: { worker: template },
+    });
+
+    const sent = await launch([], [created("w1", "claude-sonnet-5-5")]);
+
+    expect([sent.code, sent.err]).toEqual([0, ""]);
+    expect(harnexus.calls.at(-1)?.arguments.prompt).toBe(
+      `[note](${join(source, "notes/#42.md")}##42) [id](#42)\n`,
+    );
+  });
+
+  test("refuses a link to a path the app would cut at a space", async () => {
+    const { root, env, harnexus, launch } = await launchFixture();
+    const spaced = join(root, "My Skills");
+    await mkdir(spaced);
+    await writeFile(join(spaced, "SKILL.md"), "");
+    await symlink(spaced, join(root, "skills"));
+    const template = join(root, "worker.md");
+    await writeFile(template, "[$s](skills/SKILL.md)\n");
+    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
+      templates: { worker: template },
+    });
+
+    const refused = await launch();
+
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain("whose path has a space or parenthesis");
+    expect(harnexus.calls).toEqual([]);
+  });
+
   test.each([
     {
       name: "a missing config",
@@ -712,7 +756,8 @@ describe("harnexus-task templates", () => {
     {
       name: "a missing template",
       config: { templates: { worker: "/nonexistent/worker.md" } },
-      error: "the worker template /nonexistent/worker.md is not a file",
+      error:
+        "the worker template /nonexistent/worker.md: cannot read /nonexistent/worker.md",
     },
   ])("refuses $name before sending", async ({ config, error }) => {
     const { env, harnexus, launch } = await launchFixture();
@@ -739,7 +784,7 @@ describe("harnexus-task templates", () => {
 
     expect(refused.code).toBe(1);
     expect(refused.err).toContain(
-      `${template} links to ${join(root, "skills/gone/SKILL.md")}, which is not a file`,
+      `the worker template ${template}: links to ${join(root, "skills/gone/SKILL.md")}, which is not a file`,
     );
     expect(harnexus.calls).toEqual([]);
   });

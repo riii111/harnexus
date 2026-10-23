@@ -139,10 +139,10 @@ Write `{{` and `}}` for literal braces; any other brace or an unknown name is an
 - Worker: `task_id`, `document_refs` (one `- ` line per reference) and `completion_target` (`implementation`, `draft_pr` or `merge`).
 - Reviewer: `task_id`, `document_refs`, `worker_ai` (`Claude` or `Codex`), `worker_chat_id`, `checkout`, `base`, `head` and `pr_url` (`null` without a PR).
 
-A relative Markdown link target is resolved against the template's folder and replaced with the file's real path, and a missing file is an error.
+A relative Markdown link target is resolved against the folder of the template's real file and replaced with that file's real path; a missing file, or a path with a space or parenthesis, is an error.
 This is how a template attaches a skill, since the app attaches a skill named as `[$name](/absolute/path/SKILL.md)`.
-Fields may appear in such a target, as in `reply-{worker_ai}.md`.
-Absolute paths, URLs and `#` anchors are left as written, and links inside the request's values are never resolved.
+Fields may appear inside such a target, as in `reply-{worker_ai}.md`.
+Absolute paths, URLs, `#` anchors and targets that open with a field, such as `{pr_url}`, are left to their values, and links inside the request's values are never resolved.
 
 ```md
 Task {task_id}. Go as far as {completion_target}.
