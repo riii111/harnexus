@@ -202,6 +202,8 @@ Configure it in `~/.config/harnexus/pr-watch.json`:
   `actionableReview`, `noActionable` and `severity` are optional: review bodies without the first are skipped, a PR comment with the second is checked against the findings, and the first group of `severity` labels each inline finding.
   A bot's replies and its findings resolved before the watch read them are never reported.
 - `ignore`: comments to skip by `author`, optionally narrowed by `kind` (`inline`, `review` or `issue_comment`) and `bodyIncludes`.
+- `instructions`: text put at the top of every message, such as the skill your workers follow to fix and report, as in `"$my-worker\nReport as my-worker says."`.
+  Without it, a message says only what happened, with links to read it on GitHub, and asks for each item's link in the answer, which the watch checks to ask again about any left out.
 - `pollIntervalSeconds` (60), `idleIntervalSeconds` (600) after `idleAfterHours` (72) without changes, and `quietHours` (`{"start": "22:00", "end": "05:00"}`, or `null`).
 
 To see what would be sent without sending anything, run `harnexus-task watch --dry-run`, optionally with `--pr <URL>` for each PR to check.

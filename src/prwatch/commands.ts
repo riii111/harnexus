@@ -153,7 +153,7 @@ const reportOf = (
     prompt:
       detail.isDraft || events.length === 0
         ? null
-        : messageOf(detail.url, events),
+        : messageOf(detail.url, events, config.instructions),
   };
 };
 

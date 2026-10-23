@@ -224,7 +224,9 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
 
 describe("runCycle", () => {
   test("sends a completed CodeRabbit review with its new findings in one message from the registered chat", async () => {
-    const { world, calls, cycle, state } = await fixture();
+    const { world, calls, cycle, state } = await fixture({
+      instructions: "$task-worker",
+    });
     world.comments = [
       comment({}),
       comment({ id: "inline:2", reply: true, url: `${PR}#discussion_r2` }),

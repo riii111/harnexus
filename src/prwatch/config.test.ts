@@ -32,6 +32,16 @@ describe("loadConfig", () => {
     expect(config.unwrap().reviewBots).toEqual([PRESETS.coderabbit]);
   });
 
+  test("adds no instructions unless the config gives them, trimmed", async () => {
+    const none = await configWith({});
+    const given = await configWith({ instructions: " $task-worker\n" });
+    const blank = await configWith({ instructions: "  " });
+
+    expect(none.unwrap().instructions).toBeNull();
+    expect(given.unwrap().instructions).toBe("$task-worker");
+    expect(blank.isErr()).toBe(true);
+  });
+
   test("takes a preset by name and fills what a described bot leaves out", async () => {
     const config = await configWith({
       reviewBots: [
