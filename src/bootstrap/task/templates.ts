@@ -53,6 +53,9 @@ const targets = (template: string) =>
       : [{ raw: match[1] ?? "", start: span[0], end: span[1] }];
   });
 
+// A code span: a backtick run, not escaped, closed by a run of the same length before any blank line.
+const SPAN = /(?<![`\\])(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)/g;
+
 // Fenced code blocks and code spans, whose link-like text is an example to show rather than a link.
 const codeRanges = (template: string) => {
   const ranges: [number, number][] = [];
@@ -78,7 +81,7 @@ const codeRanges = (template: string) => {
   for (const [start, end] of ranges)
     outside =
       outside.slice(0, start) + " ".repeat(end - start) + outside.slice(end);
-  for (const span of outside.matchAll(/(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g))
+  for (const span of outside.matchAll(SPAN))
     ranges.push([span.index, span.index + span[0].length]);
   return ranges;
 };

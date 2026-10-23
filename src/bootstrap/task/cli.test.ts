@@ -715,10 +715,20 @@ describe("harnexus-task templates", () => {
     );
   });
 
-  test("refuses a missing link outside the code it follows", async () => {
+  test.each([
+    { name: "a code span", text: "`[a](b.md)` then [c](missing.md)\n" },
+    {
+      name: "a lone backtick a blank line before another",
+      text: "Type a ` to start.\n\n[c](missing.md)\n\nThen `x`.\n",
+    },
+    {
+      name: "an escaped backtick",
+      text: "Write \\` then [c](missing.md) and `x`.\n",
+    },
+  ])("refuses a missing link after $name", async ({ text }) => {
     const { root, env, harnexus, launch } = await launchFixture();
     const template = join(root, "worker.md");
-    await writeFile(template, "`[a](b.md)` then [c](missing.md)\n");
+    await writeFile(template, text);
     await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
       templates: { worker: template },
     });
