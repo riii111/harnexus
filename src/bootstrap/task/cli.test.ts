@@ -722,6 +722,10 @@ describe("harnexus-task templates", () => {
       text: "Type a ` to start.\n\n[c](missing.md)\n\nThen `x`.\n",
     },
     {
+      name: "a lone backtick a CRLF blank line before another",
+      text: "Type a ` to start.\r\n\r\n[c](missing.md)\r\n\r\nThen `x`.\r\n",
+    },
+    {
       name: "an escaped backtick",
       text: "Write \\` then [c](missing.md) and `x`.\n",
     },

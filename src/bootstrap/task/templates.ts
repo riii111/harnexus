@@ -54,7 +54,8 @@ const targets = (template: string) =>
   });
 
 // A code span: a backtick run, not escaped, closed by a run of the same length before any blank line.
-const SPAN = /(?<![`\\])(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)/g;
+const SPAN =
+  /(?<![`\\])(`+)(?!`)(?:(?!\r?\n[ \t]*\r?\n)[\s\S])*?(?<!`)\1(?!`)/g;
 
 // Fenced code blocks and code spans, whose link-like text is an example to show rather than a link.
 const codeRanges = (template: string) => {
