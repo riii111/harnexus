@@ -11,11 +11,9 @@ import { createGitHub } from "../../prwatch/github.ts";
 import {
   githubPr,
   linkedChat,
-  listLinks,
   loadSender,
   recordLink,
   recordSender,
-  samePr,
 } from "../../prwatch/store.ts";
 import type { WatchPaths } from "../../prwatch/watcher.ts";
 import { isObject } from "../../runtime/object.ts";
@@ -281,25 +279,29 @@ const name = (args: Args, deps: TaskDeps) =>
         : {
             renameError: `name_thread was not applied: ${JSON.stringify(answer)}`,
           }),
-      ...(yield* Result.await(deliveryWarning(deps, worker))),
+      ...(await deliveryWarning(deps, worker)),
     });
   });
 
 // A linked chat nothing can send to is told so, since the link alone would read as watched.
-const deliveryWarning = (deps: TaskDeps, worker: string) =>
-  Result.gen(async function* () {
-    if ((await reviewerOfWorker(deps.env, worker)) !== null)
-      return Result.ok({});
-    const sender = yield* Result.await(loadSender(watchPaths(deps.env).state));
-    return Result.ok(
-      sender !== null && sender !== worker
-        ? {}
-        : {
-            warning:
-              "nothing can send to this chat yet: run harnexus-task watch --sender in another chat",
-          },
-    );
-  });
+// Never fails, since the link it reports on is already made.
+const deliveryWarning = async (
+  deps: TaskDeps,
+  worker: string,
+): Promise<{ warning?: string }> => {
+  if ((await reviewerOfWorker(deps.env, worker)) !== null) return {};
+  const sender = await loadSender(watchPaths(deps.env).state);
+  if (sender.isErr())
+    return {
+      warning: `cannot read the registered sender: ${sender.error.message}`,
+    };
+  return sender.value !== null && sender.value !== worker
+    ? {}
+    : {
+        warning:
+          "nothing can send to this chat yet: run harnexus-task watch --sender in another chat",
+      };
+};
 
 const NOT_LINKABLE =
   "the PR watch needs the URL https://github.com/<owner>/<repo>/pull/<number>";
@@ -310,16 +312,16 @@ const linkPr = (deps: TaskDeps, value: string, worker: string) =>
     const pr = githubPr(value);
     if (pr === null) return Result.ok(null);
     const root = watchPaths(deps.env).state;
-    const links = yield* Result.await(listLinks(root));
-    const known = links.find(
-      (link) => link.worker === worker && samePr(link, pr),
-    );
+    const current = yield* Result.await(linkedChat(root, pr));
     yield* Result.await(
       recordLink(root, {
         ...pr,
         worker,
         // Naming the same PR again keeps its start, so comments made since are still reported.
-        linkedAt: known?.linkedAt ?? new Date().toISOString(),
+        linkedAt:
+          current?.worker === worker
+            ? current.linkedAt
+            : new Date().toISOString(),
       }),
     );
     return Result.ok(pr.url);
@@ -394,7 +396,7 @@ const linkOnly = (deps: TaskDeps, value: string) =>
     return Result.ok<Fields>({
       threadId: worker,
       watched,
-      ...(yield* Result.await(deliveryWarning(deps, worker))),
+      ...(await deliveryWarning(deps, worker)),
     });
   });
 

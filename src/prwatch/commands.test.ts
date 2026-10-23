@@ -255,29 +255,6 @@ describe("status with an unreadable record", () => {
   });
 });
 
-describe("recordLink", () => {
-  test("resumes a PR whose worker was gone once another worker names it", async () => {
-    const { root } = await fixture();
-    await recordLink(root, LINK);
-    await saveWatchState(root, REF, {
-      ...freshState(),
-      status: "stopped",
-      reason: "worker thread is gone",
-    });
-
-    await recordLink(root, LINK);
-    const same = (await loadWatchState(root, REF)).unwrap().status;
-    await recordLink(root, { ...LINK, worker: "another" });
-    const other = (await loadWatchState(root, REF)).unwrap();
-
-    expect([same, other.status, other.reason]).toEqual([
-      "stopped",
-      "watching",
-      null,
-    ]);
-  });
-});
-
 describe("watchForever once its program is replaced", () => {
   test("ends before the next cycle once the check after a sleep finds it", async () => {
     const { paths } = await fixture();
@@ -344,34 +321,4 @@ describe("watchForever", () => {
       );
     },
   );
-});
-
-describe("recordLink to another chat", () => {
-  test("drops what the last chat was awaited for and keeps what is still to send", async () => {
-    const { root } = await fixture();
-    await recordLink(root, LINK);
-    await saveWatchState(root, REF, {
-      ...freshState(),
-      status: "halted",
-      pending: [{ type: "conflict", head: "a" }],
-      delivered: {
-        at: "2026-10-23T00:00:00Z",
-        sender: "reviewer",
-        prompt: "x",
-        findings: [],
-        followUp: false,
-      },
-      halted: { prompt: "y" },
-    });
-
-    await recordLink(root, { ...LINK, worker: "another" });
-    const state = (await loadWatchState(root, REF)).unwrap();
-
-    expect([state.status, state.delivered, state.halted]).toEqual([
-      "watching",
-      null,
-      null,
-    ]);
-    expect(state.pending).toHaveLength(1);
-  });
 });

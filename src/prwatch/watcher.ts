@@ -77,9 +77,14 @@ const openEntry = (deps: WatchDeps, config: WatchConfig, link: PrLink) =>
 
     const state = loaded.value;
     if (isOver(state)) deps.over?.add(keyOf(link));
-    if (FINISHED.includes(state.status)) return Result.ok(null);
-
     const before = structuredClone(state);
+    handOver(deps, state, link);
+    if (FINISHED.includes(state.status)) {
+      if (!jsonEqual(before, state))
+        yield* Result.await(saveWatchState(deps.paths.state, link, state));
+      return Result.ok(null);
+    }
+
     const account = config.repositories[link.repo.toLowerCase()]?.account;
     if (account === undefined) {
       state.reason = "repository is not configured";
@@ -90,7 +95,30 @@ const openEntry = (deps: WatchDeps, config: WatchConfig, link: PrLink) =>
     return Result.ok<Entry | null>({ link, state, account, before });
   });
 
-// A halted PR waits for the owner to release it; the others are over for good.
+// A PR linked to another chat drops what it awaited from the last one, which the new chat never answers, and a watch stopped or halted for the last chat runs again.
+// A state that has never named its chat takes the linked one as its own.
+const handOver = (deps: WatchDeps, state: WatchState, link: PrLink) => {
+  if (state.worker === link.worker) return;
+  const previous = state.worker;
+  state.worker = link.worker;
+  if (previous === null || state.status === "ended") return;
+
+  state.followUp = [];
+  state.delivered = null;
+  state.halted = null;
+  if (state.status === "stopped" || state.status === "halted") {
+    state.status = "watching";
+    state.reason = null;
+  }
+  deps.log({
+    event: "handed_over",
+    pr: link.url,
+    from: previous,
+    to: link.worker,
+  });
+};
+
+// A halted PR waits for the owner to release it or another chat to take it; the others are over for good.
 const FINISHED: readonly WatchState["status"][] = [
   "ended",
   "stopped",

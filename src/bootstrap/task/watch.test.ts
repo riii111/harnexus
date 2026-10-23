@@ -869,4 +869,58 @@ describe("runCycle", () => {
       ["sender", "worker"],
     ]);
   });
+
+  test("hands a PR named from another chat over to it, dropping the answer awaited from the last chat", async () => {
+    const { world, calls, cycle, state, later, paths, logs } = await fixture();
+    world.comments = [comment({})];
+    world.turns = [turn()];
+    await cycle();
+    expect((await state()).delivered?.sender).toBe("reviewer");
+
+    await recordLink(paths.state, {
+      repo: "org/pay",
+      number: 7,
+      url: PR,
+      worker: "next",
+      linkedAt: LINKED_AT,
+    });
+    world.fallback = "sender";
+    world.comments = [
+      comment({}),
+      comment({ id: "inline:9", author: "tanaka", url: `${PR}#discussion_r9` }),
+    ];
+    later(1);
+    await cycle();
+
+    expect(logs.some((log) => log.event === "handed_over")).toBe(true);
+    expect(calls.sent.map((sent) => [sent.caller, sent.threadId])).toEqual([
+      ["reviewer", "worker"],
+      ["sender", "next"],
+    ]);
+  });
+
+  test("resumes a PR stopped for a gone chat once another chat takes it", async () => {
+    const { world, calls, cycle, state, later, paths } = await fixture();
+    world.gone = true;
+    world.comments = [comment({})];
+    await cycle();
+    expect((await state()).status).toBe("stopped");
+
+    await recordLink(paths.state, {
+      repo: "org/pay",
+      number: 7,
+      url: PR,
+      worker: "next",
+      linkedAt: LINKED_AT,
+    });
+    world.gone = false;
+    world.fallback = "sender";
+    later(1);
+    await cycle();
+
+    expect([(await state()).status, calls.sent.at(-1)?.threadId]).toEqual([
+      "watching",
+      "next",
+    ]);
+  });
 });
