@@ -32,15 +32,16 @@ export const watchForever = (
 
     const cycleDeps = { ...deps, over: deps.over ?? new Set<string>() };
     for (;;) {
-      const cycle = await runCycle(cycleDeps);
-      if (cycle.isErr())
-        deps.log({ event: "cycle_failed", error: cycle.error.message });
+      // Checked before each cycle, so no cycle runs on a program replaced while the watch slept.
       if (await replaced()) {
         deps.log({ event: "replaced" });
         return fail(
           "the watch's program was replaced; exiting to be restarted",
         );
       }
+      const cycle = await runCycle(cycleDeps);
+      if (cycle.isErr())
+        deps.log({ event: "cycle_failed", error: cycle.error.message });
       await sleep(
         cycle.isOk() ? cycle.value.pollIntervalSeconds * 1000 : RETRY_MS,
       );

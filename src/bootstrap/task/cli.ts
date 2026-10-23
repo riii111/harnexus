@@ -15,7 +15,6 @@ import {
   samePr,
 } from "../../prwatch/store.ts";
 import type { WatchPaths } from "../../prwatch/watcher.ts";
-import { statFileIfExists } from "../../runtime/fs.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 import { runCommand } from "../../runtime/process.boundary.ts";
 import { type OptionTypes, parseOptions } from "./args.boundary.ts";
@@ -49,6 +48,7 @@ import {
   saveJson,
   stateRoot,
 } from "./session.ts";
+import { programWatch } from "./watch-program.ts";
 import { codexWorkers } from "./watch-worker.ts";
 
 export type TaskDeps = {
@@ -296,6 +296,16 @@ const watch = async (args: Args, deps: TaskDeps) => {
   if (args.status) return status(paths.state);
   const github = createGitHub(deps.runGit, deps.env);
   if (args.dryRun) return dryRun({ paths, github }, args.prs);
+  const log = (entry: Fields) =>
+    deps.print(
+      `${JSON.stringify({ time: new Date().toISOString(), ...entry })}\n`,
+    );
+  // Only a compiled harnexus-task is its own program; run from source, the program is Bun.
+  const replaced = await programWatch(
+    process.execPath,
+    Bun.main.startsWith("/$bunfs/"),
+  );
+  if (replaced === null) log({ event: "replace_check_off" });
   return watchForever(
     {
       paths,
@@ -304,26 +314,11 @@ const watch = async (args: Args, deps: TaskDeps) => {
         callApp(deps.env, caller, tool, sent),
       ),
       now: () => new Date(),
-      log: (entry) =>
-        deps.print(
-          `${JSON.stringify({ time: new Date().toISOString(), ...entry })}\n`,
-        ),
+      log,
     },
     (ms) => Bun.sleep(ms),
-    await programReplaced(process.execPath),
+    replaced ?? undefined,
   );
-};
-
-// install:task swaps the file at the program's path, so a change there means a newer harnexus-task is installed.
-// The watch then exits non-zero, which launchd's KeepAlive answers by starting the new one.
-const programReplaced = async (path: string) => {
-  const started = await statFileIfExists(path);
-  const before = started.isOk() ? started.value : null;
-  return async () => {
-    if (before === null) return false;
-    const now = await statFileIfExists(path);
-    return now.isOk() && !jsonEqual(now.value, before);
-  };
 };
 
 const COMMANDS = { launch, review, state, resolve, name, watch };

@@ -278,7 +278,7 @@ describe("recordLink", () => {
 });
 
 describe("watchForever once its program is replaced", () => {
-  test("ends after the cycle it noticed in, without sleeping", async () => {
+  test("ends before the next cycle once the check after a sleep finds it", async () => {
     const { paths } = await fixture();
     const logs: Record<string, unknown>[] = [];
     let slept = 0;
@@ -306,6 +306,7 @@ describe("watchForever once its program is replaced", () => {
     );
 
     expect(ran.isErr() && ran.error.message).toContain("was replaced");
+    // One cycle ran before the sleep, and none after the check that found the program replaced.
     expect([checks, slept]).toEqual([2, 1]);
     expect(logs.map((entry) => entry.event)).toEqual(["started", "replaced"]);
   });
