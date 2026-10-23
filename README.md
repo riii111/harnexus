@@ -95,7 +95,8 @@ Set `HARNEXUS_APP_PATH` if the app is installed outside `/Applications/ChatGPT.a
 
 ## harnexus-task
 
-For the `task-*` skills, install the worker and review launcher:
+`harnexus-task` starts worker chats in Git worktrees and sends their commits to reviewer chats, with first messages built from [templates](#prompt-templates) you write.
+Install it:
 
 ```sh
 bun run install:task
@@ -104,7 +105,6 @@ bun run install:task
 This installs `harnexus-task` in `~/.local/bin`.
 The executable includes the Bun runtime used to build it. Run `bun run install:task`
 again with the pinned Bun version after a runtime security update.
-It requires the `task-*` skills in `$CODEX_HOME/skills`.
 Coordinate from a Codex chat by default, or explicitly select Claude; workers default to Claude and reviewers to Codex.
 A worker that opened its PR runs `harnexus-task name --pr <URL>`, which keeps its chat's launch title and appends `PR#<number>` so a search for the PR finds it.
 Reviewers read the worker's checkout and run in `~/review-home` instead of a worktree of their own, so create that empty folder and add it to the Codex app as a project before the first review.
@@ -116,6 +116,43 @@ Keep the installed executable outside sandbox-writable paths.
 
 The app's call socket lets processes running as your user create and message chats.
 To disable it, launch with `HARNEXUS_CALL_SOCKET=off bun run open-app`.
+
+### Prompt templates
+
+Set the templates in `~/.config/harnexus/task.json`:
+
+```json
+{
+  "templates": {
+    "worker": "/Users/you/.codex/harnexus-task/worker.md",
+    "reviewer": "/Users/you/.codex/harnexus-task/reviewer.md"
+  }
+}
+```
+
+`launch` reads `worker` and `review` reads `reviewer`; each fails before sending anything when its template is not set or missing.
+Paths must be absolute.
+
+A template is the chat's first message, with `{name}` replaced by the request's value.
+Write `{{` and `}}` for literal braces; any other brace or an unknown name is an error.
+
+- Worker: `task_id`, `document_refs` (one `- ` line per reference) and `completion_target` (`implementation`, `draft_pr` or `merge`).
+- Reviewer: `task_id`, `document_refs`, `worker_ai` (`Claude` or `Codex`), `worker_chat_id`, `checkout`, `base`, `head` and `pr_url` (`null` without a PR).
+
+A relative Markdown link target is resolved against the template's folder and replaced with the file's real path, and a missing file is an error.
+This is how a template attaches a skill, since the app attaches a skill named as `[$name](/absolute/path/SKILL.md)`.
+Fields may appear in such a target, as in `reply-{worker_ai}.md`.
+Absolute paths, URLs and `#` anchors are left as written, and links inside the request's values are never resolved.
+
+```md
+Task {task_id}. Go as far as {completion_target}.
+{document_refs}
+
+[$my-worker](../skills/my-worker/SKILL.md)
+```
+
+The templates and the skills they link to become instructions to chats that can act outside the sandbox, so keep them, like the config, outside sandbox-writable paths.
+The author's own templates and skills, in Japanese, are in [riii111/dotfiles](https://github.com/riii111/dotfiles/tree/main/dot_codex/skills) as an example; they are not supported for other setups.
 
 ### Watching PRs
 

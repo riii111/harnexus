@@ -3,7 +3,6 @@ import { dirname, join } from "node:path";
 import { Result } from "better-result";
 import {
   isDirectory,
-  isFile,
   pathExists,
   readRegularTextFile,
   realPathOrSelf,
@@ -17,7 +16,6 @@ import type {
 import {
   type Fields,
   fail,
-  formatTemplate,
   hasSpace,
   isBlank,
   jsonEqual,
@@ -35,11 +33,7 @@ export type GitRunner = (
   env: Env,
 ) => Promise<Result<CommandOutput, CommandFailed>>;
 
-const COMPLETION_TARGETS: Record<string, string> = {
-  implementation: "実装・検証まで",
-  draft_pr: "Draft PR・CI成功まで",
-  merge: "マージまで",
-};
+const COMPLETION_TARGETS = ["implementation", "draft_pr", "merge"];
 
 export const homeOf = (env: Env) => env.HOME ?? homedir();
 
@@ -49,6 +43,12 @@ export const absoluteOr = (value: string | undefined, fallback: string) =>
 
 export const codexHome = (env: Env) =>
   absoluteOr(env.CODEX_HOME, join(homeOf(env), ".codex"));
+
+export const configHome = (env: Env) =>
+  join(
+    absoluteOr(env.XDG_CONFIG_HOME, join(homeOf(env), ".config")),
+    "harnexus",
+  );
 
 export const ioFailed = (error: { message: string; cause?: unknown }) => {
   const { cause } = error;
@@ -176,34 +176,21 @@ export const launchRequest = (path: string) =>
       return fail("startingBranch must be a branch name");
     yield* Result.await(documentRefs(data.documentRefs));
     const target = data.completionTarget;
-    if (
-      typeof target !== "string" ||
-      !Object.hasOwn(COMPLETION_TARGETS, target)
-    )
+    if (typeof target !== "string" || !COMPLETION_TARGETS.includes(target))
       return fail(
         "completionTarget must be implementation, draft_pr, or merge",
       );
     return Result.ok(data);
   });
 
-export const workerPrompt = (data: Fields, skills: string) =>
+export const workerFields = (data: Fields) =>
   Result.gen(async function* () {
-    const skill = join(skills, "task-worker/SKILL.md");
-    const template = join(skills, "task-session-launch/references/worker.md");
-    if (!(await isFile(skill)) || !(await isFile(template)))
-      return fail("task-worker or worker template is not installed");
-    const text = yield* Result.await(readText(template));
-    return formatTemplate(text, {
+    return Result.ok<Record<string, string>>({
       task_id: String(data.taskId),
       document_refs: yield* Result.await(documentRefs(data.documentRefs)),
-      completion_target:
-        COMPLETION_TARGETS[String(data.completionTarget)] ?? "",
-      worker_skill_path: await realPathOrSelf(skill),
+      completion_target: String(data.completionTarget),
     });
   });
-
-const readText = (path: string) =>
-  readRegularTextFile(path).then((read) => read.mapError(ioFailed));
 
 // Runs unsandboxed: never let repository config start helpers or transports.
 const GIT_SAFETY = [
@@ -361,29 +348,9 @@ export const sessionValue = async (data: Fields, key: string) => {
     : (value ?? null);
 };
 
-export const reviewPrompt = (data: Fields, skills: string) =>
+export const reviewFields = (data: Fields) =>
   Result.gen(async function* () {
-    const references = join(skills, "task-review-cycle/references");
-    const paths = {
-      skill_path: join(skills, "ai-code-review/SKILL.md"),
-      cycle_skill_path: join(skills, "task-review-cycle/SKILL.md"),
-      reply_path: join(
-        references,
-        `reply-${String(data.workerAI).toLowerCase()}.md`,
-      ),
-    };
-    const template = join(references, "reviewer.md");
-    for (const path of [template, ...Object.values(paths)]) {
-      if (!(await isFile(path)))
-        return fail("ai-code-review or reviewer templates are not installed");
-    }
-    const text = yield* Result.await(readText(template));
-    const resolved: Record<string, string> = {};
-    for (const [key, path] of Object.entries(paths)) {
-      resolved[key] = await realPathOrSelf(path);
-    }
-    return formatTemplate(text, {
-      ...resolved,
+    return Result.ok<Record<string, string>>({
       task_id: String(data.taskId),
       document_refs: yield* Result.await(documentRefs(data.documentRefs)),
       worker_ai: String(data.workerAI),
