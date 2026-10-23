@@ -1,30 +1,39 @@
 import { describe, expect, test } from "bun:test";
 import { Result } from "better-result";
 import { createGitHub } from "./github.ts";
+import { PRESETS } from "./reviewers.ts";
 
 const PR = "https://github.com/org/pay/pull/7";
 
+const BOTS = [PRESETS.coderabbit];
+
 const fake = (data: unknown, status = 200) => {
-  const posts: { token: string; variables: Record<string, unknown> }[] = [];
+  const posts: {
+    token: string;
+    query: string;
+    variables: Record<string, unknown>;
+  }[] = [];
   const commands: string[][] = [];
+  const clock = { now: 0 };
   const github = createGitHub(
     async (argv) => {
       commands.push([...argv]);
       return Result.ok({ status: 0, stdout: "secret-token\n", stderr: "" });
     },
     {},
-    async (token, _query, variables) => {
-      posts.push({ token, variables });
+    async (token, query, variables) => {
+      posts.push({ token, query, variables });
       return Result.ok({ status, text: JSON.stringify(data) });
     },
+    () => clock.now,
   );
-  return { github, posts, commands };
+  return { github, posts, commands, clock };
 };
 
 const commit = {
   oid: "a".repeat(40),
   status: {
-    context: {
+    b0: {
       state: "SUCCESS",
       description: "Review completed",
       createdAt: "2026-10-23T00:00:00Z",
@@ -66,6 +75,13 @@ const pull = {
                   __typename: "CheckRun",
                   name: "superseded",
                   conclusion: "CANCELLED",
+                  isRequired: true,
+                },
+                {
+                  __typename: "StatusContext",
+                  context: "CodeRabbit",
+                  state: "FAILURE",
+                  targetUrl: null,
                   isRequired: true,
                 },
                 {
@@ -145,7 +161,7 @@ describe("createGitHub", () => {
     });
 
     const detail = (
-      await github.detail("owner", { repo: "org/pay", number: 7 })
+      await github.detail("owner", { repo: "org/pay", number: 7 }, BOTS)
     ).unwrap();
 
     expect(commands).toEqual([
@@ -172,10 +188,10 @@ describe("createGitHub", () => {
       { name: "build", url: "https://ci.example/1" },
       { name: "deploy", url: null },
     ]);
-    expect([
-      detail.coderabbit?.description,
-      detail.noActionableSummary,
-    ]).toEqual(["Review completed", true]);
+    expect([detail.bots.coderabbit?.description, detail.noActionable]).toEqual([
+      "Review completed",
+      ["coderabbit"],
+    ]);
   });
 
   test("reads every later page of threads, their comments, reviews, comments and checks", async () => {
@@ -265,7 +281,7 @@ describe("createGitHub", () => {
     );
 
     const detail = (
-      await github.detail("owner", { repo: "org/pay", number: 7 })
+      await github.detail("owner", { repo: "org/pay", number: 7 }, BOTS)
     ).unwrap();
 
     expect(detail.comments.map((comment) => comment.id)).toEqual([
@@ -293,10 +309,14 @@ describe("createGitHub", () => {
     });
 
     const summaries = (
-      await github.summaries("owner", [
-        { repo: "org/pay", number: 7 },
-        { repo: "org/gone", number: 8 },
-      ])
+      await github.summaries(
+        "owner",
+        [
+          { repo: "org/pay", number: 7 },
+          { repo: "org/gone", number: 8 },
+        ],
+        BOTS,
+      )
     ).unwrap();
 
     expect(posts).toHaveLength(1);
@@ -308,8 +328,46 @@ describe("createGitHub", () => {
       r1: "gone",
       n1: 8,
     });
+    expect(posts[0]?.query).toContain('b0: context(name: "CodeRabbit")');
     expect(summaries[0]?.rollup).toBe("FAILURE");
+    expect(summaries[0]?.bots.coderabbit?.state).toBe("SUCCESS");
     expect(summaries[1]).toBeNull();
+  });
+
+  test("reads no commit status when no configured bot keeps one", async () => {
+    const { github, posts } = fake({ data: { p0: { pullRequest: pull } } });
+
+    const summaries = (
+      await github.summaries("owner", [{ repo: "org/pay", number: 7 }], [])
+    ).unwrap();
+
+    expect(posts[0]?.query).not.toContain("status {");
+    expect(summaries[0]?.bots).toEqual({});
+  });
+
+  test("keeps an account's token for ten minutes", async () => {
+    const { github, commands, clock } = fake({ data: { p0: null } });
+    const read = () =>
+      github.summaries("owner", [{ repo: "org/pay", number: 7 }], BOTS);
+
+    await read();
+    clock.now = 9 * 60_000;
+    await read();
+    clock.now = 10 * 60_000;
+    await read();
+
+    expect(commands).toHaveLength(2);
+  });
+
+  test("forgets a token GitHub answers 401 for", async () => {
+    const { github, commands } = fake({ message: "Bad credentials" }, 401);
+    const read = () =>
+      github.summaries("owner", [{ repo: "org/pay", number: 7 }], BOTS);
+
+    await read();
+    await read();
+
+    expect(commands).toHaveLength(2);
   });
 
   test("reports GitHub's errors without the token", async () => {
@@ -318,7 +376,11 @@ describe("createGitHub", () => {
       200,
     );
 
-    const failed = await github.detail("owner", { repo: "org/pay", number: 7 });
+    const failed = await github.detail(
+      "owner",
+      { repo: "org/pay", number: 7 },
+      BOTS,
+    );
 
     expect(failed.isErr() && failed.error.message).toBe(
       "GitHub answered 200: Could not resolve to a Repository",

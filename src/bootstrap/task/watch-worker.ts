@@ -1,10 +1,55 @@
-import { join } from "node:path";
-import { isDirectory } from "../../../runtime/fs.boundary.ts";
-import { parseJson } from "../../../runtime/json.boundary.ts";
-import { isObject } from "../../../runtime/object.ts";
-import type { Fields } from "../format.ts";
-import type { Env } from "../request.ts";
-import { load, namesIn, stateRoot } from "../session.ts";
+import type { Answer, Workers } from "../../prwatch/worker.ts";
+import { parseJson } from "../../runtime/json.boundary.ts";
+import { isObject } from "../../runtime/object.ts";
+import type { Fields } from "./format.ts";
+import type { Env } from "./request.ts";
+import { reviewerOfWorker } from "./session.ts";
+
+// The PR watch's workers are Codex chats a harnexus-task launch started; the watch reaches them through the app.
+export const codexWorkers = (env: Env, callApp: AppCall): Workers => ({
+  // The worker's reviewer is a Codex thread that already messages the worker, and a thread cannot message itself.
+  senderOf: (worker) => reviewerOfWorker(env, worker),
+
+  look: async (sender, worker, awaited, now) => {
+    const view = await readThread(callApp, sender, worker, awaited?.at ?? null);
+    if (view === null || view.gone) return view;
+
+    const turn = awaited === null ? undefined : answerTo(view.turns, awaited);
+    return {
+      gone: false,
+      busy: busyReason(view, now),
+      answer: turn === undefined ? null : answerOf(turn),
+    };
+  },
+
+  send: async (sender, worker, prompt) => {
+    const detail = await callApp(sender, "send_message_to_thread", {
+      threadId: worker,
+      prompt,
+    });
+    const outcome = String(detail.outcome);
+    return {
+      outcome:
+        outcome === "done"
+          ? "done"
+          : NOT_SENT.includes(outcome)
+            ? "not_sent"
+            : "unknown",
+      detail,
+    };
+  },
+});
+
+// The outcomes harnexus-task already treats as never having reached the app.
+const NOT_SENT = ["not_sent", "rejected", "invalid"];
+
+const answerOf = (turn: Turn): Answer => ({
+  status:
+    turn.status === "inProgress" || turn.status === "completed"
+      ? turn.status
+      : "other",
+  text: turn.answer,
+});
 
 export type AppCall = (
   caller: string,
@@ -24,26 +69,6 @@ export type Turn = {
   // The thread and message of a delegated turn, which tell our message apart from any other thread's.
   delegation: { source: string; input: string } | null;
   answer: string;
-};
-
-// The worker's reviewer is a Codex thread that already messages the worker, and a thread cannot message itself.
-export const senderOf = async (env: Env, worker: string) => {
-  const root = join(stateRoot(env), "review");
-  const keys = await namesIn(root);
-  for (const key of keys.isOk() ? keys.value.sort() : []) {
-    if (!(await isDirectory(join(root, key)))) continue;
-
-    const loaded = await load(join(root, key, "state.json"));
-    const state = loaded.isOk() ? loaded.value : null;
-    if (
-      isObject(state) &&
-      typeof state.reviewer === "string" &&
-      isObject(state.candidate) &&
-      state.candidate.workerChatId === worker
-    )
-      return state.reviewer;
-  }
-  return null;
 };
 
 // Null means the app could not be asked, as while it is closed or the Mac sleeps; the next cycle asks again.
@@ -146,7 +171,7 @@ const turnOf = (turn: Record<string, unknown>): Turn => {
           ? "owner"
           : "other",
     delegation,
-    answer: answerOf(items),
+    answer: finalTextOf(items),
   };
 };
 
@@ -201,7 +226,7 @@ const unescapeXml = (text: string) =>
 
 const DELEGATING = new Set(["send_message_to_thread", "create_thread"]);
 
-const answerOf = (items: unknown[]) => {
+const finalTextOf = (items: unknown[]) => {
   const messages = items.filter(
     (item): item is Record<string, unknown> =>
       isObject(item) && item.type === "agentMessage",

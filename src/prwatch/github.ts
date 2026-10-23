@@ -2,27 +2,41 @@ import { Result } from "better-result";
 import {
   type GraphqlAnswer,
   postGraphql,
-} from "../../../infra/github/graphql.boundary.ts";
-import { parseJson } from "../../../runtime/json.boundary.ts";
-import { isObject } from "../../../runtime/object.ts";
-import { fail, type TaskFailed } from "../format.ts";
-import type { Env, GitRunner } from "../request.ts";
+} from "../infra/github/graphql.boundary.ts";
+import { parseJson } from "../runtime/json.boundary.ts";
+import { isObject } from "../runtime/object.ts";
+import type {
+  CommandFailed,
+  CommandOutput,
+} from "../runtime/process.boundary.ts";
 import type { ItemKind } from "./config.ts";
+import { fail, type WatchFailed } from "./failure.ts";
+import { botOf, type ReviewBot } from "./reviewers.ts";
 
+// The review bots are passed on every read, since the config is read again each cycle.
 export type GitHub = {
   summaries: (
     account: string,
     refs: readonly PrRef[],
-  ) => Promise<Result<(PrSummary | null)[], TaskFailed>>;
+    bots: readonly ReviewBot[],
+  ) => Promise<Result<(PrSummary | null)[], WatchFailed>>;
   detail: (
     account: string,
     ref: PrRef,
-  ) => Promise<Result<PrDetail, TaskFailed>>;
+    bots: readonly ReviewBot[],
+  ) => Promise<Result<PrDetail, WatchFailed>>;
   openPulls: (
     account: string,
     repo: string,
-  ) => Promise<Result<PrRef[], TaskFailed>>;
+  ) => Promise<Result<PrRef[], WatchFailed>>;
 };
+
+export type Env = Record<string, string | undefined>;
+
+export type RunCommand = (
+  argv: readonly string[],
+  env: Env,
+) => Promise<Result<CommandOutput, CommandFailed>>;
 
 export type PrRef = { repo: string; number: number };
 
@@ -33,11 +47,12 @@ export type PrSummary = {
   head: string;
   updatedAt: string;
   mergeable: string;
-  coderabbit: CodeRabbitStatus | null;
+  // The commit status of each review bot that keeps one, by the bot's id.
+  bots: Record<string, BotStatus | null>;
   rollup: string | null;
 };
 
-export type CodeRabbitStatus = {
+export type BotStatus = {
   state: string;
   description: string;
   createdAt: string;
@@ -48,7 +63,8 @@ export type PrDetail = PrSummary & {
   title: string;
   failedRequired: FailedCheck[];
   comments: PrComment[];
-  noActionableSummary: boolean;
+  // The ids of the bots whose PR comment says they found nothing.
+  noActionable: string[];
 };
 
 export type FailedCheck = { name: string; url: string | null };
@@ -66,21 +82,26 @@ export type PrComment = {
   resolved: boolean;
 };
 
-export const CODERABBIT = "coderabbitai[bot]";
-
 type Post = (
   token: string,
   query: string,
   variables: Record<string, unknown>,
 ) => Promise<Result<GraphqlAnswer, { message: string }>>;
 
-// The token is read per account on each call and kept nowhere, so a token the owner rotates is picked up and never reaches the state or the log.
+// The token is kept in memory for a few minutes only, so a token the owner rotates is picked up and it never reaches the state or the log.
+// Reading it starts gh, which on macOS starts the keychain tool too, so it is not read for every request.
 export const createGitHub = (
-  runCommand: GitRunner,
+  runCommand: RunCommand,
   env: Env,
   post: Post = postGraphql,
+  now: () => number = Date.now,
 ): GitHub => {
+  const tokens = new Map<string, { value: string; at: number }>();
   const token = async (account: string) => {
+    const kept = tokens.get(account);
+    if (kept !== undefined && now() - kept.at < TOKEN_TTL_MS)
+      return Result.ok(kept.value);
+
     const ran = await runCommand(
       ["gh", "auth", "token", "--hostname", "github.com", "--user", account],
       env,
@@ -90,6 +111,7 @@ export const createGitHub = (
     const value = ran.value.stdout.trim();
     if (ran.value.status !== 0 || value === "")
       return fail(`gh has no token for account ${account}`);
+    tokens.set(account, { value, at: now() });
     return Result.ok(value);
   };
 
@@ -104,6 +126,8 @@ export const createGitHub = (
       if (answer.isErr()) return fail(answer.error.message);
 
       const { status } = answer.value;
+      // A rejected token is read again on the next request.
+      if (status === 401) tokens.delete(account);
       const parsed = parseJson(answer.value.text);
       const body = parsed.isOk() ? parsed.value : null;
       if (!isObject(body))
@@ -192,32 +216,36 @@ export const createGitHub = (
     });
 
   return {
-    summaries: (account, refs) =>
+    summaries: (account, refs, bots) =>
       Result.gen(async function* () {
         if (refs.length === 0) return Result.ok([]);
 
-        const { text, variables } = summaryQuery(refs);
+        const { text, variables } = summaryQuery(refs, bots);
         const data = yield* Result.await(query(account, text, variables));
         return Result.ok(
           refs.map((_, index) => {
             const pull = pullOf(data[`p${index}`]);
-            return pull === null ? null : summaryOf(pull);
+            return pull === null ? null : summaryOf(pull, bots);
           }),
         );
       }),
 
-    detail: (account, ref) =>
+    detail: (account, ref, bots) =>
       Result.gen(async function* () {
         const [owner, name] = ref.repo.split("/");
         const data = yield* Result.await(
-          query(account, DETAIL_QUERY, { owner, name, number: ref.number }),
+          query(account, detailQuery(bots), {
+            owner,
+            name,
+            number: ref.number,
+          }),
         );
 
         const pull = pullOf(data.repository);
         if (pull === null)
           return fail(`${ref.repo}#${ref.number} is not visible to ${account}`);
         return Result.ok(
-          detailOf(yield* Result.await(readAllPages(account, ref, pull))),
+          detailOf(yield* Result.await(readAllPages(account, ref, pull)), bots),
         );
       }),
 
@@ -250,19 +278,32 @@ const errorsOf = (errors: unknown[]) =>
     )
     .join("; ");
 
-const CODERABBIT_CONTEXT = "CodeRabbit";
+const TOKEN_TTL_MS = 10 * 60_000;
 
-const SUMMARY_FIELDS = `state isDraft headRefOid updatedAt mergeable
+// Each bot's status is read under an alias by its place in the list; JSON's string escapes are valid GraphQL.
+const summaryFields = (bots: readonly ReviewBot[]) => {
+  const contexts = bots.flatMap((bot, index) =>
+    bot.status === null
+      ? []
+      : [
+          `b${index}: context(name: ${JSON.stringify(bot.status.context)}) { state description createdAt }`,
+        ],
+  );
+  const status =
+    contexts.length === 0 ? "" : `status { ${contexts.join(" ")} }`;
+  return `state isDraft headRefOid updatedAt mergeable
   commits(last: 1) { nodes { commit {
-    status { context(name: "${CODERABBIT_CONTEXT}") { state description createdAt } }
+    ${status}
     statusCheckRollup { state }
   } } }`;
+};
 
 // One aliased query for every PR of an account, which GitHub counts as a single point.
-const summaryQuery = (refs: readonly PrRef[]) => {
+const summaryQuery = (refs: readonly PrRef[], bots: readonly ReviewBot[]) => {
+  const fields = summaryFields(bots);
   const variables: Record<string, unknown> = {};
   const declared: string[] = [];
-  const fields = refs.map((ref, index) => {
+  const pulls = refs.map((ref, index) => {
     const [owner, name] = ref.repo.split("/");
     Object.assign(variables, {
       [`o${index}`]: owner,
@@ -270,11 +311,11 @@ const summaryQuery = (refs: readonly PrRef[]) => {
       [`n${index}`]: ref.number,
     });
     declared.push(`$o${index}: String!, $r${index}: String!, $n${index}: Int!`);
-    return `p${index}: repository(owner: $o${index}, name: $r${index}) { pullRequest(number: $n${index}) { ${SUMMARY_FIELDS} } }`;
+    return `p${index}: repository(owner: $o${index}, name: $r${index}) { pullRequest(number: $n${index}) { ${fields} } }`;
   });
 
   return {
-    text: `query(${declared.join(", ")}) { ${fields.join("\n")} }`,
+    text: `query(${declared.join(", ")}) { ${pulls.join("\n")} }`,
     variables,
   };
 };
@@ -292,9 +333,11 @@ const CONTEXT_NODE = `__typename
   ... on StatusContext { context state targetUrl isRequired(pullRequestNumber: $number) }
   ... on CheckRun { name conclusion detailsUrl isRequired(pullRequestNumber: $number) }`;
 
-const DETAIL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+const detailQuery = (
+  bots: readonly ReviewBot[],
+) => `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { pullRequest(number: $number) {
-    id url title ${SUMMARY_FIELDS}
+    id url title ${summaryFields(bots)}
     checks: commits(last: 1) { nodes { commit { statusCheckRollup {
       id contexts(first: 100) { nodes { ${CONTEXT_NODE} } ${PAGE_INFO} }
     } } } }
@@ -356,9 +399,12 @@ const pullOf = (repository: unknown) =>
     ? repository.pullRequest
     : null;
 
-const summaryOf = (pull: Record<string, unknown>): PrSummary => {
+const summaryOf = (
+  pull: Record<string, unknown>,
+  bots: readonly ReviewBot[],
+): PrSummary => {
   const commit = lastCommit(pull.commits);
-  const status = isObject(commit.status) ? commit.status.context : null;
+  const status = isObject(commit.status) ? commit.status : {};
   const rollup = isObject(commit.statusCheckRollup)
     ? commit.statusCheckRollup.state
     : null;
@@ -369,20 +415,28 @@ const summaryOf = (pull: Record<string, unknown>): PrSummary => {
     head: text(pull.headRefOid),
     updatedAt: text(pull.updatedAt),
     mergeable: text(pull.mergeable),
-    coderabbit: isObject(status)
-      ? {
-          state: text(status.state),
-          description: text(status.description),
-          createdAt: text(status.createdAt),
-        }
-      : null,
+    bots: Object.fromEntries(
+      bots.flatMap((bot, index) =>
+        bot.status === null ? [] : [[bot.id, botStatusOf(status[`b${index}`])]],
+      ),
+    ),
     rollup: typeof rollup === "string" ? rollup : null,
   };
 };
 
-const NO_ACTIONABLE = "No actionable comments were generated";
+const botStatusOf = (context: unknown): BotStatus | null =>
+  isObject(context)
+    ? {
+        state: text(context.state),
+        description: text(context.description),
+        createdAt: text(context.createdAt),
+      }
+    : null;
 
-const detailOf = (pull: Record<string, unknown>): PrDetail => {
+const detailOf = (
+  pull: Record<string, unknown>,
+  bots: readonly ReviewBot[],
+): PrDetail => {
   const inline = nodesOf(pull.reviewThreads).flatMap((thread) =>
     nodesOf(thread.comments).map((node) =>
       inlineOf(node, thread.isResolved === true),
@@ -394,14 +448,20 @@ const detailOf = (pull: Record<string, unknown>): PrDetail => {
   );
 
   return {
-    ...summaryOf(pull),
+    ...summaryOf(pull, bots),
     url: text(pull.url),
     title: text(pull.title),
-    failedRequired: failedRequired(pull),
+    failedRequired: failedRequired(pull, bots),
     comments: [...inline, ...reviews, ...issueComments],
-    noActionableSummary: issueComments.some(
-      (comment) =>
-        comment.author === CODERABBIT && comment.body.includes(NO_ACTIONABLE),
+    noActionable: bots.flatMap(({ id, noActionable }) =>
+      noActionable !== null &&
+      issueComments.some(
+        (comment) =>
+          botOf(bots, comment.author)?.id === id &&
+          comment.body.includes(noActionable),
+      )
+        ? [id]
+        : [],
     ),
   };
 };
@@ -446,9 +506,14 @@ const loginOf = (author: unknown) => {
   return author.__typename === "Bot" ? `${author.login}[bot]` : author.login;
 };
 
-const failedRequired = (pull: Record<string, unknown>): FailedCheck[] => {
+// A bot's own status tells its review's progress, not a failure of the PR.
+const failedRequired = (
+  pull: Record<string, unknown>,
+  bots: readonly ReviewBot[],
+): FailedCheck[] => {
   const rollup = lastCommit(pull.checks).statusCheckRollup;
   const contexts = nodesOf(isObject(rollup) ? rollup.contexts : null);
+  const progress = new Set(bots.flatMap((bot) => bot.status?.context ?? []));
 
   return contexts.flatMap((context) => {
     if (context.isRequired !== true) return [];
@@ -457,7 +522,7 @@ const failedRequired = (pull: Record<string, unknown>): FailedCheck[] => {
         ? [{ name: text(context.name), url: linkOf(context.detailsUrl) }]
         : [];
     return FAILED_STATUSES.has(text(context.state)) &&
-      context.context !== CODERABBIT_CONTEXT
+      !progress.has(text(context.context))
       ? [{ name: text(context.context), url: linkOf(context.targetUrl) }]
       : [];
   });

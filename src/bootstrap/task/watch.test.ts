@@ -3,17 +3,25 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result } from "better-result";
-import { type Fields, fail } from "../format.ts";
-import { saveJson } from "../session.ts";
-import type { GitHub, PrComment, PrDetail, PrSummary } from "./github.ts";
+import { fail } from "../../prwatch/failure.ts";
+import type {
+  GitHub,
+  PrComment,
+  PrDetail,
+  PrSummary,
+} from "../../prwatch/github.ts";
 import {
   freshState,
+  keyOf,
   loadWatchState,
   recordLink,
   saveWatchState,
   type WatchState,
-} from "./store.ts";
-import { runCycle } from "./watcher.ts";
+} from "../../prwatch/store.ts";
+import { runCycle } from "../../prwatch/watcher.ts";
+import { watchPaths } from "./cli.ts";
+import type { Fields } from "./format.ts";
+import { codexWorkers } from "./watch-worker.ts";
 
 const PR = "https://github.com/org/pay/pull/7";
 const REF = { repo: "org/pay", number: 7 };
@@ -34,10 +42,12 @@ const summary = (fields: Partial<PrSummary> = {}): PrSummary => ({
   head: HEAD,
   updatedAt: "2026-10-23T01:00:00Z",
   mergeable: "MERGEABLE",
-  coderabbit: {
-    state: "SUCCESS",
-    description: "Review completed",
-    createdAt: "2026-10-23T01:00:00Z",
+  bots: {
+    coderabbit: {
+      state: "SUCCESS",
+      description: "Review completed",
+      createdAt: "2026-10-23T01:00:00Z",
+    },
   },
   rollup: "SUCCESS",
   ...fields,
@@ -67,7 +77,7 @@ const detailOf = (
   title: "Pay",
   failedRequired: [],
   comments,
-  noActionableSummary: false,
+  noActionable: [],
   ...extra,
 });
 
@@ -119,7 +129,8 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
       ...config,
     }),
   );
-  await recordLink(env, saveJson, {
+  const paths = watchPaths(env);
+  await recordLink(paths.state, {
     repo: "org/pay",
     number: 7,
     url: PR,
@@ -127,7 +138,7 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
     linkedAt: LINKED_AT,
   });
   if (!firstRead)
-    await saveWatchState(env, saveJson, REF, {
+    await saveWatchState(paths.state, REF, {
       ...freshState(),
       summary: summary({ updatedAt: "2026-10-22T00:00:00Z" }),
     });
@@ -196,26 +207,26 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
   };
 
   const logs: Fields[] = [];
-  const cycle = async () => {
+  const cycle = async (over?: Set<string>) => {
     const ran = await runCycle({
-      env,
-      saveJson,
+      paths,
       github,
-      callApp,
+      workers: codexWorkers(env, callApp),
       now: () => world.now,
       log: (entry) => logs.push(entry),
+      ...(over === undefined ? {} : { over }),
     });
     expect(ran.isOk()).toBe(true);
   };
   const state = async (): Promise<WatchState> =>
-    (await loadWatchState(env, { repo: "org/pay", number: 7 })).unwrapOr(
-      null as never,
-    );
+    (
+      await loadWatchState(paths.state, { repo: "org/pay", number: 7 })
+    ).unwrapOr(null as never);
   const later = (minutes: number) => {
     world.now = new Date(world.now.getTime() + minutes * 60_000);
     world.summary = { ...world.summary, updatedAt: world.now.toISOString() };
   };
-  return { env, world, calls, logs, cycle, state, later };
+  return { env, paths, world, calls, logs, cycle, state, later };
 };
 
 describe("runCycle", () => {
@@ -318,10 +329,12 @@ describe("runCycle", () => {
       { firstRead: true },
     );
     world.summary = summary({
-      coderabbit: {
-        state: "PENDING",
-        description: "Review in progress",
-        createdAt: "2026-10-23T01:00:00Z",
+      bots: {
+        coderabbit: {
+          state: "PENDING",
+          description: "Review in progress",
+          createdAt: "2026-10-23T01:00:00Z",
+        },
       },
     });
     world.comments = [comment({})];
@@ -329,7 +342,7 @@ describe("runCycle", () => {
     expect(calls.sent).toEqual([]);
 
     world.summary = summary({ updatedAt: "2026-10-23T02:00:00Z" });
-    world.extra = { noActionableSummary: true };
+    world.extra = { noActionable: ["coderabbit"] };
     later(1);
     await cycle();
 
@@ -493,10 +506,12 @@ describe("runCycle", () => {
   test("holds CodeRabbit's findings while its review runs and sends a person's comment at once", async () => {
     const { world, calls, cycle, later } = await fixture();
     world.summary = summary({
-      coderabbit: {
-        state: "PENDING",
-        description: "Review in progress",
-        createdAt: "2026-10-23T01:00:00Z",
+      bots: {
+        coderabbit: {
+          state: "PENDING",
+          description: "Review in progress",
+          createdAt: "2026-10-23T01:00:00Z",
+        },
       },
     });
     world.comments = [
@@ -527,7 +542,7 @@ describe("runCycle", () => {
 
   test("tells a review without findings to report no findings", async () => {
     const { world, calls, cycle } = await fixture();
-    world.extra = { noActionableSummary: true };
+    world.extra = { noActionable: ["coderabbit"] };
 
     await cycle();
 
@@ -568,7 +583,7 @@ describe("runCycle", () => {
 
     expect(calls.sent).toEqual([]);
     expect((await state()).pending.map((event) => event.type)).toEqual([
-      "coderabbit_done",
+      "review_done",
       "finding",
     ]);
   });
@@ -702,5 +717,137 @@ describe("runCycle", () => {
 
     expect([calls.summaries, calls.sent]).toEqual([0, []]);
     expect((await state()).reason).toBe("repository is not configured");
+  });
+
+  test("sends what a state written before review bots were configurable still holds", async () => {
+    const { world, calls, cycle, state, paths } = await fixture();
+    world.turns = [turn()];
+    await saveWatchState(paths.state, REF, {
+      ...freshState(),
+      summary: summary(),
+      pending: [
+        {
+          type: "coderabbit_done",
+          head: HEAD,
+          findings: 1,
+          summaryAgrees: true,
+        },
+        {
+          type: "finding",
+          finding: {
+            id: "inline:1",
+            kind: "inline",
+            coderabbit: true,
+            label: "CodeRabbit・Major",
+            path: "src/pay.kt",
+            line: 42,
+            url: `${PR}#discussion_r1`,
+            createdAt: "2026-10-23T00:30:00Z",
+          },
+        },
+      ] as unknown as WatchState["pending"],
+    });
+
+    await cycle();
+
+    expect(String(calls.sent[0]?.prompt)).toContain("CodeRabbitのレビュー完了");
+    expect((await state()).delivered?.findings[0]?.bot).toBe("coderabbit");
+  });
+
+  test("waits for and names a review bot the config describes instead of CodeRabbit", async () => {
+    const { world, calls, cycle, later } = await fixture({
+      reviewBots: [
+        {
+          id: "other",
+          name: "OtherBot",
+          login: "other-reviewer[bot]",
+          status: { context: "Other Review", completed: "done" },
+        },
+      ],
+    });
+    const otherStatus = (state: string, description: string) => ({
+      other: { state, description, createdAt: "2026-10-23T01:00:00Z" },
+    });
+    world.summary = summary({ bots: otherStatus("PENDING", "running") });
+    world.comments = [
+      comment({ author: "other-reviewer[bot]", body: "x" }),
+      comment({ id: "inline:9", url: `${PR}#discussion_r9` }),
+    ];
+    await cycle();
+
+    expect(calls.sent).toHaveLength(1);
+    expect(String(calls.sent[0]?.prompt)).toContain("[coderabbitai[bot]]");
+    expect(String(calls.sent[0]?.prompt)).not.toContain("discussion_r1");
+
+    world.turns = [
+      delegatedTurn(NOON, calls.sent[0]?.prompt, `${PR}#discussion_r9`),
+    ];
+    world.summary = summary({
+      updatedAt: "2026-10-23T02:00:00Z",
+      bots: otherStatus("SUCCESS", "done"),
+    });
+    later(1);
+    await cycle();
+
+    expect(String(calls.sent[1]?.prompt)).toContain("OtherBotのレビュー完了");
+    expect(String(calls.sent[1]?.prompt)).toContain(
+      `[OtherBot] src/pay.kt:42 ${PR}#discussion_r1`,
+    );
+  });
+
+  test("stops reading a PR it found over for as long as the process runs", async () => {
+    const { world, logs, cycle, paths } = await fixture();
+    const over = new Set<string>();
+    world.summary = summary({ state: "MERGED" });
+    await cycle(over);
+    await writeFile(join(paths.state, keyOf(REF), "state.json"), "{");
+
+    await cycle(over);
+    const skipped = logs.filter((log) => log.event === "state_unreadable");
+    await cycle();
+    const read = logs.filter((log) => log.event === "state_unreadable");
+
+    expect([over.size, skipped.length, read.length]).toEqual([1, 0, 1]);
+  });
+
+  test("starts a bot added to the config later from the reviews it already finished", async () => {
+    const { world, calls, cycle, later } = await fixture({
+      reviewBots: [
+        "coderabbit",
+        {
+          id: "other",
+          name: "OtherBot",
+          login: "other-reviewer[bot]",
+          status: { context: "Other Review", completed: "done" },
+        },
+      ],
+    });
+    const done = (createdAt: string) => ({
+      state: "SUCCESS",
+      description: "done",
+      createdAt,
+    });
+    world.summary = summary({
+      bots: {
+        coderabbit: summary().bots.coderabbit ?? null,
+        other: done("2026-10-23T01:00:00Z"),
+      },
+    });
+    world.extra = { noActionable: ["coderabbit"] };
+    await cycle();
+    const first = String(calls.sent[0]?.prompt);
+
+    world.turns = [delegatedTurn(NOON, calls.sent[0]?.prompt, "指摘なし")];
+    world.summary = summary({
+      head: "b".repeat(40),
+      bots: { coderabbit: null, other: done("2026-10-23T03:00:00Z") },
+    });
+    later(1);
+    await cycle();
+
+    expect(first).not.toContain("OtherBot");
+    expect(String(calls.sent[1]?.prompt)).toContain(
+      "OtherBotのレビューが完了し",
+    );
   });
 });
