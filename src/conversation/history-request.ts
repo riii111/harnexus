@@ -137,10 +137,12 @@ export const createHistoryRequests = ({
       return record === null ? turnId : historyTurnId(record);
     };
     const { cursor, turnId } = request.params;
-    // The app holds every item of a turn it was streamed, which carry the live ids the record lacks.
+    // The app holds every item of a turn it was streamed, which carry the live ids the record lacks; its cursor may still name another turn's item.
     const streamed =
       typeof turnId === "string" &&
-      (turnId === live?.turnId || resolve(turnId) !== turnId);
+      (turnId === live?.turnId || resolve(turnId) !== turnId) &&
+      isItemAnchor(cursor) &&
+      cursor.itemId.startsWith(`${turnId}-item-`);
     const result = pageFor(
       method,
       history.value,

@@ -2203,7 +2203,7 @@ describe("a Claude thread with a running turn", () => {
     ]);
   });
 
-  test("answers nothing past an item anchor the app was streamed, while the turn runs and after it ends", async () => {
+  test("answers nothing past an item anchor the app was streamed in the asked turn, while it runs and after it ends", async () => {
     const { router, live, turnRecords, sent } = setup(["th-claude"], {
       records: {
         "th-claude": conversation(),
@@ -2211,7 +2211,7 @@ describe("a Claude thread with a running turn", () => {
     });
     live.set("th-claude", LIVE);
     turnRecords.set(LIVE.turnId, "u2");
-    const list = async (id: number) => {
+    const list = async (id: number, itemId = `${LIVE.turnId}-item-2`) => {
       router.fromApp(
         encode({
           id,
@@ -2219,7 +2219,7 @@ describe("a Claude thread with a running turn", () => {
           params: {
             threadId: "th-claude",
             turnId: LIVE.turnId,
-            cursor: { type: "item", itemId: `${LIVE.turnId}-item-2` },
+            cursor: { type: "item", itemId },
           },
         }),
       );
@@ -2230,9 +2230,14 @@ describe("a Claude thread with a running turn", () => {
     const running = await list(8);
     live.delete("th-claude");
     const ended = await list(9);
+    const fromEarlierTurn = await list(10, "harnexus-turn-earlier-item-3");
 
     expect(running.result.data).toEqual([]);
     expect(ended.result.data).toEqual([]);
+    expect(fromEarlierTurn.result.data).toMatchObject([
+      { turnId: "harnexus-history-u2", item: { type: "userMessage" } },
+      { turnId: "harnexus-history-u2", item: { type: "agentMessage" } },
+    ]);
   });
 
   test("passes a read without turns unchanged while no turn runs", async () => {
