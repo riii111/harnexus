@@ -676,7 +676,8 @@ describe("harnexus-task templates", () => {
     await writeFile(
       template,
       "{{task_id}} is {task_id}\n{document_refs}\n" +
-        "[guide](https://example.com/guide) [local](/nowhere.md) [top](#top) [linked](../linked.md) [escaped](../{{task_id}}.md)\n",
+        "[guide](https://example.com/guide) [local](/nowhere.md) [top](#top) [linked](../linked.md) [escaped](../{{task_id}}.md)\n" +
+        "[ref][r]\n\n[r]: ../linked.md\n",
     );
     await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
       templates: { worker: template },
@@ -687,7 +688,8 @@ describe("harnexus-task templates", () => {
     expect([sent.code, sent.err]).toEqual([0, ""]);
     expect(harnexus.calls.at(-1)?.arguments.prompt).toBe(
       `{task_id} is manual/TR1\n- ${document}\n` +
-        `[guide](https://example.com/guide) [local](/nowhere.md) [top](#top) [linked](${linked}) [escaped](${escaped})\n`,
+        `[guide](https://example.com/guide) [local](/nowhere.md) [top](#top) [linked](${linked}) [escaped](${escaped})\n` +
+        `[ref][r]\n\n[r]: ${linked}\n`,
     );
   });
 
@@ -721,19 +723,31 @@ describe("harnexus-task templates", () => {
       name: "a real path with a space",
       link: "[$s](spaced/SKILL.md)",
       taskId: "TR1",
-      error: "whose path has a space, parenthesis or #",
+      error: "whose path has a space, parenthesis, # or backslash",
     },
     {
       name: "a real path with #",
       link: "[$s](hashed/SKILL.md)",
       taskId: "TR1",
-      error: "whose path has a space, parenthesis or #",
+      error: "whose path has a space, parenthesis, # or backslash",
     },
     {
       name: "a target with a title",
       link: '[n](notes/task.md "notes")',
       taskId: "TR1",
       error: "without angle brackets, spaces or a title",
+    },
+    {
+      name: "a reference definition with a title",
+      link: '[n][r]\n\n[r]: notes/task.md "notes"',
+      taskId: "TR1",
+      error: "without angle brackets, spaces or a title",
+    },
+    {
+      name: "a target opening with escaped braces",
+      link: "[n]({{task_id}}/task.md)",
+      taskId: "TR1",
+      error: "which is not a file",
     },
     {
       name: "a target in angle brackets",

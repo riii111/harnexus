@@ -42,8 +42,21 @@ const templatePath = (env: Env, kind: TemplateKind) =>
     return Result.ok(path);
   });
 
-// A Markdown link target such as the SKILL.md a template names, up to the first closing parenthesis on its line.
-const LINK_TARGET = /\]\(([^)\n]*)\)/g;
+// A Markdown link target such as the SKILL.md a template names: inline up to the first closing parenthesis on its line, or a reference definition's rest of line.
+const LINK_TARGETS = [
+  /\]\(([^)\n]*)\)/dg,
+  /^ {0,3}\[[^\]\n]+\]:[ \t]*(.*)$/dgm,
+];
+
+const targets = (template: string) =>
+  LINK_TARGETS.flatMap((pattern) =>
+    [...template.matchAll(pattern)].flatMap((match) => {
+      const span = match.indices?.[1];
+      return span === undefined
+        ? []
+        : [{ raw: match[1] ?? "", start: span[0], end: span[1] }];
+    }),
+  ).sort((a, b) => a.start - b.start);
 
 // A value inside a target is a name, never a path, so none can lead the link to another folder or break it.
 const targetValue = (value: string) =>
@@ -55,7 +68,7 @@ const targetValue = (value: string) =>
 const isRelative = (path: string) =>
   path !== "" &&
   !path.startsWith("/") &&
-  !path.startsWith("{") &&
+  !(path.startsWith("{") && !path.startsWith("{{")) &&
   !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(path);
 
 const escapeBraces = (text: string) =>
@@ -72,8 +85,9 @@ const resolveLinks = (
     const folder = dirname(await realPathOrSelf(path));
     let text = "";
     let last = 0;
-    for (const match of template.matchAll(LINK_TARGET)) {
-      const raw = match[1] ?? "";
+    for (const { raw, start, end } of targets(template)) {
+      // A target inside one already resolved, as an inline link on a definition's line, is part of it.
+      if (start < last) continue;
       const hash = raw.indexOf("#");
       const rawPath = hash === -1 ? raw : raw.slice(0, hash);
       if (!isRelative(rawPath.replace(/^</, "").trimStart())) continue;
@@ -89,17 +103,17 @@ const resolveLinks = (
       if (!(await isFile(file)))
         return fail(`links to ${file}, which is not a file`);
       const real = await realPathOrSelf(file);
-      // A link target ends at a space or parenthesis, and Markdown reads a # as the start of an anchor.
-      if (/[\s()#]/.test(real))
+      // A link target ends at a space or parenthesis, and Markdown reads a # as an anchor and a backslash as an escape.
+      if (/[\s()#\\]/.test(real))
         return fail(
-          `links to ${real}, whose path has a space, parenthesis or #`,
+          `links to ${real}, whose path has a space, parenthesis, # or backslash`,
         );
       const fragment =
         hash === -1
           ? ""
           : yield* formatTemplate(raw.slice(hash), fields, targetValue);
-      text += `${template.slice(last, match.index)}](${escapeBraces(real + fragment)})`;
-      last = match.index + match[0].length;
+      text += template.slice(last, start) + escapeBraces(real + fragment);
+      last = end;
     }
     return Result.ok(text + template.slice(last));
   });
