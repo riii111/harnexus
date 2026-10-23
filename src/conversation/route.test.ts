@@ -2203,6 +2203,38 @@ describe("a Claude thread with a running turn", () => {
     ]);
   });
 
+  test("answers nothing past an item anchor the app was streamed, while the turn runs and after it ends", async () => {
+    const { router, live, turnRecords, sent } = setup(["th-claude"], {
+      records: {
+        "th-claude": conversation(),
+      },
+    });
+    live.set("th-claude", LIVE);
+    turnRecords.set(LIVE.turnId, "u2");
+    const list = async (id: number) => {
+      router.fromApp(
+        encode({
+          id,
+          method: "thread/items/list",
+          params: {
+            threadId: "th-claude",
+            turnId: LIVE.turnId,
+            cursor: { type: "item", itemId: `${LIVE.turnId}-item-2` },
+          },
+        }),
+      );
+      await until(() => responseTo(sent, id) !== null);
+      return responseTo(sent, id);
+    };
+
+    const running = await list(8);
+    live.delete("th-claude");
+    const ended = await list(9);
+
+    expect(running.result.data).toEqual([]);
+    expect(ended.result.data).toEqual([]);
+  });
+
   test("passes a read without turns unchanged while no turn runs", async () => {
     const { router } = setup(["th-claude"], {
       records: { "th-claude": conversation() },
