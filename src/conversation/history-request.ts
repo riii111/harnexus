@@ -29,7 +29,16 @@ export type HistoryEvent =
       event: "claude_history_unreadable";
       error: InferErr<Awaited<ReturnType<ReadSession>>>["_tag"];
     }
-  | { event: "claude_subagents_unrestored" };
+  | { event: "claude_subagents_unrestored" }
+  | {
+      event: "claude_history_answered";
+      method: HistoryMethod;
+      thread: string;
+      live: string | null;
+      turn: string | null;
+      cursor: string | null;
+      returned: string[] | null;
+    };
 
 export type HistoryMethod = (typeof HISTORY_METHODS)[number];
 
@@ -159,6 +168,18 @@ export const createHistoryRequests = ({
       },
       streamed,
     );
+    log({
+      event: "claude_history_answered",
+      method,
+      thread: threadId.slice(0, 8),
+      live: live === null ? null : shortId(live.turnId),
+      turn: typeof turnId === "string" ? shortId(turnId) : null,
+      cursor: cursorShape(cursor),
+      returned:
+        result === null
+          ? null
+          : (result.data as readonly object[]).map(returnedId),
+    });
     send(
       result === null
         ? {
@@ -333,3 +354,33 @@ const INTERNAL_ERROR = -32603;
 const RECORD_UNREADABLE =
   "Harnexus cannot read this thread's Claude conversation record.";
 const UNKNOWN_CURSOR = "The cursor does not name a page of this Claude thread.";
+
+// Only the ids' kind and first characters are logged, enough to tell a live turn from a recorded one and match them up.
+export const shortId = (id: string) =>
+  id.replace(
+    /harnexus-(history|turn)-([0-9a-f]{8})(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/g,
+    (_, kind: string, head: string) =>
+      `${kind === "history" ? "h" : "l"}:${head}`,
+  );
+
+const cursorShape = (cursor: unknown) => {
+  if (typeof cursor === "string") return shortId(cursor);
+  if (isItemAnchor(cursor)) return `anchor ${shortId(cursor.itemId)}`;
+  return null;
+};
+
+const returnedId = (entry: object) => {
+  if (
+    "item" in entry &&
+    isObject(entry.item) &&
+    typeof entry.item.id === "string"
+  ) {
+    return shortId(entry.item.id);
+  }
+  if ("turnId" in entry && typeof entry.turnId === "string") {
+    return shortId(entry.turnId);
+  }
+  return "id" in entry && typeof entry.id === "string"
+    ? shortId(entry.id)
+    : "?";
+};

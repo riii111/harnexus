@@ -138,6 +138,7 @@ const serializeLogEvent = (entry: LogEvent) => {
     case "codex_incompatible":
     case "codex_version":
     case "claude_history_served":
+    case "claude_history_answered":
     case "claude_history_unreadable":
     case "claude_subagents_unrestored":
     case "claude_subagents_unreadable":

@@ -16,7 +16,11 @@ import {
   delegationSource,
 } from "../infra/codex/delegations.ts";
 import { codexVersion, isVerifiedCodex } from "../infra/codex/versions.ts";
-import { type LiveTurn, withLiveTurn } from "../presentation/history.ts";
+import {
+  type HistoryTurn,
+  type LiveTurn,
+  withLiveTurn,
+} from "../presentation/history.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import {
@@ -24,6 +28,7 @@ import {
   endsLive,
   type HistoryEvent,
   isHistoryMethod,
+  shortId,
   withLiveStatus,
   withResumeHistory,
   withTurns,
@@ -63,6 +68,7 @@ export type RouteEvent =
       initialPage: boolean;
       picked: boolean;
       turns: number;
+      newest: string | null;
     }
   | HistoryEvent
   | SubagentRestoreEvent<{ _tag: SubagentsReadTag }>;
@@ -600,6 +606,7 @@ export const createRouter = ({
           initialPage: false,
           picked: false,
           turns: shown.length,
+          newest: newestTurnOf(shown),
         });
         return encode({
           ...message,
@@ -667,6 +674,7 @@ export const createRouter = ({
         initialPage: isObject(params.initialTurnsPage),
         picked,
         turns: shown.length,
+        newest: newestTurnOf(shown),
       });
       return encode({
         ...message,
@@ -730,6 +738,11 @@ export const createRouter = ({
   return { fromApp, fromServer };
 };
 
+const newestTurnOf = (shown: readonly HistoryTurn[]) => {
+  const id = shown.at(-1)?.turn.id;
+  return id === undefined ? null : shortId(id);
+};
+
 export const serializeRouteEvent = (entry: RouteEvent) => {
   switch (entry.event) {
     case "claude_request_refused":
@@ -757,6 +770,17 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
         initialPage: entry.initialPage,
         picked: entry.picked,
         turns: entry.turns,
+        newest: entry.newest,
+      };
+    case "claude_history_answered":
+      return {
+        event: entry.event,
+        method: entry.method,
+        thread: entry.thread,
+        live: entry.live,
+        turn: entry.turn,
+        cursor: entry.cursor,
+        returned: entry.returned,
       };
     case "claude_history_unreadable":
     case "claude_subagents_unreadable":
