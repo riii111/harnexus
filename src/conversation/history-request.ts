@@ -119,9 +119,8 @@ export const createHistoryRequests = ({
     const threadId = String(request.params.threadId);
     const loaded = await load(threadId);
     // Asked once the record is read, so a turn that ended meanwhile is not shown running.
-    const history = loaded.map((turns) =>
-      withLiveTurn(turns, threads.liveTurnOf?.(threadId) ?? null),
-    );
+    const live = threads.liveTurnOf?.(threadId) ?? null;
+    const history = loaded.map((turns) => withLiveTurn(turns, live));
     if (history.isErr()) {
       send({
         id: request.id,
@@ -138,17 +137,28 @@ export const createHistoryRequests = ({
       return record === null ? turnId : historyTurnId(record);
     };
     const { cursor, turnId } = request.params;
-    const result = pageFor(method, history.value, {
-      ...request.params,
-      ...(method === "thread/turns/list" &&
-        typeof cursor === "string" && {
-          cursor: cursor.replace(
-            TURN_CURSOR,
-            (_, at: string, id: string) => at + resolve(id),
-          ),
-        }),
-      ...(typeof turnId === "string" && { turnId: resolve(turnId) }),
-    });
+    // The app holds every item of a turn it was streamed, which carry the live ids the record lacks; its cursor may still name another turn's item.
+    const streamed =
+      typeof turnId === "string" &&
+      (turnId === live?.turnId || resolve(turnId) !== turnId) &&
+      isItemAnchor(cursor) &&
+      cursor.itemId.startsWith(`${turnId}-item-`);
+    const result = pageFor(
+      method,
+      history.value,
+      {
+        ...request.params,
+        ...(method === "thread/turns/list" &&
+          typeof cursor === "string" && {
+            cursor: cursor.replace(
+              TURN_CURSOR,
+              (_, at: string, id: string) => at + resolve(id),
+            ),
+          }),
+        ...(typeof turnId === "string" && { turnId: resolve(turnId) }),
+      },
+      streamed,
+    );
     send(
       result === null
         ? {
@@ -251,10 +261,13 @@ export const endsLive = (history: readonly HistoryTurn[]) =>
 
 const ACTIVE = { type: "active", activeFlags: [] };
 
+const EMPTY_ITEMS = { data: [], nextCursor: null, backwardsCursor: null };
+
 const pageFor = (
   method: HistoryMethod,
   history: readonly HistoryTurn[],
   params: Record<string, unknown>,
+  streamed: boolean,
 ) => {
   const cursor = typeof params.cursor === "string" ? params.cursor : null;
   const limit = limitOf(params.limit);
@@ -272,13 +285,19 @@ const pageFor = (
         limit,
         sortDirection: directionOf(params.sortDirection, "asc"),
       };
-      // The app can anchor on an item it streamed under the live turn's ids or one a rewind cut, which the record does not hold, so such an anchor reads from the start as before anchors existed.
-      return isItemAnchor(params.cursor)
-        ? (pageItems(history, {
-            ...request,
-            cursor: itemAnchorCursor(params.cursor.itemId),
-          }) ?? pageItems(history, { ...request, cursor: null }))
-        : pageItems(history, { ...request, cursor });
+      if (!isItemAnchor(params.cursor)) {
+        return pageItems(history, { ...request, cursor });
+      }
+      // The record holds a streamed turn's items under other ids, so past an anchor in one the app already has them all, and reading the turn again would show its items twice; an anchor a rewind cut reads from the start as before anchors existed.
+      return (
+        pageItems(history, {
+          ...request,
+          cursor: itemAnchorCursor(params.cursor.itemId),
+        }) ??
+        (streamed
+          ? EMPTY_ITEMS
+          : pageItems(history, { ...request, cursor: null }))
+      );
     }
     case "thread/timeline/list": {
       const page = pageTimeline(history, { cursor, limit });
