@@ -3,9 +3,31 @@ import type { WatchConfig } from "./config.ts";
 import type { PrDetail } from "./github.ts";
 import type { WatchState } from "./store.ts";
 
+// The first read of a PR takes what is already on it as seen, so starting the watch never sends what the owner has handled.
+export const nextEvents = (
+  detail: PrDetail,
+  state: WatchState,
+  linkedAt: string,
+  owner: string,
+  config: WatchConfig,
+) =>
+  state.summary === null
+    ? { events: [] as WatchEvent[], ...baselineOf(detail) }
+    : eventsOf(detail, state, linkedAt, owner, config);
+
+// Every comment is taken, findings or not, so one whose verdict changes later is still not new.
+const baselineOf = (detail: PrDetail) => ({
+  seen: [
+    ...detail.comments.map((comment) => comment.id),
+    ...(reviewCompleted(detail) ? [reviewKey(detail.head)] : []),
+    ...detail.failedRequired.map((check) => checkKey(detail.head, check.name)),
+  ],
+  conflictHead: detail.mergeable === "CONFLICTING" ? detail.head : null,
+});
+
 // Events are told apart from what was already queued or sent by their keys, so a later read never repeats one.
 // The owner's own account is fixed per repository, so its comments are known without another request.
-export const eventsOf = (
+const eventsOf = (
   detail: PrDetail,
   state: WatchState,
   linkedAt: string,
@@ -57,13 +79,11 @@ const reviewDone = (
   fresh: (time: string) => boolean,
   findings: readonly WatchEvent[],
 ): WatchEvent[] => {
-  const status = detail.coderabbit;
-  const key = `coderabbit:${detail.head}`;
+  const key = reviewKey(detail.head);
   if (
-    status === null ||
-    status.state !== "SUCCESS" ||
-    !status.description.includes(REVIEW_COMPLETED) ||
-    !fresh(status.createdAt) ||
+    detail.coderabbit === null ||
+    !reviewCompleted(detail) ||
+    !fresh(detail.coderabbit.createdAt) ||
     seen.has(key)
   )
     return [];
@@ -86,7 +106,14 @@ const reviewDone = (
   ];
 };
 
+const reviewCompleted = ({ coderabbit }: PrDetail) =>
+  coderabbit !== null &&
+  coderabbit.state === "SUCCESS" &&
+  coderabbit.description.includes(REVIEW_COMPLETED);
+
 const REVIEW_COMPLETED = "Review completed";
+
+const reviewKey = (head: string) => `coderabbit:${head}`;
 
 // Told once per head while the PR conflicts, so a base that keeps moving does not repeat it.
 const conflictOf = (detail: PrDetail, notified: string | null) => {
@@ -103,9 +130,11 @@ const conflictOf = (detail: PrDetail, notified: string | null) => {
 
 const failedChecks = (detail: PrDetail, seen: Set<string>) =>
   detail.failedRequired.flatMap((check): WatchEvent[] => {
-    const key = `ci:${detail.head}:${check.name}`;
+    const key = checkKey(detail.head, check.name);
     if (seen.has(key)) return [];
 
     seen.add(key);
     return [{ type: "ci_failed", head: detail.head, check }];
   });
+
+const checkKey = (head: string, name: string) => `ci:${head}:${name}`;

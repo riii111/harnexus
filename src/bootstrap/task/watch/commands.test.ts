@@ -16,6 +16,13 @@ import {
 } from "./store.ts";
 
 const PR = "https://github.com/org/pay/pull/7";
+const REF = { repo: "org/pay", number: 7 };
+const LINK = {
+  ...REF,
+  url: PR,
+  worker: "worker",
+  linkedAt: "2026-09-01T00:00:00Z",
+};
 
 const cleanups: (() => Promise<unknown>)[] = [];
 
@@ -99,14 +106,19 @@ const github = (asked: string[]): GitHub => ({
 });
 
 describe("dryRun", () => {
-  test("reports the verdicts and the message for every open PR without sending", async () => {
+  test("reports the verdicts and the message for every open PR the watch already read without writing its state", async () => {
     const { env } = await fixture();
+    await recordLink(env, saveJson, LINK);
+    const read = { ...freshState(), summary: detail };
+    await saveWatchState(env, saveJson, REF, read);
     const asked: string[] = [];
 
     const ran = await dryRun({ env, github: github(asked) }, []);
 
     const report = ran.unwrap().prs as Record<string, unknown>[];
     expect(asked).toEqual(["open owner org/pay", "owner org/pay#7"]);
+    expect((await loadWatchState(env, REF)).unwrap()).toEqual(read);
+    expect(report[0]?.firstRead).toBe(false);
     expect(report[0]?.ignored).toEqual([
       {
         id: "issue:2",
@@ -119,6 +131,23 @@ describe("dryRun", () => {
     expect(String(report[0]?.prompt)).toContain(
       `1. [CodeRabbit・Minor] a.kt:3 ${PR}#discussion_r1`,
     );
+  });
+
+  test.each([
+    { name: "a linked PR without watch state", linked: true },
+    { name: "a PR no worker linked", linked: false },
+  ])("shows $name as a first read with no message and writes no state", async ({
+    linked,
+  }) => {
+    const { env } = await fixture();
+    if (linked) await recordLink(env, saveJson, LINK);
+
+    const ran = await dryRun({ env, github: github([]) }, [PR]);
+
+    const [report] = ran.unwrap().prs as Record<string, unknown>[];
+    expect([report?.firstRead, report?.prompt]).toEqual([true, null]);
+    expect((report?.notified as unknown[]).length).toBe(1);
+    expect((await loadWatchState(env, REF)).unwrap()).toEqual(freshState());
   });
 
   test("reads only the given PRs and refuses a repository outside the config", async () => {

@@ -125,7 +125,7 @@ It never writes to GitHub.
 
 It waits while the worker's turn runs, for five minutes after you talk to the worker, and during the quiet hours.
 It watches open PRs that are not drafts, ends with a merge or close, and stops for a worker chat that no longer exists.
-Only comments made after the PR was named are reported.
+The first time it reads a PR, it takes everything already there as seen and sends nothing; from then on only what is new is reported.
 If it cannot confirm that a message arrived, it stops sending for that PR; check the worker chat, then run `harnexus-task watch --release <PR URL>` to resume.
 
 Configure it in `~/.config/harnexus/pr-watch.json`:
@@ -143,3 +143,4 @@ Configure it in `~/.config/harnexus/pr-watch.json`:
 - `pollIntervalSeconds` (60), `idleIntervalSeconds` (600) after `idleAfterHours` (72) without changes, and `quietHours` (`{"start": "22:00", "end": "05:00"}`, or `null`).
 
 To see what would be sent without sending anything, run `harnexus-task watch --dry-run`, optionally with `--pr <URL>` for each PR to check.
+A PR the watch has not read yet shows `firstRead: true` and no message.
