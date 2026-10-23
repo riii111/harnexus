@@ -665,15 +665,18 @@ describe("harnexus-task templates", () => {
     const { root, env, harnexus, data, launch } = await launchFixture();
     const linked = join(root, "linked.md");
     const document = join(root, "a](linked.md)");
+    const escaped = join(root, "{task_id}.md");
     await writeFile(linked, "");
+    await writeFile(escaped, "");
     await writeFile(document, "");
+    data.taskId = "manual/TR1";
     data.documentRefs = [document];
     const template = join(root, "templates/worker.md");
     await mkdir(dirname(template));
     await writeFile(
       template,
       "{{task_id}} is {task_id}\n{document_refs}\n" +
-        "[guide](https://example.com/guide) [local](/nowhere.md) [top](#top) [linked](../linked.md)\n",
+        "[guide](https://example.com/guide) [local](/nowhere.md) [top](#top) [linked](../linked.md) [escaped](../{{task_id}}.md)\n",
     );
     await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
       templates: { worker: template },
@@ -683,14 +686,14 @@ describe("harnexus-task templates", () => {
 
     expect([sent.code, sent.err]).toEqual([0, ""]);
     expect(harnexus.calls.at(-1)?.arguments.prompt).toBe(
-      `{task_id} is TR1\n- ${document}\n` +
-        `[guide](https://example.com/guide) [local](/nowhere.md) [top](#top) [linked](${linked})\n`,
+      `{task_id} is manual/TR1\n- ${document}\n` +
+        `[guide](https://example.com/guide) [local](/nowhere.md) [top](#top) [linked](${linked}) [escaped](${escaped})\n`,
     );
   });
 
   test("fills anchors and field-led targets, and resolves beside a symlinked template's real file", async () => {
     const { root, env, harnexus, data, launch } = await launchFixture();
-    data.taskId = "#42";
+    data.taskId = "TR-42";
     const source = join(root, "source");
     await mkdir(join(source, "notes"), { recursive: true });
     await writeFile(join(source, "notes/task.md"), "");
@@ -709,7 +712,7 @@ describe("harnexus-task templates", () => {
 
     expect([sent.code, sent.err]).toEqual([0, ""]);
     expect(harnexus.calls.at(-1)?.arguments.prompt).toBe(
-      `[note](${join(source, "notes/task.md")}##42) [id](#42)\n`,
+      `[note](${join(source, "notes/task.md")}#TR-42) [id](TR-42)\n`,
     );
   });
 
@@ -722,8 +725,8 @@ describe("harnexus-task templates", () => {
     },
     {
       name: "a real path with #",
-      link: "[n](notes/{task_id}.md)",
-      taskId: "#42",
+      link: "[$s](hashed/SKILL.md)",
+      taskId: "TR1",
       error: "whose path has a space, parenthesis or #",
     },
     {
@@ -742,17 +745,33 @@ describe("harnexus-task templates", () => {
       name: "a field holding a path",
       link: "[n](notes/{task_id}.md)",
       taskId: "x/../../task",
-      error: "{task_id} holds a path",
+      error:
+        "{task_id} may hold only letters, digits, _ and - inside a link target",
+    },
+    {
+      name: "a field whose value would break the anchor",
+      link: "[n](notes/task.md#{task_id})",
+      taskId: "#42",
+      error:
+        "{task_id} may hold only letters, digits, _ and - inside a link target",
+    },
+    {
+      name: "a field that is not a request value",
+      link: "[n](notes/{constructor}.md)",
+      taskId: "TR1",
+      error: "unknown template field {constructor}",
     },
   ])("refuses a link to $name", async ({ link, taskId, error }) => {
     const { root, env, harnexus, data, launch } = await launchFixture();
     data.taskId = taskId;
     await mkdir(join(root, "notes"));
     await writeFile(join(root, "notes/task.md"), "");
-    await writeFile(join(root, "notes/#42.md"), "");
     await mkdir(join(root, "My Skills"));
     await writeFile(join(root, "My Skills/SKILL.md"), "");
     await symlink(join(root, "My Skills"), join(root, "spaced"));
+    await mkdir(join(root, "c#"));
+    await writeFile(join(root, "c#/SKILL.md"), "");
+    await symlink(join(root, "c#"), join(root, "hashed"));
     const template = join(root, "worker.md");
     await writeFile(template, `${link}\n`);
     await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {

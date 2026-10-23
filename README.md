@@ -142,7 +142,7 @@ Write `{{` and `}}` for literal braces; any other brace or an unknown name is an
 A relative Markdown link target is resolved against the folder of the template's real file and replaced with that file's real path.
 This is how a template attaches a skill, since the app attaches a skill named as `[$name](/absolute/path/SKILL.md)`.
 Write the target bare, without angle brackets, spaces or a title; a missing file, or a real path with a space, parenthesis or `#`, is an error.
-Fields may appear inside such a target, as in `reply-{worker_ai}.md`, but not ones whose value holds a `/`.
+Fields may appear inside such a target, as in `reply-{worker_ai}.md`, when their values hold only letters, digits, `_` and `-`.
 Absolute paths, URLs, `#` anchors and targets that open with a field, such as `{pr_url}`, are left to their values, and links inside the request's values are never resolved.
 
 ```md

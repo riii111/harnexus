@@ -45,7 +45,11 @@ const templatePath = (env: Env, kind: TemplateKind) =>
 // A Markdown link target such as the SKILL.md a template names, up to the first closing parenthesis on its line.
 const LINK_TARGET = /\]\(([^)\n]*)\)/g;
 
-const FIELD = /\{([^{}]*)\}/g;
+// A value inside a target is a name, never a path, so none can lead the link to another folder or break it.
+const targetValue = (value: string) =>
+  /^[\p{L}\p{N}_-]+$/u.test(value)
+    ? null
+    : "may hold only letters, digits, _ and - inside a link target";
 
 // A target opening with a field is the value's to decide, as with {pr_url} or {checkout}.
 const isRelative = (path: string) =>
@@ -57,7 +61,7 @@ const isRelative = (path: string) =>
 const escapeBraces = (text: string) =>
   text.replaceAll("{", "{{").replaceAll("}", "}}");
 
-// Links are found before the request's values go into the text, so no value can add one, and a value inside a target may not hold a path, so none can lead it to another folder.
+// Links are found before the request's values go into the text, so no value can add one.
 const resolveLinks = (
   template: string,
   path: string,
@@ -78,24 +82,22 @@ const resolveLinks = (
         return fail(
           `links to "${raw}"; write a relative target without angle brackets, spaces or a title`,
         );
-      for (const [, name] of rawPath.matchAll(FIELD)) {
-        const value = name === undefined ? undefined : fields[name];
-        if (value?.includes("/") || value === "." || value === "..")
-          return fail(
-            `{${name}} holds a path, which a link target may not take`,
-          );
-      }
-      const file = resolve(folder, yield* formatTemplate(rawPath, fields));
+      const file = resolve(
+        folder,
+        yield* formatTemplate(rawPath, fields, targetValue),
+      );
       if (!(await isFile(file)))
         return fail(`links to ${file}, which is not a file`);
       const real = await realPathOrSelf(file);
-      // The app reads a link target only up to a space or parenthesis, and from a # on as an anchor.
+      // A link target ends at a space or parenthesis, and Markdown reads a # as the start of an anchor.
       if (/[\s()#]/.test(real))
         return fail(
           `links to ${real}, whose path has a space, parenthesis or #`,
         );
       const fragment =
-        hash === -1 ? "" : yield* formatTemplate(raw.slice(hash), fields);
+        hash === -1
+          ? ""
+          : yield* formatTemplate(raw.slice(hash), fields, targetValue);
       text += `${template.slice(last, match.index)}](${escapeBraces(real + fragment)})`;
       last = match.index + match[0].length;
     }
