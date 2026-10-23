@@ -242,6 +242,19 @@ const writeTemporary = async (path: string, content: string) => {
 export const isFile = async (path: string) =>
   (await stat(path).catch(() => null))?.isFile() ?? false;
 
+// Null for a path that cannot be inspected; the device and inode tell a file swapped in at the path from one changed in place.
+export const fileIdentity = async (path: string) => {
+  const found = await stat(path).catch(() => null);
+  return found?.isFile()
+    ? {
+        dev: found.dev,
+        ino: found.ino,
+        size: found.size,
+        modifiedMs: Math.trunc(found.mtimeMs),
+      }
+    : null;
+};
+
 export const isDirectory = async (path: string) =>
   (await stat(path).catch(() => null))?.isDirectory() ?? false;
 

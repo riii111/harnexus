@@ -48,6 +48,7 @@ import {
   saveJson,
   stateRoot,
 } from "./session.ts";
+import { programWatch } from "./watch-program.ts";
 import { codexWorkers } from "./watch-worker.ts";
 
 export type TaskDeps = {
@@ -289,12 +290,22 @@ export const watchPaths = (env: Env): WatchPaths => ({
   state: join(stateRoot(env), "watch"),
 });
 
-const watch = (args: Args, deps: TaskDeps) => {
+const watch = async (args: Args, deps: TaskDeps) => {
   const paths = watchPaths(deps.env);
   if (args.release !== undefined) return release(paths.state, args.release);
   if (args.status) return status(paths.state);
   const github = createGitHub(deps.runGit, deps.env);
   if (args.dryRun) return dryRun({ paths, github }, args.prs);
+  const log = (entry: Fields) =>
+    deps.print(
+      `${JSON.stringify({ time: new Date().toISOString(), ...entry })}\n`,
+    );
+  // Only a compiled harnexus-task is its own program; run from source, the program is Bun.
+  const replaced = await programWatch(
+    process.execPath,
+    Bun.main.startsWith("/$bunfs/"),
+  );
+  if (replaced === null) log({ event: "replace_check_off" });
   return watchForever(
     {
       paths,
@@ -303,12 +314,10 @@ const watch = (args: Args, deps: TaskDeps) => {
         callApp(deps.env, caller, tool, sent),
       ),
       now: () => new Date(),
-      log: (entry) =>
-        deps.print(
-          `${JSON.stringify({ time: new Date().toISOString(), ...entry })}\n`,
-        ),
+      log,
     },
     (ms) => Bun.sleep(ms),
+    replaced ?? undefined,
   );
 };
 

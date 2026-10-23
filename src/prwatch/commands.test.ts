@@ -277,6 +277,41 @@ describe("recordLink", () => {
   });
 });
 
+describe("watchForever once its program is replaced", () => {
+  test("ends before the next cycle once the check after a sleep finds it", async () => {
+    const { paths } = await fixture();
+    const logs: Record<string, unknown>[] = [];
+    let slept = 0;
+    let checks = 0;
+
+    const ran = await watchForever(
+      {
+        paths,
+        github: github([]),
+        workers: {
+          senderOf: async () => null,
+          look: async () => null,
+          send: async () => ({ outcome: "done", detail: {} }),
+        },
+        now: () => new Date(),
+        log: (entry) => logs.push(entry),
+      },
+      async () => {
+        slept += 1;
+      },
+      async () => {
+        checks += 1;
+        return checks > 1;
+      },
+    );
+
+    expect(ran.isErr() && ran.error.message).toContain("was replaced");
+    // One cycle ran before the sleep, and none after the check that found the program replaced.
+    expect([checks, slept]).toEqual([2, 1]);
+    expect(logs.map((entry) => entry.event)).toEqual(["started", "replaced"]);
+  });
+});
+
 // The lock comes from macOS's O_EXLOCK, which other systems do not have.
 const onMac = process.platform === "darwin";
 
