@@ -2,21 +2,16 @@ import type { Answer, Workers } from "../../prwatch/worker.ts";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 import type { Fields } from "./format.ts";
-import type { Env } from "./request.ts";
-import { reviewerOfWorker } from "./session.ts";
 
 // The PR watch's workers are Codex chats linked to a PR; the watch reaches them through the app.
+// Every message comes from the one chat registered with watch --sender, so the watch depends on no other command's records.
 export const codexWorkers = (
-  env: Env,
   callApp: AppCall,
-  fallback: () => Promise<string | null>,
+  registered: () => Promise<string | null>,
 ): Workers => ({
-  // The worker's reviewer already messages the worker, so it sends when there is one.
-  // Otherwise the chat registered with watch --sender does; a thread cannot message itself, so a worker never sends to itself.
+  // A thread cannot message itself, so the registered chat is never sent to from itself.
   senderOf: async (worker) => {
-    const reviewer = await reviewerOfWorker(env, worker);
-    if (reviewer !== null) return reviewer;
-    const sender = await fallback();
+    const sender = await registered();
     return sender === worker ? null : sender;
   },
 

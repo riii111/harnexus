@@ -120,8 +120,9 @@ To disable it, launch with `HARNEXUS_CALL_SOCKET=off bun run open-app`.
 ### Watching PRs
 
 `harnexus-task watch` runs until stopped and tells the worker of each PR named with `name --pr` what needs its attention: review comments, a finished review by an AI review bot such as CodeRabbit, a conflict with the base, and a failed required check.
-It sends one message per PR from the worker's reviewer chat, with each item's kind, place and link but not its text.
-A worker without a reviewer, such as a chat you started by hand, is sent to from the chat registered with `harnexus-task watch --sender`; run it once in a chat you keep for that.
+It sends one message per PR, with each item's kind, place and link but not its text.
+Every message comes from one chat you register: run `harnexus-task watch --sender` once in a chat you keep for that.
+Until a chat is registered, nothing is sent, and `name --pr`, `watch --link` and `watch --status` say so.
 It never writes to GitHub.
 
 It waits while the worker's turn runs, for five minutes after you talk to the worker, and during the quiet hours.

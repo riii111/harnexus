@@ -296,7 +296,8 @@ const hasWork = (state: WatchState) =>
   state.followUp.length > 0 ||
   state.delivered !== null;
 
-const NO_SENDER = "nothing can send to the worker yet";
+const NO_SENDER =
+  "no chat is registered to send from: run harnexus-task watch --sender in a chat kept for it";
 
 // False while the answer to the last message is still to come, so a new message never interrupts it.
 const checkAnswer = (

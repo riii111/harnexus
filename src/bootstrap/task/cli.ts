@@ -44,7 +44,6 @@ import {
   launchOfThread,
   launchSession,
   listState,
-  reviewerOfWorker,
   reviewProject,
   reviewSession,
   type SaveJson,
@@ -290,7 +289,6 @@ const deliveryWarning = async (
   deps: TaskDeps,
   worker: string,
 ): Promise<{ warning?: string }> => {
-  if ((await reviewerOfWorker(deps.env, worker)) !== null) return {};
   const sender = await loadSender(watchPaths(deps.env).state);
   if (sender.isErr())
     return {
@@ -361,7 +359,6 @@ const watch = async (args: Args, deps: TaskDeps) => {
       paths,
       github,
       workers: codexWorkers(
-        deps.env,
         (caller, tool, sent) => callApp(deps.env, caller, tool, sent),
         async () => (await loadSender(paths.state)).unwrapOr(null),
       ),
@@ -373,7 +370,7 @@ const watch = async (args: Args, deps: TaskDeps) => {
   );
 };
 
-// The calling chat becomes the sender for workers without a reviewer of their own.
+// The calling chat becomes the one the watch sends every message from.
 const registerSender = (deps: TaskDeps, root: string) =>
   Result.gen(async function* () {
     const thread = yield* callerId(deps.env);

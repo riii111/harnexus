@@ -142,15 +142,6 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
       ...freshState(),
       summary: summary({ updatedAt: "2026-10-22T00:00:00Z" }),
     });
-  const review = join(root, "state/taskctl/review/r1");
-  await mkdir(review, { recursive: true });
-  await writeFile(
-    join(review, "state.json"),
-    JSON.stringify({
-      reviewer: "reviewer",
-      candidate: { workerChatId: "worker" },
-    }),
-  );
 
   const world = {
     summary: summary(),
@@ -161,7 +152,8 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
     active: false,
     gone: false,
     sendOutcome: "done",
-    fallback: null as string | null,
+    // The chat registered with watch --sender.
+    sender: "reviewer" as string | null,
     now: NOON,
   };
   const calls = { summaries: 0, details: 0, sent: [] as Fields[] };
@@ -212,7 +204,7 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
     const ran = await runCycle({
       paths,
       github,
-      workers: codexWorkers(env, callApp, async () => world.fallback),
+      workers: codexWorkers(callApp, async () => world.sender),
       now: () => world.now,
       log: (entry) => logs.push(entry),
       ...(over === undefined ? {} : { over }),
@@ -231,7 +223,7 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
 };
 
 describe("runCycle", () => {
-  test("sends a completed CodeRabbit review with its new findings in one message from the worker's reviewer", async () => {
+  test("sends a completed CodeRabbit review with its new findings in one message from the registered chat", async () => {
     const { world, calls, cycle, state } = await fixture();
     world.comments = [
       comment({}),
@@ -852,18 +844,22 @@ describe("runCycle", () => {
     );
   });
 
-  test("sends from the registered chat to a worker without a reviewer, but never from the worker itself", async () => {
-    const { world, calls, cycle, later, paths } = await fixture();
-    await rm(join(paths.state, "..", "review"), { recursive: true });
+  test("sends nothing without a registered chat, or when the registered chat is the worker itself", async () => {
+    const { world, calls, cycle, later, state } = await fixture();
     world.comments = [comment({})];
-    world.fallback = "worker";
+    world.sender = null;
+    await cycle();
+    const reason = (await state()).reason;
+    world.sender = "worker";
+    later(1);
     await cycle();
     const fromItself = calls.sent.length;
 
-    world.fallback = "sender";
+    world.sender = "sender";
     later(1);
     await cycle();
 
+    expect(reason).toContain("watch --sender");
     expect(fromItself).toBe(0);
     expect(calls.sent.map((sent) => [sent.caller, sent.threadId])).toEqual([
       ["sender", "worker"],
@@ -884,7 +880,7 @@ describe("runCycle", () => {
       worker: "next",
       linkedAt: LINKED_AT,
     });
-    world.fallback = "sender";
+    world.sender = "sender";
     world.comments = [
       comment({}),
       comment({ id: "inline:9", author: "tanaka", url: `${PR}#discussion_r9` }),
@@ -917,7 +913,7 @@ describe("runCycle", () => {
       linkedAt: LINKED_AT,
     });
     world.gone = false;
-    world.fallback = "sender";
+    world.sender = "sender";
     later(1);
     await cycle();
 
@@ -942,7 +938,7 @@ describe("runCycle", () => {
       linkedAt: LINKED_AT,
     });
     world.sendOutcome = "done";
-    world.fallback = "sender";
+    world.sender = "sender";
     later(1);
     await cycle();
 

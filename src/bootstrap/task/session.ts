@@ -539,26 +539,5 @@ export const launchOfThread = (env: Env, thread: string) =>
     return Result.ok<Fields | null>(null);
   });
 
-// The reviewer a review session recorded for the worker, which the PR watch sends from.
-// Another review's unreadable state is skipped, as for a launch.
-export const reviewerOfWorker = async (env: Env, worker: string) => {
-  const root = join(stateRoot(env), "review");
-  const keys = await namesIn(root);
-  for (const key of keys.isOk() ? keys.value.sort() : []) {
-    if (!(await isDirectory(join(root, key)))) continue;
-
-    const loaded = await load(join(root, key, "state.json"));
-    const state = loaded.isOk() ? loaded.value : null;
-    if (
-      isObject(state) &&
-      typeof state.reviewer === "string" &&
-      isObject(state.candidate) &&
-      state.candidate.workerChatId === worker
-    )
-      return state.reviewer;
-  }
-  return null;
-};
-
 export const namesIn = async (path: string) =>
   (await io(listDirectoryIfExists(path))).map((names) => names ?? []);
