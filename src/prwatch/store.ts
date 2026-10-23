@@ -219,7 +219,7 @@ export const saveWatchState = (
 
 export const lockPath = (root: string) => join(root, "watch.lock");
 
-// The chat the watch sends from to a worker that has no sender of its own, such as a chat the owner started by hand.
+// The one chat the watch sends every message from.
 export const recordSender = (root: string, thread: string) =>
   saveJson(senderPath(root), { thread, at: new Date().toISOString() });
 

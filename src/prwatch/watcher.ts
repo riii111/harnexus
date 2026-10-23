@@ -257,10 +257,15 @@ const deliver = async (
 
   const pr = link.url;
   const sender = await deps.workers.senderOf(link.worker);
-  if (sender === null) {
-    if (state.reason !== NO_SENDER)
-      deps.log({ event: "no_sender", pr, worker: link.worker });
-    state.reason = NO_SENDER;
+  if (typeof sender !== "string") {
+    if (state.reason !== sender.missing)
+      deps.log({
+        event: "no_sender",
+        pr,
+        worker: link.worker,
+        reason: sender.missing,
+      });
+    state.reason = sender.missing;
     return;
   }
 
@@ -295,9 +300,6 @@ const hasWork = (state: WatchState) =>
   state.pending.length > 0 ||
   state.followUp.length > 0 ||
   state.delivered !== null;
-
-const NO_SENDER =
-  "no chat is registered to send from: run harnexus-task watch --sender in a chat kept for it";
 
 // False while the answer to the last message is still to come, so a new message never interrupts it.
 const checkAnswer = (

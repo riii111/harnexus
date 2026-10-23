@@ -268,7 +268,7 @@ describe("watchForever once its program is replaced", () => {
         paths,
         github: github([]),
         workers: {
-          senderOf: async () => null,
+          senderOf: async () => ({ missing: "none" }),
           look: async () => null,
           send: async () => ({ outcome: "done", detail: {} }),
         },
@@ -307,7 +307,7 @@ describe("watchForever", () => {
           paths,
           github: github([]),
           workers: {
-            senderOf: async () => null,
+            senderOf: async () => ({ missing: "none" }),
             look: async () => null,
             send: async () => ({ outcome: "done", detail: {} }),
           },

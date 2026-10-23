@@ -51,7 +51,7 @@ import {
   stateRoot,
 } from "./session.ts";
 import { programWatch } from "./watch-program.ts";
-import { codexWorkers } from "./watch-worker.ts";
+import { codexWorkers, senderFor } from "./watch-worker.ts";
 
 export type TaskDeps = {
   env: Env;
@@ -289,17 +289,11 @@ const deliveryWarning = async (
   deps: TaskDeps,
   worker: string,
 ): Promise<{ warning?: string }> => {
-  const sender = await loadSender(watchPaths(deps.env).state);
-  if (sender.isErr())
-    return {
-      warning: `cannot read the registered sender: ${sender.error.message}`,
-    };
-  return sender.value !== null && sender.value !== worker
-    ? {}
-    : {
-        warning:
-          "nothing can send to this chat yet: run harnexus-task watch --sender in another chat",
-      };
+  const sender = senderFor(
+    await loadSender(watchPaths(deps.env).state),
+    worker,
+  );
+  return typeof sender === "string" ? {} : { warning: sender.missing };
 };
 
 const NOT_LINKABLE =
@@ -354,13 +348,20 @@ const watch = async (args: Args, deps: TaskDeps) => {
     Bun.main.startsWith("/$bunfs/"),
   );
   if (replaced === null) log({ event: "replace_check_off" });
+  // Said once at start, since without a registered chat no PR is ever sent to.
+  const registered = await loadSender(paths.state);
+  if (registered.isErr() || registered.value === null)
+    log({
+      event: "no_sender_registered",
+      ...(registered.isErr() ? { error: registered.error.message } : {}),
+    });
   return watchForever(
     {
       paths,
       github,
       workers: codexWorkers(
         (caller, tool, sent) => callApp(deps.env, caller, tool, sent),
-        async () => (await loadSender(paths.state)).unwrapOr(null),
+        () => loadSender(paths.state),
       ),
       now: () => new Date(),
       log,

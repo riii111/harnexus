@@ -204,7 +204,7 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
     const ran = await runCycle({
       paths,
       github,
-      workers: codexWorkers(callApp, async () => world.sender),
+      workers: codexWorkers(callApp, async () => Result.ok(world.sender)),
       now: () => world.now,
       log: (entry) => logs.push(entry),
       ...(over === undefined ? {} : { over }),
@@ -854,12 +854,14 @@ describe("runCycle", () => {
     later(1);
     await cycle();
     const fromItself = calls.sent.length;
+    const itselfReason = (await state()).reason;
 
     world.sender = "sender";
     later(1);
     await cycle();
 
-    expect(reason).toContain("watch --sender");
+    expect(reason).toContain("no chat is registered");
+    expect(itselfReason).toContain("is this chat itself");
     expect(fromItself).toBe(0);
     expect(calls.sent.map((sent) => [sent.caller, sent.threadId])).toEqual([
       ["sender", "worker"],

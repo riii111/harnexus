@@ -639,7 +639,7 @@ describe("harnexus-task name", () => {
       title: "Impl｜決済を再送する PR#141",
       watched: "https://github.com/org/pay/pull/141",
       warning:
-        "nothing can send to this chat yet: run harnexus-task watch --sender in another chat",
+        "no chat is registered to send from: run harnexus-task watch --sender in a chat kept for it",
     });
     expect(again.out.title).toBe("Impl｜決済を再送する PR#142");
     expect(again.out.watched).toBe("https://github.com/org/pay/pull/142");
@@ -681,7 +681,7 @@ describe("harnexus-task name", () => {
         title: null,
         watched: "https://github.com/org/pay/pull/141",
         warning:
-          "nothing can send to this chat yet: run harnexus-task watch --sender in another chat",
+          "no chat is registered to send from: run harnexus-task watch --sender in a chat kept for it",
       },
     ]);
     expect([unlinkable.code, unlinkable.err]).toEqual([
