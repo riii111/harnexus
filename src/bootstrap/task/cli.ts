@@ -1,11 +1,26 @@
 import { join } from "node:path";
 import { Result, TaggedError } from "better-result";
 import type { CallOutcome } from "../../infra/codex/call-gateway.ts";
+import {
+  dryRun,
+  release,
+  status,
+  watchForever,
+} from "../../prwatch/commands.ts";
+import { createGitHub } from "../../prwatch/github.ts";
+import {
+  githubPr,
+  listLinks,
+  recordLink,
+  samePr,
+} from "../../prwatch/store.ts";
+import type { WatchPaths } from "../../prwatch/watcher.ts";
 import { isObject } from "../../runtime/object.ts";
 import { runCommand } from "../../runtime/process.boundary.ts";
 import { type OptionTypes, parseOptions } from "./args.boundary.ts";
 import { asText, type Fields, fail, jsonEqual, truthy } from "./format.ts";
 import {
+  absoluteOr,
   callerId,
   candidate,
   chatId,
@@ -13,6 +28,7 @@ import {
   type Env,
   type GitRunner,
   gitIn,
+  homeOf,
   launchRequest,
   NAME,
   readJson,
@@ -30,10 +46,9 @@ import {
   reviewSession,
   type SaveJson,
   saveJson,
+  stateRoot,
 } from "./session.ts";
-import { dryRun, release, watchForever } from "./watch/commands.ts";
-import { createGitHub } from "./watch/github.ts";
-import { githubPr, listLinks, recordLink } from "./watch/store.ts";
+import { codexWorkers } from "./watch-worker.ts";
 
 export type TaskDeps = {
   env: Env;
@@ -63,6 +78,7 @@ type Args = {
   prs: string[];
   dryRun: boolean;
   release?: string;
+  status: boolean;
 };
 
 const worktreeTarget = (project: unknown) => ({
@@ -248,15 +264,13 @@ const linkPr = (deps: TaskDeps, value: string, worker: string) =>
   Result.gen(async function* () {
     const pr = githubPr(value);
     if (pr === null) return Result.ok(null);
-    const links = yield* Result.await(listLinks(deps.env));
+    const root = watchPaths(deps.env).state;
+    const links = yield* Result.await(listLinks(root));
     const known = links.find(
-      (link) =>
-        link.worker === worker &&
-        link.repo.toLowerCase() === pr.repo.toLowerCase() &&
-        link.number === pr.number,
+      (link) => link.worker === worker && samePr(link, pr),
     );
     yield* Result.await(
-      recordLink(deps.env, deps.saveJson, {
+      recordLink(root, {
         ...pr,
         worker,
         // Naming the same PR again keeps its start, so comments made since are still reported.
@@ -266,17 +280,28 @@ const linkPr = (deps: TaskDeps, value: string, worker: string) =>
     return Result.ok(pr.url);
   });
 
+// The watch keeps its config beside harnexus's and its records beside the other task records.
+export const watchPaths = (env: Env): WatchPaths => ({
+  config: join(
+    absoluteOr(env.XDG_CONFIG_HOME, join(homeOf(env), ".config")),
+    "harnexus/pr-watch.json",
+  ),
+  state: join(stateRoot(env), "watch"),
+});
+
 const watch = (args: Args, deps: TaskDeps) => {
-  if (args.release !== undefined)
-    return release(deps.env, deps.saveJson, args.release);
+  const paths = watchPaths(deps.env);
+  if (args.release !== undefined) return release(paths.state, args.release);
+  if (args.status) return status(paths.state);
   const github = createGitHub(deps.runGit, deps.env);
-  if (args.dryRun) return dryRun({ env: deps.env, github }, args.prs);
+  if (args.dryRun) return dryRun({ paths, github }, args.prs);
   return watchForever(
     {
-      env: deps.env,
-      saveJson: deps.saveJson,
+      paths,
       github,
-      callApp: (caller, tool, sent) => callApp(deps.env, caller, tool, sent),
+      workers: codexWorkers(deps.env, (caller, tool, sent) =>
+        callApp(deps.env, caller, tool, sent),
+      ),
       now: () => new Date(),
       log: (entry) =>
         deps.print(
@@ -338,6 +363,7 @@ const OPTIONS: Record<Command, OptionTypes> = {
     "dry-run": { type: "boolean" },
     pr: { type: "string", multiple: true },
     release: { type: "string" },
+    status: { type: "boolean" },
   },
 };
 
@@ -349,7 +375,7 @@ const USAGE = {
   resolve:
     "resolve --request REQUEST (--sent | --not-sent) [--thread-id THREAD_ID]",
   name: "name --pr PR",
-  watch: "watch [--dry-run [--pr PR]... | --release PR]",
+  watch: "watch [--dry-run [--pr PR]... | --release PR | --status]",
 } satisfies Record<Command, string>;
 
 const usageOf = (commands: readonly Command[]) =>
@@ -390,6 +416,7 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
     updateBase: values["update-base"] === true,
     sent: values.sent === true,
     dryRun: values["dry-run"] === true,
+    status: values.status === true,
     prs: command === "watch" && Array.isArray(values.pr) ? values.pr : [],
   };
   const request = text("request");
@@ -403,8 +430,11 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
   if (released !== undefined) args.release = released;
   if (args.prs.length > 0 && !args.dryRun)
     return shown("--pr is only for --dry-run");
-  if (released !== undefined && args.dryRun)
-    return shown("--release cannot be combined with --dry-run");
+  if (
+    [released !== undefined, args.dryRun, args.status].filter(Boolean).length >
+    1
+  )
+    return shown("use only one of --dry-run, --release and --status");
   if (command === "resolve" && values.sent === values["not-sent"])
     return shown("exactly one of --sent and --not-sent is required");
   const model = text("model");

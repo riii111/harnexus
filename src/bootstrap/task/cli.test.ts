@@ -12,9 +12,9 @@ import {
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { runTask, TASK_DEPS, type TaskDeps } from "./cli.ts";
+import { listLinks } from "../../prwatch/store.ts";
+import { runTask, TASK_DEPS, type TaskDeps, watchPaths } from "./cli.ts";
 import { callApp, type SaveJson, saveJson } from "./session.ts";
-import { listLinks } from "./watch/store.ts";
 
 const SKILLS = join(import.meta.dir, "../../../test/fixtures/task-skills");
 const README = join(import.meta.dir, "../../../README.md");
@@ -688,7 +688,7 @@ describe("harnexus-task name", () => {
       ["name", "--pr", "https://github.com/org/pay/pull/141"],
       [{ outcome: "done" }],
     );
-    const first = await listLinks(env);
+    const first = await listLinks(watchPaths(env).state);
     await invoke(
       ["name", "--pr", "https://github.com/org/pay/pull/141#top"],
       [{ outcome: "done" }],
@@ -698,7 +698,7 @@ describe("harnexus-task name", () => {
       [{ outcome: "done" }],
     );
 
-    const links = (await listLinks(env)).unwrap();
+    const links = (await listLinks(watchPaths(env).state)).unwrap();
     expect(links).toEqual([
       {
         repo: "org/pay",
@@ -738,7 +738,12 @@ describe("harnexus-task watch", () => {
     {
       name: "--release with --dry-run",
       args: ["--dry-run", "--release", "https://github.com/org/pay/pull/1"],
-      message: "--release cannot be combined with --dry-run",
+      message: "use only one of --dry-run, --release and --status",
+    },
+    {
+      name: "--status with --release",
+      args: ["--status", "--release", "https://github.com/org/pay/pull/1"],
+      message: "use only one of --dry-run, --release and --status",
     },
   ])("refuses $name", async ({ args, message }) => {
     const { invoke } = await fixture();

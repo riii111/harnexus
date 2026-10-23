@@ -3,9 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result } from "better-result";
-import { holdProcessLock } from "../../../runtime/fs.boundary.ts";
-import { saveJson } from "../session.ts";
-import { dryRun, release, watchForever } from "./commands.ts";
+import { holdProcessLock } from "../runtime/fs.boundary.ts";
+import { dryRun, release, status, watchForever } from "./commands.ts";
 import type { GitHub, PrDetail } from "./github.ts";
 import {
   freshState,
@@ -33,20 +32,18 @@ afterEach(async () => {
 const fixture = async () => {
   const root = await mkdtemp(join(tmpdir(), "harnexus-watch-commands-"));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
-  const env = {
-    HOME: root,
-    XDG_STATE_HOME: join(root, "state"),
-    XDG_CONFIG_HOME: join(root, "config"),
+  const paths = {
+    config: join(root, "pr-watch.json"),
+    state: join(root, "watch"),
   };
-  await mkdir(join(root, "config/harnexus"), { recursive: true });
   await writeFile(
-    join(root, "config/harnexus/pr-watch.json"),
+    paths.config,
     JSON.stringify({
       repositories: { "Org/Pay": { account: "owner" } },
       ignore: [{ author: "coderabbitai[bot]", kind: "issue_comment" }],
     }),
   );
-  return { env };
+  return { paths, root: paths.state };
 };
 
 const detail: PrDetail = {
@@ -55,16 +52,18 @@ const detail: PrDetail = {
   head: "a".repeat(40),
   updatedAt: "2026-10-23T00:00:00Z",
   mergeable: "MERGEABLE",
-  coderabbit: {
-    state: "SUCCESS",
-    description: "Review completed",
-    createdAt: "2026-10-01T00:00:00Z",
+  bots: {
+    coderabbit: {
+      state: "SUCCESS",
+      description: "Review completed",
+      createdAt: "2026-10-01T00:00:00Z",
+    },
   },
   rollup: "SUCCESS",
   url: PR,
   title: "Pay",
   failedRequired: [],
-  noActionableSummary: false,
+  noActionable: [],
   comments: [
     {
       id: "inline:1",
@@ -107,17 +106,17 @@ const github = (asked: string[]): GitHub => ({
 
 describe("dryRun", () => {
   test("reports the verdicts and the message for every open PR the watch already read without writing its state", async () => {
-    const { env } = await fixture();
-    await recordLink(env, saveJson, LINK);
+    const { paths, root } = await fixture();
+    await recordLink(root, LINK);
     const read = { ...freshState(), summary: detail };
-    await saveWatchState(env, saveJson, REF, read);
+    await saveWatchState(root, REF, read);
     const asked: string[] = [];
 
-    const ran = await dryRun({ env, github: github(asked) }, []);
+    const ran = await dryRun({ paths, github: github(asked) }, []);
 
     const report = ran.unwrap().prs as Record<string, unknown>[];
     expect(asked).toEqual(["open owner org/pay", "owner org/pay#7"]);
-    expect((await loadWatchState(env, REF)).unwrap()).toEqual(read);
+    expect((await loadWatchState(root, REF)).unwrap()).toEqual(read);
     expect(report[0]?.firstRead).toBe(false);
     expect(report[0]?.ignored).toEqual([
       {
@@ -139,23 +138,25 @@ describe("dryRun", () => {
   ])("shows $name as a first read with no message and writes no state", async ({
     linked,
   }) => {
-    const { env } = await fixture();
-    if (linked) await recordLink(env, saveJson, LINK);
+    const { paths, root } = await fixture();
+    if (linked) await recordLink(root, LINK);
 
-    const ran = await dryRun({ env, github: github([]) }, [PR]);
+    const ran = await dryRun({ paths, github: github([]) }, [PR]);
 
     const [report] = ran.unwrap().prs as Record<string, unknown>[];
     expect([report?.firstRead, report?.prompt]).toEqual([true, null]);
     expect((report?.notified as unknown[]).length).toBe(1);
-    expect((await loadWatchState(env, REF)).unwrap()).toEqual(freshState());
+    expect((await loadWatchState(root, REF)).unwrap()).toEqual(freshState());
   });
 
   test("reads only the given PRs and refuses a repository outside the config", async () => {
-    const { env } = await fixture();
+    const { paths } = await fixture();
     const asked: string[] = [];
 
-    const given = await dryRun({ env, github: github(asked) }, [`${PR}/files`]);
-    const outside = await dryRun({ env, github: github(asked) }, [
+    const given = await dryRun({ paths, github: github(asked) }, [
+      `${PR}/files`,
+    ]);
+    const outside = await dryRun({ paths, github: github(asked) }, [
       "https://github.com/org/other/pull/1",
     ]);
 
@@ -169,25 +170,25 @@ describe("dryRun", () => {
 
 describe("release", () => {
   test("resumes a halted PR and takes its message as delivered", async () => {
-    const { env } = await fixture();
+    const { root } = await fixture();
     const ref = { repo: "org/pay", number: 7 };
-    await recordLink(env, saveJson, {
+    await recordLink(root, {
       ...ref,
       url: PR,
       worker: "worker",
       linkedAt: "2026-10-01T00:00:00Z",
     });
-    await saveWatchState(env, saveJson, ref, {
+    await saveWatchState(root, ref, {
       ...freshState(),
       status: "halted",
       pending: [{ type: "conflict", head: "a" }],
       halted: { prompt: "x" },
     });
 
-    const released = await release(env, saveJson, PR);
-    const again = await release(env, saveJson, PR);
+    const released = await release(root, PR);
+    const again = await release(root, PR);
 
-    const state = (await loadWatchState(env, ref)).unwrap();
+    const state = (await loadWatchState(root, ref)).unwrap();
     expect(released.unwrap()).toEqual({ released: PR, worker: "worker" });
     expect([state.status, state.pending, state.halted]).toEqual([
       "watching",
@@ -198,6 +199,36 @@ describe("release", () => {
   });
 });
 
+describe("status", () => {
+  test("lists each linked PR with what its watch is doing", async () => {
+    const { root } = await fixture();
+    await recordLink(root, LINK);
+    await saveWatchState(root, REF, {
+      ...freshState(),
+      status: "halted",
+      reason: "x",
+      pending: [{ type: "conflict", head: "a" }],
+    });
+
+    const shown = await status(root);
+
+    expect(shown.unwrap()).toEqual({
+      prs: [
+        {
+          pr: PR,
+          worker: "worker",
+          status: "halted",
+          reason: "x",
+          pending: 1,
+          followUp: 0,
+          awaitingAnswer: false,
+          checkedAt: null,
+        },
+      ],
+    });
+  });
+});
+
 // The lock comes from macOS's O_EXLOCK, which other systems do not have.
 const onMac = process.platform === "darwin";
 
@@ -205,18 +236,19 @@ describe("watchForever", () => {
   test.skipIf(!onMac)(
     "refuses to start while another watch holds the lock",
     async () => {
-      const { env } = await fixture();
-      await mkdir(join(env.XDG_STATE_HOME, "taskctl/watch"), {
-        recursive: true,
-      });
-      expect(holdProcessLock(lockPath(env)).unwrap()).toBe(true);
+      const { paths, root } = await fixture();
+      await mkdir(root, { recursive: true });
+      expect(holdProcessLock(lockPath(root)).unwrap()).toBe(true);
 
       const ran = await watchForever(
         {
-          env,
-          saveJson,
+          paths,
           github: github([]),
-          callApp: async () => ({ outcome: "done" }),
+          workers: {
+            senderOf: async () => null,
+            look: async () => null,
+            send: async () => ({ outcome: "done", detail: {} }),
+          },
           now: () => new Date(),
           log: () => {},
         },
@@ -224,7 +256,7 @@ describe("watchForever", () => {
       );
 
       expect(ran.isErr() && ran.error.message).toBe(
-        "another harnexus-task watch is running",
+        "another PR watch is running",
       );
     },
   );

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { Fields } from "../format.ts";
-import { answerTo, busyReason, readThread } from "./worker-thread.ts";
+import type { Fields } from "./format.ts";
+import { answerTo, busyReason, readThread } from "./watch-worker.ts";
 
 const answered = (read: unknown) => async () => ({
   outcome: "done",

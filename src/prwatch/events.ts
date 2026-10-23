@@ -1,7 +1,22 @@
-import { classify, type WatchEvent } from "./classify.ts";
+import { classify, type Finding } from "./classify.ts";
 import type { WatchConfig } from "./config.ts";
-import type { PrDetail } from "./github.ts";
+import type { FailedCheck, PrDetail } from "./github.ts";
+import type { ReviewBot } from "./reviewers.ts";
 import type { WatchState } from "./store.ts";
+
+export type WatchEvent =
+  | { type: "finding"; finding: Finding }
+  | {
+      type: "review_done";
+      // The bot's id and the name shown to the worker.
+      bot: string;
+      name: string;
+      head: string;
+      findings: number;
+      summaryAgrees: boolean;
+    }
+  | { type: "conflict"; head: string }
+  | { type: "ci_failed"; head: string; check: FailedCheck };
 
 // The first read of a PR takes what is already on it as seen, so starting the watch never sends what the owner has handled.
 export const nextEvents = (
@@ -12,14 +27,16 @@ export const nextEvents = (
   config: WatchConfig,
 ) =>
   state.summary === null
-    ? { events: [] as WatchEvent[], ...baselineOf(detail) }
+    ? { events: [] as WatchEvent[], ...baselineOf(detail, config.reviewBots) }
     : eventsOf(detail, state, linkedAt, owner, config);
 
 // Every comment is taken, findings or not, so one whose verdict changes later is still not new.
-const baselineOf = (detail: PrDetail) => ({
+const baselineOf = (detail: PrDetail, bots: readonly ReviewBot[]) => ({
   seen: [
     ...detail.comments.map((comment) => comment.id),
-    ...(reviewCompleted(detail) ? [reviewKey(detail.head)] : []),
+    ...bots.flatMap((bot) =>
+      reviewCompleted(detail, bot) ? [reviewKey(bot, detail.head)] : [],
+    ),
     ...detail.failedRequired.map((check) => checkKey(detail.head, check.name)),
   ],
   conflictHead: detail.mergeable === "CONFLICTING" ? detail.head : null,
@@ -39,7 +56,9 @@ const eventsOf = (
   const fresh = (time: string) => Date.parse(time) >= after;
 
   const findings = newFindings(detail, seen, fresh, owner, config);
-  const done = reviewDone(detail, seen, fresh, findings);
+  const done = config.reviewBots.flatMap((bot) =>
+    reviewDone(detail, bot, seen, fresh, findings),
+  );
   const conflict = conflictOf(detail, state.conflictHead);
   const failed = failedChecks(detail, seen);
 
@@ -57,14 +76,23 @@ const newFindings = (
   owner: string,
   config: WatchConfig,
 ) => {
-  // CodeRabbit's findings wait for its review to complete, so they arrive with it in one message.
-  const reviewing = detail.coderabbit?.state === "PENDING";
+  // A bot's findings wait for its review to complete, so they arrive with it in one message.
+  const reviewing = new Set(
+    Object.entries(detail.bots).flatMap(([id, status]) =>
+      status?.state === "PENDING" ? [id] : [],
+    ),
+  );
   const events: WatchEvent[] = [];
-  for (const verdict of classify(detail.comments, owner, config.ignore)) {
+  for (const verdict of classify(
+    detail.comments,
+    owner,
+    config.ignore,
+    config.reviewBots,
+  )) {
     if (!("finding" in verdict)) continue;
 
     const { finding } = verdict;
-    if (finding.coderabbit && reviewing) continue;
+    if (finding.bot !== null && reviewing.has(finding.bot)) continue;
     if (!fresh(finding.createdAt) || seen.has(finding.id)) continue;
 
     seen.add(finding.id);
@@ -75,15 +103,17 @@ const newFindings = (
 
 const reviewDone = (
   detail: PrDetail,
+  bot: ReviewBot,
   seen: Set<string>,
   fresh: (time: string) => boolean,
   findings: readonly WatchEvent[],
 ): WatchEvent[] => {
-  const key = reviewKey(detail.head);
+  const key = reviewKey(bot, detail.head);
+  const status = detail.bots[bot.id];
   if (
-    detail.coderabbit === null ||
-    !reviewCompleted(detail) ||
-    !fresh(detail.coderabbit.createdAt) ||
+    status == null ||
+    !reviewCompleted(detail, bot) ||
+    !fresh(status.createdAt) ||
     seen.has(key)
   )
     return [];
@@ -93,27 +123,37 @@ const reviewDone = (
   const inline = findings.filter(
     (event) =>
       event.type === "finding" &&
-      event.finding.coderabbit &&
+      event.finding.bot === bot.id &&
       event.finding.kind === "inline",
   ).length;
+  // A bot without a summary to check against always agrees.
+  const summaryAgrees =
+    bot.noActionable === null ||
+    (inline === 0) === detail.noActionable.includes(bot.id);
   return [
     {
-      type: "coderabbit_done",
+      type: "review_done",
+      bot: bot.id,
+      name: bot.name,
       head: detail.head,
       findings: inline,
-      summaryAgrees: (inline === 0) === detail.noActionableSummary,
+      summaryAgrees,
     },
   ];
 };
 
-const reviewCompleted = ({ coderabbit }: PrDetail) =>
-  coderabbit !== null &&
-  coderabbit.state === "SUCCESS" &&
-  coderabbit.description.includes(REVIEW_COMPLETED);
+const reviewCompleted = (detail: PrDetail, bot: ReviewBot) => {
+  const status = detail.bots[bot.id];
+  return (
+    bot.status !== null &&
+    status != null &&
+    status.state === "SUCCESS" &&
+    status.description.includes(bot.status.completed)
+  );
+};
 
-const REVIEW_COMPLETED = "Review completed";
-
-const reviewKey = (head: string) => `coderabbit:${head}`;
+// The id leads, so the keys CodeRabbit's reviews were recorded under before bots were configurable still match.
+const reviewKey = (bot: ReviewBot, head: string) => `${bot.id}:${head}`;
 
 // Told once per head while the PR conflicts, so a base that keeps moving does not repeat it.
 const conflictOf = (detail: PrDetail, notified: string | null) => {

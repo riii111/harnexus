@@ -1,46 +1,38 @@
 import { Result } from "better-result";
-import { type Fields, jsonEqual } from "../format.ts";
-import type { Env } from "../request.ts";
-import type { SaveJson } from "../session.ts";
-import {
-  type Finding,
-  followUpOf,
-  messageOf,
-  missingFrom,
-  type WatchEvent,
-} from "./classify.ts";
-import { configPath, loadConfig, type WatchConfig } from "./config.ts";
-import { nextEvents } from "./events.ts";
+import type { Finding } from "./classify.ts";
+import { loadConfig, type WatchConfig } from "./config.ts";
+import { nextEvents, type WatchEvent } from "./events.ts";
+import { type Fields, jsonEqual } from "./failure.ts";
 import type { GitHub, PrSummary } from "./github.ts";
+import { followUpOf, messageOf, missingFrom } from "./message.ts";
 import {
+  isOver,
+  keyOf,
   listLinks,
   loadWatchState,
   type PrLink,
   saveWatchState,
   type WatchState,
 } from "./store.ts";
-import {
-  type AppCall,
-  answerTo,
-  busyReason,
-  readThread,
-  senderOf,
-} from "./worker-thread.ts";
+import type { Answer, Workers } from "./worker.ts";
+
+export type WatchPaths = { config: string; state: string };
 
 export type WatchDeps = {
-  env: Env;
-  saveJson: SaveJson;
+  paths: WatchPaths;
   github: GitHub;
-  callApp: AppCall;
+  workers: Workers;
   now: () => Date;
   log: (entry: Fields) => void;
+  // The PRs this process found over, which later cycles leave unread.
+  over?: Set<string>;
 };
 
 // One pass: poll the PRs that are due, queue what changed, then deliver to every worker that can take a message now.
 export const runCycle = (deps: WatchDeps) =>
   Result.gen(async function* () {
-    const config = yield* Result.await(loadConfig(configPath(deps.env)));
-    const links = yield* Result.await(listLinks(deps.env));
+    const config = yield* Result.await(loadConfig(deps.paths.config));
+    const links = yield* Result.await(listLinks(deps.paths.state, deps.over));
     const now = deps.now();
 
     const entries: Entry[] = [];
@@ -56,8 +48,9 @@ export const runCycle = (deps: WatchDeps) =>
       await deliver(deps, config, entry, now);
       if (!jsonEqual(entry.before, entry.state))
         yield* Result.await(
-          saveWatchState(deps.env, deps.saveJson, entry.link, entry.state),
+          saveWatchState(deps.paths.state, entry.link, entry.state),
         );
+      if (isOver(entry.state)) deps.over?.add(keyOf(entry.link));
     }
     return Result.ok(config);
   });
@@ -72,7 +65,7 @@ type Entry = {
 
 const openEntry = (deps: WatchDeps, config: WatchConfig, link: PrLink) =>
   Result.gen(async function* () {
-    const loaded = await loadWatchState(deps.env, link);
+    const loaded = await loadWatchState(deps.paths.state, link);
     if (loaded.isErr()) {
       deps.log({
         event: "state_unreadable",
@@ -83,6 +76,7 @@ const openEntry = (deps: WatchDeps, config: WatchConfig, link: PrLink) =>
     }
 
     const state = loaded.value;
+    if (isOver(state)) deps.over?.add(keyOf(link));
     if (FINISHED.includes(state.status)) return Result.ok(null);
 
     const before = structuredClone(state);
@@ -90,9 +84,7 @@ const openEntry = (deps: WatchDeps, config: WatchConfig, link: PrLink) =>
     if (account === undefined) {
       state.reason = "repository is not configured";
       if (!jsonEqual(before, state))
-        yield* Result.await(
-          saveWatchState(deps.env, deps.saveJson, link, state),
-        );
+        yield* Result.await(saveWatchState(deps.paths.state, link, state));
       return Result.ok(null);
     }
     return Result.ok<Entry | null>({ link, state, account, before });
@@ -140,6 +132,7 @@ const pollAccount = async (
   const summaries = await deps.github.summaries(
     account,
     entries.map((entry) => entry.link),
+    config.reviewBots,
   );
   if (summaries.isErr()) {
     deps.log({ event: "poll_failed", account, error: summaries.error.message });
@@ -190,7 +183,7 @@ const applySummary = async (
     if (resumed) deps.log({ event: "resumed", pr });
   }
 
-  const detail = await deps.github.detail(account, link);
+  const detail = await deps.github.detail(account, link, config.reviewBots);
   // The summary is left as it was, so the next cycle reads the detail again.
   if (detail.isErr()) {
     deps.log({ event: "detail_failed", pr, error: detail.error.message });
@@ -221,7 +214,7 @@ const deliver = async (
   if (state.status !== "watching" || !hasWork(state)) return;
 
   const pr = link.url;
-  const sender = await senderOf(deps.env, link.worker);
+  const sender = await deps.workers.senderOf(link.worker);
   if (sender === null) {
     if (state.reason !== NO_SENDER)
       deps.log({ event: "no_sender", pr, worker: link.worker });
@@ -229,11 +222,11 @@ const deliver = async (
     return;
   }
 
-  const view = await readThread(
-    deps.callApp,
+  const view = await deps.workers.look(
     sender,
     link.worker,
-    state.delivered?.at ?? null,
+    state.delivered,
+    now,
   );
   if (view === null) return;
   if (view.gone) {
@@ -245,13 +238,13 @@ const deliver = async (
   state.reason = null;
 
   if (state.delivered !== null) {
-    const checked = checkAnswer(deps, state, view.turns, pr, now);
+    const checked = checkAnswer(deps, state, view.answer, pr, now);
     if (!checked) return;
   }
 
   if (state.pending.length === 0 && state.followUp.length === 0) return;
   if (inQuietHours(now, config.quietHours)) return;
-  if (busyReason(view, now) !== null) return;
+  if (view.busy !== null) return;
 
   await send(deps, entry, sender, now);
 };
@@ -261,27 +254,26 @@ const hasWork = (state: WatchState) =>
   state.followUp.length > 0 ||
   state.delivered !== null;
 
-const NO_SENDER = "no reviewer thread to send from";
+const NO_SENDER = "nothing can send to the worker yet";
 
 // False while the answer to the last message is still to come, so a new message never interrupts it.
 const checkAnswer = (
   deps: WatchDeps,
   state: WatchState,
-  turns: Parameters<typeof answerTo>[0],
+  turn: Answer | null,
   pr: string,
   now: Date,
 ) => {
   const delivered = state.delivered;
   if (delivered === null) return true;
 
-  const turn = answerTo(turns, delivered);
-  if (turn === undefined) {
+  if (turn === null) {
     if (since(delivered.at, now) < ANSWER_WAIT_MS) return false;
     deps.log({ event: "answer_not_seen", pr });
   } else if (turn.status === "inProgress") return false;
   // A turn that did not complete was stopped by the owner, who then has the conversation.
   else if (turn.status === "completed" && !delivered.followUp) {
-    state.followUp = missingFrom(turn.answer, delivered.findings);
+    state.followUp = missingFrom(turn.text, delivered.findings);
     if (state.followUp.length > 0)
       deps.log({
         event: "answer_incomplete",
@@ -334,7 +326,7 @@ const send = async (
     status: "halted",
     halted: { at: iso(now), prompt, answer: null },
   };
-  const marked = await saveWatchState(deps.env, deps.saveJson, link, sending);
+  const marked = await saveWatchState(deps.paths.state, link, sending);
   if (marked.isErr()) {
     deps.log({ event: "state_unwritable", pr, error: marked.error.message });
     return;
@@ -344,12 +336,10 @@ const send = async (
 
   // Taken just before the call, so a turn started while the cycle read GitHub is never taken for the answer.
   const sentAt = iso(deps.now());
-  const answer = await deps.callApp(sender, "send_message_to_thread", {
-    threadId: link.worker,
-    prompt,
-  });
-  const outcome = String(answer.outcome);
-  if (outcome === "done") {
+  const result = await deps.workers.send(sender, link.worker, prompt);
+  // The worker's own word for the outcome, which the log keeps.
+  const outcome = String(result.detail.outcome ?? result.outcome);
+  if (result.outcome === "done") {
     if (followUp) state.followUp = [];
     else state.pending = [];
     state.delivered = { at: sentAt, sender, prompt, findings, followUp };
@@ -362,22 +352,19 @@ const send = async (
     });
     return;
   }
-  if (NOT_SENT.includes(outcome)) {
+  if (result.outcome === "not_sent") {
     deps.log({ event: "send_not_sent", pr, outcome });
     return;
   }
 
   // The message may have reached the worker, so it is never sent again on its own.
   state.status = "halted";
-  state.halted = { at: iso(now), prompt, answer };
+  state.halted = { at: iso(now), prompt, answer: result.detail };
   deps.log({ event: "halted", pr, outcome });
 };
 
 const findingsOf = (events: readonly WatchEvent[]): Finding[] =>
   events.flatMap((event) => (event.type === "finding" ? [event.finding] : []));
-
-// The outcomes harnexus-task already treats as never having reached the app.
-const NOT_SENT = ["not_sent", "rejected", "invalid"];
 
 const iso = (date: Date) => date.toISOString();
 

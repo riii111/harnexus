@@ -119,7 +119,7 @@ To disable it, launch with `HARNEXUS_CALL_SOCKET=off bun run open-app`.
 
 ### Watching PRs
 
-`harnexus-task watch` runs until stopped and tells the worker of each PR named with `name --pr` what needs its attention: review comments, a finished CodeRabbit review, a conflict with the base, and a failed required check.
+`harnexus-task watch` runs until stopped and tells the worker of each PR named with `name --pr` what needs its attention: review comments, a finished review by an AI review bot such as CodeRabbit, a conflict with the base, and a failed required check.
 It sends one message per PR from the worker's reviewer chat, with each item's kind, place and link but not its text.
 It never writes to GitHub.
 
@@ -133,14 +133,40 @@ Configure it in `~/.config/harnexus/pr-watch.json`:
 ```json
 {
   "repositories": { "owner/repo": { "account": "your-login" } },
+  "reviewBots": ["coderabbit"],
   "ignore": [{ "author": "github-actions[bot]", "kind": "issue_comment" }]
 }
 ```
 
 - `repositories`: the gh account that reads each repository, so switching the active account never breaks the watch.
   That account's own comments are never reported.
+- `reviewBots`: the AI review bots to wait for, `["coderabbit"]` when left out.
+  Name the preset `coderabbit`, or describe another bot:
+
+  ```json
+  {
+    "id": "other",
+    "name": "OtherBot",
+    "login": "other-reviewer[bot]",
+    "status": { "context": "Other Review", "completed": "Review completed" },
+    "actionableReview": "Actionable comments",
+    "noActionable": "No issues found",
+    "severity": "\\*\\*(Critical|Major|Minor)\\*\\*"
+  }
+  ```
+
+  `id` keys the bot's reviews in the watch's records, so keep it when other fields change.
+  `status` is the commit status the bot keeps while it reviews; the watch holds the bot's findings until it reads `completed` there and then sends them with the completion in one message.
+  Without `status`, findings are sent as they come.
+  `actionableReview`, `noActionable` and `severity` are optional: review bodies without the first are skipped, a PR comment with the second is checked against the findings, and the first group of `severity` labels each inline finding.
+  A bot's replies and its findings resolved before the watch read them are never reported.
 - `ignore`: comments to skip by `author`, optionally narrowed by `kind` (`inline`, `review` or `issue_comment`) and `bodyIncludes`.
 - `pollIntervalSeconds` (60), `idleIntervalSeconds` (600) after `idleAfterHours` (72) without changes, and `quietHours` (`{"start": "22:00", "end": "05:00"}`, or `null`).
 
 To see what would be sent without sending anything, run `harnexus-task watch --dry-run`, optionally with `--pr <URL>` for each PR to check.
 A PR the watch has not read yet shows `firstRead: true` and no message.
+`harnexus-task watch --status` lists each linked PR with what its watch is doing.
+
+Between cycles the watch only sleeps.
+It keeps each gh account's token in memory for ten minutes rather than starting gh for every request, and stops reading the records of PRs that were merged, closed or lost their worker until it restarts.
+The detection under `src/prwatch` reaches workers only through the `Workers` interface that `harnexus-task` fills with Codex chats.

@@ -1,39 +1,36 @@
-import { dirname } from "node:path";
 import { Result } from "better-result";
-import {
-  holdProcessLock,
-  prepareDirectory,
-} from "../../../runtime/fs.boundary.ts";
-import { type Fields, fail, type TaskFailed } from "../format.ts";
-import { type Env, ioFailed, NAME } from "../request.ts";
-import type { SaveJson } from "../session.ts";
-import { classify, messageOf, type Verdict } from "./classify.ts";
-import { configPath, loadConfig, type WatchConfig } from "./config.ts";
+import { holdProcessLock, prepareDirectory } from "../runtime/fs.boundary.ts";
+import { classify, type Verdict } from "./classify.ts";
+import { loadConfig, type WatchConfig } from "./config.ts";
 import { nextEvents } from "./events.ts";
+import { type Fields, fail, ioFailed, type WatchFailed } from "./failure.ts";
 import type { GitHub, PrDetail, PrRef } from "./github.ts";
+import { messageOf } from "./message.ts";
 import {
   freshState,
   githubPr,
   listLinks,
   loadWatchState,
   lockPath,
-  type PrLink,
+  samePr,
   saveWatchState,
   type WatchState,
 } from "./store.ts";
-import { runCycle, type WatchDeps } from "./watcher.ts";
+import { runCycle, type WatchDeps, type WatchPaths } from "./watcher.ts";
 
 // Runs until stopped; a failed cycle is logged and retried, so a config or network error never ends the watch.
+// Between cycles the process only sleeps on a timer.
 export const watchForever = (
   deps: WatchDeps,
   sleep: (ms: number) => Promise<unknown>,
 ) =>
   Result.gen(async function* () {
-    yield* Result.await(acquireLock(deps.env));
+    yield* Result.await(acquireLock(deps.paths.state));
     deps.log({ event: "started", pid: process.pid });
 
+    const cycleDeps = { ...deps, over: deps.over ?? new Set<string>() };
     for (;;) {
-      const cycle = await runCycle(deps);
+      const cycle = await runCycle(cycleDeps);
       if (cycle.isErr())
         deps.log({ event: "cycle_failed", error: cycle.error.message });
       await sleep(
@@ -45,28 +42,27 @@ export const watchForever = (
 const RETRY_MS = 60_000;
 
 // One watch at a time, so two never send the same event.
-const acquireLock = (env: Env): Promise<Result<void, TaskFailed>> =>
+const acquireLock = (root: string): Promise<Result<void, WatchFailed>> =>
   Result.gen(async function* () {
-    const path = lockPath(env);
-    yield* Result.await(prepareDirectory(dirname(path)).then(io));
+    yield* Result.await(prepareDirectory(root).then(io));
 
-    const held = yield* io(holdProcessLock(path));
-    return held ? Result.ok() : fail(`another ${NAME} watch is running`);
+    const held = yield* io(holdProcessLock(lockPath(root)));
+    return held ? Result.ok() : fail("another PR watch is running");
   });
 
 const io = <T>(
   result: Result<T, { message: string; cause?: unknown }>,
-): Result<T, TaskFailed> => result.mapError(ioFailed);
+): Result<T, WatchFailed> => result.mapError(ioFailed);
 
 // Decides from each PR's saved watch state as the watch would, but writes none, so a run before starting shows what the first cycle sends.
 export const dryRun = (
-  deps: { env: Env; github: GitHub },
+  deps: { paths: WatchPaths; github: GitHub },
   urls: readonly string[],
 ) =>
   Result.gen(async function* () {
-    const config = yield* Result.await(loadConfig(configPath(deps.env)));
+    const config = yield* Result.await(loadConfig(deps.paths.config));
     const refs = yield* Result.await(dryRunTargets(deps.github, config, urls));
-    const links = yield* Result.await(listLinks(deps.env));
+    const links = yield* Result.await(listLinks(deps.paths.state));
 
     const reports: Fields[] = [];
     for (const ref of refs) {
@@ -75,8 +71,10 @@ export const dryRun = (
       const state =
         link === undefined
           ? freshState()
-          : yield* Result.await(loadWatchState(deps.env, link));
-      const detail = yield* Result.await(deps.github.detail(account, ref));
+          : yield* Result.await(loadWatchState(deps.paths.state, link));
+      const detail = yield* Result.await(
+        deps.github.detail(account, ref, config.reviewBots),
+      );
       reports.push(
         reportOf(detail, state, link?.linkedAt ?? EPOCH, account, config),
       );
@@ -111,10 +109,6 @@ const accountFor = (config: WatchConfig, repo: string) => {
     : Result.ok(account);
 };
 
-const samePr = (link: PrLink, ref: PrRef) =>
-  link.repo.toLowerCase() === ref.repo.toLowerCase() &&
-  link.number === ref.number;
-
 // A PR no watch has linked has no state, so it is shown as read for the first time and its link time is never used.
 const EPOCH = new Date(0).toISOString();
 
@@ -125,7 +119,12 @@ const reportOf = (
   account: string,
   config: WatchConfig,
 ) => {
-  const verdicts = classify(detail.comments, account, config.ignore);
+  const verdicts = classify(
+    detail.comments,
+    account,
+    config.ignore,
+    config.reviewBots,
+  );
   const { events } = nextEvents(detail, state, linkedAt, account, config);
 
   return {
@@ -134,7 +133,7 @@ const reportOf = (
     draft: detail.isDraft,
     firstRead: state.summary === null,
     head: detail.head,
-    coderabbit: detail.coderabbit,
+    bots: detail.bots,
     mergeable: detail.mergeable,
     failedRequired: detail.failedRequired,
     notified: verdicts.flatMap((verdict) =>
@@ -162,21 +161,21 @@ const ignoredOf = (verdict: Verdict) =>
     : [];
 
 // Releasing takes the halted message as delivered, since the owner checked the app and it must never be sent again.
-export const release = (env: Env, save: SaveJson, url: string) =>
+export const release = (root: string, url: string) =>
   Result.gen(async function* () {
     const ref = githubPr(url);
     if (ref === null)
       return fail("--release must be a GitHub pull request URL");
 
-    const links = yield* Result.await(listLinks(env));
+    const links = yield* Result.await(listLinks(root));
     const link = links.find((each) => samePr(each, ref));
     if (link === undefined) return fail(`${ref.url} is not linked to a worker`);
 
-    const state = yield* Result.await(loadWatchState(env, link));
+    const state = yield* Result.await(loadWatchState(root, link));
     if (state.status !== "halted") return fail(`${ref.url} is not halted`);
 
     yield* Result.await(
-      saveWatchState(env, save, link, {
+      saveWatchState(root, link, {
         ...state,
         status: "watching",
         reason: null,
@@ -187,4 +186,24 @@ export const release = (env: Env, save: SaveJson, url: string) =>
       }),
     );
     return Result.ok<Fields>({ released: ref.url, worker: link.worker });
+  });
+
+// What each linked PR's watch is doing, read from the records alone, so it works whether or not a watch runs.
+export const status = (root: string) =>
+  Result.gen(async function* () {
+    const prs: Fields[] = [];
+    for (const link of yield* Result.await(listLinks(root))) {
+      const state = yield* Result.await(loadWatchState(root, link));
+      prs.push({
+        pr: link.url,
+        worker: link.worker,
+        status: state.status,
+        reason: state.reason,
+        pending: state.pending.length,
+        followUp: state.followUp.length,
+        awaitingAnswer: state.delivered !== null,
+        checkedAt: state.checkedAt,
+      });
+    }
+    return Result.ok<Fields>({ prs });
   });

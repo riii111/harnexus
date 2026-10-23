@@ -190,7 +190,13 @@ export const l = m;`,
   });
 });
 
-type Area = "bootstrap" | "conversation" | "presentation" | "infra" | "runtime";
+type Area =
+  | "bootstrap"
+  | "conversation"
+  | "presentation"
+  | "prwatch"
+  | "infra"
+  | "runtime";
 
 type Exception = { from: string; to: string; reason: string; until: string };
 
@@ -198,9 +204,18 @@ type Exception = { from: string; to: string; reason: string; until: string };
 const EXCEPTIONS: readonly Exception[] = [];
 
 const ALLOWED: Record<Area, readonly Area[]> = {
-  bootstrap: ["bootstrap", "conversation", "presentation", "infra", "runtime"],
+  bootstrap: [
+    "bootstrap",
+    "conversation",
+    "presentation",
+    "prwatch",
+    "infra",
+    "runtime",
+  ],
   conversation: ["conversation", "presentation", "infra", "runtime"],
   presentation: ["presentation", "runtime"],
+  // The PR watch stands apart from the conversation and is told how to reach workers, so it may be moved out whole.
+  prwatch: ["prwatch", "infra", "runtime"],
   infra: ["infra", "runtime"],
   runtime: ["runtime"],
 };
@@ -264,6 +279,12 @@ const brokenRule = (from: string, to: string) => {
     !PURE_BOUNDARIES.has(to)
   )
     return "presentation/ may not reference an I/O boundary";
+  if (
+    fromArea === "prwatch" &&
+    toArea === "infra" &&
+    !to.startsWith("infra/github/")
+  )
+    return "prwatch/ may reach only infra/github/";
   if (from.startsWith("infra/claude/") && to.startsWith("infra/codex/"))
     return "infra/claude/ may not reference infra/codex/";
   if (
