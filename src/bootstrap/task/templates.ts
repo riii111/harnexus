@@ -53,6 +53,36 @@ const targets = (template: string) =>
       : [{ raw: match[1] ?? "", start: span[0], end: span[1] }];
   });
 
+// Fenced code blocks and code spans, whose link-like text is an example to show rather than a link.
+const codeRanges = (template: string) => {
+  const ranges: [number, number][] = [];
+  let open: { fence: string; start: number } | null = null;
+  for (const line of template.matchAll(/^ {0,3}(`{3,}|~{3,})(.*)$/gm)) {
+    const fence = line[1] ?? "";
+    const rest = line[2] ?? "";
+    if (open === null) {
+      if (!(fence.startsWith("`") && rest.includes("`")))
+        open = { fence, start: line.index };
+    } else if (
+      fence[0] === open.fence[0] &&
+      fence.length >= open.fence.length &&
+      rest.trim() === ""
+    ) {
+      ranges.push([open.start, line.index + line[0].length]);
+      open = null;
+    }
+  }
+  if (open !== null) ranges.push([open.start, template.length]);
+  // Blanking the blocks keeps their backticks from pairing with a span outside.
+  let outside = template;
+  for (const [start, end] of ranges)
+    outside =
+      outside.slice(0, start) + " ".repeat(end - start) + outside.slice(end);
+  for (const span of outside.matchAll(/(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g))
+    ranges.push([span.index, span.index + span[0].length]);
+  return ranges;
+};
+
 // A value inside a target is a name, never a path, so none can lead the link to another folder or break it.
 const targetValue = (value: string) =>
   /^[\p{L}\p{N}_-]+$/u.test(value)
@@ -78,9 +108,11 @@ const resolveLinks = (
   Result.gen(async function* () {
     // The layout is the one the templates were written in, so a symlinked template resolves beside its real file.
     const folder = dirname(await realPathOrSelf(path));
+    const code = codeRanges(template);
     let text = "";
     let last = 0;
     for (const { raw, start, end } of targets(template)) {
+      if (code.some(([from, to]) => start >= from && start < to)) continue;
       const hash = raw.indexOf("#");
       const rawPath = hash === -1 ? raw : raw.slice(0, hash);
       if (!isRelative(rawPath.replace(/^</, "").trimStart())) continue;

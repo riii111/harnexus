@@ -693,6 +693,43 @@ describe("harnexus-task templates", () => {
     );
   });
 
+  test("leaves links in code as examples and resolves the link after them", async () => {
+    const { root, env, harnexus, launch } = await launchFixture();
+    const linked = join(root, "linked.md");
+    await writeFile(linked, "");
+    const template = join(root, "worker.md");
+    const examples =
+      "Cite as `[file](path/to/file.ts)` or ``[a](b`c.md)``.\n" +
+      "```md\n[x](missing.md)\n```\n" +
+      "~~~\n[y](gone.md)\n```\nstill code [z](none.md)\n~~~\n";
+    await writeFile(template, `${examples}[$s](linked.md)\n`);
+    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
+      templates: { worker: template },
+    });
+
+    const sent = await launch([], [created("w1", "claude-sonnet-5-5")]);
+
+    expect([sent.code, sent.err]).toEqual([0, ""]);
+    expect(harnexus.calls.at(-1)?.arguments.prompt).toBe(
+      `${examples}[$s](${linked})\n`,
+    );
+  });
+
+  test("refuses a missing link outside the code it follows", async () => {
+    const { root, env, harnexus, launch } = await launchFixture();
+    const template = join(root, "worker.md");
+    await writeFile(template, "`[a](b.md)` then [c](missing.md)\n");
+    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
+      templates: { worker: template },
+    });
+
+    const refused = await launch();
+
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain(`links to ${join(root, "missing.md")}`);
+    expect(harnexus.calls).toEqual([]);
+  });
+
   test("fills anchors and field-led targets, and resolves beside a symlinked template's real file", async () => {
     const { root, env, harnexus, data, launch } = await launchFixture();
     data.taskId = "TR-42";
