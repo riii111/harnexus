@@ -10,6 +10,7 @@ import {
   freshState,
   githubPr,
   listLinks,
+  loadSender,
   loadWatchState,
   lockPath,
   samePr,
@@ -225,5 +226,6 @@ export const status = (root: string) =>
         checkedAt: state.checkedAt,
       });
     }
-    return Result.ok<Fields>({ prs });
+    const sender = yield* Result.await(loadSender(root));
+    return Result.ok<Fields>({ sender, prs });
   });

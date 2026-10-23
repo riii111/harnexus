@@ -161,6 +161,7 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
     active: false,
     gone: false,
     sendOutcome: "done",
+    fallback: null as string | null,
     now: NOON,
   };
   const calls = { summaries: 0, details: 0, sent: [] as Fields[] };
@@ -211,7 +212,7 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
     const ran = await runCycle({
       paths,
       github,
-      workers: codexWorkers(env, callApp),
+      workers: codexWorkers(env, callApp, async () => world.fallback),
       now: () => world.now,
       log: (entry) => logs.push(entry),
       ...(over === undefined ? {} : { over }),
@@ -849,5 +850,23 @@ describe("runCycle", () => {
     expect(String(calls.sent[1]?.prompt)).toContain(
       "OtherBotのレビューが完了し",
     );
+  });
+
+  test("sends from the registered chat to a worker without a reviewer, but never from the worker itself", async () => {
+    const { world, calls, cycle, later, paths } = await fixture();
+    await rm(join(paths.state, "..", "review"), { recursive: true });
+    world.comments = [comment({})];
+    world.fallback = "worker";
+    await cycle();
+    const fromItself = calls.sent.length;
+
+    world.fallback = "sender";
+    later(1);
+    await cycle();
+
+    expect(fromItself).toBe(0);
+    expect(calls.sent.map((sent) => [sent.caller, sent.threadId])).toEqual([
+      ["sender", "worker"],
+    ]);
   });
 });

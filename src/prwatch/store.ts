@@ -210,6 +210,22 @@ export const saveWatchState = (
 
 export const lockPath = (root: string) => join(root, "watch.lock");
 
+// The chat the watch sends from to a worker that has no sender of its own, such as a chat the owner started by hand.
+export const recordSender = (root: string, thread: string) =>
+  saveJson(senderPath(root), { thread, at: new Date().toISOString() });
+
+export const loadSender = (root: string) =>
+  Result.gen(async function* () {
+    const loaded = yield* Result.await(loadJson(senderPath(root)));
+    return Result.ok(
+      isObject(loaded) && typeof loaded.thread === "string"
+        ? loaded.thread
+        : null,
+    );
+  });
+
+const senderPath = (root: string) => join(root, "sender.json");
+
 const statePath = (root: string, ref: PrRef) =>
   join(root, keyOf(ref), "state.json");
 

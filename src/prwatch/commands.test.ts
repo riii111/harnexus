@@ -219,6 +219,7 @@ describe("status", () => {
     const shown = await status(root);
 
     expect(shown.unwrap()).toEqual({
+      sender: null,
       prs: [
         {
           pr: PR,

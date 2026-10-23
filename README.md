@@ -121,6 +121,7 @@ To disable it, launch with `HARNEXUS_CALL_SOCKET=off bun run open-app`.
 
 `harnexus-task watch` runs until stopped and tells the worker of each PR named with `name --pr` what needs its attention: review comments, a finished review by an AI review bot such as CodeRabbit, a conflict with the base, and a failed required check.
 It sends one message per PR from the worker's reviewer chat, with each item's kind, place and link but not its text.
+A worker without a reviewer, such as a chat you started by hand, is sent to from the chat registered with `harnexus-task watch --sender`; run it once in a chat you keep for that.
 It never writes to GitHub.
 
 It waits while the worker's turn runs, for five minutes after you talk to the worker, and during the quiet hours.
@@ -165,7 +166,11 @@ Configure it in `~/.config/harnexus/pr-watch.json`:
 
 To see what would be sent without sending anything, run `harnexus-task watch --dry-run`, optionally with `--pr <URL>` for each PR to check.
 A PR the watch has not read yet shows `firstRead: true` and no message.
-`harnexus-task watch --status` lists each linked PR with what its watch is doing.
+`harnexus-task watch --status` lists the registered sender and each linked PR with what its watch is doing.
+
+`name --pr <URL>` links the PR to the calling chat whether or not `launch` started it, and renames only a launched worker.
+It fails when it cannot link, as for a PR number alone, so a PR the watch cannot see is never taken as watched.
+To have any chat told about a PR without renaming it, run `harnexus-task watch --link <URL>` from that chat.
 A running watch notices when its `harnexus-task` is replaced, as by `bun run install:task`, and exits with a failure before its next cycle, so a LaunchAgent that restarts it on failure (`KeepAlive` with `SuccessfulExit: false`) starts the new binary.
 It never exits in the middle of sending a message.
 A watch started by hand ends the same way and has to be started again.

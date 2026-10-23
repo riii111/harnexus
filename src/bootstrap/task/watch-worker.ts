@@ -5,10 +5,20 @@ import type { Fields } from "./format.ts";
 import type { Env } from "./request.ts";
 import { reviewerOfWorker } from "./session.ts";
 
-// The PR watch's workers are Codex chats a harnexus-task launch started; the watch reaches them through the app.
-export const codexWorkers = (env: Env, callApp: AppCall): Workers => ({
-  // The worker's reviewer is a Codex thread that already messages the worker, and a thread cannot message itself.
-  senderOf: (worker) => reviewerOfWorker(env, worker),
+// The PR watch's workers are Codex chats linked to a PR; the watch reaches them through the app.
+export const codexWorkers = (
+  env: Env,
+  callApp: AppCall,
+  fallback: () => Promise<string | null>,
+): Workers => ({
+  // The worker's reviewer already messages the worker, so it sends when there is one.
+  // Otherwise the chat registered with watch --sender does; a thread cannot message itself, so a worker never sends to itself.
+  senderOf: async (worker) => {
+    const reviewer = await reviewerOfWorker(env, worker);
+    if (reviewer !== null) return reviewer;
+    const sender = await fallback();
+    return sender === worker ? null : sender;
+  },
 
   look: async (sender, worker, awaited, now) => {
     const view = await readThread(callApp, sender, worker, awaited?.at ?? null);
