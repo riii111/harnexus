@@ -1750,6 +1750,7 @@ describe("Claude thread history", () => {
         initialPage: false,
         picked: false,
         turns: 2,
+        newest: "harnexus-history-u2",
       },
       {
         event: "claude_history_served",
@@ -1759,6 +1760,7 @@ describe("Claude thread history", () => {
         initialPage: false,
         picked: false,
         turns: 2,
+        newest: "harnexus-history-u2",
       },
     ]);
   });
@@ -2201,6 +2203,39 @@ describe("a Claude thread with a running turn", () => {
     expect(items.result.data).toMatchObject([
       { turnId: "harnexus-history-u2", item: { type: "userMessage" } },
     ]);
+  });
+
+  test("logs which turns and items a history read named and returned, by the ids' kind and first characters", async () => {
+    const { router, live, sent, events } = setup(["th-claude"], {
+      records: {
+        "th-claude": conversation(),
+      },
+    });
+    const turnId = "harnexus-turn-0123abcd-4567-89ef-0123-456789abcdef";
+    live.set("th-claude", { ...LIVE, turnId });
+
+    router.fromApp(
+      encode({
+        id: 8,
+        method: "thread/items/list",
+        params: {
+          threadId: "th-claude",
+          turnId,
+          cursor: { type: "item", itemId: `${turnId}-item-2` },
+        },
+      }),
+    );
+    await until(() => responseTo(sent, 8) !== null);
+
+    expect(events).toContainEqual({
+      event: "claude_history_answered",
+      method: "thread/items/list",
+      thread: "th-claud",
+      live: "l:0123abcd",
+      turn: "l:0123abcd",
+      cursor: "anchor l:0123abcd-item-2",
+      returned: [],
+    });
   });
 
   test("answers nothing past an item anchor the app was streamed in the asked turn, while it runs and after it ends", async () => {
