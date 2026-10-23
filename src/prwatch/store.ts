@@ -37,21 +37,41 @@ const GITHUB_PR =
 export const samePr = (a: PrRef, b: PrRef) =>
   a.repo.toLowerCase() === b.repo.toLowerCase() && a.number === b.number;
 
-// A PR whose worker chat was gone is watched again once another worker names it.
+// A PR handed to another chat drops what it awaited from the last one, which the new chat never answers.
+// A PR stopped or halted for the last chat is watched again.
 export const recordLink = (root: string, link: PrLink) =>
   Result.gen(async function* () {
-    const known = yield* Result.await(loadJson(linkPath(root, link)));
+    const known = linkOf(yield* Result.await(loadJson(linkPath(root, link))));
     yield* Result.await(saveJson(linkPath(root, link), link));
+    if (known === null || known.worker === link.worker) return Result.ok();
+
     const state = yield* Result.await(loadWatchState(root, link));
-    if (state.status === "stopped" && linkOf(known)?.worker !== link.worker)
-      yield* Result.await(
-        saveWatchState(root, link, {
-          ...state,
-          status: "watching",
-          reason: null,
-        }),
-      );
+    const resumed =
+      state.status === "stopped" || state.status === "halted"
+        ? { status: "watching" as const, reason: null }
+        : {};
+    yield* Result.await(
+      saveWatchState(root, link, {
+        ...state,
+        ...resumed,
+        followUp: [],
+        delivered: null,
+        halted: null,
+      }),
+    );
     return Result.ok();
+  });
+
+// The chat a PR is linked to and whether its watch still runs, for a caller deciding whether to take the PR over.
+export const linkedChat = (root: string, ref: PrRef) =>
+  Result.gen(async function* () {
+    const link = linkOf(yield* Result.await(loadJson(linkPath(root, ref))));
+    if (link === null) return Result.ok(null);
+    const state = yield* Result.await(loadWatchState(root, ref));
+    return Result.ok({
+      worker: link.worker,
+      active: state.status !== "stopped" && state.status !== "ended",
+    });
   });
 
 const linkPath = (root: string, ref: PrRef) =>

@@ -638,6 +638,8 @@ describe("harnexus-task name", () => {
       threadId: "w1",
       title: "Impl｜決済を再送する PR#141",
       watched: "https://github.com/org/pay/pull/141",
+      warning:
+        "nothing can send to this chat yet: run harnexus-task watch --sender in another chat",
     });
     expect(again.out.title).toBe("Impl｜決済を再送する PR#142");
     expect(again.out.watched).toBe("https://github.com/org/pay/pull/142");
@@ -678,6 +680,8 @@ describe("harnexus-task name", () => {
         threadId: "caller",
         title: null,
         watched: "https://github.com/org/pay/pull/141",
+        warning:
+          "nothing can send to this chat yet: run harnexus-task watch --sender in another chat",
       },
     ]);
     expect([unlinkable.code, unlinkable.err]).toEqual([
@@ -734,7 +738,7 @@ describe("harnexus-task name", () => {
     ]);
   });
 
-  test("reports a name the app did not apply", async () => {
+  test("keeps the PR watched and says so when the app did not apply the name", async () => {
     const { env, invoke, launch } = await launchFixture();
     await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
     env.CODEX_THREAD_ID = "w1";
@@ -744,10 +748,12 @@ describe("harnexus-task name", () => {
       [{ outcome: "not_sent", message: "closed" }],
     );
 
-    expect([failed.code, failed.err]).toEqual([
-      1,
-      expect.stringContaining("name_thread was not applied"),
+    expect([failed.code, failed.out.title, failed.out.watched]).toEqual([
+      0,
+      null,
+      "https://github.com/org/pay/pull/141",
     ]);
+    expect(failed.out.renameError).toContain("name_thread was not applied");
   });
 });
 
@@ -794,11 +800,21 @@ describe("harnexus-task watch --sender and --link", () => {
       "https://github.com/org/pay/pull/9",
     ]);
     const refused = await invoke(["watch", "--link", "9"]);
+    env.CODEX_THREAD_ID = "other-chat";
+    const taken = await invoke([
+      "watch",
+      "--link",
+      "https://github.com/org/pay/pull/9",
+    ]);
     const shown = await invoke(["watch", "--status"]);
 
     expect([registered.out, linked.out]).toEqual([
       { sender: "sender-chat" },
       { threadId: "review-chat", watched: "https://github.com/org/pay/pull/9" },
+    ]);
+    expect([taken.code, taken.err]).toEqual([
+      1,
+      expect.stringContaining("already watched for chat review-chat"),
     ]);
     expect([refused.code, refused.err]).toEqual([
       1,

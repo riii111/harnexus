@@ -226,6 +226,11 @@ export const status = (root: string) =>
         checkedAt: state.checkedAt,
       });
     }
-    const sender = yield* Result.await(loadSender(root));
-    return Result.ok<Fields>({ sender, prs });
+    // An unreadable sender record is shown as such, like an unreadable PR record.
+    const sender = await loadSender(root);
+    return Result.ok<Fields>(
+      sender.isOk()
+        ? { sender: sender.value, prs }
+        : { sender: null, senderError: sender.error.message, prs },
+    );
   });

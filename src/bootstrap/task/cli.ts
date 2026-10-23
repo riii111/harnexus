@@ -10,6 +10,7 @@ import {
 import { createGitHub } from "../../prwatch/github.ts";
 import {
   githubPr,
+  linkedChat,
   listLinks,
   loadSender,
   recordLink,
@@ -44,6 +45,7 @@ import {
   launchOfThread,
   launchSession,
   listState,
+  reviewerOfWorker,
   reviewProject,
   reviewSession,
   type SaveJson,
@@ -252,24 +254,51 @@ const name = (args: Args, deps: TaskDeps) =>
       return fail("--pr must be a pull request URL or number");
     const worker = yield* callerId(deps.env);
     // Linked first and for any chat, so a worker the owner started by hand is still watched.
+    // A worker naming its PR takes it over, as the latest worker on a PR is the one doing it.
     const watched = yield* Result.await(linkPr(deps, args.pr ?? "", worker));
     const request = yield* Result.await(launchOfThread(deps.env, worker));
     // Only a launched worker has a title to extend; another chat keeps its own.
-    let title: string | null = null;
-    if (request !== null) {
-      title = `${threadTitle("Impl", request)} PR#${number}`;
-      const answer = await callApp(deps.env, worker, "name_thread", {
-        name: title,
-      });
-      if (answer.outcome !== ("done" satisfies CallOutcome))
-        return fail(`name_thread was not applied: ${JSON.stringify(answer)}`);
-    }
+    const title =
+      request === null ? null : `${threadTitle("Impl", request)} PR#${number}`;
+    const answer =
+      title === null
+        ? null
+        : await callApp(deps.env, worker, "name_thread", { name: title });
+    const renamed =
+      answer === null || answer.outcome === ("done" satisfies CallOutcome);
     // Fails even after a rename, so a PR the watch cannot see is never taken as watched.
     if (watched === null)
       return fail(
-        `${args.pr} is not watched${title === null ? "" : ` (the thread is named ${title})`}: ${NOT_LINKABLE}`,
+        `${args.pr} is not watched${title === null || !renamed ? "" : ` (the thread is named ${title})`}: ${NOT_LINKABLE}`,
       );
-    return Result.ok<Fields>({ threadId: worker, title, watched });
+    // A rename the app did not apply leaves the PR watched, which the result says rather than failing.
+    return Result.ok<Fields>({
+      threadId: worker,
+      title: renamed ? title : null,
+      watched,
+      ...(renamed
+        ? {}
+        : {
+            renameError: `name_thread was not applied: ${JSON.stringify(answer)}`,
+          }),
+      ...(yield* Result.await(deliveryWarning(deps, worker))),
+    });
+  });
+
+// A linked chat nothing can send to is told so, since the link alone would read as watched.
+const deliveryWarning = (deps: TaskDeps, worker: string) =>
+  Result.gen(async function* () {
+    if ((await reviewerOfWorker(deps.env, worker)) !== null)
+      return Result.ok({});
+    const sender = yield* Result.await(loadSender(watchPaths(deps.env).state));
+    return Result.ok(
+      sender !== null && sender !== worker
+        ? {}
+        : {
+            warning:
+              "nothing can send to this chat yet: run harnexus-task watch --sender in another chat",
+          },
+    );
   });
 
 const NOT_LINKABLE =
@@ -348,14 +377,25 @@ const registerSender = (deps: TaskDeps, root: string) =>
     return Result.ok<Fields>({ sender: thread });
   });
 
-// Any chat can ask to be told about a PR without being renamed.
+// Any chat can ask to be told about a PR without being renamed, but never takes a PR another chat is watched for.
 const linkOnly = (deps: TaskDeps, value: string) =>
   Result.gen(async function* () {
     const worker = yield* callerId(deps.env);
+    const pr = githubPr(value);
+    if (pr === null) return fail(`${value} is not watched: ${NOT_LINKABLE}`);
+    const current = yield* Result.await(
+      linkedChat(watchPaths(deps.env).state, pr),
+    );
+    if (current?.active && current.worker !== worker)
+      return fail(
+        `${pr.url} is already watched for chat ${current.worker}; name it with name --pr from the chat that takes it over`,
+      );
     const watched = yield* Result.await(linkPr(deps, value, worker));
-    if (watched === null)
-      return fail(`${value} is not watched: ${NOT_LINKABLE}`);
-    return Result.ok<Fields>({ threadId: worker, watched });
+    return Result.ok<Fields>({
+      threadId: worker,
+      watched,
+      ...(yield* Result.await(deliveryWarning(deps, worker))),
+    });
   });
 
 const COMMANDS = { launch, review, state, resolve, name, watch };
