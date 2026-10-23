@@ -10,7 +10,7 @@ import {
   type WatchEvent,
 } from "./classify.ts";
 import { configPath, loadConfig, type WatchConfig } from "./config.ts";
-import { eventsOf } from "./events.ts";
+import { nextEvents } from "./events.ts";
 import type { GitHub, PrSummary } from "./github.ts";
 import {
   listLinks,
@@ -178,14 +178,17 @@ const applySummary = async (
   if (summary.isDraft) {
     if (state.status !== "draft") deps.log({ event: "paused", pr });
     state.status = "draft";
-    state.summary = summary;
-    return;
+    // A draft is still read the first time, so what it had before the watch started is never sent once it is ready.
+    if (state.summary !== null) {
+      state.summary = summary;
+      return;
+    }
+  } else {
+    const resumed = state.status === "draft";
+    state.status = "watching";
+    if (!changed && !resumed) return;
+    if (resumed) deps.log({ event: "resumed", pr });
   }
-
-  const resumed = state.status === "draft";
-  state.status = "watching";
-  if (!changed && !resumed) return;
-  if (resumed) deps.log({ event: "resumed", pr });
 
   const detail = await deps.github.detail(account, link);
   // The summary is left as it was, so the next cycle reads the detail again.
@@ -194,8 +197,8 @@ const applySummary = async (
     return;
   }
 
+  const found = nextEvents(detail.value, state, link.linkedAt, account, config);
   state.summary = summary;
-  const found = eventsOf(detail.value, state, link.linkedAt, account, config);
   state.seen = found.seen;
   state.conflictHead = found.conflictHead;
   if (found.events.length === 0) return;

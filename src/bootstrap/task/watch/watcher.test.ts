@@ -3,13 +3,20 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result } from "better-result";
-import type { Fields } from "../format.ts";
+import { type Fields, fail } from "../format.ts";
 import { saveJson } from "../session.ts";
 import type { GitHub, PrComment, PrDetail, PrSummary } from "./github.ts";
-import { loadWatchState, recordLink, type WatchState } from "./store.ts";
+import {
+  freshState,
+  loadWatchState,
+  recordLink,
+  saveWatchState,
+  type WatchState,
+} from "./store.ts";
 import { runCycle } from "./watcher.ts";
 
 const PR = "https://github.com/org/pay/pull/7";
+const REF = { repo: "org/pay", number: 7 };
 const HEAD = "a".repeat(40);
 const LINKED_AT = "2026-10-20T00:00:00.000Z";
 // Local noon, so the default quiet hours never apply unless a test asks for them.
@@ -94,7 +101,8 @@ const delegatedTurn = (
     ],
   });
 
-const fixture = async (config: Fields = {}) => {
+// Starts from a PR the watch already read once, unless a test checks the first read.
+const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
   const root = await mkdtemp(join(tmpdir(), "harnexus-watch-"));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
   const env = {
@@ -118,6 +126,11 @@ const fixture = async (config: Fields = {}) => {
     worker: "worker",
     linkedAt: LINKED_AT,
   });
+  if (!firstRead)
+    await saveWatchState(env, saveJson, REF, {
+      ...freshState(),
+      summary: summary({ updatedAt: "2026-10-22T00:00:00Z" }),
+    });
   const review = join(root, "state/taskctl/review/r1");
   await mkdir(review, { recursive: true });
   await writeFile(
@@ -132,6 +145,7 @@ const fixture = async (config: Fields = {}) => {
     summary: summary(),
     comments: [] as PrComment[],
     extra: {} as Partial<PrDetail>,
+    detailFails: false,
     turns: [turn()] as Turn[],
     active: false,
     gone: false,
@@ -147,6 +161,7 @@ const fixture = async (config: Fields = {}) => {
     },
     detail: async () => {
       calls.details += 1;
+      if (world.detailFails) return fail("GitHub is down");
       return Result.ok(detailOf(world.summary, world.comments, world.extra));
     },
     openPulls: async () => Result.ok([]),
@@ -243,6 +258,137 @@ describe("runCycle", () => {
       saved.pending,
       saved.delivered?.findings.length,
     ]).toEqual(["watching", [], 1]);
+  });
+
+  test("takes everything on a PR it reads for the first time as seen and sends only what comes after", async () => {
+    const { world, calls, cycle, state, later } = await fixture(
+      {},
+      { firstRead: true },
+    );
+    world.summary = summary({ mergeable: "CONFLICTING", rollup: "FAILURE" });
+    world.extra = {
+      failedRequired: [{ name: "build", url: "https://ci.example/1" }],
+    };
+    world.comments = [
+      comment({}),
+      comment({
+        id: "review:2",
+        kind: "review",
+        author: "tanaka",
+        url: `${PR}#pullrequestreview-2`,
+        body: "looks off",
+        path: null,
+        line: null,
+      }),
+      comment({
+        id: "issue:3",
+        kind: "issue_comment",
+        author: "tanaka",
+        url: `${PR}#issuecomment-3`,
+      }),
+    ];
+    await cycle();
+    const first = await state();
+    expect(calls.sent).toEqual([]);
+    expect([first.pending, first.conflictHead]).toEqual([[], HEAD]);
+
+    later(1);
+    world.comments = [
+      ...world.comments,
+      comment({
+        id: "issue:4",
+        kind: "issue_comment",
+        author: "tanaka",
+        url: `${PR}#issuecomment-4`,
+        createdAt: world.now.toISOString(),
+      }),
+    ];
+    await cycle();
+
+    expect(calls.sent).toHaveLength(1);
+    const prompt = String(calls.sent[0]?.prompt);
+    expect(prompt).toContain("理由：レビュー・コメント\n");
+    expect(prompt).toContain(`1. [tanaka] src/pay.kt:42 ${PR}#issuecomment-4`);
+    expect(prompt).not.toContain("2. ");
+  });
+
+  test("takes CodeRabbit's earlier findings as seen on the first read while its review runs", async () => {
+    const { world, calls, cycle, later } = await fixture(
+      {},
+      { firstRead: true },
+    );
+    world.summary = summary({
+      coderabbit: {
+        state: "PENDING",
+        description: "Review in progress",
+        createdAt: "2026-10-23T01:00:00Z",
+      },
+    });
+    world.comments = [comment({})];
+    await cycle();
+    expect(calls.sent).toEqual([]);
+
+    world.summary = summary({ updatedAt: "2026-10-23T02:00:00Z" });
+    world.extra = { noActionableSummary: true };
+    later(1);
+    await cycle();
+
+    expect(calls.sent).toHaveLength(1);
+    expect(String(calls.sent[0]?.prompt)).toContain(
+      "「指摘なし」とだけ報告してください",
+    );
+  });
+
+  test("reads a draft on its first read and sends only what came after once it is ready", async () => {
+    const { world, calls, cycle, state, later } = await fixture(
+      {},
+      { firstRead: true },
+    );
+    world.summary = summary({ isDraft: true });
+    world.comments = [comment({})];
+    await cycle();
+    expect([calls.details, calls.sent, (await state()).status]).toEqual([
+      1,
+      [],
+      "draft",
+    ]);
+
+    world.summary = summary({ isDraft: false });
+    later(1);
+    world.comments = [
+      comment({}),
+      comment({
+        id: "issue:5",
+        kind: "issue_comment",
+        author: "tanaka",
+        url: `${PR}#issuecomment-5`,
+        createdAt: world.now.toISOString(),
+      }),
+    ];
+    await cycle();
+
+    expect(calls.sent).toHaveLength(1);
+    expect(String(calls.sent[0]?.prompt)).toContain("issuecomment-5");
+    expect(String(calls.sent[0]?.prompt)).not.toContain("discussion_r1");
+  });
+
+  test("reads the PR again on the next cycle when the first read of its detail failed", async () => {
+    const { world, calls, cycle, state, later } = await fixture(
+      {},
+      { firstRead: true },
+    );
+    world.comments = [comment({})];
+    world.detailFails = true;
+    await cycle();
+    expect((await state()).summary).toBeNull();
+
+    world.detailFails = false;
+    later(1);
+    await cycle();
+
+    expect(calls.details).toBe(2);
+    expect(calls.sent).toEqual([]);
+    expect((await state()).seen).toContain("inline:1");
   });
 
   test("never sends an event again and checks the answer before the next message", async () => {

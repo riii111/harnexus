@@ -9,7 +9,7 @@ import { type Env, ioFailed, NAME } from "../request.ts";
 import type { SaveJson } from "../session.ts";
 import { classify, messageOf, type Verdict } from "./classify.ts";
 import { configPath, loadConfig, type WatchConfig } from "./config.ts";
-import { eventsOf } from "./events.ts";
+import { nextEvents } from "./events.ts";
 import type { GitHub, PrDetail, PrRef } from "./github.ts";
 import {
   freshState,
@@ -17,7 +17,9 @@ import {
   listLinks,
   loadWatchState,
   lockPath,
+  type PrLink,
   saveWatchState,
+  type WatchState,
 } from "./store.ts";
 import { runCycle, type WatchDeps } from "./watcher.ts";
 
@@ -56,7 +58,7 @@ const io = <T>(
   result: Result<T, { message: string; cause?: unknown }>,
 ): Result<T, TaskFailed> => result.mapError(ioFailed);
 
-// Reads every comment as if the PR had just been linked, so the verdicts can be checked against GitHub before anything is sent.
+// Decides from each PR's saved watch state as the watch would, but writes none, so a run before starting shows what the first cycle sends.
 export const dryRun = (
   deps: { env: Env; github: GitHub },
   urls: readonly string[],
@@ -64,12 +66,20 @@ export const dryRun = (
   Result.gen(async function* () {
     const config = yield* Result.await(loadConfig(configPath(deps.env)));
     const refs = yield* Result.await(dryRunTargets(deps.github, config, urls));
+    const links = yield* Result.await(listLinks(deps.env));
 
     const reports: Fields[] = [];
     for (const ref of refs) {
       const account = yield* accountFor(config, ref.repo);
+      const link = links.find((each) => samePr(each, ref));
+      const state =
+        link === undefined
+          ? freshState()
+          : yield* Result.await(loadWatchState(deps.env, link));
       const detail = yield* Result.await(deps.github.detail(account, ref));
-      reports.push(reportOf(detail, account, config));
+      reports.push(
+        reportOf(detail, state, link?.linkedAt ?? EPOCH, account, config),
+      );
     }
     return Result.ok<Fields>({ dryRun: true, prs: reports });
   });
@@ -101,20 +111,28 @@ const accountFor = (config: WatchConfig, repo: string) => {
     : Result.ok(account);
 };
 
-const reportOf = (detail: PrDetail, account: string, config: WatchConfig) => {
+const samePr = (link: PrLink, ref: PrRef) =>
+  link.repo.toLowerCase() === ref.repo.toLowerCase() &&
+  link.number === ref.number;
+
+// A PR no watch has linked has no state, so it is shown as read for the first time and its link time is never used.
+const EPOCH = new Date(0).toISOString();
+
+const reportOf = (
+  detail: PrDetail,
+  state: WatchState,
+  linkedAt: string,
+  account: string,
+  config: WatchConfig,
+) => {
   const verdicts = classify(detail.comments, account, config.ignore);
-  const { events } = eventsOf(
-    detail,
-    freshState(),
-    new Date(0).toISOString(),
-    account,
-    config,
-  );
+  const { events } = nextEvents(detail, state, linkedAt, account, config);
 
   return {
     pr: detail.url,
     title: detail.title,
     draft: detail.isDraft,
+    firstRead: state.summary === null,
     head: detail.head,
     coderabbit: detail.coderabbit,
     mergeable: detail.mergeable,
@@ -151,11 +169,7 @@ export const release = (env: Env, save: SaveJson, url: string) =>
       return fail("--release must be a GitHub pull request URL");
 
     const links = yield* Result.await(listLinks(env));
-    const link = links.find(
-      (each) =>
-        each.repo.toLowerCase() === ref.repo.toLowerCase() &&
-        each.number === ref.number,
-    );
+    const link = links.find((each) => samePr(each, ref));
     if (link === undefined) return fail(`${ref.url} is not linked to a worker`);
 
     const state = yield* Result.await(loadWatchState(env, link));
