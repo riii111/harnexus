@@ -20,9 +20,11 @@ import { runCycle, type WatchDeps, type WatchPaths } from "./watcher.ts";
 
 // Runs until stopped; a failed cycle is logged and retried, so a config or network error never ends the watch.
 // Between cycles the process only sleeps on a timer.
+// Once its program has been replaced it ends between cycles, never mid-send, so the service that keeps it running starts the new one.
 export const watchForever = (
   deps: WatchDeps,
   sleep: (ms: number) => Promise<unknown>,
+  replaced: () => Promise<boolean> = async () => false,
 ) =>
   Result.gen(async function* () {
     yield* Result.await(acquireLock(deps.paths.state));
@@ -33,6 +35,12 @@ export const watchForever = (
       const cycle = await runCycle(cycleDeps);
       if (cycle.isErr())
         deps.log({ event: "cycle_failed", error: cycle.error.message });
+      if (await replaced()) {
+        deps.log({ event: "replaced" });
+        return fail(
+          "the watch's program was replaced; exiting to be restarted",
+        );
+      }
       await sleep(
         cycle.isOk() ? cycle.value.pollIntervalSeconds * 1000 : RETRY_MS,
       );

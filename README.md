@@ -166,7 +166,8 @@ Configure it in `~/.config/harnexus/pr-watch.json`:
 To see what would be sent without sending anything, run `harnexus-task watch --dry-run`, optionally with `--pr <URL>` for each PR to check.
 A PR the watch has not read yet shows `firstRead: true` and no message.
 `harnexus-task watch --status` lists each linked PR with what its watch is doing.
-`bun run install:task` restarts a loaded PR watch LaunchAgent (`io.github.riii111.pr-watch`) so it runs the binary just installed, and leaves it alone when it is not loaded.
+A running watch notices when its `harnexus-task` is replaced, as by `bun run install:task`, and exits between cycles with a failure, so a LaunchAgent that restarts it on failure starts the new binary.
+It never exits in the middle of sending a message.
 
 Between cycles the watch only sleeps.
 It keeps each gh account's token in memory for ten minutes rather than starting gh for every request, and stops reading the records of merged or closed PRs until it restarts.

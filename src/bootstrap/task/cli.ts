@@ -15,6 +15,7 @@ import {
   samePr,
 } from "../../prwatch/store.ts";
 import type { WatchPaths } from "../../prwatch/watcher.ts";
+import { statFileIfExists } from "../../runtime/fs.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 import { runCommand } from "../../runtime/process.boundary.ts";
 import { type OptionTypes, parseOptions } from "./args.boundary.ts";
@@ -289,7 +290,7 @@ export const watchPaths = (env: Env): WatchPaths => ({
   state: join(stateRoot(env), "watch"),
 });
 
-const watch = (args: Args, deps: TaskDeps) => {
+const watch = async (args: Args, deps: TaskDeps) => {
   const paths = watchPaths(deps.env);
   if (args.release !== undefined) return release(paths.state, args.release);
   if (args.status) return status(paths.state);
@@ -309,7 +310,20 @@ const watch = (args: Args, deps: TaskDeps) => {
         ),
     },
     (ms) => Bun.sleep(ms),
+    await programReplaced(process.execPath),
   );
+};
+
+// install:task swaps the file at the program's path, so a change there means a newer harnexus-task is installed.
+// The watch then exits non-zero, which launchd's KeepAlive answers by starting the new one.
+const programReplaced = async (path: string) => {
+  const started = await statFileIfExists(path);
+  const before = started.isOk() ? started.value : null;
+  return async () => {
+    if (before === null) return false;
+    const now = await statFileIfExists(path);
+    return now.isOk() && !jsonEqual(now.value, before);
+  };
 };
 
 const COMMANDS = { launch, review, state, resolve, name, watch };
