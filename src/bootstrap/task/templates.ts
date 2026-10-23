@@ -42,21 +42,16 @@ const templatePath = (env: Env, kind: TemplateKind) =>
     return Result.ok(path);
   });
 
-// A Markdown link target such as the SKILL.md a template names: inline up to the first closing parenthesis on its line, or a reference definition's rest of line.
-const LINK_TARGETS = [
-  /\]\(([^)\n]*)\)/dg,
-  /^ {0,3}\[[^\]\n]+\]:[ \t]*(.*)$/dgm,
-];
+// An inline Markdown link target such as the SKILL.md a template names, up to the first closing parenthesis on its line; a line opening with [label]: may be prose, so reference definitions are left as written.
+const LINK_TARGET = /\]\(([^)\n]*)\)/dg;
 
 const targets = (template: string) =>
-  LINK_TARGETS.flatMap((pattern) =>
-    [...template.matchAll(pattern)].flatMap((match) => {
-      const span = match.indices?.[1];
-      return span === undefined
-        ? []
-        : [{ raw: match[1] ?? "", start: span[0], end: span[1] }];
-    }),
-  ).sort((a, b) => a.start - b.start);
+  [...template.matchAll(LINK_TARGET)].flatMap((match) => {
+    const span = match.indices?.[1];
+    return span === undefined
+      ? []
+      : [{ raw: match[1] ?? "", start: span[0], end: span[1] }];
+  });
 
 // A value inside a target is a name, never a path, so none can lead the link to another folder or break it.
 const targetValue = (value: string) =>
@@ -86,8 +81,6 @@ const resolveLinks = (
     let text = "";
     let last = 0;
     for (const { raw, start, end } of targets(template)) {
-      // A target inside one already resolved, as an inline link on a definition's line, is part of it.
-      if (start < last) continue;
       const hash = raw.indexOf("#");
       const rawPath = hash === -1 ? raw : raw.slice(0, hash);
       if (!isRelative(rawPath.replace(/^</, "").trimStart())) continue;
