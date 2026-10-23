@@ -688,15 +688,15 @@ describe("harnexus-task templates", () => {
     );
   });
 
-  test("splits the anchor before filling and resolves beside a symlinked template's real file", async () => {
+  test("fills anchors and field-led targets, and resolves beside a symlinked template's real file", async () => {
     const { root, env, harnexus, data, launch } = await launchFixture();
     data.taskId = "#42";
     const source = join(root, "source");
     await mkdir(join(source, "notes"), { recursive: true });
-    await writeFile(join(source, "notes/#42.md"), "");
+    await writeFile(join(source, "notes/task.md"), "");
     await writeFile(
       join(source, "worker.md"),
-      "[note](notes/{task_id}.md#{task_id}) [id]({task_id})\n",
+      "[note](notes/task.md#{task_id}) [id]({task_id})\n",
     );
     await mkdir(join(root, "linked"));
     const template = join(root, "linked/worker.md");
@@ -709,18 +709,52 @@ describe("harnexus-task templates", () => {
 
     expect([sent.code, sent.err]).toEqual([0, ""]);
     expect(harnexus.calls.at(-1)?.arguments.prompt).toBe(
-      `[note](${join(source, "notes/#42.md")}##42) [id](#42)\n`,
+      `[note](${join(source, "notes/task.md")}##42) [id](#42)\n`,
     );
   });
 
-  test("refuses a link to a path the app would cut at a space", async () => {
-    const { root, env, harnexus, launch } = await launchFixture();
-    const spaced = join(root, "My Skills");
-    await mkdir(spaced);
-    await writeFile(join(spaced, "SKILL.md"), "");
-    await symlink(spaced, join(root, "skills"));
+  test.each([
+    {
+      name: "a real path with a space",
+      link: "[$s](spaced/SKILL.md)",
+      taskId: "TR1",
+      error: "whose path has a space, parenthesis or #",
+    },
+    {
+      name: "a real path with #",
+      link: "[n](notes/{task_id}.md)",
+      taskId: "#42",
+      error: "whose path has a space, parenthesis or #",
+    },
+    {
+      name: "a target with a title",
+      link: '[n](notes/task.md "notes")',
+      taskId: "TR1",
+      error: "without angle brackets, spaces or a title",
+    },
+    {
+      name: "a target in angle brackets",
+      link: "[n](<notes/task.md>)",
+      taskId: "TR1",
+      error: "without angle brackets, spaces or a title",
+    },
+    {
+      name: "a field holding a path",
+      link: "[n](notes/{task_id}.md)",
+      taskId: "x/../../task",
+      error: "{task_id} holds a path",
+    },
+  ])("refuses a link to $name", async ({ link, taskId, error }) => {
+    const { root, env, harnexus, data, launch } = await launchFixture();
+    data.taskId = taskId;
+    await mkdir(join(root, "notes"));
+    await writeFile(join(root, "notes/task.md"), "");
+    await writeFile(join(root, "notes/#42.md"), "");
+    await mkdir(join(root, "My Skills"));
+    await writeFile(join(root, "My Skills/SKILL.md"), "");
+    await symlink(join(root, "My Skills"), join(root, "spaced"));
     const template = join(root, "worker.md");
-    await writeFile(template, "[$s](skills/SKILL.md)\n");
+    await writeFile(template, `${link}\n`);
     await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
       templates: { worker: template },
     });
@@ -728,7 +762,7 @@ describe("harnexus-task templates", () => {
     const refused = await launch();
 
     expect(refused.code).toBe(1);
-    expect(refused.err).toContain("whose path has a space or parenthesis");
+    expect(refused.err).toContain(error);
     expect(harnexus.calls).toEqual([]);
   });
 

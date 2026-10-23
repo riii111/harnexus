@@ -4,11 +4,10 @@ import { z } from "zod";
 import {
   isFile,
   pathExists,
-  readRegularTextFile,
   realPathOrSelf,
 } from "../../runtime/fs.boundary.ts";
 import { fail, formatTemplate, TaskFailed } from "./format.ts";
-import { configHome, type Env, ioFailed, readJson } from "./request.ts";
+import { configHome, type Env, readJson, readText } from "./request.ts";
 
 export type TemplateKind = "worker" | "reviewer";
 
@@ -43,8 +42,10 @@ const templatePath = (env: Env, kind: TemplateKind) =>
     return Result.ok(path);
   });
 
-// A Markdown link target such as the SKILL.md a template names; spaces and parentheses end it.
-const LINK_TARGET = /\]\(([^()\s]+)\)/g;
+// A Markdown link target such as the SKILL.md a template names, up to the first closing parenthesis on its line.
+const LINK_TARGET = /\]\(([^)\n]*)\)/g;
+
+const FIELD = /\{([^{}]*)\}/g;
 
 // A target opening with a field is the value's to decide, as with {pr_url} or {checkout}.
 const isRelative = (path: string) =>
@@ -56,7 +57,7 @@ const isRelative = (path: string) =>
 const escapeBraces = (text: string) =>
   text.replaceAll("{", "{{").replaceAll("}", "}}");
 
-// Relative targets are resolved before the request's values go in, so no value can add a link that is resolved.
+// Links are found before the request's values go into the text, so no value can add one, and a value inside a target may not hold a path, so none can lead it to another folder.
 const resolveLinks = (
   template: string,
   path: string,
@@ -71,14 +72,28 @@ const resolveLinks = (
       const raw = match[1] ?? "";
       const hash = raw.indexOf("#");
       const rawPath = hash === -1 ? raw : raw.slice(0, hash);
-      if (!isRelative(rawPath)) continue;
+      if (!isRelative(rawPath.replace(/^</, "").trimStart())) continue;
+      // The app attaches a skill only from a bare target, so a relative one with angle brackets, a space or a title would reach the chat unresolved.
+      if (/^<|\s/.test(raw))
+        return fail(
+          `links to "${raw}"; write a relative target without angle brackets, spaces or a title`,
+        );
+      for (const [, name] of rawPath.matchAll(FIELD)) {
+        const value = name === undefined ? undefined : fields[name];
+        if (value?.includes("/") || value === "." || value === "..")
+          return fail(
+            `{${name}} holds a path, which a link target may not take`,
+          );
+      }
       const file = resolve(folder, yield* formatTemplate(rawPath, fields));
       if (!(await isFile(file)))
         return fail(`links to ${file}, which is not a file`);
       const real = await realPathOrSelf(file);
-      // The app reads a link target only up to a space or parenthesis.
-      if (/[\s()]/.test(real))
-        return fail(`links to ${real}, whose path has a space or parenthesis`);
+      // The app reads a link target only up to a space or parenthesis, and from a # on as an anchor.
+      if (/[\s()#]/.test(real))
+        return fail(
+          `links to ${real}, whose path has a space, parenthesis or #`,
+        );
       const fragment =
         hash === -1 ? "" : yield* formatTemplate(raw.slice(hash), fields);
       text += `${template.slice(last, match.index)}](${escapeBraces(real + fragment)})`;
@@ -89,9 +104,7 @@ const resolveLinks = (
 
 const render = (path: string, fields: Record<string, string>) =>
   Result.gen(async function* () {
-    const template = yield* Result.await(
-      readRegularTextFile(path).then((read) => read.mapError(ioFailed)),
-    );
+    const template = yield* Result.await(readText(path));
     const linked = yield* Result.await(resolveLinks(template, path, fields));
     return formatTemplate(linked, fields);
   });

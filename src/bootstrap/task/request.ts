@@ -59,11 +59,12 @@ export const ioFailed = (error: { message: string; cause?: unknown }) => {
   });
 };
 
+export const readText = (path: string) =>
+  readRegularTextFile(path).then((read) => read.mapError(ioFailed));
+
 export const readJson = (path: string) =>
   Result.gen(async function* () {
-    const text = yield* Result.await(
-      readRegularTextFile(path).then((read) => read.mapError(ioFailed)),
-    );
+    const text = yield* Result.await(readText(path));
     return parseJson(text).mapError(
       () => new TaskFailed({ message: `${path} is not valid JSON` }),
     );
