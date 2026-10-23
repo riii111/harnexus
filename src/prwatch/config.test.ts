@@ -68,6 +68,14 @@ describe("loadConfig", () => {
       message: "reviewBots repeats an id",
     },
     {
+      name: "a login used twice",
+      reviewBots: [
+        "coderabbit",
+        { id: "other", name: "X", login: "CodeRabbitAI[bot]" },
+      ],
+      message: "reviewBots repeats a login",
+    },
+    {
       name: "an unknown preset",
       reviewBots: ["copilot"],
       message: "reviewBots",

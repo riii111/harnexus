@@ -11,7 +11,7 @@ import type {
 } from "../runtime/process.boundary.ts";
 import type { ItemKind } from "./config.ts";
 import { fail, type WatchFailed } from "./failure.ts";
-import type { ReviewBot } from "./reviewers.ts";
+import { botOf, type ReviewBot } from "./reviewers.ts";
 
 // The review bots are passed on every read, since the config is read again each cycle.
 export type GitHub = {
@@ -453,11 +453,11 @@ const detailOf = (
     title: text(pull.title),
     failedRequired: failedRequired(pull, bots),
     comments: [...inline, ...reviews, ...issueComments],
-    noActionable: bots.flatMap(({ id, login, noActionable }) =>
+    noActionable: bots.flatMap(({ id, noActionable }) =>
       noActionable !== null &&
       issueComments.some(
         (comment) =>
-          comment.author.toLowerCase() === login.toLowerCase() &&
+          botOf(bots, comment.author)?.id === id &&
           comment.body.includes(noActionable),
       )
         ? [id]

@@ -2,7 +2,7 @@ import { classify, type Finding } from "./classify.ts";
 import type { WatchConfig } from "./config.ts";
 import type { FailedCheck, PrDetail } from "./github.ts";
 import type { ReviewBot } from "./reviewers.ts";
-import type { WatchState } from "./store.ts";
+import { botKey, type WatchState } from "./store.ts";
 
 export type WatchEvent =
   | { type: "finding"; finding: Finding }
@@ -34,9 +34,7 @@ export const nextEvents = (
 const baselineOf = (detail: PrDetail, bots: readonly ReviewBot[]) => ({
   seen: [
     ...detail.comments.map((comment) => comment.id),
-    ...bots.flatMap((bot) =>
-      reviewCompleted(detail, bot) ? [reviewKey(bot, detail.head)] : [],
-    ),
+    ...bots.flatMap((bot) => botBaseline(detail, bot)),
     ...detail.failedRequired.map((check) => checkKey(detail.head, check.name)),
   ],
   conflictHead: detail.mergeable === "CONFLICTING" ? detail.head : null,
@@ -108,6 +106,12 @@ const reviewDone = (
   fresh: (time: string) => boolean,
   findings: readonly WatchEvent[],
 ): WatchEvent[] => {
+  // A bot added after the PR's first read starts from its reviews as they stand, as the first read does.
+  if (!seen.has(botKey(bot.id))) {
+    for (const key of botBaseline(detail, bot)) seen.add(key);
+    return [];
+  }
+
   const key = reviewKey(bot, detail.head);
   const status = detail.bots[bot.id];
   if (
@@ -151,6 +155,11 @@ const reviewCompleted = (detail: PrDetail, bot: ReviewBot) => {
     status.description.includes(bot.status.completed)
   );
 };
+
+const botBaseline = (detail: PrDetail, bot: ReviewBot) => [
+  botKey(bot.id),
+  ...(reviewCompleted(detail, bot) ? [reviewKey(bot, detail.head)] : []),
+];
 
 // The id leads, so the keys CodeRabbit's reviews were recorded under before bots were configurable still match.
 const reviewKey = (bot: ReviewBot, head: string) => `${bot.id}:${head}`;

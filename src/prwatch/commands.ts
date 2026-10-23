@@ -193,7 +193,18 @@ export const status = (root: string) =>
   Result.gen(async function* () {
     const prs: Fields[] = [];
     for (const link of yield* Result.await(listLinks(root))) {
-      const state = yield* Result.await(loadWatchState(root, link));
+      // An unreadable record is shown as such, as the watch logs and skips it.
+      const loaded = await loadWatchState(root, link);
+      if (loaded.isErr()) {
+        prs.push({
+          pr: link.url,
+          worker: link.worker,
+          status: "unreadable",
+          reason: loaded.error.message,
+        });
+        continue;
+      }
+      const state = loaded.value;
       prs.push({
         pr: link.url,
         worker: link.worker,

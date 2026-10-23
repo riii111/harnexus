@@ -809,4 +809,45 @@ describe("runCycle", () => {
 
     expect([over.size, skipped.length, read.length]).toEqual([1, 0, 1]);
   });
+
+  test("starts a bot added to the config later from the reviews it already finished", async () => {
+    const { world, calls, cycle, later } = await fixture({
+      reviewBots: [
+        "coderabbit",
+        {
+          id: "other",
+          name: "OtherBot",
+          login: "other-reviewer[bot]",
+          status: { context: "Other Review", completed: "done" },
+        },
+      ],
+    });
+    const done = (createdAt: string) => ({
+      state: "SUCCESS",
+      description: "done",
+      createdAt,
+    });
+    world.summary = summary({
+      bots: {
+        coderabbit: summary().bots.coderabbit ?? null,
+        other: done("2026-10-23T01:00:00Z"),
+      },
+    });
+    world.extra = { noActionable: ["coderabbit"] };
+    await cycle();
+    const first = String(calls.sent[0]?.prompt);
+
+    world.turns = [delegatedTurn(NOON, calls.sent[0]?.prompt, "指摘なし")];
+    world.summary = summary({
+      head: "b".repeat(40),
+      bots: { coderabbit: null, other: done("2026-10-23T03:00:00Z") },
+    });
+    later(1);
+    await cycle();
+
+    expect(first).not.toContain("OtherBot");
+    expect(String(calls.sent[1]?.prompt)).toContain(
+      "OtherBotのレビューが完了し",
+    );
+  });
 });

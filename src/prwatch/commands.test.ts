@@ -7,7 +7,9 @@ import { holdProcessLock } from "../runtime/fs.boundary.ts";
 import { dryRun, release, status, watchForever } from "./commands.ts";
 import type { GitHub, PrDetail } from "./github.ts";
 import {
+  botKey,
   freshState,
+  keyOf,
   loadWatchState,
   lockPath,
   recordLink,
@@ -108,7 +110,11 @@ describe("dryRun", () => {
   test("reports the verdicts and the message for every open PR the watch already read without writing its state", async () => {
     const { paths, root } = await fixture();
     await recordLink(root, LINK);
-    const read = { ...freshState(), summary: detail };
+    const read = {
+      ...freshState(),
+      summary: detail,
+      seen: [botKey("coderabbit")],
+    };
     await saveWatchState(root, REF, read);
     const asked: string[] = [];
 
@@ -226,6 +232,48 @@ describe("status", () => {
         },
       ],
     });
+  });
+});
+
+describe("status with an unreadable record", () => {
+  test("shows the record as unreadable and still lists the others", async () => {
+    const { root } = await fixture();
+    await recordLink(root, LINK);
+    await recordLink(root, { ...LINK, number: 8, url: `${PR.slice(0, -1)}8` });
+    await writeFile(join(root, keyOf(REF), "state.json"), "{");
+
+    const shown = (await status(root)).unwrap().prs as Record<
+      string,
+      unknown
+    >[];
+
+    expect(shown.map((pr) => pr.status).sort()).toEqual([
+      "unreadable",
+      "watching",
+    ]);
+  });
+});
+
+describe("recordLink", () => {
+  test("resumes a PR whose worker was gone once another worker names it", async () => {
+    const { root } = await fixture();
+    await recordLink(root, LINK);
+    await saveWatchState(root, REF, {
+      ...freshState(),
+      status: "stopped",
+      reason: "worker thread is gone",
+    });
+
+    await recordLink(root, LINK);
+    const same = (await loadWatchState(root, REF)).unwrap().status;
+    await recordLink(root, { ...LINK, worker: "another" });
+    const other = (await loadWatchState(root, REF)).unwrap();
+
+    expect([same, other.status, other.reason]).toEqual([
+      "stopped",
+      "watching",
+      null,
+    ]);
   });
 });
 

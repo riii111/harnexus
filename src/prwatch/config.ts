@@ -39,6 +39,10 @@ export const loadConfig = (
     const ids = reviewBots.map((bot) => bot.id);
     if (new Set(ids).size !== ids.length)
       return fail(`${path} is invalid: reviewBots repeats an id`);
+    // A comment is credited to one bot by its login, so two bots cannot share one.
+    const logins = reviewBots.map((bot) => bot.login.toLowerCase());
+    if (new Set(logins).size !== logins.length)
+      return fail(`${path} is invalid: reviewBots repeats a login`);
     return Result.ok({ ...parsed.data, repositories, reviewBots });
   });
 

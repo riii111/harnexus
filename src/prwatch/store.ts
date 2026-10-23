@@ -37,8 +37,25 @@ const GITHUB_PR =
 export const samePr = (a: PrRef, b: PrRef) =>
   a.repo.toLowerCase() === b.repo.toLowerCase() && a.number === b.number;
 
+// A PR whose worker chat was gone is watched again once another worker names it.
 export const recordLink = (root: string, link: PrLink) =>
-  saveJson(join(root, keyOf(link), "link.json"), link);
+  Result.gen(async function* () {
+    const known = yield* Result.await(loadJson(linkPath(root, link)));
+    yield* Result.await(saveJson(linkPath(root, link), link));
+    const state = yield* Result.await(loadWatchState(root, link));
+    if (state.status === "stopped" && linkOf(known)?.worker !== link.worker)
+      yield* Result.await(
+        saveWatchState(root, link, {
+          ...state,
+          status: "watching",
+          reason: null,
+        }),
+      );
+    return Result.ok();
+  });
+
+const linkPath = (root: string, ref: PrRef) =>
+  join(root, keyOf(ref), "link.json");
 
 // An unreadable link is skipped, so one broken record cannot stop the watch of every other PR.
 // The keys in skip are not read at all, which spares the watch every PR it has finished with.
@@ -114,9 +131,9 @@ export const freshState = (): WatchState => ({
   halted: null,
 });
 
-// No command brings these back, so a watch may stop reading them for as long as it runs.
-export const isOver = (state: WatchState) =>
-  state.status === "ended" || state.status === "stopped";
+// No command brings an ended PR back, so a watch may stop reading it for as long as it runs.
+// A stopped one is left readable, since naming it from another worker resumes it.
+export const isOver = (state: WatchState) => state.status === "ended";
 
 export const loadWatchState = (root: string, ref: PrRef) =>
   Result.gen(async function* () {
@@ -129,8 +146,14 @@ export const loadWatchState = (root: string, ref: PrRef) =>
   });
 
 // A state written before review bots were configurable names CodeRabbit in its own fields; it is read as the coderabbit preset.
+// Its CodeRabbit key is taken as the bot already known, so the watch does not read CodeRabbit as newly added.
 const upgraded = (state: WatchState): WatchState => ({
   ...state,
+  summary: state.summary === null ? null : upgradedSummary(state.summary),
+  seen:
+    state.summary !== null && !state.seen.some((key) => key.startsWith(BOT_KEY))
+      ? [...state.seen, botKey("coderabbit")]
+      : state.seen,
   pending: state.pending.map(upgradedEvent),
   followUp: state.followUp.map(upgradedFinding),
   delivered:
@@ -141,6 +164,20 @@ const upgraded = (state: WatchState): WatchState => ({
           findings: state.delivered.findings.map(upgradedFinding),
         },
 });
+
+const upgradedSummary = (summary: PrSummary): PrSummary => {
+  const { coderabbit, ...rest } = summary as PrSummary & {
+    coderabbit?: PrSummary["bots"][string];
+  };
+  return "bots" in summary
+    ? summary
+    : { ...rest, bots: { coderabbit: coderabbit ?? null } };
+};
+
+// Marks a bot whose reviews the watch has taken in, so one added to the config later starts from what it already did.
+export const botKey = (id: string) => `${BOT_KEY}${id}`;
+
+const BOT_KEY = "bot:";
 
 const upgradedEvent = (event: WatchEvent): WatchEvent => {
   const old = event as WatchEvent | (Fields & { type: "coderabbit_done" });

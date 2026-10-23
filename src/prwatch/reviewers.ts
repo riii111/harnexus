@@ -35,4 +35,16 @@ export const botOf = (bots: readonly ReviewBot[], login: string) =>
   bots.find((bot) => bot.login.toLowerCase() === login.toLowerCase()) ?? null;
 
 export const severityOf = (bot: ReviewBot, body: string) =>
-  bot.severity === null ? undefined : new RegExp(bot.severity).exec(body)?.[1];
+  bot.severity === null ? undefined : compiled(bot.severity).exec(body)?.[1];
+
+// Each pattern is compiled once, since every inline comment of every read is matched against it.
+const compiled = (source: string) => {
+  const kept = PATTERNS.get(source);
+  if (kept !== undefined) return kept;
+
+  const pattern = new RegExp(source);
+  PATTERNS.set(source, pattern);
+  return pattern;
+};
+
+const PATTERNS = new Map<string, RegExp>();

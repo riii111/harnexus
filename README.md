@@ -168,5 +168,6 @@ A PR the watch has not read yet shows `firstRead: true` and no message.
 `harnexus-task watch --status` lists each linked PR with what its watch is doing.
 
 Between cycles the watch only sleeps.
-It keeps each gh account's token in memory for ten minutes rather than starting gh for every request, and stops reading the records of PRs that were merged, closed or lost their worker until it restarts.
+It keeps each gh account's token in memory for ten minutes rather than starting gh for every request, and stops reading the records of merged or closed PRs until it restarts.
+A PR stopped because its worker chat was gone is watched again once another worker names it with `name --pr`.
 The detection under `src/prwatch` reaches workers only through the `Workers` interface that `harnexus-task` fills with Codex chats.
