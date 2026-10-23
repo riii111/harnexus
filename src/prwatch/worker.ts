@@ -2,8 +2,8 @@ import type { Fields } from "./failure.ts";
 
 // What the watch needs from whoever works on a PR; harnexus-task supplies Codex worker chats.
 export type Workers = {
-  // Null while nothing can send to the worker.
-  senderOf: (worker: string) => Promise<string | null>;
+  // The chat to send from, or why nothing can send to the worker yet.
+  senderOf: (worker: string) => Promise<string | { missing: string }>;
   // Null when the worker cannot be asked now, as while the app is closed; the next cycle asks again.
   look: (
     sender: string,

@@ -10,6 +10,7 @@ import {
   freshState,
   githubPr,
   listLinks,
+  loadSender,
   loadWatchState,
   lockPath,
   samePr,
@@ -222,8 +223,16 @@ export const status = (root: string) =>
         pending: state.pending.length,
         followUp: state.followUp.length,
         awaitingAnswer: state.delivered !== null,
+        // The running watch has yet to hand the PR to the chat it is now linked to.
+        handingOver: state.worker !== null && state.worker !== link.worker,
         checkedAt: state.checkedAt,
       });
     }
-    return Result.ok<Fields>({ prs });
+    // An unreadable sender record is shown as such, like an unreadable PR record.
+    const sender = await loadSender(root);
+    return Result.ok<Fields>(
+      sender.isOk()
+        ? { sender: sender.value, prs }
+        : { sender: null, senderError: sender.error.message, prs },
+    );
   });

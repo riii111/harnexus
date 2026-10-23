@@ -638,6 +638,8 @@ describe("harnexus-task name", () => {
       threadId: "w1",
       title: "Impl｜決済を再送する PR#141",
       watched: "https://github.com/org/pay/pull/141",
+      warning:
+        "no chat is registered to send from: run harnexus-task watch --sender in a chat kept for it",
     });
     expect(again.out.title).toBe("Impl｜決済を再送する PR#142");
     expect(again.out.watched).toBe("https://github.com/org/pay/pull/142");
@@ -651,7 +653,7 @@ describe("harnexus-task name", () => {
     ]);
   });
 
-  test("refuses a thread no launch recorded and a value that is not a PR", async () => {
+  test("links the PR of a chat no launch recorded without renaming it, and refuses a value that is not a PR", async () => {
     const { harnexus, invoke, launch, env } = await launchFixture();
     await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
     const launches = join(env.XDG_STATE_HOME ?? "", "taskctl/launch");
@@ -659,7 +661,12 @@ describe("harnexus-task name", () => {
     await mkdir(join(launches, "broken"));
     await writeFile(join(launches, "broken/state.json"), "{");
 
-    const unknown = await invoke(["name", "--pr", "141"]);
+    const unknown = await invoke([
+      "name",
+      "--pr",
+      "https://github.com/org/pay/pull/141",
+    ]);
+    const unlinkable = await invoke(["name", "--pr", "141"]);
     const prose = await invoke(["name", "--pr", "PR 141"]);
     const issue = await invoke([
       "name",
@@ -667,10 +674,23 @@ describe("harnexus-task name", () => {
       "https://github.com/org/pay/issues/141",
     ]);
 
-    expect([unknown.code, unknown.err]).toEqual([
-      1,
-      expect.stringContaining("no harnexus-task launch recorded thread caller"),
+    expect([unknown.code, unknown.out]).toEqual([
+      0,
+      {
+        threadId: "caller",
+        title: null,
+        watched: "https://github.com/org/pay/pull/141",
+        warning:
+          "no chat is registered to send from: run harnexus-task watch --sender in a chat kept for it",
+      },
     ]);
+    expect([unlinkable.code, unlinkable.err]).toEqual([
+      1,
+      expect.stringContaining("141 is not watched: the PR watch needs the URL"),
+    ]);
+    expect(
+      (await listLinks(watchPaths(env).state)).unwrap().map((l) => l.worker),
+    ).toEqual(["caller"]);
     for (const refused of [prose, issue])
       expect([refused.code, refused.err]).toEqual([
         1,
@@ -680,7 +700,7 @@ describe("harnexus-task name", () => {
   });
 
   test("links the PR to the worker for the watch and keeps the first link time", async () => {
-    const { env, invoke, launch } = await launchFixture();
+    const { env, invoke, launch, harnexus } = await launchFixture();
     await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
     env.CODEX_THREAD_ID = "w1";
 
@@ -697,6 +717,7 @@ describe("harnexus-task name", () => {
       ["name", "--pr", "142"],
       [{ outcome: "done" }],
     );
+    const renamedOnly = harnexus.calls.at(-1)?.arguments.name;
 
     const links = (await listLinks(watchPaths(env).state)).unwrap();
     expect(links).toEqual([
@@ -708,23 +729,31 @@ describe("harnexus-task name", () => {
         linkedAt: first.unwrap()[0]?.linkedAt ?? "",
       },
     ]);
-    expect(numberOnly.out.watched).toBeNull();
+    expect([numberOnly.code, numberOnly.err, renamedOnly]).toEqual([
+      1,
+      expect.stringContaining(
+        "142 is not watched (the thread is named Impl TR1 PR#142)",
+      ),
+      "Impl TR1 PR#142",
+    ]);
   });
 
-  test("reports a name the app did not apply", async () => {
+  test("keeps the PR watched and says so when the app did not apply the name", async () => {
     const { env, invoke, launch } = await launchFixture();
     await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
     env.CODEX_THREAD_ID = "w1";
 
     const failed = await invoke(
-      ["name", "--pr", "141"],
+      ["name", "--pr", "https://github.com/org/pay/pull/141"],
       [{ outcome: "not_sent", message: "closed" }],
     );
 
-    expect([failed.code, failed.err]).toEqual([
-      1,
-      expect.stringContaining("name_thread was not applied"),
+    expect([failed.code, failed.out.title, failed.out.watched]).toEqual([
+      0,
+      null,
+      "https://github.com/org/pay/pull/141",
     ]);
+    expect(failed.out.renameError).toContain("name_thread was not applied");
   });
 });
 
@@ -738,12 +767,14 @@ describe("harnexus-task watch", () => {
     {
       name: "--release with --dry-run",
       args: ["--dry-run", "--release", "https://github.com/org/pay/pull/1"],
-      message: "use only one of --dry-run, --release and --status",
+      message:
+        "use only one of --dry-run, --release, --status, --sender and --link",
     },
     {
       name: "--status with --release",
       args: ["--status", "--release", "https://github.com/org/pay/pull/1"],
-      message: "use only one of --dry-run, --release and --status",
+      message:
+        "use only one of --dry-run, --release, --status, --sender and --link",
     },
   ])("refuses $name", async ({ args, message }) => {
     const { invoke } = await fixture();
@@ -753,6 +784,45 @@ describe("harnexus-task watch", () => {
     expect([refused.code, refused.err]).toEqual([
       2,
       expect.stringContaining(message),
+    ]);
+  });
+});
+
+describe("harnexus-task watch --sender and --link", () => {
+  test("records the calling chat as the sender and links a PR to the calling chat", async () => {
+    const { env, invoke } = await fixture();
+    env.CODEX_THREAD_ID = "sender-chat";
+    const registered = await invoke(["watch", "--sender"]);
+    env.CODEX_THREAD_ID = "review-chat";
+    const linked = await invoke([
+      "watch",
+      "--link",
+      "https://github.com/org/pay/pull/9",
+    ]);
+    const refused = await invoke(["watch", "--link", "9"]);
+    env.CODEX_THREAD_ID = "other-chat";
+    const taken = await invoke([
+      "watch",
+      "--link",
+      "https://github.com/org/pay/pull/9",
+    ]);
+    const shown = await invoke(["watch", "--status"]);
+
+    expect([registered.out, linked.out]).toEqual([
+      { sender: "sender-chat" },
+      { threadId: "review-chat", watched: "https://github.com/org/pay/pull/9" },
+    ]);
+    expect([taken.code, taken.err]).toEqual([
+      1,
+      expect.stringContaining("already watched for chat review-chat"),
+    ]);
+    expect([refused.code, refused.err]).toEqual([
+      1,
+      expect.stringContaining("9 is not watched"),
+    ]);
+    expect(shown.out.sender).toBe("sender-chat");
+    expect(shown.out.prs.map((pr: { worker: string }) => pr.worker)).toEqual([
+      "review-chat",
     ]);
   });
 });

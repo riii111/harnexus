@@ -219,6 +219,7 @@ describe("status", () => {
     const shown = await status(root);
 
     expect(shown.unwrap()).toEqual({
+      sender: null,
       prs: [
         {
           pr: PR,
@@ -228,6 +229,7 @@ describe("status", () => {
           pending: 1,
           followUp: 0,
           awaitingAnswer: false,
+          handingOver: false,
           checkedAt: null,
         },
       ],
@@ -254,29 +256,6 @@ describe("status with an unreadable record", () => {
   });
 });
 
-describe("recordLink", () => {
-  test("resumes a PR whose worker was gone once another worker names it", async () => {
-    const { root } = await fixture();
-    await recordLink(root, LINK);
-    await saveWatchState(root, REF, {
-      ...freshState(),
-      status: "stopped",
-      reason: "worker thread is gone",
-    });
-
-    await recordLink(root, LINK);
-    const same = (await loadWatchState(root, REF)).unwrap().status;
-    await recordLink(root, { ...LINK, worker: "another" });
-    const other = (await loadWatchState(root, REF)).unwrap();
-
-    expect([same, other.status, other.reason]).toEqual([
-      "stopped",
-      "watching",
-      null,
-    ]);
-  });
-});
-
 describe("watchForever once its program is replaced", () => {
   test("ends before the next cycle once the check after a sleep finds it", async () => {
     const { paths } = await fixture();
@@ -289,7 +268,7 @@ describe("watchForever once its program is replaced", () => {
         paths,
         github: github([]),
         workers: {
-          senderOf: async () => null,
+          senderOf: async () => ({ missing: "none" }),
           look: async () => null,
           send: async () => ({ outcome: "done", detail: {} }),
         },
@@ -328,7 +307,7 @@ describe("watchForever", () => {
           paths,
           github: github([]),
           workers: {
-            senderOf: async () => null,
+            senderOf: async () => ({ missing: "none" }),
             look: async () => null,
             send: async () => ({ outcome: "done", detail: {} }),
           },

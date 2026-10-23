@@ -120,7 +120,9 @@ To disable it, launch with `HARNEXUS_CALL_SOCKET=off bun run open-app`.
 ### Watching PRs
 
 `harnexus-task watch` runs until stopped and tells the worker of each PR named with `name --pr` what needs its attention: review comments, a finished review by an AI review bot such as CodeRabbit, a conflict with the base, and a failed required check.
-It sends one message per PR from the worker's reviewer chat, with each item's kind, place and link but not its text.
+It sends one message per PR, with each item's kind, place and link but not its text.
+Every message comes from one chat you register: run `harnexus-task watch --sender` once in a chat you keep for that.
+Until a chat is registered, nothing is sent, and `name --pr`, `watch --link` and `watch --status` say so.
 It never writes to GitHub.
 
 It waits while the worker's turn runs, for five minutes after you talk to the worker, and during the quiet hours.
@@ -165,7 +167,14 @@ Configure it in `~/.config/harnexus/pr-watch.json`:
 
 To see what would be sent without sending anything, run `harnexus-task watch --dry-run`, optionally with `--pr <URL>` for each PR to check.
 A PR the watch has not read yet shows `firstRead: true` and no message.
-`harnexus-task watch --status` lists each linked PR with what its watch is doing.
+`harnexus-task watch --status` lists the registered sender and each linked PR with what its watch is doing.
+
+`name --pr <URL>` links the PR to the calling chat whether or not `launch` started it, and renames only a launched worker.
+It fails when it cannot link, as for a PR number alone, so a PR the watch cannot see is never taken as watched.
+To have any chat told about a PR without renaming it, run `harnexus-task watch --link <URL>` from that chat.
+`--link` refuses a PR whose watch still runs for another chat, including one halted on a message that may have reached it; a worker naming its PR with `name --pr` takes it over.
+The running watch notices the new chat on its next cycle, sends it again the findings only the last chat was told, drops the answer it awaited from that chat, and resumes a watch that was stopped or halted for it. `watch --status` shows `handingOver` until then.
+Both print a `warning` when nothing can send to the chat yet, and `name --pr` reports a rename the app did not apply as `renameError` while the PR stays watched.
 A running watch notices when its `harnexus-task` is replaced, as by `bun run install:task`, and exits with a failure before its next cycle, so a LaunchAgent that restarts it on failure (`KeepAlive` with `SuccessfulExit: false`) starts the new binary.
 It never exits in the middle of sending a message.
 A watch started by hand ends the same way and has to be started again.

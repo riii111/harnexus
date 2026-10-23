@@ -1,14 +1,16 @@
+import type { Result } from "better-result";
 import type { Answer, Workers } from "../../prwatch/worker.ts";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 import type { Fields } from "./format.ts";
-import type { Env } from "./request.ts";
-import { reviewerOfWorker } from "./session.ts";
 
-// The PR watch's workers are Codex chats a harnexus-task launch started; the watch reaches them through the app.
-export const codexWorkers = (env: Env, callApp: AppCall): Workers => ({
-  // The worker's reviewer is a Codex thread that already messages the worker, and a thread cannot message itself.
-  senderOf: (worker) => reviewerOfWorker(env, worker),
+// The PR watch's workers are Codex chats linked to a PR; the watch reaches them through the app.
+// Every message comes from the one chat registered with watch --sender, so the watch depends on no other command's records.
+export const codexWorkers = (
+  callApp: AppCall,
+  registered: () => Promise<Result<string | null, { message: string }>>,
+): Workers => ({
+  senderOf: async (worker) => senderFor(await registered(), worker),
 
   look: async (sender, worker, awaited, now) => {
     const view = await readThread(callApp, sender, worker, awaited?.at ?? null);
@@ -50,6 +52,28 @@ const answerOf = (turn: Turn): Answer => ({
       : "other",
   text: turn.answer,
 });
+
+// Why nothing can send to the worker, or the chat that sends to it; shared with the warning name --pr and watch --link print.
+// A thread cannot message itself, so the registered chat is never sent to from itself.
+export const senderFor = (
+  registered: Result<string | null, { message: string }>,
+  worker: string,
+): string | { missing: string } => {
+  if (registered.isErr())
+    return {
+      missing: `cannot read the registered sender: ${registered.error.message}`,
+    };
+  if (registered.value === null) return { missing: NO_SENDER };
+  if (registered.value === worker)
+    return {
+      missing:
+        "the registered sender is this chat itself: run harnexus-task watch --sender in another chat",
+    };
+  return registered.value;
+};
+
+const NO_SENDER =
+  "no chat is registered to send from: run harnexus-task watch --sender in a chat kept for it";
 
 export type AppCall = (
   caller: string,

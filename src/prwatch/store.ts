@@ -37,21 +37,27 @@ const GITHUB_PR =
 export const samePr = (a: PrRef, b: PrRef) =>
   a.repo.toLowerCase() === b.repo.toLowerCase() && a.number === b.number;
 
-// A PR whose worker chat was gone is watched again once another worker names it.
+// Only the link is written here; the running watch is the one writer of a PR's state, and it notices the new chat itself.
 export const recordLink = (root: string, link: PrLink) =>
+  saveJson(linkPath(root, link), link);
+
+export const loadLink = async (
+  root: string,
+  ref: PrRef,
+): Promise<Result<PrLink | null, WatchFailed>> =>
+  (await loadJson(linkPath(root, ref))).map(linkOf);
+
+// Whether a PR's watch still runs for its chat, for a caller deciding whether another chat may take it.
+// Only a watch stopped for a gone chat has let it go; a halted one may have just reached it.
+export const linkedChat = (root: string, ref: PrRef) =>
   Result.gen(async function* () {
-    const known = yield* Result.await(loadJson(linkPath(root, link)));
-    yield* Result.await(saveJson(linkPath(root, link), link));
-    const state = yield* Result.await(loadWatchState(root, link));
-    if (state.status === "stopped" && linkOf(known)?.worker !== link.worker)
-      yield* Result.await(
-        saveWatchState(root, link, {
-          ...state,
-          status: "watching",
-          reason: null,
-        }),
-      );
-    return Result.ok();
+    const link = yield* Result.await(loadLink(root, ref));
+    if (link === null) return Result.ok(null);
+    const state = yield* Result.await(loadWatchState(root, ref));
+    return Result.ok({
+      worker: link.worker,
+      active: state.status !== "stopped" && state.status !== "ended",
+    });
   });
 
 const linkPath = (root: string, ref: PrRef) =>
@@ -105,6 +111,8 @@ export type WatchState = {
   followUp: Finding[];
   conflictHead: string | null;
   delivered: Delivered | null;
+  // The chat the delivery fields belong to; a different chat in the link means the PR was handed over.
+  worker: string | null;
   // The message whose delivery could not be confirmed; nothing more is sent for the PR until it is released.
   halted: Fields | null;
 };
@@ -128,6 +136,7 @@ export const freshState = (): WatchState => ({
   followUp: [],
   conflictHead: null,
   delivered: null,
+  worker: null,
   halted: null,
 });
 
@@ -209,6 +218,22 @@ export const saveWatchState = (
 ): Promise<Result<void, WatchFailed>> => saveJson(statePath(root, ref), state);
 
 export const lockPath = (root: string) => join(root, "watch.lock");
+
+// The one chat the watch sends every message from.
+export const recordSender = (root: string, thread: string) =>
+  saveJson(senderPath(root), { thread, at: new Date().toISOString() });
+
+export const loadSender = (root: string) =>
+  Result.gen(async function* () {
+    const loaded = yield* Result.await(loadJson(senderPath(root)));
+    return Result.ok(
+      isObject(loaded) && typeof loaded.thread === "string"
+        ? loaded.thread
+        : null,
+    );
+  });
+
+const senderPath = (root: string) => join(root, "sender.json");
 
 const statePath = (root: string, ref: PrRef) =>
   join(root, keyOf(ref), "state.json");

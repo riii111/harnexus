@@ -77,9 +77,14 @@ const openEntry = (deps: WatchDeps, config: WatchConfig, link: PrLink) =>
 
     const state = loaded.value;
     if (isOver(state)) deps.over?.add(keyOf(link));
-    if (FINISHED.includes(state.status)) return Result.ok(null);
-
     const before = structuredClone(state);
+    handOver(deps, state, link);
+    if (FINISHED.includes(state.status)) {
+      if (!jsonEqual(before, state))
+        yield* Result.await(saveWatchState(deps.paths.state, link, state));
+      return Result.ok(null);
+    }
+
     const account = config.repositories[link.repo.toLowerCase()]?.account;
     if (account === undefined) {
       state.reason = "repository is not configured";
@@ -90,7 +95,44 @@ const openEntry = (deps: WatchDeps, config: WatchConfig, link: PrLink) =>
     return Result.ok<Entry | null>({ link, state, account, before });
   });
 
-// A halted PR waits for the owner to release it; the others are over for good.
+// A PR linked to another chat drops what it awaited from the last one, which the new chat never answers, and a watch stopped or halted for the last chat runs again.
+// A state that has never named its chat takes the linked one as its own.
+const handOver = (deps: WatchDeps, state: WatchState, link: PrLink) => {
+  if (state.worker === link.worker) return;
+  const previous = state.worker;
+  state.worker = link.worker;
+  if (previous === null || state.status === "ended") return;
+
+  // What only the last chat was told goes to the new one again.
+  const told = [...(state.delivered?.findings ?? []), ...state.followUp];
+  state.pending = [
+    ...told
+      .filter(
+        (finding) =>
+          !state.pending.some(
+            (event) =>
+              event.type === "finding" && event.finding.id === finding.id,
+          ),
+      )
+      .map((finding): WatchEvent => ({ type: "finding", finding })),
+    ...state.pending,
+  ];
+  state.followUp = [];
+  state.delivered = null;
+  state.halted = null;
+  if (state.status === "stopped" || state.status === "halted") {
+    state.status = "watching";
+    state.reason = null;
+  }
+  deps.log({
+    event: "handed_over",
+    pr: link.url,
+    from: previous,
+    to: link.worker,
+  });
+};
+
+// A halted PR waits for the owner to release it or another chat to take it; the others are over for good.
 const FINISHED: readonly WatchState["status"][] = [
   "ended",
   "stopped",
@@ -215,10 +257,15 @@ const deliver = async (
 
   const pr = link.url;
   const sender = await deps.workers.senderOf(link.worker);
-  if (sender === null) {
-    if (state.reason !== NO_SENDER)
-      deps.log({ event: "no_sender", pr, worker: link.worker });
-    state.reason = NO_SENDER;
+  if (typeof sender !== "string") {
+    if (state.reason !== sender.missing)
+      deps.log({
+        event: "no_sender",
+        pr,
+        worker: link.worker,
+        reason: sender.missing,
+      });
+    state.reason = sender.missing;
     return;
   }
 
@@ -253,8 +300,6 @@ const hasWork = (state: WatchState) =>
   state.pending.length > 0 ||
   state.followUp.length > 0 ||
   state.delivered !== null;
-
-const NO_SENDER = "nothing can send to the worker yet";
 
 // False while the answer to the last message is still to come, so a new message never interrupts it.
 const checkAnswer = (

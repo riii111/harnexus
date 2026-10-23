@@ -10,9 +10,11 @@ import {
 import { createGitHub } from "../../prwatch/github.ts";
 import {
   githubPr,
-  listLinks,
+  linkedChat,
+  loadLink,
+  loadSender,
   recordLink,
-  samePr,
+  recordSender,
 } from "../../prwatch/store.ts";
 import type { WatchPaths } from "../../prwatch/watcher.ts";
 import { isObject } from "../../runtime/object.ts";
@@ -49,7 +51,7 @@ import {
   stateRoot,
 } from "./session.ts";
 import { programWatch } from "./watch-program.ts";
-import { codexWorkers } from "./watch-worker.ts";
+import { codexWorkers, senderFor } from "./watch-worker.ts";
 
 export type TaskDeps = {
   env: Env;
@@ -80,6 +82,8 @@ type Args = {
   dryRun: boolean;
   release?: string;
   status: boolean;
+  sender: boolean;
+  link?: string;
 };
 
 const worktreeTarget = (project: unknown) => ({
@@ -247,18 +251,53 @@ const name = (args: Args, deps: TaskDeps) =>
     if (number === undefined)
       return fail("--pr must be a pull request URL or number");
     const worker = yield* callerId(deps.env);
-    const request = yield* Result.await(launchOfThread(deps.env, worker));
-    if (request === null)
-      return fail(`no ${NAME} launch recorded thread ${worker} as its worker`);
+    // Linked first and for any chat, so a worker the owner started by hand is still watched.
+    // A worker naming its PR takes it over, as the latest worker on a PR is the one doing it.
     const watched = yield* Result.await(linkPr(deps, args.pr ?? "", worker));
-    const title = `${threadTitle("Impl", request)} PR#${number}`;
-    const answer = await callApp(deps.env, worker, "name_thread", {
-      name: title,
+    const request = yield* Result.await(launchOfThread(deps.env, worker));
+    // Only a launched worker has a title to extend; another chat keeps its own.
+    const title =
+      request === null ? null : `${threadTitle("Impl", request)} PR#${number}`;
+    const answer =
+      title === null
+        ? null
+        : await callApp(deps.env, worker, "name_thread", { name: title });
+    const renamed =
+      answer === null || answer.outcome === ("done" satisfies CallOutcome);
+    // Fails even after a rename, so a PR the watch cannot see is never taken as watched.
+    if (watched === null)
+      return fail(
+        `${args.pr} is not watched${title === null || !renamed ? "" : ` (the thread is named ${title})`}: ${NOT_LINKABLE}`,
+      );
+    // A rename the app did not apply leaves the PR watched, which the result says rather than failing.
+    return Result.ok<Fields>({
+      threadId: worker,
+      title: renamed ? title : null,
+      watched,
+      ...(renamed
+        ? {}
+        : {
+            renameError: `name_thread was not applied: ${JSON.stringify(answer)}`,
+          }),
+      ...(await deliveryWarning(deps, worker)),
     });
-    if (answer.outcome !== ("done" satisfies CallOutcome))
-      return fail(`name_thread was not applied: ${JSON.stringify(answer)}`);
-    return Result.ok<Fields>({ threadId: worker, title, watched });
   });
+
+// A linked chat nothing can send to is told so, since the link alone would read as watched.
+// Never fails, since the link it reports on is already made.
+const deliveryWarning = async (
+  deps: TaskDeps,
+  worker: string,
+): Promise<{ warning?: string }> => {
+  const sender = senderFor(
+    await loadSender(watchPaths(deps.env).state),
+    worker,
+  );
+  return typeof sender === "string" ? {} : { warning: sender.missing };
+};
+
+const NOT_LINKABLE =
+  "the PR watch needs the URL https://github.com/<owner>/<repo>/pull/<number>";
 
 // Kept apart from the title, so the watch finds the worker of a PR without reading thread names.
 const linkPr = (deps: TaskDeps, value: string, worker: string) =>
@@ -266,16 +305,17 @@ const linkPr = (deps: TaskDeps, value: string, worker: string) =>
     const pr = githubPr(value);
     if (pr === null) return Result.ok(null);
     const root = watchPaths(deps.env).state;
-    const links = yield* Result.await(listLinks(root));
-    const known = links.find(
-      (link) => link.worker === worker && samePr(link, pr),
-    );
+    // Only the link is read, so an unreadable state never stops a chat from naming its PR.
+    const current = yield* Result.await(loadLink(root, pr));
     yield* Result.await(
       recordLink(root, {
         ...pr,
         worker,
         // Naming the same PR again keeps its start, so comments made since are still reported.
-        linkedAt: known?.linkedAt ?? new Date().toISOString(),
+        linkedAt:
+          current?.worker === worker
+            ? current.linkedAt
+            : new Date().toISOString(),
       }),
     );
     return Result.ok(pr.url);
@@ -294,6 +334,8 @@ const watch = async (args: Args, deps: TaskDeps) => {
   const paths = watchPaths(deps.env);
   if (args.release !== undefined) return release(paths.state, args.release);
   if (args.status) return status(paths.state);
+  if (args.sender) return registerSender(deps, paths.state);
+  if (args.link !== undefined) return linkOnly(deps, args.link);
   const github = createGitHub(deps.runGit, deps.env);
   if (args.dryRun) return dryRun({ paths, github }, args.prs);
   const log = (entry: Fields) =>
@@ -306,12 +348,20 @@ const watch = async (args: Args, deps: TaskDeps) => {
     Bun.main.startsWith("/$bunfs/"),
   );
   if (replaced === null) log({ event: "replace_check_off" });
+  // Said once at start, since without a registered chat no PR is ever sent to.
+  const registered = await loadSender(paths.state);
+  if (registered.isErr() || registered.value === null)
+    log({
+      event: "no_sender_registered",
+      ...(registered.isErr() ? { error: registered.error.message } : {}),
+    });
   return watchForever(
     {
       paths,
       github,
-      workers: codexWorkers(deps.env, (caller, tool, sent) =>
-        callApp(deps.env, caller, tool, sent),
+      workers: codexWorkers(
+        (caller, tool, sent) => callApp(deps.env, caller, tool, sent),
+        () => loadSender(paths.state),
       ),
       now: () => new Date(),
       log,
@@ -320,6 +370,35 @@ const watch = async (args: Args, deps: TaskDeps) => {
     replaced ?? undefined,
   );
 };
+
+// The calling chat becomes the one the watch sends every message from.
+const registerSender = (deps: TaskDeps, root: string) =>
+  Result.gen(async function* () {
+    const thread = yield* callerId(deps.env);
+    yield* Result.await(recordSender(root, thread));
+    return Result.ok<Fields>({ sender: thread });
+  });
+
+// Any chat can ask to be told about a PR without being renamed, but never takes a PR another chat is watched for.
+const linkOnly = (deps: TaskDeps, value: string) =>
+  Result.gen(async function* () {
+    const worker = yield* callerId(deps.env);
+    const pr = githubPr(value);
+    if (pr === null) return fail(`${value} is not watched: ${NOT_LINKABLE}`);
+    const current = yield* Result.await(
+      linkedChat(watchPaths(deps.env).state, pr),
+    );
+    if (current?.active && current.worker !== worker)
+      return fail(
+        `${pr.url} is already watched for chat ${current.worker}; name it with name --pr from the chat that takes it over`,
+      );
+    const watched = yield* Result.await(linkPr(deps, value, worker));
+    return Result.ok<Fields>({
+      threadId: worker,
+      watched,
+      ...(await deliveryWarning(deps, worker)),
+    });
+  });
 
 const COMMANDS = { launch, review, state, resolve, name, watch };
 
@@ -373,6 +452,8 @@ const OPTIONS: Record<Command, OptionTypes> = {
     pr: { type: "string", multiple: true },
     release: { type: "string" },
     status: { type: "boolean" },
+    sender: { type: "boolean" },
+    link: { type: "string" },
   },
 };
 
@@ -384,7 +465,8 @@ const USAGE = {
   resolve:
     "resolve --request REQUEST (--sent | --not-sent) [--thread-id THREAD_ID]",
   name: "name --pr PR",
-  watch: "watch [--dry-run [--pr PR]... | --release PR | --status]",
+  watch:
+    "watch [--dry-run [--pr PR]... | --release PR | --status | --sender | --link PR]",
 } satisfies Record<Command, string>;
 
 const usageOf = (commands: readonly Command[]) =>
@@ -426,6 +508,7 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
     sent: values.sent === true,
     dryRun: values["dry-run"] === true,
     status: values.status === true,
+    sender: values.sender === true,
     prs: command === "watch" && Array.isArray(values.pr) ? values.pr : [],
   };
   const request = text("request");
@@ -437,13 +520,22 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
   else if (command === "name") return shown("--pr is required");
   const released = text("release");
   if (released !== undefined) args.release = released;
+  const link = text("link");
+  if (link !== undefined) args.link = link;
   if (args.prs.length > 0 && !args.dryRun)
     return shown("--pr is only for --dry-run");
   if (
-    [released !== undefined, args.dryRun, args.status].filter(Boolean).length >
-    1
+    [
+      released !== undefined,
+      args.dryRun,
+      args.status,
+      args.sender,
+      link !== undefined,
+    ].filter(Boolean).length > 1
   )
-    return shown("use only one of --dry-run, --release and --status");
+    return shown(
+      "use only one of --dry-run, --release, --status, --sender and --link",
+    );
   if (command === "resolve" && values.sent === values["not-sent"])
     return shown("exactly one of --sent and --not-sent is required");
   const model = text("model");
