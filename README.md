@@ -171,8 +171,8 @@ A PR the watch has not read yet shows `firstRead: true` and no message.
 `name --pr <URL>` links the PR to the calling chat whether or not `launch` started it, and renames only a launched worker.
 It fails when it cannot link, as for a PR number alone, so a PR the watch cannot see is never taken as watched.
 To have any chat told about a PR without renaming it, run `harnexus-task watch --link <URL>` from that chat.
-`--link` refuses a PR whose watch still runs for another chat; a worker naming its PR with `name --pr` takes it over.
-The running watch notices the new chat on its next cycle, drops any answer it awaited from the last chat, and resumes a watch that was stopped or halted for it.
+`--link` refuses a PR whose watch still runs for another chat, including one halted on a message that may have reached it; a worker naming its PR with `name --pr` takes it over.
+The running watch notices the new chat on its next cycle, sends it again the findings only the last chat was told, drops the answer it awaited from that chat, and resumes a watch that was stopped or halted for it. `watch --status` shows `handingOver` until then.
 Both print a `warning` when nothing can send to the chat yet, and `name --pr` reports a rename the app did not apply as `renameError` while the PR stays watched.
 A running watch notices when its `harnexus-task` is replaced, as by `bun run install:task`, and exits with a failure before its next cycle, so a LaunchAgent that restarts it on failure (`KeepAlive` with `SuccessfulExit: false`) starts the new binary.
 It never exits in the middle of sending a message.

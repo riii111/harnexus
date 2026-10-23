@@ -103,6 +103,20 @@ const handOver = (deps: WatchDeps, state: WatchState, link: PrLink) => {
   state.worker = link.worker;
   if (previous === null || state.status === "ended") return;
 
+  // What only the last chat was told goes to the new one again.
+  const told = [...(state.delivered?.findings ?? []), ...state.followUp];
+  state.pending = [
+    ...told
+      .filter(
+        (finding) =>
+          !state.pending.some(
+            (event) =>
+              event.type === "finding" && event.finding.id === finding.id,
+          ),
+      )
+      .map((finding): WatchEvent => ({ type: "finding", finding })),
+    ...state.pending,
+  ];
   state.followUp = [];
   state.delivered = null;
   state.halted = null;

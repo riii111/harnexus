@@ -41,17 +41,22 @@ export const samePr = (a: PrRef, b: PrRef) =>
 export const recordLink = (root: string, link: PrLink) =>
   saveJson(linkPath(root, link), link);
 
-// The chat a PR is linked to, since when, and whether its watch still runs, for a caller deciding whether to take the PR over.
-// A stopped or halted watch cannot reach its chat, so another chat may take the PR.
+export const loadLink = async (
+  root: string,
+  ref: PrRef,
+): Promise<Result<PrLink | null, WatchFailed>> =>
+  (await loadJson(linkPath(root, ref))).map(linkOf);
+
+// Whether a PR's watch still runs for its chat, for a caller deciding whether another chat may take it.
+// Only a watch stopped for a gone chat has let it go; a halted one may have just reached it.
 export const linkedChat = (root: string, ref: PrRef) =>
   Result.gen(async function* () {
-    const link = linkOf(yield* Result.await(loadJson(linkPath(root, ref))));
+    const link = yield* Result.await(loadLink(root, ref));
     if (link === null) return Result.ok(null);
     const state = yield* Result.await(loadWatchState(root, ref));
     return Result.ok({
       worker: link.worker,
-      linkedAt: link.linkedAt,
-      active: state.status === "watching" || state.status === "draft",
+      active: state.status !== "stopped" && state.status !== "ended",
     });
   });
 

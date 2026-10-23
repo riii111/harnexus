@@ -229,6 +229,7 @@ describe("status", () => {
           pending: 1,
           followUp: 0,
           awaitingAnswer: false,
+          handingOver: false,
           checkedAt: null,
         },
       ],

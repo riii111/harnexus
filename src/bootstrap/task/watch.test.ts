@@ -897,6 +897,9 @@ describe("runCycle", () => {
       ["reviewer", "worker"],
       ["sender", "next"],
     ]);
+    // The finding only the last chat was told goes to the new one too.
+    expect(String(calls.sent[1]?.prompt)).toContain("discussion_r1");
+    expect(String(calls.sent[1]?.prompt)).toContain("discussion_r9");
   });
 
   test("resumes a PR stopped for a gone chat once another chat takes it", async () => {
@@ -922,5 +925,33 @@ describe("runCycle", () => {
       "watching",
       "next",
     ]);
+  });
+
+  test("hands a halted PR over and keeps what it still had to send", async () => {
+    const { world, calls, cycle, state, later, paths } = await fixture();
+    world.comments = [comment({})];
+    world.sendOutcome = "unknown";
+    await cycle();
+    expect((await state()).status).toBe("halted");
+
+    await recordLink(paths.state, {
+      repo: "org/pay",
+      number: 7,
+      url: PR,
+      worker: "next",
+      linkedAt: LINKED_AT,
+    });
+    world.sendOutcome = "done";
+    world.fallback = "sender";
+    later(1);
+    await cycle();
+
+    const saved = await state();
+    expect([saved.status, saved.halted, saved.worker]).toEqual([
+      "watching",
+      null,
+      "next",
+    ]);
+    expect(calls.sent.at(-1)?.threadId).toBe("next");
   });
 });

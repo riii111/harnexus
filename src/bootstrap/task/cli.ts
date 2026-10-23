@@ -11,6 +11,7 @@ import { createGitHub } from "../../prwatch/github.ts";
 import {
   githubPr,
   linkedChat,
+  loadLink,
   loadSender,
   recordLink,
   recordSender,
@@ -312,7 +313,8 @@ const linkPr = (deps: TaskDeps, value: string, worker: string) =>
     const pr = githubPr(value);
     if (pr === null) return Result.ok(null);
     const root = watchPaths(deps.env).state;
-    const current = yield* Result.await(linkedChat(root, pr));
+    // Only the link is read, so an unreadable state never stops a chat from naming its PR.
+    const current = yield* Result.await(loadLink(root, pr));
     yield* Result.await(
       recordLink(root, {
         ...pr,

@@ -223,6 +223,8 @@ export const status = (root: string) =>
         pending: state.pending.length,
         followUp: state.followUp.length,
         awaitingAnswer: state.delivered !== null,
+        // The running watch has yet to hand the PR to the chat it is now linked to.
+        handingOver: state.worker !== null && state.worker !== link.worker,
         checkedAt: state.checkedAt,
       });
     }
