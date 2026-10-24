@@ -29,6 +29,7 @@ describe("environmentCommands", () => {
       ["unsetenv", "HARNEXUS_STATE_PATH"],
       ["unsetenv", "HARNEXUS_UNVERIFIED_CODEX"],
       ["unsetenv", "HARNEXUS_PERMISSION_MODE"],
+      ["unsetenv", "HARNEXUS_CALL_SOCKET"],
     ]);
   });
 });
