@@ -1,5 +1,6 @@
 import { isAbsolute, join, resolve } from "node:path";
 import {
+  loadCallSocketPath,
   loadLogPath,
   loadPermissionMode,
   loadStatePath,
@@ -81,6 +82,8 @@ async function findProblem() {
   if (state.isErr()) return state.error.message;
   const log = loadLogPath(process.env, state.value);
   if (log.isErr()) return log.error.message;
+  const socket = loadCallSocketPath(process.env, state.value);
+  if (socket.isErr()) return socket.error.message;
   if (!isAbsolute(paths.codex)) {
     return "HARNEXUS_CODEX_PATH must be an absolute path";
   }
