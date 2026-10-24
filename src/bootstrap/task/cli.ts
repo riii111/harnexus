@@ -22,22 +22,20 @@ import { runCommand } from "../../runtime/process.boundary.ts";
 import { type OptionTypes, parseOptions } from "./args.boundary.ts";
 import { asText, type Fields, fail, jsonEqual, truthy } from "./format.ts";
 import {
-  absoluteOr,
   callerId,
   candidate,
   chatId,
-  codexHome,
+  configHome,
   type Env,
   type GitRunner,
   gitIn,
-  homeOf,
   launchRequest,
   NAME,
   readJson,
-  reviewPrompt,
+  reviewFields,
   reviewRequest,
   sessionValue,
-  workerPrompt,
+  workerFields,
 } from "./request.ts";
 import {
   callApp,
@@ -50,6 +48,7 @@ import {
   saveJson,
   stateRoot,
 } from "./session.ts";
+import { taskPrompt } from "./templates.ts";
 import { programWatch } from "./watch-program.ts";
 import { codexWorkers, senderFor } from "./watch-worker.ts";
 
@@ -119,9 +118,8 @@ const launch = (args: Args, deps: TaskDeps) =>
       });
     }
     const target = worktreeTarget(data.projectId);
-    const prompt = yield* Result.await(
-      workerPrompt(data, join(codexHome(deps.env), "skills")),
-    );
+    const fields = yield* Result.await(workerFields(data));
+    const prompt = yield* Result.await(taskPrompt(deps.env, "worker", fields));
     const sent: Fields = {
       prompt,
       target,
@@ -176,10 +174,9 @@ const review = (args: Args, deps: TaskDeps) =>
             `${asText(session.state?.reviewer)}; wait for its result`,
         );
     }
+    const fields = yield* Result.await(reviewFields(data));
     const sent: Fields = {
-      prompt: yield* Result.await(
-        reviewPrompt(data, join(codexHome(deps.env), "skills")),
-      ),
+      prompt: yield* Result.await(taskPrompt(deps.env, "reviewer", fields)),
     };
     let tool = "create_thread";
     if (session.state !== null) {
@@ -323,10 +320,7 @@ const linkPr = (deps: TaskDeps, value: string, worker: string) =>
 
 // The watch keeps its config beside harnexus's and its records beside the other task records.
 export const watchPaths = (env: Env): WatchPaths => ({
-  config: join(
-    absoluteOr(env.XDG_CONFIG_HOME, join(homeOf(env), ".config")),
-    "harnexus/pr-watch.json",
-  ),
+  config: join(configHome(env), "pr-watch.json"),
   state: join(stateRoot(env), "watch"),
 });
 

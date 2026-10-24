@@ -1,4 +1,4 @@
-[$ai-code-review]({skill_path})
+[$ai-code-review](../../ai-code-review/SKILL.md)
 タスクID: {task_id}
 参照文書のパス・URL:
 {document_refs}
@@ -8,4 +8,4 @@ workerの作業ディレクトリ: {checkout}
 レビュー対象のコミット範囲: {base}...{head}
 PRのURL: {pr_url}
 
-[レビュー時の確認事項]({cycle_skill_path}#レビュー時の確認事項)と[返却方法]({reply_path})に従ってください。
+[レビュー時の確認事項](../SKILL.md#レビュー時の確認事項)と[返却方法](reply-{worker_ai}.md)に従ってください。

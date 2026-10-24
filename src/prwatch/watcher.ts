@@ -293,7 +293,7 @@ const deliver = async (
   if (inQuietHours(now, config.quietHours)) return;
   if (view.busy !== null) return;
 
-  await send(deps, entry, sender, now);
+  await send(deps, config, entry, sender, now);
 };
 
 const hasWork = (state: WatchState) =>
@@ -352,6 +352,7 @@ const minutesOf = (clock: string) => {
 
 const send = async (
   deps: WatchDeps,
+  config: WatchConfig,
   entry: Entry,
   sender: string,
   now: Date,
@@ -361,8 +362,8 @@ const send = async (
   // The follow-up goes alone and first, so it asks only about what the last answer left out.
   const followUp = state.followUp.length > 0;
   const prompt = followUp
-    ? followUpOf(pr, state.followUp)
-    : messageOf(pr, state.pending);
+    ? followUpOf(pr, state.followUp, config.instructions)
+    : messageOf(pr, state.pending, config.instructions);
   const findings = followUp ? state.followUp : findingsOf(state.pending);
 
   // Recorded as halted before the call, so a watch stopped mid-send never sends the message again.

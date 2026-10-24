@@ -73,6 +73,21 @@ const fakeHarnexus = async (path: string) => {
   return { calls, answers, unplanned };
 };
 
+const writeTemplateConfig = async (configHome: string, config: unknown) => {
+  await mkdir(join(configHome, "harnexus"), { recursive: true });
+  await writeFile(
+    join(configHome, "harnexus/task.json"),
+    JSON.stringify(config),
+  );
+};
+
+const installedTemplates = (codex: string) => ({
+  templates: {
+    worker: join(codex, "skills/task-session-launch/references/worker.md"),
+    reviewer: join(codex, "skills/task-review-cycle/references/reviewer.md"),
+  },
+});
+
 const fixture = async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "harnexus-task-")));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
@@ -80,10 +95,12 @@ const fixture = async () => {
   const codex = join(root, "codex");
   await mkdir(codex);
   await symlink(SKILLS, join(codex, "skills"));
+  await writeTemplateConfig(join(root, "config"), installedTemplates(codex));
   const env: Record<string, string> = {
     CODEX_HOME: codex,
     CODEX_THREAD_ID: "caller",
     HARNEXUS_CALL_SOCKET: socket,
+    XDG_CONFIG_HOME: join(root, "config"),
     XDG_STATE_HOME: join(root, "state"),
   };
   const harnexus = await fakeHarnexus(socket);
@@ -163,7 +180,7 @@ describe("harnexus-task launch", () => {
     expect([args.model, args.thinking]).toEqual(["claude-sonnet-5-5", "high"]);
     for (const reference of data.documentRefs as string[])
       expect(args.prompt).toContain(reference);
-    expect(args.prompt).toContain("Draft PR・CI成功まで");
+    expect(args.prompt).toContain("進めてよい範囲: draft_pr");
     expect(args.prompt).toContain(
       await realpath(join(SKILLS, "task-worker/SKILL.md")),
     );
@@ -602,9 +619,15 @@ describe("harnexus-task launch", () => {
     const { root, env, launch } = await launchFixture();
     await mkdir(join(root, ".codex"));
     await symlink(SKILLS, join(root, ".codex/skills"));
+    await writeTemplateConfig(
+      join(root, ".config"),
+      installedTemplates(join(root, ".codex")),
+    );
+    await rm(join(root, "config"), { recursive: true });
     Object.assign(env, {
       HOME: root,
       CODEX_HOME: "harnexus-task-relative-codex",
+      XDG_CONFIG_HOME: "harnexus-task-relative-config",
       XDG_STATE_HOME: "harnexus-task-relative-state",
     });
 
@@ -614,6 +637,295 @@ describe("harnexus-task launch", () => {
     expect(sent.out.state.startsWith(join(root, ".local/state/taskctl/"))).toBe(
       true,
     );
+  });
+});
+
+describe("harnexus-task templates", () => {
+  test("links the reviewer prompt to the files beside its template", async () => {
+    const { harnexus, commit, review, listed } = await reviewFixture();
+    commit("test: candidate");
+
+    const sent = await review([], [listed, created("r1", "gpt-6.1-sol")]);
+
+    expect([sent.code, sent.err]).toEqual([0, ""]);
+    const prompt = harnexus.calls.at(-1)?.arguments.prompt;
+    const real = (path: string) => realpath(join(SKILLS, path));
+    expect(prompt).toContain(
+      `[$ai-code-review](${await real("ai-code-review/SKILL.md")})`,
+    );
+    expect(prompt).toContain(
+      `(${await real("task-review-cycle/SKILL.md")}#レビュー時の確認事項)`,
+    );
+    expect(prompt).toContain(
+      `[返却方法](${await real("task-review-cycle/references/reply-Codex.md")})`,
+    );
+  });
+
+  test("fills a template of its own without resolving links in the values", async () => {
+    const { root, env, harnexus, data, launch } = await launchFixture();
+    const linked = join(root, "linked.md");
+    const document = join(root, "a](linked.md)");
+    const escaped = join(root, "{task_id}.md");
+    await writeFile(linked, "");
+    await writeFile(escaped, "");
+    await writeFile(document, "");
+    data.taskId = "manual/TR1";
+    data.documentRefs = [document];
+    const template = join(root, "templates/worker.md");
+    await mkdir(dirname(template));
+    await writeFile(
+      template,
+      "{{task_id}} is {task_id}\n{document_refs}\n" +
+        "[guide](https://example.com/guide) [local](/nowhere.md) [top](#top) [linked](../linked.md) [escaped](../{{task_id}}.md)\n" +
+        "[ref][r]\n\n[r]: ../linked.md\n[注意]: 先に読むこと\n",
+    );
+    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
+      templates: { worker: template },
+    });
+
+    const sent = await launch([], [created("w1", "claude-sonnet-5-5")]);
+
+    expect([sent.code, sent.err]).toEqual([0, ""]);
+    expect(harnexus.calls.at(-1)?.arguments.prompt).toBe(
+      `{task_id} is manual/TR1\n- ${document}\n` +
+        `[guide](https://example.com/guide) [local](/nowhere.md) [top](#top) [linked](${linked}) [escaped](${escaped})\n` +
+        "[ref][r]\n\n[r]: ../linked.md\n[注意]: 先に読むこと\n",
+    );
+  });
+
+  test("leaves links in code as examples and resolves the link after them", async () => {
+    const { root, env, harnexus, launch } = await launchFixture();
+    const linked = join(root, "linked.md");
+    await writeFile(linked, "");
+    const template = join(root, "worker.md");
+    const examples =
+      "Cite as `[file](path/to/file.ts)` or ``[a](b`c.md)``.\n" +
+      "```md\n[x](missing.md)\n```\n" +
+      "~~~\n[y](gone.md)\n```\nstill code [z](none.md)\n~~~\n" +
+      "1. Output format:\n\n    ~~~md\n    [file](path/to/file.ts)\n    ~~~\n\n" +
+      "> ```\n> [q](quoted.md)\n> ```\n\n";
+    await writeFile(
+      template,
+      `${examples}<!--\n- [old](gone.md)\n\n# Old\n[x](gone.md)\n-->\nWrite \`[text](\` then <rules>\n[$s](linked.md)\n</rules>\n\n    ![i](linked.md)\n`,
+    );
+    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
+      templates: { worker: template },
+    });
+
+    const sent = await launch([], [created("w1", "claude-sonnet-5-5")]);
+
+    expect([sent.code, sent.err]).toEqual([0, ""]);
+    expect(harnexus.calls.at(-1)?.arguments.prompt).toBe(
+      `${examples}<!--\n- [old](gone.md)\n\n# Old\n[x](gone.md)\n-->\nWrite \`[text](\` then <rules>\n[$s](${linked})\n</rules>\n\n    ![i](${linked})\n`,
+    );
+  });
+
+  test.each([
+    { name: "a code span", text: "`[a](b.md)` then [c](missing.md)\n" },
+    {
+      name: "a lone backtick a blank line before another",
+      text: "Type a ` to start.\n\n[c](missing.md)\n\nThen `x`.\n",
+    },
+    {
+      name: "a lone backtick a CRLF blank line before another",
+      text: "Type a ` to start.\r\n\r\n[c](missing.md)\r\n\r\nThen `x`.\r\n",
+    },
+    {
+      name: "a lone backtick a heading before another",
+      text: "Type a backtick: `\n# Instructions\n[c](missing.md)\nUse `x`.\n",
+    },
+    {
+      name: "an escaped backtick",
+      text: "Write \\` then [c](missing.md) and `x`.\n",
+    },
+  ])("refuses a missing link after $name", async ({ text }) => {
+    const { root, env, harnexus, launch } = await launchFixture();
+    const template = join(root, "worker.md");
+    await writeFile(template, text);
+    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
+      templates: { worker: template },
+    });
+
+    const refused = await launch();
+
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain(`links to ${join(root, "missing.md")}`);
+    expect(harnexus.calls).toEqual([]);
+  });
+
+  test("fills anchors and field-led targets, and resolves beside a symlinked template's real file", async () => {
+    const { root, env, harnexus, data, launch } = await launchFixture();
+    data.taskId = "TR-42";
+    const source = join(root, "source");
+    await mkdir(join(source, "notes"), { recursive: true });
+    await writeFile(join(source, "notes/task.md"), "");
+    await writeFile(
+      join(source, "worker.md"),
+      "[note](notes/task.md#{task_id}) [id]({task_id})\n",
+    );
+    await mkdir(join(root, "linked"));
+    const template = join(root, "linked/worker.md");
+    await symlink(join(source, "worker.md"), template);
+    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
+      templates: { worker: template },
+    });
+
+    const sent = await launch([], [created("w1", "claude-sonnet-5-5")]);
+
+    expect([sent.code, sent.err]).toEqual([0, ""]);
+    expect(harnexus.calls.at(-1)?.arguments.prompt).toBe(
+      `[note](${join(source, "notes/task.md")}#TR-42) [id](TR-42)\n`,
+    );
+  });
+
+  test.each([
+    {
+      name: "a real path with a space",
+      link: "[$s](spaced/SKILL.md)",
+      taskId: "TR1",
+      error: "whose path has a space, parenthesis, # or backslash",
+    },
+    {
+      name: "a real path with #",
+      link: "[$s](hashed/SKILL.md)",
+      taskId: "TR1",
+      error: "whose path has a space, parenthesis, # or backslash",
+    },
+    {
+      name: "a target with a title",
+      link: '[n](notes/task.md "notes")',
+      taskId: "TR1",
+      error: "without angle brackets, spaces or a title",
+    },
+    {
+      name: "a target opening with escaped braces",
+      link: "[n]({{task_id}}/task.md)",
+      taskId: "TR1",
+      error: "which is not a file",
+    },
+    {
+      name: "a target with a leading space",
+      link: "[n]( notes/task.md)",
+      taskId: "TR1",
+      error: "without angle brackets, spaces or a title",
+    },
+    {
+      name: "a target with a space",
+      link: "[n](notes/task md)",
+      taskId: "TR1",
+      error: "without angle brackets, spaces or a title",
+    },
+    {
+      name: "a target opening with a full-width space",
+      link: "[n](\u3000notes/task.md)",
+      taskId: "TR1",
+      error: "without angle brackets, spaces or a title",
+    },
+    {
+      name: "a target in angle brackets",
+      link: "[n](<notes/task.md>)",
+      taskId: "TR1",
+      error: "without angle brackets, spaces or a title",
+    },
+    {
+      name: "a field holding a path",
+      link: "[n](notes/{task_id}.md)",
+      taskId: "x/../../task",
+      error:
+        "{task_id} may hold only letters, digits, _ and - inside a link target",
+    },
+    {
+      name: "a field whose value would break the anchor",
+      link: "[n](notes/task.md#{task_id})",
+      taskId: "#42",
+      error:
+        "{task_id} may hold only letters, digits, _ and - inside a link target",
+    },
+    {
+      name: "a field that is not a request value",
+      link: "[n](notes/{constructor}.md)",
+      taskId: "TR1",
+      error: "unknown template field {constructor}",
+    },
+  ])("refuses a link to $name", async ({ link, taskId, error }) => {
+    const { root, env, harnexus, data, launch } = await launchFixture();
+    data.taskId = taskId;
+    await mkdir(join(root, "notes"));
+    await writeFile(join(root, "notes/task.md"), "");
+    await mkdir(join(root, "My Skills"));
+    await writeFile(join(root, "My Skills/SKILL.md"), "");
+    await symlink(join(root, "My Skills"), join(root, "spaced"));
+    await mkdir(join(root, "c#"));
+    await writeFile(join(root, "c#/SKILL.md"), "");
+    await symlink(join(root, "c#"), join(root, "hashed"));
+    const template = join(root, "worker.md");
+    await writeFile(template, `${link}\n`);
+    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
+      templates: { worker: template },
+    });
+
+    const refused = await launch();
+
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain(error);
+    expect(harnexus.calls).toEqual([]);
+  });
+
+  test.each([
+    {
+      name: "a missing config",
+      config: null,
+      error: "harnexus/task.json does not exist; set templates.worker",
+    },
+    {
+      name: "a config without the worker template",
+      config: { templates: { reviewer: "/reviewer.md" } },
+      error: "templates.worker is not set in",
+    },
+    {
+      name: "a relative template path",
+      config: { templates: { worker: "worker.md" } },
+      error: "must be absolute",
+    },
+    {
+      name: "an unknown config field",
+      config: { templates: {}, prompts: {} },
+      error: "is invalid",
+    },
+    {
+      name: "a missing template",
+      config: { templates: { worker: "/nonexistent/worker.md" } },
+      error:
+        "the worker template /nonexistent/worker.md: cannot read /nonexistent/worker.md",
+    },
+  ])("refuses $name before sending", async ({ config, error }) => {
+    const { env, harnexus, launch } = await launchFixture();
+    const home = env.XDG_CONFIG_HOME ?? "";
+    await rm(join(home, "harnexus/task.json"));
+    if (config !== null) await writeTemplateConfig(home, config);
+
+    const refused = await launch();
+
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain(error);
+    expect(harnexus.calls).toEqual([]);
+  });
+
+  test("refuses a template that links to a missing file", async () => {
+    const { root, env, harnexus, launch } = await launchFixture();
+    const template = join(root, "worker.md");
+    await writeFile(template, "{task_id} [$gone](skills/gone/SKILL.md)\n");
+    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
+      templates: { worker: template },
+    });
+
+    const refused = await launch();
+
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain(
+      `the worker template ${template}: links to ${join(root, "skills/gone/SKILL.md")}, which is not a file`,
+    );
+    expect(harnexus.calls).toEqual([]);
   });
 });
 

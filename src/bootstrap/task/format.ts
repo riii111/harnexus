@@ -36,9 +36,11 @@ export const asText = (value: unknown) =>
   typeof value === "string" ? value : JSON.stringify(value ?? null);
 
 // Named fields only, and an unknown field or stray brace is an error, so a changed template never sends a half-filled prompt.
+// refuse names what is wrong with a value at that place, or returns null to accept it.
 export const formatTemplate = (
   template: string,
   fields: Record<string, string>,
+  refuse: (value: string) => string | null = () => null,
 ): Result<string, TaskFailed> => {
   let problem: string | null = null;
   const text = template.replace(
@@ -52,6 +54,10 @@ export const formatTemplate = (
       }
       const value = Object.hasOwn(fields, name) ? fields[name] : undefined;
       if (value === undefined) problem ??= `unknown template field {${name}}`;
+      else {
+        const refused = refuse(value);
+        if (refused !== null) problem ??= `{${name}} ${refused}`;
+      }
       return value ?? match;
     },
   );

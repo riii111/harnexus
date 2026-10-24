@@ -99,4 +99,6 @@ const CONFIG = z.strictObject({
     .strictObject({ start: CLOCK, end: CLOCK })
     .nullable()
     .default({ start: "22:00", end: "05:00" }),
+  // Put at the top of every message, as a skill to use or the way to report.
+  instructions: z.string().trim().min(1).nullable().default(null),
 });

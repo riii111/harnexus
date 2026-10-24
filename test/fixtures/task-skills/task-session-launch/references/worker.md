@@ -3,4 +3,4 @@
 {document_refs}
 進めてよい範囲: {completion_target}
 
-[$task-worker]({worker_skill_path})
+[$task-worker](../../task-worker/SKILL.md)
