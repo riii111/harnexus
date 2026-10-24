@@ -1,4 +1,5 @@
 import { constants } from "node:os";
+import { join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import {
@@ -37,6 +38,7 @@ import {
   readCommandOutput,
 } from "../runtime/process.boundary.ts";
 import { serveLinesWhenFree } from "../runtime/socket.boundary.ts";
+import { readBridgeIdentity } from "./bridge-identity.ts";
 import { connectClaudeThreads } from "./claude-threads.ts";
 import { reportCompatibilityFailure } from "./compatibility.boundary.ts";
 import { createBridgeLogger } from "./logging.ts";
@@ -46,6 +48,8 @@ import {
   stopLingeringServer,
 } from "./supervise.ts";
 import { codexHome } from "./task/request.ts";
+
+const REPO = join(import.meta.dir, "..", "..");
 
 // Must match bin/harnexus-codex.
 const SERVER_OUTPUT_FD = 3;
@@ -86,7 +90,10 @@ if (pipes.isErr()) {
   process.exit(1);
 }
 
-logger.log({ event: "bridge_started" });
+logger.log({
+  event: "bridge_started",
+  ...(await readBridgeIdentity(REPO, process.env)),
+});
 const stopServer = {
   signal: signalWithLog(server, logger.log),
   graceMs: loadShutdownGraceMs(process.env),

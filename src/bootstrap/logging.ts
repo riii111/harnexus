@@ -25,13 +25,14 @@ import { openLogSink } from "../runtime/fs.boundary.ts";
 import { createLogger } from "../runtime/logger.ts";
 import type { Signal } from "../runtime/process.boundary.ts";
 import type { serveLines } from "../runtime/socket.boundary.ts";
+import type { BridgeIdentity } from "./bridge-identity.ts";
 import {
   type ServerSignalEvent,
   serializeServerSignalEvent,
 } from "./supervise.ts";
 
 type LogEvent =
-  | { event: "bridge_started" }
+  | ({ event: "bridge_started" } & BridgeIdentity)
   | { event: "compatibility_report_failed" }
   | { event: "bridge_startup_failed"; reason: StartupFailure }
   | { event: "log_file_unavailable"; reason: LogFileFailure }
@@ -86,13 +87,10 @@ export const createBridgeLogger = (env: NodeJS.ProcessEnv) => {
             explicit: log.explicit,
           })),
     );
-  const toStderr = createLogger(
-    (line) => process.stderr.write(line),
-    serializeLogEvent,
-  );
+  const toStderr = createLogger((line) => process.stderr.write(line), withPid);
   const toFile =
     file.isOk() && file.value !== null
-      ? createLogger(file.value.append, serializeLogEvent)
+      ? createLogger(file.value.append, withPid)
       : null;
   const keepsMessages = file.isOk() && file.value?.explicit === true;
   const logger = {
@@ -107,10 +105,30 @@ export const createBridgeLogger = (env: NodeJS.ProcessEnv) => {
   return logger;
 };
 
+// Bridges of every app-server connection append to one file, so the pid tells their lines apart.
+const withPid = (entry: LogEvent) => ({
+  pid: process.pid,
+  ...serializeLogEvent(entry),
+});
+
 const serializeLogEvent = (entry: LogEvent) => {
   switch (entry.event) {
-    case "compatibility_report_failed":
     case "bridge_started":
+      return {
+        event: entry.event,
+        commit: entry.commit,
+        bun: entry.bun,
+        sdk: entry.sdk,
+        claudeCode: entry.claudeCode,
+        settings: {
+          permissionMode: entry.settings.permissionMode,
+          unverifiedCodex: entry.settings.unverifiedCodex,
+          statePath: entry.settings.statePath,
+          logPath: entry.settings.logPath,
+          callSocket: entry.settings.callSocket,
+        },
+      };
+    case "compatibility_report_failed":
     case "server_closed":
     case "call_socket_listening":
       return { event: entry.event };
