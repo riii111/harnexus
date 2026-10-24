@@ -464,7 +464,7 @@ const logSection = ({ log, sinceMs }: FeedbackFacts): string[] => {
   ];
 };
 
-// Each known path prints as its role, and any other home or volume keeps only its kind, so a report names no user, project or employer.
+// Each known path prints as its role, and the folder right below /Users, /home or /Volumes of any other path prints as its kind; folders below those stay as they are.
 export const redactPaths = (
   text: string,
   known: readonly { path: string; name: string }[],

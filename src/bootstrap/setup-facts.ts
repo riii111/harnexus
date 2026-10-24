@@ -56,7 +56,7 @@ export const collectSetupFacts = async (
 };
 
 // The CLI prints its name before the version, as in "codex-cli 0.163.0-alpha.10.2".
-export const codexVersionOf = (output: string) =>
+const codexVersionOf = (output: string) =>
   versionOf(/(\d+\.\d+\.\d+\S*)/.exec(output)?.[1]);
 
 const readManifest = async (repo: string) => {
