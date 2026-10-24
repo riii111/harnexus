@@ -42,7 +42,7 @@ describe("createBridgeLogger", () => {
 
   test("drops fields outside the event shape", () => {
     const entry = {
-      event: "bridge_started",
+      event: "server_closed",
       params: { token: "secret-token", prompt: "private text" },
     } as const;
     const widened: LogEvent = entry;
@@ -107,6 +107,55 @@ describe("createBridgeLogger", () => {
   });
 });
 
+describe("createBridgeLogger pid", () => {
+  test("marks every line with the bridge's pid", () => {
+    const lines: string[] = [];
+    const write = spyOn(process.stderr, "write").mockImplementation((line) => {
+      lines.push(String(line));
+      return true;
+    });
+    createBridgeLogger({ HARNEXUS_LOG_PATH: "off" }).log({
+      event: "server_closed",
+    });
+    write.mockRestore();
+
+    expect(lines.map((line) => JSON.parse(line).pid)).toEqual([process.pid]);
+  });
+});
+
+describe("createBridgeLogger bridge_started", () => {
+  test("records the code and setting kinds without anything outside them", () => {
+    const settings = {
+      permissionMode: "auto",
+      unverifiedCodex: "run",
+      statePath: "custom",
+      logPath: "default",
+      callSocket: "off",
+    } as const;
+    const entry = {
+      event: "bridge_started",
+      commit: "0123456789ab",
+      bun: "1.4.4",
+      sdk: "0.3.304",
+      claudeCode: "2.1.304",
+      settings: { ...settings, path: "/Users/someone/private" },
+      cwd: "/Users/someone/project",
+    } as const;
+    const widened: LogEvent = entry;
+
+    const [record] = logged(widened);
+
+    expect(record).toEqual({
+      event: "bridge_started",
+      commit: "0123456789ab",
+      bun: "1.4.4",
+      sdk: "0.3.304",
+      claudeCode: "2.1.304",
+      settings,
+    });
+  });
+});
+
 describe("createBridgeLogger file", () => {
   test.each([
     {
@@ -115,13 +164,13 @@ describe("createBridgeLogger file", () => {
         HARNEXUS_STATE_PATH: join(dir, "default", "threads.json"),
       }),
       path: () => join(dir, "default", "bridge.log"),
-      expected: ["bridge_started"],
+      expected: ["server_closed"],
     },
     {
       name: "a file set by hand keeps them",
       env: () => ({ HARNEXUS_LOG_PATH: join(dir, "explicit.log") }),
       path: () => join(dir, "explicit.log"),
-      expected: ["rpc_message", "bridge_started"],
+      expected: ["rpc_message", "server_closed"],
     },
   ])("$name", async ({ env, path, expected }) => {
     const write = spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -136,7 +185,7 @@ describe("createBridgeLogger file", () => {
       mcpStartup: null,
       threadOpen: null,
     });
-    logger.log({ event: "bridge_started" });
+    logger.log({ event: "server_closed" });
     write.mockRestore();
 
     const events = (await readFile(path(), "utf8"))
@@ -160,7 +209,7 @@ const logged = (entry: LogEvent) => {
   createBridgeLogger({ HARNEXUS_LOG_PATH: "off" }).log(entry);
   write.mockRestore();
   return lines.map((line) => {
-    const { time: _time, ...record } = JSON.parse(line);
+    const { time: _time, pid: _pid, ...record } = JSON.parse(line);
     return record;
   });
 };

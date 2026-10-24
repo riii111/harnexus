@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun test",
     "doctor": "bun --no-env-file --config=/dev/null src/bootstrap/doctor.ts",
+    "feedback": "bun --no-env-file --config=/dev/null src/bootstrap/feedback.ts",
     "open-app": "bun --no-env-file --config=/dev/null src/bootstrap/open-app.ts",
     "call": "bun --no-env-file --config=/dev/null src/bootstrap/call.ts",
     "task": "bun --no-env-file --config=/dev/null src/bootstrap/task/main.ts",
