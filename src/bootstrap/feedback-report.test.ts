@@ -293,6 +293,7 @@ const EMPTY_SELECTION: LogSelection = {
   window: [],
   omitted: 0,
   messages: new Map(),
+  shapes: [],
 };
 
 const readLog = (coverage: {
@@ -336,5 +337,6 @@ const facts = (overrides: Partial<FeedbackFacts>): FeedbackFacts => ({
   app: { startedAtMs: null, installedCodex: null, runningCodex: [] },
   doctor: [],
   log: { state: "off" },
+  protocol: null,
   ...overrides,
 });

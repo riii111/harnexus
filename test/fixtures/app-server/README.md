@@ -8,3 +8,4 @@ Synthetic JSON-RPC sessions between the Codex app and `codex app-server`, one `{
 - Turns carry the `rootTurnId` that codex-cli 0.162.0-alpha.17.2's generated protocol types added; it is the turn's own id, as for a turn started without a parent turn.
 - Every id, path and text is made up. Text fields carry the `sk-fixture-secret` marker so tests can assert it never reaches the log.
 - `src/rpc/relay.fixtures.test.ts` replays each file through the relay; refresh the files when a Codex update changes these shapes.
+- `bun run feedback` compares the message shapes the user's bridges recorded with the shapes of these files, so a method missing here shows in a report only by name. `bun run shape-fixture < report.txt` turns the shapes a report lists into lines with placeholder values to start a file from.
