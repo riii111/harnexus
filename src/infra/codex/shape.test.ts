@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { PROTOCOL_FIELDS } from "./protocol-fields.ts";
 import { isShapePath, shapeKey, shapeOf } from "./shape.ts";
 
 describe("shapeOf", () => {
@@ -24,7 +25,7 @@ describe("shapeOf", () => {
       "params.flags:array",
       "params.item.command:string",
       "params.item.type=commandExecution",
-      "params.text_elements[].start:number",
+      "params.text_elements[].<key>:number",
       "params.threadId:string",
     ]);
   });
@@ -85,8 +86,8 @@ describe("shapeOf", () => {
     },
     {
       name: "a written configuration value",
-      value: { edits: [{ value: { acme_azure: { env_key: "k" } } }] },
-      expected: ["edits[].value:object"],
+      value: { input: [{ value: { acme_azure: { env_key: "k" } } }] },
+      expected: ["input[].value:object"],
     },
     {
       name: "a word in an environment map entry",
@@ -95,8 +96,21 @@ describe("shapeOf", () => {
     },
     {
       name: "a status word outside the places the protocol puts one",
-      value: { params: { note: { status: "secretAlphabeticValue" } } },
-      expected: ["params.note.status:string"],
+      value: { params: { output: { status: "secretAlphabeticValue" } } },
+      expected: ["params.output.status:string"],
+    },
+    {
+      name: "a key the user picked that looks like a field name",
+      value: {
+        params: {
+          additionalContext: { confidentialAcquisitionPlan: { kind: "x" } },
+          confidentialPlan: { kind: "x" },
+        },
+      },
+      expected: [
+        "params.<key>:object",
+        "params.additionalContext.<key>.kind:string",
+      ],
     },
     {
       name: "configuration contents",
@@ -114,7 +128,7 @@ describe("shapeOf", () => {
 
   test("stays bounded on a huge or deeply nested message", () => {
     let deep: unknown = "end";
-    for (let index = 0; index < 1000; index += 1) deep = { next: deep };
+    for (let index = 0; index < 1000; index += 1) deep = { item: deep };
     const wide = Object.fromEntries(
       Array.from({ length: 5000 }, (_, index) => [`field${index}`, index]),
     );
@@ -190,3 +204,27 @@ const FIXTURES = join(
   "fixtures",
   "app-server",
 );
+
+describe("PROTOCOL_FIELDS", () => {
+  test("holds every field name the recorded sessions use", () => {
+    const names = new Set<string>();
+    const collect = (value: unknown): void => {
+      if (Array.isArray(value)) value.forEach(collect);
+      else if (typeof value === "object" && value !== null)
+        for (const [key, child] of Object.entries(value)) {
+          names.add(key);
+          collect(child);
+        }
+    };
+    for (const name of readdirSync(FIXTURES).filter((file) =>
+      file.endsWith(".jsonl"),
+    ))
+      for (const line of readFileSync(join(FIXTURES, name), "utf8").split("\n"))
+        if (line.trim() !== "") collect(JSON.parse(line).message);
+
+    const fieldNames = [...names].filter((name) =>
+      /^[a-z][a-zA-Z0-9]{0,40}(?:_[a-z0-9]{1,20}){0,4}$/.test(name),
+    );
+    expect(fieldNames.filter((name) => !PROTOCOL_FIELDS.has(name))).toEqual([]);
+  });
+});

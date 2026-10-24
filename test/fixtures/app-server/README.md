@@ -9,3 +9,4 @@ Synthetic JSON-RPC sessions between the Codex app and `codex app-server`, one `{
 - Every id, path and text is made up. Text fields carry the `sk-fixture-secret` marker so tests can assert it never reaches the log.
 - `src/rpc/relay.fixtures.test.ts` replays each file through the relay; refresh the files when a Codex update changes these shapes.
 - `bun run feedback` compares the message shapes the user's bridges recorded with the shapes of these files, so a method missing here shows in a report only by name.
+- A shape keeps only the field names in `src/infra/codex/protocol-fields.ts`, so a field name a new file brings must be added there; a test fails until it is.

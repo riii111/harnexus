@@ -1,5 +1,7 @@
+import { PROTOCOL_FIELDS } from "./protocol-fields.ts";
+
 // A message's shape is the sorted set of its paths, each ending in the type found there, so two shapes differ exactly where a field was added, moved or retyped.
-// Keys are kept only when they look like the protocol's own field names; any other key, such as a path, an environment variable or a header, prints as <key>, and values print only as their type.
+// Keys are kept only when they are the protocol's own field names; any other key, such as a path, an environment variable, a header or a key the user picked, prints as <key>, and values print only as their type.
 // A discriminator keeps its value when it is a plain camelCase word, since an item or status type tells variants of one method apart; only the top-level method keeps a value with separators.
 // Tool arguments and results, configuration and schemas are the user's own data, so below them only the type is kept.
 export type ShapePath = string;
@@ -56,7 +58,10 @@ const walk = (
       count += 1;
       if (count > MAX_KEYS) break;
       const child = (value as Record<string, unknown>)[name];
-      const field = !isMap && FIELD_NAME.test(name) ? name : "<key>";
+      const field =
+        !isMap && FIELD_NAME.test(name) && PROTOCOL_FIELDS.has(name)
+          ? name
+          : "<key>";
       const path = at === "" ? field : `${at}.${field}`;
       if (typeof child === "string" && isDiscriminator(at, name, child))
         paths.add(`${path}=${child}`);
@@ -143,6 +148,7 @@ const DISCRIMINATOR_PLACES = new Set([
 ]);
 // Objects under these fields are keyed by names the user picks, such as MCP servers, environment variables, headers and tool parameters.
 const MAP_FIELDS = new Set([
+  "additionalContext",
   "env",
   "headers",
   "mcpServers",
