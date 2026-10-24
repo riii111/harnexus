@@ -65,7 +65,14 @@ If the problem persists, run:
 bun run doctor
 ```
 
-You can paste the report into a bug report; it contains no conversation text or credentials.
+To report a bug, run this with `--since` covering when the problem happened, such as `30m`, `2h` or `2026-10-24T18:30`:
+
+```sh
+bun run feedback --since 2h
+```
+
+Read the output, then paste all of it into a [bug report](https://github.com/riii111/harnexus/issues/new?template=bug-report.yml).
+It contains no conversation text, code or credentials; paths under your home folder appear as `~`.
 
 If harnexus cannot start, the app falls back to standard Codex.
 If incompatibility is detected while running, Claude becomes unavailable for that connection.

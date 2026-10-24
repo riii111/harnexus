@@ -1,0 +1,86 @@
+name: Bug report
+description: Something in harnexus does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, run this in the harnexus checkout the app uses, with `--since` covering when the problem happened:
+
+        ```sh
+        bun run feedback --since 2h
+        ```
+
+        The report has no conversation text, code or credentials.
+        It shows versions, model ids, error tags, the start of thread ids, and paths under your home folder as `~`; read it before pasting.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, including any message the app showed.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you did before it happened. If you cannot reproduce it, describe what you were doing.
+    validations:
+      required: true
+  - type: input
+    id: when
+    attributes:
+      label: When it happened
+      description: Date and time with your time zone, so it can be found in the report's log.
+      placeholder: 2026-10-24 18:30 JST
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Claude model
+      description: The model chosen in the chat, if the problem is in a Claude chat.
+    validations:
+      required: false
+  - type: dropdown
+    id: codex-chat
+    attributes:
+      label: Does it happen in a Codex chat too?
+      description: A chat in the same app with a Codex model instead of a Claude one.
+      options:
+        - Not checked
+        - "No, only in Claude chats"
+        - "Yes, in Codex chats too"
+    validations:
+      required: true
+  - type: dropdown
+    id: reopened
+    attributes:
+      label: Does it still happen after quitting the app and reopening it with `bun run open-app`?
+      options:
+        - Not checked
+        - "Yes, it still happens"
+        - "No, reopening fixed it"
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Feedback report
+      description: The whole output of `bun run feedback`.
+      render: text
+    validations:
+      required: true
+  - type: checkboxes
+    id: reviewed
+    attributes:
+      label: Review
+      options:
+        - label: I read the report and it contains nothing I do not want to share.
+          required: true
