@@ -42,8 +42,8 @@ const templatePath = (env: Env, kind: TemplateKind) =>
     return Result.ok(path);
   });
 
-// A candidate inline link target such as the SKILL.md a template names, up to the first closing parenthesis on its line; a line opening with [label]: may be prose, so reference definitions are left as written.
-const LINK_TARGET = /\]\(([^)\n]*)\)/dg;
+// A candidate inline link target such as the SKILL.md a template names, up to the first closing parenthesis on its line and never across a backtick, so a ]( in code cannot take in the link after it; a line opening with [label]: may be prose, so reference definitions are left as written.
+const LINK_TARGET = /\]\(([^)\n`]*)\)/dg;
 
 const targets = (template: string) =>
   [...template.matchAll(LINK_TARGET)].flatMap((match) => {
@@ -53,31 +53,45 @@ const targets = (template: string) =>
       : [{ raw: match[1] ?? "", start: span[0], end: span[1] }];
   });
 
-// The candidates Markdown reads as links, so examples in code and text that a block such as a heading splits are left alone.
-// Each target is swapped for a marker and the parser reports which markers it saw as a link destination.
+// The candidates Markdown reads as links or images, so examples in code and text that a block such as a heading splits are left alone.
+// Each target is swapped for a marker and the parser reports which markers it saw as a destination.
+// Prompts wrap sections in tags and indent prose, so HTML and indented code are read as plain text, where a link stays a link.
 const links = (template: string) => {
   const candidates = targets(template);
   const nonce = crypto.randomUUID().replaceAll("-", "");
-  const markerOf = (index: number) => `hx${nonce}n${index}`;
+  const markerOf = (index: number) => `hx${nonce}n${index}x`;
   let marked = "";
   let last = 0;
   for (const [index, { raw, start, end }] of candidates.entries()) {
-    const close = raw.indexOf(">");
-    const replaced = raw.startsWith("<")
-      ? `<${markerOf(index)}>${close === -1 ? "" : raw.slice(close + 1)}`
-      : `${markerOf(index)}${raw.slice(/^\S*/.exec(raw)?.[0].length ?? 0)}`;
-    marked += template.slice(last, start) + replaced;
+    const lead = /^\s*/u.exec(raw)?.[0] ?? "";
+    const rest = raw.slice(lead.length);
+    const close = rest.indexOf(">");
+    const replaced = rest.startsWith("<")
+      ? `<${markerOf(index)}>${close === -1 ? "" : rest.slice(close + 1)}`
+      : `${markerOf(index)}${rest.slice(/^\S*/u.exec(rest)?.[0].length ?? 0)}`;
+    marked += template.slice(last, start) + lead + replaced;
     last = end;
   }
   marked += template.slice(last);
-  const seen = new Set<string>();
-  Bun.markdown.render(marked, {
-    link: (children, { href }) => {
-      seen.add(href);
-      return children;
+  const seen: string[] = [];
+  Bun.markdown.render(
+    marked,
+    {
+      link: (children, { href }) => {
+        seen.push(href);
+        return children;
+      },
+      image: (children, { src }) => {
+        seen.push(src);
+        return children;
+      },
     },
-  });
-  return candidates.filter((_, index) => seen.has(markerOf(index)));
+    { noHtmlBlocks: true, noHtmlSpans: true, noIndentedCodeBlocks: true },
+  );
+  // A destination may keep whitespace the marker's split left after it, which the caller then refuses.
+  return candidates.filter((_, index) =>
+    seen.some((destination) => destination.startsWith(markerOf(index))),
+  );
 };
 
 // A value inside a target is a name, never a path, so none can lead the link to another folder or break it.

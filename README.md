@@ -140,11 +140,12 @@ Write `{{` and `}}` for literal braces; any other brace or an unknown name is an
 - Worker: `task_id`, `document_refs` (one `- ` line per reference) and `completion_target` (`implementation`, `draft_pr` or `merge`).
 - Reviewer: `task_id`, `document_refs`, `worker_ai` (`Claude` or `Codex`), `worker_chat_id`, `checkout`, `base`, `head` and `pr_url` (`null` without a PR).
 
-A relative inline Markdown link target is resolved against the folder of the template's real file and replaced with that file's real path.
+A relative inline Markdown link or image target is resolved against the folder of the template's real file and replaced with that file's real path.
 This is how a template attaches a skill, since the app attaches a skill named as `[$name](/absolute/path/SKILL.md)`.
 Write the target bare, without angle brackets, spaces or a title; a missing file, or a real path with a space, parenthesis, `#` or backslash, is an error.
 Fields may appear inside such a target, as in `reply-{worker_ai}.md`, when their values hold only letters, digits, `_` and `-`.
-Links in code spans and fenced code blocks, reference definitions, absolute paths, URLs, `#` anchors and targets that open with a field, such as `{pr_url}`, are left to their values, and links inside the request's values are never resolved.
+Links in code spans and fenced code blocks, which Markdown shows as text, are left as examples; HTML tags and indentation are read as plain text, so links in a tagged or indented section are resolved.
+Reference definitions, absolute paths, URLs, `#` anchors and targets that open with a field, such as `{pr_url}`, are left to their values, and links inside the request's values are never resolved.
 
 ```md
 Task {task_id}. Go as far as {completion_target}.

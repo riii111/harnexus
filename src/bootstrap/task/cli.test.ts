@@ -704,7 +704,10 @@ describe("harnexus-task templates", () => {
       "~~~\n[y](gone.md)\n```\nstill code [z](none.md)\n~~~\n" +
       "1. Output format:\n\n    ~~~md\n    [file](path/to/file.ts)\n    ~~~\n\n" +
       "> ```\n> [q](quoted.md)\n> ```\n\n";
-    await writeFile(template, `${examples}[$s](linked.md)\n`);
+    await writeFile(
+      template,
+      `${examples}Write \`[text](\` then <rules>\n[$s](linked.md)\n</rules>\n\n    ![i](linked.md)\n`,
+    );
     await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
       templates: { worker: template },
     });
@@ -713,7 +716,7 @@ describe("harnexus-task templates", () => {
 
     expect([sent.code, sent.err]).toEqual([0, ""]);
     expect(harnexus.calls.at(-1)?.arguments.prompt).toBe(
-      `${examples}[$s](${linked})\n`,
+      `${examples}Write \`[text](\` then <rules>\n[$s](${linked})\n</rules>\n\n    ![i](${linked})\n`,
     );
   });
 
@@ -799,6 +802,12 @@ describe("harnexus-task templates", () => {
       link: "[n]({{task_id}}/task.md)",
       taskId: "TR1",
       error: "which is not a file",
+    },
+    {
+      name: "a target with a leading space",
+      link: "[n]( notes/task.md)",
+      taskId: "TR1",
+      error: "without angle brackets, spaces or a title",
     },
     {
       name: "a target in angle brackets",
