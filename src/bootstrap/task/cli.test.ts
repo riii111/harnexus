@@ -701,7 +701,9 @@ describe("harnexus-task templates", () => {
     const examples =
       "Cite as `[file](path/to/file.ts)` or ``[a](b`c.md)``.\n" +
       "```md\n[x](missing.md)\n```\n" +
-      "~~~\n[y](gone.md)\n```\nstill code [z](none.md)\n~~~\n";
+      "~~~\n[y](gone.md)\n```\nstill code [z](none.md)\n~~~\n" +
+      "1. Output format:\n\n    ~~~md\n    [file](path/to/file.ts)\n    ~~~\n\n" +
+      "> ```\n> [q](quoted.md)\n> ```\n\n";
     await writeFile(template, `${examples}[$s](linked.md)\n`);
     await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
       templates: { worker: template },
@@ -724,6 +726,10 @@ describe("harnexus-task templates", () => {
     {
       name: "a lone backtick a CRLF blank line before another",
       text: "Type a ` to start.\r\n\r\n[c](missing.md)\r\n\r\nThen `x`.\r\n",
+    },
+    {
+      name: "a lone backtick a heading before another",
+      text: "Type a backtick: `\n# Instructions\n[c](missing.md)\nUse `x`.\n",
     },
     {
       name: "an escaped backtick",

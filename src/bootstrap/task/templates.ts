@@ -42,7 +42,7 @@ const templatePath = (env: Env, kind: TemplateKind) =>
     return Result.ok(path);
   });
 
-// An inline Markdown link target such as the SKILL.md a template names, up to the first closing parenthesis on its line; a line opening with [label]: may be prose, so reference definitions are left as written.
+// A candidate inline link target such as the SKILL.md a template names, up to the first closing parenthesis on its line; a line opening with [label]: may be prose, so reference definitions are left as written.
 const LINK_TARGET = /\]\(([^)\n]*)\)/dg;
 
 const targets = (template: string) =>
@@ -53,38 +53,31 @@ const targets = (template: string) =>
       : [{ raw: match[1] ?? "", start: span[0], end: span[1] }];
   });
 
-// A code span: a backtick run, not escaped, closed by a run of the same length before any blank line.
-const SPAN =
-  /(?<![`\\])(`+)(?!`)(?:(?!\r?\n[ \t]*\r?\n)[\s\S])*?(?<!`)\1(?!`)/g;
-
-// Fenced code blocks and code spans, whose link-like text is an example to show rather than a link.
-const codeRanges = (template: string) => {
-  const ranges: [number, number][] = [];
-  let open: { fence: string; start: number } | null = null;
-  for (const line of template.matchAll(/^ {0,3}(`{3,}|~{3,})(.*)$/gm)) {
-    const fence = line[1] ?? "";
-    const rest = line[2] ?? "";
-    if (open === null) {
-      if (!(fence.startsWith("`") && rest.includes("`")))
-        open = { fence, start: line.index };
-    } else if (
-      fence[0] === open.fence[0] &&
-      fence.length >= open.fence.length &&
-      rest.trim() === ""
-    ) {
-      ranges.push([open.start, line.index + line[0].length]);
-      open = null;
-    }
+// The candidates Markdown reads as links, so examples in code and text that a block such as a heading splits are left alone.
+// Each target is swapped for a marker and the parser reports which markers it saw as a link destination.
+const links = (template: string) => {
+  const candidates = targets(template);
+  const nonce = crypto.randomUUID().replaceAll("-", "");
+  const markerOf = (index: number) => `hx${nonce}n${index}`;
+  let marked = "";
+  let last = 0;
+  for (const [index, { raw, start, end }] of candidates.entries()) {
+    const close = raw.indexOf(">");
+    const replaced = raw.startsWith("<")
+      ? `<${markerOf(index)}>${close === -1 ? "" : raw.slice(close + 1)}`
+      : `${markerOf(index)}${raw.slice(/^\S*/.exec(raw)?.[0].length ?? 0)}`;
+    marked += template.slice(last, start) + replaced;
+    last = end;
   }
-  if (open !== null) ranges.push([open.start, template.length]);
-  // Blanking the blocks keeps their backticks from pairing with a span outside.
-  let outside = template;
-  for (const [start, end] of ranges)
-    outside =
-      outside.slice(0, start) + " ".repeat(end - start) + outside.slice(end);
-  for (const span of outside.matchAll(SPAN))
-    ranges.push([span.index, span.index + span[0].length]);
-  return ranges;
+  marked += template.slice(last);
+  const seen = new Set<string>();
+  Bun.markdown.render(marked, {
+    link: (children, { href }) => {
+      seen.add(href);
+      return children;
+    },
+  });
+  return candidates.filter((_, index) => seen.has(markerOf(index)));
 };
 
 // A value inside a target is a name, never a path, so none can lead the link to another folder or break it.
@@ -112,11 +105,9 @@ const resolveLinks = (
   Result.gen(async function* () {
     // The layout is the one the templates were written in, so a symlinked template resolves beside its real file.
     const folder = dirname(await realPathOrSelf(path));
-    const code = codeRanges(template);
     let text = "";
     let last = 0;
-    for (const { raw, start, end } of targets(template)) {
-      if (code.some(([from, to]) => start >= from && start < to)) continue;
+    for (const { raw, start, end } of links(template)) {
       const hash = raw.indexOf("#");
       const rawPath = hash === -1 ? raw : raw.slice(0, hash);
       if (!isRelative(rawPath.replace(/^</, "").trimStart())) continue;
