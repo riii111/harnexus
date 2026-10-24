@@ -100,7 +100,7 @@ const stopServer = {
 };
 const claude = await withClaude({
   ...pipes.value,
-  observer: createObserver(logger.log),
+  observer: createObserver(logger.log, { shapes: "sampled" }),
 });
 if (
   process.argv.includes("--launcher") &&
@@ -117,6 +117,7 @@ for (const signal of BRIDGE_SIGNALS) {
   });
 }
 await relayStreams({ ...claude.streams, stopServer });
+claude.endObservation();
 logger.log({ event: "server_closed" });
 claude.closeAll();
 pipes.value.serverInput.destroy();
@@ -132,6 +133,7 @@ async function withClaude(relay: {
   const plain = {
     streams: { appInput: process.stdin, appOutput: process.stdout, ...relay },
     closeAll: () => {},
+    endObservation: () => {},
   };
   const statePath = loadStatePath(process.env);
   if (statePath.isErr()) {
@@ -171,7 +173,14 @@ async function withClaude(relay: {
       reason: settings.error._tag,
     });
   }
-  const appInjector = createLineInjector(process.stdout);
+  // The router consumes a Claude thread's requests and writes its own notifications, so the observer reads what the app sends before the router and everything the app is given, as the fixtures record a session.
+  const appInjector = createLineInjector(process.stdout, (bytes) =>
+    relay.observer.chunk("server_to_app", bytes),
+  );
+  process.stdin.on("data", (chunk: Uint8Array) =>
+    relay.observer.chunk("app_to_server", chunk),
+  );
+  process.stdin.once("end", () => relay.observer.end("app_to_server"));
   // The bridge's own requests to the server are answered before the router reads the server output, so their responses never reach the app.
   const serverCalls = attachServerRequests(relay);
   let callSocketOpen = false;
@@ -218,13 +227,13 @@ async function withClaude(relay: {
   process.stdin.on("error", (error) => appRewriter.destroy(error));
   return {
     streams: {
-      ...relay,
       appInput: process.stdin.pipe(appRewriter),
       appOutput: appInjector.stream,
       serverInput: serverCalls.serverInput,
       serverOutput: serverCalls.serverOutput.pipe(serverRewriter),
     },
     closeAll,
+    endObservation: () => relay.observer.end("server_to_app"),
   };
 }
 

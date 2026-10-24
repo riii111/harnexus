@@ -267,6 +267,102 @@ describe("selectLog", () => {
   });
 });
 
+describe("selectLog shapes", () => {
+  test("keeps the shapes of bridges in the window whenever they were recorded, and drops a path that is not a shape path", () => {
+    const parsed = parseLog(
+      lines(
+        at("08:00", 1, {
+          event: "rpc_shape",
+          direction: "app_to_server",
+          kind: "request",
+          method: "turn/start",
+          shape: "0123456789abcdef",
+          paths: [
+            "id:number",
+            "params.text:string",
+            "params.note=free text here",
+          ],
+        }),
+        at("08:00", 2, {
+          event: "rpc_shape",
+          direction: "app_to_server",
+          kind: "request",
+          method: "turn/start",
+          shape: "0123456789abcdef",
+          paths: ["id:number"],
+        }),
+        at("09:30", 1, { event: "claude_turn", step: "refused" }),
+      ),
+    );
+
+    const selection = selectLog(parsed.lines, WINDOW);
+
+    expect(selection.shapes).toEqual([
+      {
+        direction: "app_to_server",
+        kind: "request",
+        method: "turn/start",
+        paths: ["id:number", "params.text:string"],
+      },
+    ]);
+    expect(selection.window.join("")).not.toContain("rpc_shape");
+  });
+});
+
+describe("selectLog shapes of a reused pid", () => {
+  test("takes only the shapes recorded since the bridge's last start and before the window's end", () => {
+    const shapeLine = (clock: string, field: string) =>
+      at(clock, 1, {
+        event: "rpc_shape",
+        direction: "app_to_server",
+        kind: "request",
+        method: "turn/start",
+        shape: "0123456789abcdef",
+        paths: [`params.${field}:string`],
+      });
+    const parsed = parseLog(
+      lines(
+        shapeLine("07:00", "older"),
+        at("08:00", 1, { event: "bridge_started", commit: "0123456789ab" }),
+        shapeLine("08:01", "current"),
+        at("09:30", 1, { event: "claude_turn", step: "refused" }),
+        shapeLine("10:30", "later"),
+      ),
+    );
+
+    const selection = selectLog(parsed.lines, WINDOW);
+
+    expect(selection.shapes.map(({ paths }) => paths)).toEqual([
+      ["params.current:string"],
+    ]);
+  });
+});
+
+describe("selectLog shapes of an ended bridge", () => {
+  test("keeps the shapes and startup lines of a bridge whose only lines in the window are relayed messages", () => {
+    const parsed = parseLog(
+      lines(
+        at("08:00", 5, { event: "bridge_started", commit: "0123456789ab" }),
+        at("09:10", 5, { event: "rpc_message", method: "turn/start" }),
+        at("09:10", 5, {
+          event: "rpc_shape",
+          direction: "app_to_server",
+          kind: "request",
+          method: "turn/start",
+          shape: "0123456789abcdef",
+          paths: ["id:number"],
+        }),
+        at("10:30", 5, { event: "server_closed" }),
+      ),
+    );
+
+    const selection = selectLog(parsed.lines, WINDOW);
+
+    expect(selection.context.map(eventOf)).toEqual(["bridge_started 5"]);
+    expect(selection.shapes.map(({ paths }) => paths)).toEqual([["id:number"]]);
+  });
+});
+
 describe("loggedStarts", () => {
   test("keeps each bridge's last start and the Codex CLI it met", () => {
     const parsed = parseLog(

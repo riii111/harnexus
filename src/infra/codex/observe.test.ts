@@ -445,6 +445,94 @@ describe("createObserver", () => {
   });
 });
 
+describe("createObserver shapes", () => {
+  test("records each shape of a method once, with the method a response answers, and no values", () => {
+    const { log, records } = observe(
+      [
+        toServer({ id: 1, method: "turn/start", params: { text: PROMPT } }),
+        toServer({ id: 2, method: "turn/start", params: { text: SECRET } }),
+        toApp({ id: 1, result: { turn: { id: "tu", status: "inProgress" } } }),
+        toServer({
+          id: 3,
+          method: "turn/start",
+          params: { text: PROMPT, effort: "high" },
+        }),
+      ],
+      { shapes: "sampled" },
+    );
+
+    expect(
+      records
+        .filter((record) => record.event === "rpc_shape")
+        .map(({ direction, kind, method, paths }) => ({
+          direction,
+          kind,
+          method,
+          paths,
+        })),
+    ).toEqual([
+      {
+        direction: "app_to_server",
+        kind: "request",
+        method: "turn/start",
+        paths: ["id:number", "method=turn/start", "params.text:string"],
+      },
+      {
+        direction: "server_to_app",
+        kind: "response",
+        method: "turn/start",
+        paths: [
+          "id:number",
+          "result.turn.id:string",
+          "result.turn.status=inProgress",
+        ],
+      },
+      {
+        direction: "app_to_server",
+        kind: "request",
+        method: "turn/start",
+        paths: [
+          "id:number",
+          "method=turn/start",
+          "params.effort:string",
+          "params.text:string",
+        ],
+      },
+    ]);
+    expect(log).not.toContain(SECRET);
+    expect(log).not.toContain(PROMPT);
+  });
+
+  test("walks only some messages of a frequent method", () => {
+    const deltas = Array.from({ length: 250 }, (_, index) =>
+      toApp({
+        method: "item/agentMessage/delta",
+        params: index % 2 === 0 ? { delta: "a" } : { delta: "a", extra: index },
+      }),
+    );
+
+    const { records } = observe(
+      [
+        ...deltas,
+        toApp({
+          method: "item/agentMessage/delta",
+          params: { delta: "a", late: true },
+        }),
+      ],
+      { shapes: "sampled" },
+    );
+
+    const shapes = records.filter((record) => record.event === "rpc_shape");
+    expect(shapes).toHaveLength(2);
+  });
+
+  test("records no shapes unless asked", () => {
+    const { records } = observe([toServer({ id: 1, method: "turn/start" })]);
+
+    expect(records.map((record) => record.event)).toEqual(["rpc_message"]);
+  });
+});
+
 const SECRET = "sk-secret-token-0123";
 const PROMPT = "private conversation text";
 
@@ -452,7 +540,7 @@ const encode = (text: string) => new TextEncoder().encode(text);
 
 const observe = (
   messages: { direction: Direction; line: string }[],
-  options: { maxLineBytes?: number } = {},
+  options: { maxLineBytes?: number; shapes?: "off" | "sampled" | "every" } = {},
 ) => {
   const lines: string[] = [];
   const logger = createLogger(

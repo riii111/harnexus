@@ -1,6 +1,7 @@
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { createLineSplitter } from "./line-splitter.ts";
 import type { Direction } from "./relay.ts";
+import { type ShapePath, shapeKey, shapeOf } from "./shape.ts";
 
 // Only identifiers and structural schema reach an event, so params, conversations, code and credentials never do.
 export type ObservationEvent =
@@ -14,7 +15,15 @@ export type ObservationEvent =
       mcpStartup: McpStartup | null;
       threadOpen: ThreadOpen | null;
     }
-  | { event: "rpc_unobserved"; direction: Direction; reason: UnobservedReason };
+  | { event: "rpc_unobserved"; direction: Direction; reason: UnobservedReason }
+  | {
+      event: "rpc_shape";
+      direction: Direction;
+      kind: MessageKind;
+      method: string | null;
+      shape: string;
+      paths: readonly ShapePath[];
+    };
 
 type MessageKind = "request" | "notification" | "response" | "error_response";
 
@@ -63,9 +72,14 @@ const DEFAULT_MAX_LINE_BYTES = 8 * 1024 * 1024;
 // The relayed bytes are never altered; this only reads a copy of each chunk.
 export const createObserver = (
   record: (event: ObservationEvent) => void,
-  { maxLineBytes = DEFAULT_MAX_LINE_BYTES } = {},
+  {
+    maxLineBytes = DEFAULT_MAX_LINE_BYTES,
+    shapes: shapeMode = "off",
+  }: { maxLineBytes?: number; shapes?: "off" | "sampled" | "every" } = {},
 ) => {
   const requests = createRequestTracker();
+  const shapes =
+    shapeMode === "off" ? null : createShapeSampler(shapeMode === "every");
 
   const observeLine = (direction: Direction, bytes: Uint8Array) => {
     const text = decoder.decode(bytes);
@@ -105,6 +119,10 @@ export const createObserver = (
       mcpStartup,
       threadOpen,
     });
+    const shape = shapes?.sample(direction, kind, method, message) ?? null;
+    if (shape !== null) {
+      record({ event: "rpc_shape", direction, kind, method, ...shape });
+    }
   };
 
   const splitterFor = (direction: Direction) =>
@@ -173,8 +191,61 @@ export const serializeObservationEvent = (entry: ObservationEvent) => {
         direction: entry.direction,
         reason: entry.reason,
       };
+    case "rpc_shape":
+      return {
+        event: entry.event,
+        direction: entry.direction,
+        kind: entry.kind,
+        method: entry.method,
+        shape: entry.shape,
+        paths: entry.paths,
+      };
   }
 };
+
+// Every message of a method is parsed anyway, but walking it again costs time before each line is relayed, so after the first few of a method and variant only one in a hundred is walked; recorded sessions, which nothing waits on, are walked whole.
+// A shape is recorded the first time this bridge sees it, and the count of recorded shapes is capped, so a stream of deltas cannot fill the log.
+const createShapeSampler = (every: boolean) => {
+  const seen = new Set<string>();
+  const counts = new Map<string, number>();
+  return {
+    sample: (
+      direction: Direction,
+      kind: MessageKind,
+      method: string | null,
+      message: JsonObject,
+    ) => {
+      if (seen.size >= MAX_SHAPES) return null;
+      const methodKey = `${direction}:${kind}:${method}:${variantOf(message)}`;
+      const count = (counts.get(methodKey) ?? 0) + 1;
+      if (counts.size < MAX_SHAPES || counts.has(methodKey))
+        counts.set(methodKey, count);
+      if (
+        !every &&
+        count > SHAPE_EVERY_FIRST &&
+        count % SHAPE_EVERY_LATER !== 0
+      )
+        return null;
+      const paths = shapeOf(message);
+      const shape = shapeKey(paths);
+      if (seen.has(`${methodKey}:${shape}`)) return null;
+      seen.add(`${methodKey}:${shape}`);
+      return { shape, paths };
+    },
+  };
+};
+
+// Item and event notifications carry many variants under one method, so each variant is sampled on its own and a rare one is still walked when it first comes.
+const variantOf = (message: JsonObject) => {
+  const params = asObject(message.params);
+  const type =
+    asObject(params?.item)?.type ?? asObject(params?.msg)?.type ?? null;
+  return typeof type === "string" ? type.slice(0, 64) : "";
+};
+
+const MAX_SHAPES = 300;
+const SHAPE_EVERY_FIRST = 20;
+const SHAPE_EVERY_LATER = 100;
 
 // Responses carry only an id, so the method comes from the request sent the other way; the map is bounded because some requests are never answered.
 const createRequestTracker = () => {

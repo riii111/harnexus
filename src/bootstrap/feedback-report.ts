@@ -3,6 +3,7 @@ import type { BridgeSettings } from "./bridge-identity.ts";
 import type { CheckoutHead } from "./checkout.ts";
 import { type Check, formatReport } from "./doctor-report.ts";
 import type { LoggedStart, LogSelection } from "./feedback-log.ts";
+import { formatProtocol, type ProtocolDiff } from "./feedback-protocol.ts";
 
 class TimeArgumentInvalid extends TaggedError("TimeArgumentInvalid")<{
   message: string;
@@ -196,6 +197,8 @@ export type FeedbackFacts = {
   };
   doctor: readonly Check[];
   log: LogFacts;
+  // Null when the log was not read or its bridges recorded no shapes.
+  protocol: ProtocolDiff | null;
 };
 
 export const formatFeedback = (facts: FeedbackFacts) =>
@@ -216,7 +219,12 @@ export const formatFeedback = (facts: FeedbackFacts) =>
     "== Log ==",
     ...logSection(facts),
     "",
+    "== Protocol ==",
+    ...formatProtocol(facts.protocol, PROTOCOL_BUDGET_CHARS),
+    "",
   ].join("\n");
+
+const PROTOCOL_BUDGET_CHARS = 10_000;
 
 const checkoutChecks = (facts: FeedbackFacts): Check[] => [
   commitCheck(facts.head),

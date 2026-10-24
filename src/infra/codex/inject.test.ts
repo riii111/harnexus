@@ -67,6 +67,23 @@ describe("createLineInjector", () => {
   });
 });
 
+describe("createLineInjector tap", () => {
+  test("sees relayed and injected bytes in the order the target gets them", async () => {
+    const target = sink();
+    const tapped: string[] = [];
+    const injector = createLineInjector(target.stream, (bytes) =>
+      tapped.push(Buffer.from(bytes).toString()),
+    );
+
+    await write(injector.stream, "app 1 first half");
+    injector.inject("own\n");
+    await write(injector.stream, " second half\napp 2\n");
+
+    expect(tapped.join("")).toBe(target.text());
+    expect(target.text()).toBe("app 1 first half second half\napp 2\nown\n");
+  });
+});
+
 const sink = (delayMs = 0) => {
   const chunks: Buffer[] = [];
   const stream = new Writable({

@@ -1,5 +1,7 @@
+import { isShapePath } from "../infra/codex/shape.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
+import type { RecordedShape } from "./feedback-protocol.ts";
 
 export type LogLine = {
   time: string;
@@ -40,7 +42,7 @@ const readLine = (row: string, leftOut: Set<string>): LogLine | null => {
   if (typeof event !== "string" || !WORD.test(event)) return null;
   const fields: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(rest)) {
-    const kept = keepField(key, value);
+    const kept = keepField(event, key, value);
     if (kept === LEFT_OUT) {
       if (WORD.test(key)) leftOut.add(key);
     } else {
@@ -61,6 +63,7 @@ export type LogSelection = {
   window: string[];
   omitted: number;
   messages: Map<string, number>;
+  shapes: RecordedShape[];
 };
 
 // Lines a bridge writes once at start, so one started before the window still shows what it runs and what it found.
@@ -98,7 +101,7 @@ const isRoutine = (line: LogLine) =>
     (ROUTINE_STEPS.has(String(line.fields.step)) ||
       (line.fields.step === "finished" && line.fields.status === "completed")));
 
-// Relayed messages, kept only in a log set by hand, are counted by method; their shapes are not part of this report.
+// Relayed messages, kept only in a log set by hand, are counted by method; shapes, which every log keeps, go to the protocol section.
 export const selectLog = (
   lines: readonly LogLine[],
   {
@@ -120,6 +123,7 @@ export const selectLog = (
   for (const line of lines) {
     if (line.timeMs < sinceMs || line.timeMs > untilMs) continue;
     pids.add(line.pid);
+    if (line.event === "rpc_shape") continue;
     if (line.event === "rpc_message") {
       const method =
         typeof line.fields.method === "string" ? line.fields.method : "unknown";
@@ -145,7 +149,36 @@ export const selectLog = (
     window: kept.map(({ text }) => text),
     omitted: rows.length - kept.length + startup.length - context.length,
     messages,
+    shapes: shapesOf(lines, pids, untilMs),
   };
+};
+
+// A bridge records a shape when it first meets it, mostly before the window, so every shape a bridge in the window recorded since its last start counts; a pid reused by an earlier bridge brings none of that bridge's shapes.
+const shapesOf = (
+  lines: readonly LogLine[],
+  pids: ReadonlySet<number | null>,
+  untilMs: number,
+): RecordedShape[] => {
+  const byPid = new Map<number | null, RecordedShape[]>();
+  for (const line of lines) {
+    if (line.timeMs > untilMs || !pids.has(line.pid)) continue;
+    if (line.event === "bridge_started") byPid.set(line.pid, []);
+    if (line.event !== "rpc_shape") continue;
+    const { direction, kind, method, paths } = line.fields;
+    if (typeof direction !== "string" || typeof kind !== "string") continue;
+    if (!Array.isArray(paths)) continue;
+    const shapes = byPid.get(line.pid) ?? [];
+    shapes.push({
+      direction,
+      kind,
+      method: typeof method === "string" ? method : null,
+      paths: paths.filter(
+        (path): path is string => typeof path === "string" && path !== REDACTED,
+      ),
+    });
+    byPid.set(line.pid, shapes);
+  }
+  return [...byPid.values()].flat();
 };
 
 type Row = { line: LogLine; text: string };
@@ -228,8 +261,16 @@ const stringOrNull = (value: unknown) =>
 
 const LEFT_OUT = Symbol("left out");
 
-const keepField = (key: string, value: unknown): unknown => {
+const keepField = (event: string, key: string, value: unknown): unknown => {
   if (key === "settings") return keepSettings(value);
+  if (key === "paths" && event === "rpc_shape")
+    return Array.isArray(value)
+      ? value
+          .slice(0, MAX_PATHS)
+          .map((item) =>
+            typeof item === "string" && isShapePath(item) ? item : REDACTED,
+          )
+      : scalar(value);
   if (key === "returned")
     return Array.isArray(value)
       ? value.slice(0, MAX_ITEMS).map((item) => checked(SHORT_ID, item))
@@ -271,6 +312,7 @@ const COMMIT = /^[0-9a-f]{7,40}$/;
 // A thread's head, or a turn, item or cursor id with harnexus's own ids shortened to their kind and head.
 const SHORT_ID = /^(?:anchor )?(?:[hl]:)?[A-Za-z0-9_-]{1,64}$/;
 const NUMBER_ONLY = /^$/;
+const SHAPE_KEY = /^[0-9a-f]{16}$/;
 
 const FIELD_PATTERNS: Record<string, RegExp> = {
   step: WORD,
@@ -291,6 +333,7 @@ const FIELD_PATTERNS: Record<string, RegExp> = {
   claudeCode: VERSION,
   model: MODEL,
   commit: COMMIT,
+  shape: SHAPE_KEY,
   thread: SHORT_ID,
   live: SHORT_ID,
   turn: SHORT_ID,
@@ -325,3 +368,4 @@ const SETTING_KEYS = new Set([
 
 const REDACTED = "<redacted>";
 const MAX_ITEMS = 64;
+const MAX_PATHS = 400;
