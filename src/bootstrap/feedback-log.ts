@@ -115,8 +115,11 @@ export const selectLog = (
 ): LogSelection => {
   const messages = new Map<string, number>();
   const inWindow: LogLine[] = [];
+  // Every line in the window names a bridge that was there, a relayed message included, so a bridge that has since ended still gets its startup lines.
+  const pids = new Set<number | null>(runningPids);
   for (const line of lines) {
     if (line.timeMs < sinceMs || line.timeMs > untilMs) continue;
+    pids.add(line.pid);
     if (line.event === "rpc_message") {
       const method =
         typeof line.fields.method === "string" ? line.fields.method : "unknown";
@@ -125,10 +128,6 @@ export const selectLog = (
       inWindow.push(line);
     }
   }
-  const pids = new Set<number | null>([
-    ...runningPids,
-    ...inWindow.map(({ pid }) => pid),
-  ]);
   const latest = new Map<string, LogLine>();
   for (const line of lines) {
     if (line.timeMs >= sinceMs || !STARTUP_EVENTS.has(line.event)) continue;

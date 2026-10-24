@@ -10,19 +10,17 @@ import {
   statFileIfExists,
 } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
-import { isObject } from "../runtime/object.ts";
 import { readCommandOutput } from "../runtime/process.boundary.ts";
 import { compatibilityCheck } from "./compatibility-report.ts";
 import {
   type Check,
   fallbackCheck,
   logChecks,
-  parseProcesses,
   processChecks,
 } from "./doctor-report.ts";
-import { readLaunchd } from "./launchd.boundary.ts";
 import { registrationChecks } from "./launchd-plan.ts";
 import { registeredEnvironment } from "./open-app-plan.ts";
+import type { SetupFacts } from "./setup-facts.ts";
 
 // The checks change nothing but create the store's marker directory when it is missing, as the bridge does, so the command is safe while the app runs; nothing it prints holds conversation text or credentials.
 const REPO = join(import.meta.dir, "..", "..");
@@ -47,23 +45,37 @@ export const CODEX_IN_APP =
   "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 
 // Independent checks run at once, since asking Claude Code about the login alone can take many seconds; the order of the report stays fixed.
-export const doctorChecks = async (setup: DoctorSetup): Promise<Check[]> =>
+export const doctorChecks = async (
+  setup: DoctorSetup,
+  facts: SetupFacts,
+): Promise<Check[]> =>
   (
     await Promise.all([
       appCheck(setup).then((check) => [check]),
-      codexCheck(setup).then((check) => [check]),
-      sdkCheck().then((check) => [check]),
-      bunCheck().then((check) => [check]),
+      [codexCheck(setup, facts.codex)],
+      [sdkCheck(facts.sdk.version)],
+      [bunCheck(facts.pinnedBun)],
       loginCheck().then((check) => [check]),
       stateChecks(setup),
       launcherCheck().then((check) => [check]),
-      launchdChecks(setup),
-      processesChecks(),
+      launchdChecks(setup, facts.launchd),
+      facts.processes === null
+        ? [
+            {
+              status: "fail" as const,
+              name: "Processes",
+              detail: "cannot list processes",
+            },
+          ]
+        : processChecks(facts.processes, REPO),
       logSummaryChecks(setup),
       lastFallbackCheck(setup).then((check) => [check]),
       lastCompatibilityCheck(setup).then((check) => [check]),
     ])
   ).flat();
+
+export const codexPathOf = (setup: DoctorSetup) =>
+  setup.env.HARNEXUS_CODEX_PATH || join(setup.app, CODEX_IN_APP);
 
 async function appCheck(setup: DoctorSetup): Promise<Check> {
   const read = await readCommandOutput("/usr/bin/plutil", [
@@ -88,26 +100,24 @@ async function appCheck(setup: DoctorSetup): Promise<Check> {
 }
 
 // The app bundles the Codex CLI the launcher hands over to, so its version is what the bridge's rewrites meet.
-async function codexCheck(setup: DoctorSetup): Promise<Check> {
-  const codex = setup.env.HARNEXUS_CODEX_PATH || join(setup.app, CODEX_IN_APP);
-  const read = await readCommandOutput(codex, ["--version"]);
-  if (read.isErr()) {
-    return { status: "fail", name: "Codex CLI", detail: `cannot run ${codex}` };
+function codexCheck(setup: DoctorSetup, codex: SetupFacts["codex"]): Check {
+  if (codex === null) {
+    return {
+      status: "fail",
+      name: "Codex CLI",
+      detail: `cannot run ${codexPathOf(setup)}`,
+    };
   }
-  const version = /(\d+\.\d+\.\d+\S*)/.exec(read.value)?.[1] ?? null;
-  return isVerifiedCodex(version)
-    ? { status: "ok", name: "Codex CLI", detail: `${version}` }
+  return isVerifiedCodex(codex.version)
+    ? { status: "ok", name: "Codex CLI", detail: `${codex.version}` }
     : {
         status: "warn",
         name: "Codex CLI",
-        detail: `${version ?? "unknown version"} is not a version harnexus was checked on`,
+        detail: `${codex.version ?? "unknown version"} is not a version harnexus was checked on`,
       };
 }
 
-async function sdkCheck(): Promise<Check> {
-  const version = await packageVersion(
-    join(REPO, "node_modules/@anthropic-ai/claude-agent-sdk/package.json"),
-  );
+function sdkCheck(version: string | null): Check {
   return version === null
     ? {
         status: "fail",
@@ -117,22 +127,13 @@ async function sdkCheck(): Promise<Check> {
     : { status: "ok", name: "Claude Agent SDK", detail: version };
 }
 
-async function bunCheck(): Promise<Check> {
-  const text = await readTextFileIfExists(join(REPO, "package.json"));
-  const parsed =
-    text.isOk() && text.value !== null ? parseJson(text.value) : null;
-  const manager =
-    parsed?.isOk() && isObject(parsed.value)
-      ? parsed.value.packageManager
-      : undefined;
-  const pinned =
-    typeof manager === "string" ? manager.replace(/^bun@/, "") : "";
+function bunCheck(pinned: string | null): Check {
   return pinned === Bun.version
     ? { status: "ok", name: "Bun", detail: Bun.version }
     : {
         status: "warn",
         name: "Bun",
-        detail: `${Bun.version} runs this, while harnexus pins ${pinned || "no version"}`,
+        detail: `${Bun.version} runs this, while harnexus pins ${pinned ?? "no version"}`,
       };
 }
 
@@ -192,16 +193,6 @@ async function launcherCheck(): Promise<Check> {
     : { status: "fail", name: "Launcher", detail: runnable.error.message };
 }
 
-async function processesChecks(): Promise<Check[]> {
-  const listed = await readCommandOutput("/bin/ps", [
-    "-axo",
-    "pid=,ppid=,command=",
-  ]);
-  return listed.isOk()
-    ? processChecks(parseProcesses(listed.value), REPO)
-    : [{ status: "fail", name: "Processes", detail: "cannot list processes" }];
-}
-
 // The bridge finds its log as the app's environment sets it, which matches this shell's when the app was opened with bun run open-app.
 async function logSummaryChecks(setup: DoctorSetup): Promise<Check[]> {
   const path = loadStatePath(setup.env).andThen((statePath) =>
@@ -243,19 +234,10 @@ async function readLogTail(path: string) {
   return read.isOk() ? read.value : null;
 }
 
-async function packageVersion(path: string) {
-  const text = await readTextFileIfExists(path);
-  if (text.isErr() || text.value === null) return null;
-  const parsed = parseJson(text.value);
-  return parsed.isOk() &&
-    isObject(parsed.value) &&
-    typeof parsed.value.version === "string"
-    ? parsed.value.version
-    : null;
-}
-
-async function launchdChecks(setup: DoctorSetup): Promise<Check[]> {
-  const read = await readLaunchd();
+function launchdChecks(
+  setup: DoctorSetup,
+  read: SetupFacts["launchd"],
+): Check[] {
   if (read.isErr())
     return [{ status: "fail", name: "launchd", detail: read.error.message }];
   return registrationChecks(
@@ -263,7 +245,7 @@ async function launchdChecks(setup: DoctorSetup): Promise<Check[]> {
       {
         app: setup.app,
         launcher: join(REPO, "bin", "harnexus-codex"),
-        codex: setup.env.HARNEXUS_CODEX_PATH || join(setup.app, CODEX_IN_APP),
+        codex: codexPathOf(setup),
         bun: process.execPath,
       },
       setup.env,

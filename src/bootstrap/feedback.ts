@@ -4,11 +4,8 @@ import { loadLogPath, loadStatePath } from "../runtime/config.ts";
 import {
   listFilesDeepIfExists,
   readFileSlice,
-  readTextFileIfExists,
   statFileIfExists,
 } from "../runtime/fs.boundary.ts";
-import { parseJson } from "../runtime/json.boundary.ts";
-import { isObject } from "../runtime/object.ts";
 import { readCommandOutput, runCommand } from "../runtime/process.boundary.ts";
 import { bridgeSettings, SDK_PACKAGE } from "./bridge-identity.ts";
 import {
@@ -18,6 +15,7 @@ import {
 } from "./checkout.ts";
 import {
   CODEX_IN_APP,
+  codexPathOf,
   DEFAULT_APP,
   type DoctorSetup,
   doctorChecks,
@@ -40,10 +38,10 @@ import {
   type GitChanges,
   type LogFacts,
   parseTimeArgument,
-  parseTimedProcesses,
   redactPaths,
 } from "./feedback-report.ts";
 import { readLaunchd } from "./launchd.boundary.ts";
+import { collectSetupFacts } from "./setup-facts.ts";
 
 // Gathers what a bug report needs into one text to paste; like doctor it changes nothing but the thread store's marker directory, and nothing it prints holds conversation text, code or credentials.
 const REPO = join(import.meta.dir, "..", "..");
@@ -88,45 +86,33 @@ process.stderr.write(
   "Collecting the report; asking Claude Code about the login can take up to half a minute.\n",
 );
 
-const { setup, launchd } = await appSetup();
-const processes = await readCommandOutput("/bin/ps", [
-  "-axo",
-  "pid=,ppid=,etime=,command=",
-]).then((read) => (read.isOk() ? parseTimedProcesses(read.value) : []));
+const launchdRead = await readLaunchd();
+const { setup, launchd } = appSetup(launchdRead);
+const setupFacts = await collectSetupFacts(
+  REPO,
+  codexPathOf(setup),
+  launchdRead,
+);
+const processes = setupFacts.processes ?? [];
 const bridges = findBridges(processes, REPO, now);
 const running = new Set(bridges.mine.map(({ pid }) => pid));
-const [
-  doctor,
-  head,
-  sdk,
-  dependencies,
-  changes,
-  macos,
-  installedCodex,
-  bun,
-  codeChangedAt,
-  log,
-] = await Promise.all([
-  doctorChecks(setup),
-  readCheckoutHead(REPO),
-  readInstalledPackage(REPO, SDK_PACKAGE),
-  dependencyStates(),
-  gitChanges(),
-  process.platform === "darwin"
-    ? readCommandOutput("/usr/bin/sw_vers", ["-productVersion"]).then((read) =>
-        read.isOk() ? read.value.trim() : null,
-      )
-    : null,
-  readCommandOutput(
-    setup.env.HARNEXUS_CODEX_PATH || join(setup.app, CODEX_IN_APP),
-    ["--version"],
-  ).then((read) =>
-    read.isOk() ? versionOf(/(\d+\.\d+\.\d+\S*)/.exec(read.value)?.[1]) : null,
-  ),
-  registeredBun(),
-  newestCodeChange(),
-  readAppLog(running),
-]);
+const [doctor, head, dependencies, changes, macos, bun, codeChangedAt, log] =
+  await Promise.all([
+    doctorChecks(setup, setupFacts),
+    readCheckoutHead(REPO),
+    dependencyStates(setupFacts.dependencies),
+    gitChanges(),
+    process.platform === "darwin"
+      ? readCommandOutput("/usr/bin/sw_vers", ["-productVersion"]).then(
+          (read) => (read.isOk() ? read.value.trim() : null),
+        )
+      : null,
+    registeredBun(),
+    newestCodeChange(),
+    readAppLog(running),
+  ]);
+const sdk = setupFacts.sdk;
+const installedCodex = setupFacts.codex?.version ?? null;
 
 const facts: FeedbackFacts = {
   nowMs: now,
@@ -152,7 +138,7 @@ const facts: FeedbackFacts = {
       setup.env.CODEX_CLI_PATH !== LAUNCHER,
     settings: bridgeSettings(setup.env),
     bun,
-    pinnedBun: await pinnedBun(),
+    pinnedBun: setupFacts.pinnedBun,
   },
   app: {
     startedAtMs: appStartedAt(processes, setup.app, now),
@@ -200,14 +186,13 @@ function readArgs(argv: readonly string[]) {
 }
 
 // The app runs with what open-app registered with launchd, and a variable launchd lacks takes its default there rather than this shell's value.
-async function appSetup(): Promise<{
+function appSetup(read: Awaited<ReturnType<typeof readLaunchd>>): {
   setup: DoctorSetup;
   launchd: "registered" | "none" | "unreadable";
-}> {
+} {
   const shell = shellSetup();
-  const launchd = await readLaunchd();
-  if (launchd.isErr()) return { setup: shell, launchd: "unreadable" };
-  const env = launchd.value.env;
+  if (read.isErr()) return { setup: shell, launchd: "unreadable" };
+  const env = read.value.env;
   if (Object.keys(env).length === 0) return { setup: shell, launchd: "none" };
   const codex = env.HARNEXUS_CODEX_PATH;
   const suffix = `/${CODEX_IN_APP}`;
@@ -228,33 +213,18 @@ async function registeredBun() {
   return { path, version: read.isOk() ? versionOf(read.value.trim()) : null };
 }
 
-async function packageManifest() {
-  const text = await readTextFileIfExists(join(REPO, "package.json"));
-  const parsed =
-    text.isOk() && text.value !== null ? parseJson(text.value) : null;
-  return parsed?.isOk() && isObject(parsed.value) ? parsed.value : {};
-}
-
-async function pinnedBun() {
-  const manager = (await packageManifest()).packageManager;
-  return typeof manager === "string" && manager.startsWith("bun@")
-    ? manager.slice("bun@".length)
-    : null;
-}
-
-async function dependencyStates(): Promise<DependencyState[]> {
-  const dependencies = (await packageManifest()).dependencies;
-  if (!isObject(dependencies)) return [];
+async function dependencyStates(
+  pins: Record<string, string>,
+): Promise<DependencyState[]> {
   return Promise.all(
-    Object.entries(dependencies)
-      .filter(
-        (entry): entry is [string, string] => typeof entry[1] === "string",
-      )
-      .map(async ([name, pinned]) => ({
-        name,
-        pinned,
-        installed: (await readInstalledPackage(REPO, name)).version,
-      })),
+    Object.entries(pins).map(async ([name, pinned]) => ({
+      name,
+      pinned,
+      installed:
+        name === SDK_PACKAGE
+          ? setupFacts.sdk.version
+          : (await readInstalledPackage(REPO, name)).version,
+    })),
   );
 }
 

@@ -182,6 +182,20 @@ describe("selectLog", () => {
     ).toBeLessThanOrEqual(3000);
   });
 
+  test("adds the startup lines of an ended bridge that only relayed messages in the window", () => {
+    const parsed = parseLog(
+      lines(
+        at("08:00", 3, { event: "bridge_started", commit: "0123456789ab" }),
+        at("09:10", 3, { event: "rpc_message", method: "turn/start" }),
+        at("10:30", 3, { event: "server_closed" }),
+      ),
+    );
+
+    const selection = selectLog(parsed.lines, WINDOW);
+
+    expect(selection.context.map(eventOf)).toEqual(["bridge_started 3"]);
+  });
+
   test("counts relayed messages by method instead of printing them", () => {
     const parsed = parseLog(
       lines(
