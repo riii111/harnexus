@@ -1,12 +1,26 @@
 import { Writable } from "node:stream";
 
 // The writer on the other side may split a message across writes, so an injected line waits for a line boundary.
-export const createLineInjector = (target: Writable) => {
+// The tap sees every byte the target is given, relayed and injected alike, in the order the target gets them.
+export const createLineInjector = (
+  target: Writable,
+  tap: (bytes: Uint8Array) => void = () => {},
+) => {
   let atBoundary = true;
   let broken = false;
   let pending: string[] = [];
+  const write = (
+    data: Uint8Array | string,
+    callback?: (error?: Error | null) => void,
+  ) => {
+    const bytes = typeof data === "string" ? Buffer.from(data) : data;
+    if (bytes.length > 0) tap(bytes);
+    return callback === undefined
+      ? target.write(bytes)
+      : target.write(bytes, callback);
+  };
   const flushPending = () => {
-    for (const line of pending) target.write(line);
+    for (const line of pending) write(line);
     pending = [];
   };
   const stream = new Writable({
@@ -19,15 +33,15 @@ export const createLineInjector = (target: Writable) => {
       }
       const lastNewline = bytes.lastIndexOf(NEWLINE);
       if (pending.length > 0 && lastNewline !== -1) {
-        target.write(bytes.subarray(0, lastNewline + 1));
+        write(bytes.subarray(0, lastNewline + 1));
         flushPending();
         const rest = bytes.subarray(lastNewline + 1);
         atBoundary = rest.length === 0;
-        target.write(rest, (error) => callback(error ?? null));
+        write(rest, (error) => callback(error ?? null));
         return;
       }
       atBoundary = bytes[bytes.length - 1] === NEWLINE;
-      target.write(bytes, (error) => callback(error ?? null));
+      write(bytes, (error) => callback(error ?? null));
     },
     final(callback) {
       target.end(() => callback());
@@ -45,7 +59,7 @@ export const createLineInjector = (target: Writable) => {
     // False means the line was never handed to the target.
     inject: (line: string) => {
       if (broken || target.writableEnded) return false;
-      if (atBoundary) target.write(line);
+      if (atBoundary) write(line);
       else pending.push(line);
       return true;
     },

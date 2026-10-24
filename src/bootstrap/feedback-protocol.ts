@@ -3,14 +3,7 @@ import {
   type ObservationEvent,
 } from "../infra/codex/observe.ts";
 import type { Direction } from "../infra/codex/relay.ts";
-import {
-  isShapePath,
-  messageOfShape,
-  type ShapePath,
-  shapeKey,
-} from "../infra/codex/shape.ts";
-import { parseJson } from "../runtime/json.boundary.ts";
-import { isObject } from "../runtime/object.ts";
+import { type ShapePath, shapeKey } from "../infra/codex/shape.ts";
 
 export type RecordedShape = {
   direction: string;
@@ -52,20 +45,23 @@ export type ProtocolDiff = {
 
 export type VariantChange = {
   method: string;
+  recorded: number;
   added: readonly ShapePath[];
   filled: readonly ShapePath[];
-  missing: readonly ShapePath[];
+  // How many of the recorded shapes lack each field.
+  missing: readonly { path: ShapePath; lackedBy: number }[];
 };
 
 // A method carries variants told apart by the type of the object it carries, such as each item type of item/started, so each variant is compared with the fixtures' shapes of the same variant.
 // Only a method the fixtures hold can be compared, so one they lack is listed by name rather than flagged, as is a variant they lack.
-// A field the fixtures hold only empty or null is told apart from a new one, since a recorded session may just not have filled it; a field every fixture shape of the variant has, where no recorded one has anything, is missing.
+// A field the fixtures hold only empty or null is told apart from a new one, since a recorded session may just not have filled it.
+// A field every fixture shape of the variant has is missing from each recorded shape that has nothing at its place, counted shape by shape so a complete message cannot hide an incomplete one.
 export const diffShapes = (
   observed: readonly RecordedShape[],
   baseline: readonly RecordedShape[],
 ): ProtocolDiff => {
   const known = groupVariants(baseline);
-  const knownShapes = new Set(baseline.map(({ paths }) => shapeKey(paths)));
+  const knownShapes = new Set(baseline.map(shapeId));
   const seen = groupVariants(observed);
   const changed: VariantChange[] = [];
   const newVariants: string[] = [];
@@ -92,24 +88,28 @@ export const diffShapes = (
       );
       const filled = extra.filter((path) => heldEmpty(path, fixturePaths));
       const added = extra.filter((path) => !heldEmpty(path, fixturePaths));
-      const reached = new Set([...observedPaths].flatMap(locationsOf));
-      const missing = [...intersection(fixtures)].filter(
-        (path) => !observedPaths.has(path) && !reached.has(locationOf(path)),
-      );
+      const required = [...intersection(fixtures)];
+      const missing = required
+        .map((path) => ({
+          path,
+          lackedBy: shapes.filter((shape) => lacks(shape, path)).length,
+        }))
+        .filter(({ lackedBy }) => lackedBy > 0);
       if (added.length + filled.length + missing.length === 0) continue;
       changedVariants.add(`${group}|${variant}`);
       changed.push({
         method: name,
+        recorded: shapes.length,
         added: added.sort(),
         filled: filled.sort(),
-        missing: missing.sort(),
+        missing: missing.sort((a, b) => a.path.localeCompare(b.path)),
       });
     }
   }
   const unseen = unique(observed).filter(
     (shape) =>
       changedVariants.has(`${groupOf(shape)}|${variantOf(shape)}`) &&
-      !knownShapes.has(shapeKey(shape.paths)),
+      !knownShapes.has(shapeId(shape)),
   );
   return {
     covered: seen.size - uncovered.length,
@@ -134,12 +134,19 @@ export const formatProtocol = (
       : []),
   ];
   const changes = diff.changed.map(
-    ({ method, added, filled, missing }) =>
+    ({ method, recorded, added, filled, missing }) =>
       `Differs from the fixtures in ${method}: ${[
         added.length > 0 && `new ${listed(added)}`,
         filled.length > 0 &&
           `filled where the fixtures hold only empty or null ${listed(filled)}`,
-        missing.length > 0 && `missing ${listed(missing)}`,
+        missing.length > 0 &&
+          `missing ${listed(
+            missing.map(({ path, lackedBy }) =>
+              lackedBy === recorded
+                ? path
+                : `${path} (in ${lackedBy} of ${recorded} recorded shapes)`,
+            ),
+          )}`,
       ]
         .filter((part) => part !== false)
         .join("; ")}`,
@@ -167,7 +174,7 @@ export const formatProtocol = (
   for (const line of [...summary, ...changes, ...names]) add(line);
   if (shapes.length > 0) {
     add("");
-    add("-- Shapes the fixtures lack, for bun run shape-fixture --");
+    add("-- Shapes the fixtures lack --");
     for (const shape of shapes) add(shape);
   }
   return left > 0
@@ -220,84 +227,30 @@ const intersection = (shapes: readonly RecordedShape[]) => {
   );
 };
 
-const locationOf = (path: ShapePath) => path.replace(/(?::[a-z]+|=.+)$/, "");
+const placeOf = (path: ShapePath) => path.replace(/(?::[a-z]+|=.+)$/, "");
 
-// The field itself and every container above it.
-const locationsOf = (path: ShapePath) =>
-  locationOf(path)
+const pathPrefixes = (path: ShapePath) =>
+  placeOf(path)
     .split(/(?=\.|\[\])/)
     .map((_, index, parts) => parts.slice(0, index + 1).join(""));
 
+// A shape with anything at the field's place, such as the same field with another type, does not lack it.
+const lacks = (shape: RecordedShape, path: ShapePath) => {
+  const place = placeOf(path);
+  return !shape.paths.some((own) => pathPrefixes(own).includes(place));
+};
+
 // A path below a container the fixtures hold only as empty or null, or the same field with another type, fills what the fixtures left unfilled.
 const heldEmpty = (path: ShapePath, fixturePaths: ReadonlySet<ShapePath>) =>
-  locationsOf(path).some((prefix) =>
+  pathPrefixes(path).some((prefix) =>
     EMPTY_LEAVES.some((leaf) => fixturePaths.has(`${prefix}${leaf}`)),
   );
 
 const EMPTY_LEAVES = [":null", ":array", ":object"];
 
-const unique = (shapes: readonly RecordedShape[]) => {
-  const byKey = new Map<string, RecordedShape>();
-  for (const shape of shapes)
-    byKey.set(`${groupOf(shape)} ${shapeKey(shape.paths)}`, shape);
-  return [...byKey.values()];
-};
+const shapeId = (shape: RecordedShape) =>
+  `${groupOf(shape)} ${shapeKey(shape.paths)}`;
 
-// Each shape a report lists becomes a fixture line with placeholder values and an id of its own; a response is preceded by the request it answers, so the observer pairs them as in a session.
-export const fixtureFromReport = (report: string) => {
-  const records: { direction: string; message: unknown }[] = [];
-  let id = FIXTURE_ID_BASE;
-  for (const line of report.split("\n")) {
-    const shape = readShapeLine(line.trim());
-    if (shape === null) continue;
-    const built = messageOfShape(shape.paths);
-    // A method with more separators than a shape keeps as a word is rebuilt from the method the shape line names.
-    const message =
-      isObject(built) &&
-      shape.method !== null &&
-      (shape.kind === "request" || shape.kind === "notification")
-        ? { ...built, method: shape.method }
-        : built;
-    if (
-      (shape.kind === "response" || shape.kind === "error_response") &&
-      isObject(message)
-    ) {
-      id += 1;
-      records.push({
-        direction:
-          shape.direction === "server_to_app"
-            ? "app_to_server"
-            : "server_to_app",
-        message: { id, method: shape.method ?? "unknown", params: {} },
-      });
-      records.push({ direction: shape.direction, message: { ...message, id } });
-    } else if (shape.kind === "request" && isObject(message)) {
-      id += 1;
-      records.push({ direction: shape.direction, message: { ...message, id } });
-    } else {
-      records.push({ direction: shape.direction, message });
-    }
-  }
-  return records.map((record) => `${JSON.stringify(record)}\n`).join("");
-};
-
-const readShapeLine = (line: string): RecordedShape | null => {
-  if (!line.startsWith("{")) return null;
-  const parsed = parseJson(line);
-  if (parsed.isErr() || !isObject(parsed.value)) return null;
-  const { direction, kind, method, paths } = parsed.value;
-  if (direction !== "app_to_server" && direction !== "server_to_app")
-    return null;
-  if (typeof kind !== "string" || !Array.isArray(paths)) return null;
-  return {
-    direction,
-    kind,
-    method: typeof method === "string" && METHOD.test(method) ? method : null,
-    paths: paths.filter(
-      (path): path is string => typeof path === "string" && isShapePath(path),
-    ),
-  };
-};
-
-const FIXTURE_ID_BASE = 9000;
-const METHOD = /^[a-zA-Z][a-zA-Z0-9/_]{0,120}$/;
+const unique = (shapes: readonly RecordedShape[]) => [
+  ...new Map(shapes.map((shape) => [shapeId(shape), shape])).values(),
+];

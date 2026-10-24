@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isShapePath, messageOfShape, shapeKey, shapeOf } from "./shape.ts";
+import { isShapePath, shapeKey, shapeOf } from "./shape.ts";
 
 describe("shapeOf", () => {
   test("names each field's path and type and keeps discriminator words", () => {
@@ -89,6 +89,16 @@ describe("shapeOf", () => {
       expected: ["edits[].value:object"],
     },
     {
+      name: "a word in an environment map entry",
+      value: { params: { env: { role: "secretAlphabeticValue" } } },
+      expected: ["params.env.<key>:string"],
+    },
+    {
+      name: "a status word outside the places the protocol puts one",
+      value: { params: { note: { status: "secretAlphabeticValue" } } },
+      expected: ["params.note.status:string"],
+    },
+    {
       name: "configuration contents",
       value: { config: { model_providers: { acme_azure: { base_url: "u" } } } },
       expected: ["config:object"],
@@ -98,7 +108,7 @@ describe("shapeOf", () => {
 
     expect(shape).toEqual([...expected]);
     expect(shape.join(" ")).not.toMatch(
-      /someone|acme|ACME|sk-?123|bobJones|fire/i,
+      /someone|acme|sk-?123|bobJones|fire|confidential|secret/i,
     );
   });
 
@@ -151,32 +161,12 @@ describe("shapeKey", () => {
   });
 });
 
-describe("messageOfShape input", () => {
-  test("never writes through __proto__ or constructor", () => {
-    messageOfShape([
-      "__proto__.polluted:string",
-      "constructor.prototype.polluted:string",
-      "a.__proto__.polluted:string",
-    ]);
-
-    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-  });
-
-  test("keeps every type variant of an array element field", () => {
-    const shape = ["a[].b:number", "a[].b:string", "item.type:string"];
-
-    expect(shapeOf(messageOfShape(shape))).toEqual(shape);
-  });
-});
-
-describe("messageOfShape", () => {
+describe("shapeOf fixtures", () => {
   test.each(
     readdirSync(FIXTURES)
       .filter((name) => name.endsWith(".jsonl"))
       .map((name) => ({ name })),
-  )("rebuilds a message with every shape of $name, none naming its secret", ({
-    name,
-  }) => {
+  )("shapes every message of $name without its secret", ({ name }) => {
     const messages = readFileSync(join(FIXTURES, name), "utf8")
       .split("\n")
       .filter((line) => line.trim() !== "")
@@ -184,7 +174,8 @@ describe("messageOfShape", () => {
 
     for (const message of messages) {
       const shape = shapeOf(message);
-      expect(shapeOf(messageOfShape(shape))).toEqual(shape);
+      expect(shape.length).toBeGreaterThan(0);
+      expect(shape.every(isShapePath)).toBe(true);
       expect(shape.join("\n")).not.toContain("sk-fixture-secret");
     }
   });

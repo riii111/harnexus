@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   diffShapes,
-  fixtureFromReport,
   fixtureShapes,
   formatProtocol,
   type RecordedShape,
@@ -58,6 +57,7 @@ describe("diffShapes", () => {
       changed: [
         {
           method: "app_to_server request turn/start (no type)",
+          recorded: 2,
           added: ["params.mode:string"],
           filled: [],
           missing: [],
@@ -94,10 +94,50 @@ describe("diffShapes", () => {
     expect(diff.changed).toEqual([
       {
         method: "app_to_server request turn/started (no type)",
+        recorded: 1,
         added: [],
         filled: [],
-        missing: ["params.turn.rootTurnId:string"],
+        missing: [{ path: "params.turn.rootTurnId:string", lackedBy: 1 }],
       },
+    ]);
+  });
+
+  test("names a field one recorded shape lacks even when another has it", () => {
+    const diff = diffShapes(
+      [
+        shape("turn/started", [
+          "params.threadId:string",
+          "params.turn.id:string",
+        ]),
+        shape("turn/started", ["params.turn.id:string"]),
+      ],
+      [
+        shape("turn/started", [
+          "params.threadId:string",
+          "params.turn.id:string",
+        ]),
+      ],
+    );
+
+    expect(diff.changed[0]?.missing).toEqual([
+      { path: "params.threadId:string", lackedBy: 1 },
+    ]);
+    expect(formatProtocol(diff, 10_000).join("\n")).toContain(
+      "missing params.threadId:string (in 1 of 2 recorded shapes)",
+    );
+  });
+
+  test("lists a changed shape even when another method's fixture has the same paths", () => {
+    const diff = diffShapes(
+      [shape("turn/start", ["id:number", "params.mode:string"])],
+      [
+        shape("turn/start", ["id:number"]),
+        shape("thread/start", ["id:number", "params.mode:string"]),
+      ],
+    );
+
+    expect(diff.unseen).toEqual([
+      shape("turn/start", ["id:number", "params.mode:string"]),
     ]);
   });
 
@@ -199,6 +239,7 @@ describe("formatProtocol", () => {
         methods: 400,
         changed: Array.from({ length: 50 }, (_, index) => ({
           method: `app_to_server request m${index}`,
+          recorded: 1,
           added: many,
           filled: [],
           missing: [],
@@ -213,75 +254,6 @@ describe("formatProtocol", () => {
     expect(lines.join("\n").length).toBeLessThanOrEqual(2100);
     expect(lines[1]).toContain("and 480 more");
     expect(lines.at(-1)).toMatch(/^\d+ more lines left out to fit an issue$/);
-  });
-});
-
-describe("fixtureFromReport", () => {
-  test("turns the shapes a report lists into fixture lines the observer shapes the same way", () => {
-    const notification = {
-      direction: "server_to_app",
-      kind: "notification",
-      method: "item/started",
-      paths: [
-        "method=item/started",
-        "params.item.type=newThing",
-        "params.x:number",
-      ],
-    };
-    const response = {
-      direction: "server_to_app",
-      kind: "response",
-      method: "thread/start",
-      paths: ["id:number", "result.thread.id:string"],
-    };
-    const report = `== Protocol ==\nsome text\n${JSON.stringify(notification)}\n${JSON.stringify(response)}\n{not json\n`;
-
-    const fixture = fixtureFromReport(report)
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-
-    expect(fixture).toHaveLength(3);
-    expect(fixture.map(({ message }) => message.id)).toEqual([
-      undefined,
-      9001,
-      9001,
-    ]);
-    expect(
-      fixtureShapes(fixture).filter(
-        ({ direction }) => direction === "server_to_app",
-      ),
-    ).toEqual([notification, response]);
-  });
-});
-
-describe("fixtureFromReport input", () => {
-  test("keeps a long method and skips paths that are not shape paths", () => {
-    const line = JSON.stringify({
-      direction: "server_to_app",
-      kind: "notification",
-      method: "codex/event/exec_command_output_delta/x/y/z",
-      paths: [
-        "method:string",
-        "params.chunk:string",
-        "/Users/someone/file:string",
-        "__proto__.polluted:string",
-      ],
-    });
-
-    const [record] = fixtureFromReport(line)
-      .trim()
-      .split("\n")
-      .map((text) => JSON.parse(text));
-
-    expect(record).toEqual({
-      direction: "server_to_app",
-      message: {
-        method: "codex/event/exec_command_output_delta/x/y/z",
-        params: { chunk: "x" },
-      },
-    });
-    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 });
 

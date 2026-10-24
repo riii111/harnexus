@@ -4,8 +4,11 @@ import { loadLogPath, loadStatePath } from "../runtime/config.ts";
 import {
   listFilesDeepIfExists,
   readFileSlice,
+  readTextFileIfExists,
   statFileIfExists,
 } from "../runtime/fs.boundary.ts";
+import { parseJson } from "../runtime/json.boundary.ts";
+import { isObject } from "../runtime/object.ts";
 import { readCommandOutput, runCommand } from "../runtime/process.boundary.ts";
 import { bridgeSettings, SDK_PACKAGE } from "./bridge-identity.ts";
 import {

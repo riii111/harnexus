@@ -70,10 +70,15 @@ const walk = (
   paths.add(`${at}:${typeName(value)}`);
 };
 
-const isDiscriminator = (at: string, key: string, value: string) =>
-  at === "" && key === "method"
-    ? METHOD_WORD.test(value)
-    : DISCRIMINATORS.has(key) && PLAIN_WORD.test(value);
+// A word under type, kind, status or role elsewhere, such as in a map entry or a user's own object, may be the user's value, so only these places keep it.
+const isDiscriminator = (at: string, key: string, value: string) => {
+  if (at === "" && key === "method") return METHOD_WORD.test(value);
+  if (!PLAIN_WORD.test(value)) return false;
+  const place = `${at}.${key}`
+    .replaceAll("[]", "")
+    .replace(/^(?:params|result|error)\./, "");
+  return DISCRIMINATOR_PLACES.has(place);
+};
 
 const typeName = (value: unknown) => {
   if (value === null) return "null";
@@ -92,85 +97,12 @@ const typeName = (value: unknown) => {
   }
 };
 
-// One shape stands for every message with the same paths, so a bridge records it once.
 export const shapeKey = (paths: readonly ShapePath[]) =>
   Bun.hash(paths.join("\n")).toString(16).padStart(16, "0");
 
-// Only a path the walk could have written passes, so a log edited by hand or a pasted report cannot carry text, a file path or an odd key through it.
+// Only a path the walk could have written passes, so a log edited by hand cannot carry text, a file path or an odd key through it.
 export const isShapePath = (path: string) =>
   path.length <= MAX_PATH_CHARS && SHAPE_PATH.test(path);
-
-// Builds a message with placeholder values that has the given shape, so a shape from a report can be replayed in a test; each array element variant gets an element of its own.
-// The input may come from a pasted report, so only shape paths are read, and their field names cannot reach an object's prototype.
-export const messageOfShape = (paths: readonly ShapePath[]): unknown => {
-  let message: unknown;
-  for (const path of paths) {
-    if (!isShapePath(path)) continue;
-    const matched = /^(.*?)(?::([a-z]+)|=(.+))$/.exec(path);
-    if (matched === null) continue;
-    const [, at = "", type = "", word] = matched;
-    const steps = at === "" ? [] : stepsOf(at);
-    const leaf = word ?? placeholder(type, steps.at(-1) ?? "");
-    message = assign(message, steps, leaf);
-  }
-  return message ?? {};
-};
-
-const assign = (
-  current: unknown,
-  steps: readonly string[],
-  leaf: unknown,
-): unknown => {
-  const [step, ...rest] = steps;
-  if (step === undefined) return current === undefined ? leaf : current;
-  if (step === "[]") {
-    const list: unknown[] = Array.isArray(current) ? current : [];
-    const index = list.findIndex((item) => canHold(item, rest, leaf));
-    const at = index === -1 ? list.length : index;
-    list[at] = assign(list[at], rest, leaf);
-    return list;
-  }
-  const record: Record<string, unknown> = isRecord(current) ? current : {};
-  record[step] = assign(record[step], rest, leaf);
-  return record;
-};
-
-// An element already holding another value or type at the path cannot take it, so the variant goes to a new element.
-const canHold = (
-  item: unknown,
-  steps: readonly string[],
-  leaf: unknown,
-): boolean => {
-  if (item === undefined) return true;
-  const [step, ...rest] = steps;
-  if (step === undefined) return item === leaf;
-  if (step === "[]") return Array.isArray(item);
-  return isRecord(item) && canHold(item[step], rest, leaf);
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-const stepsOf = (at: string) =>
-  at.split(/(\[\])|\./).filter((step) => step !== undefined && step !== "");
-
-// A discriminator's string placeholder is not a plain word, so the rebuilt message shapes back to the same path.
-const placeholder = (type: string, key: string): unknown => {
-  switch (type) {
-    case "string":
-      return DISCRIMINATORS.has(key) ? "X X" : "x";
-    case "number":
-      return 0;
-    case "boolean":
-      return false;
-    case "array":
-      return [];
-    case "object":
-      return {};
-    default:
-      return null;
-  }
-};
 
 // The protocol names fields in camelCase, with a few in snake_case.
 const FIELD_NAME = /^[a-z][a-zA-Z0-9]{0,40}(?:_[a-z0-9]{1,20}){0,4}$/;
@@ -181,7 +113,34 @@ const FIELD_PATH = String.raw`${SEGMENT}(?:\[\])*(?:\.${SEGMENT}(?:\[\])*)*`;
 const SHAPE_PATH = new RegExp(
   `^(?:method=${METHOD_WORD.source.slice(1, -1)}|(?:${FIELD_PATH})?:(?:string|number|boolean|null|array|object|deeper|unknown)|${FIELD_PATH}=${PLAIN_WORD.source.slice(1, -1)})$`,
 );
-const DISCRIMINATORS = new Set(["type", "kind", "status", "role"]);
+// The places the protocol puts a type or status word, below params, result or error, with array steps left out.
+const DISCRIMINATOR_PLACES = new Set([
+  "kind",
+  "status",
+  "status.type",
+  "type",
+  "msg.type",
+  "input.type",
+  "dynamicTools.type",
+  "commandActions.type",
+  "contentItems.type",
+  "sandbox.type",
+  "item.type",
+  "item.status",
+  "item.role",
+  "item.content.type",
+  "item.contentItems.type",
+  "item.commandActions.type",
+  "item.changes.kind.type",
+  "turn.status",
+  "turn.items.type",
+  "thread.status.type",
+  "thread.turns.status",
+  "thread.turns.items.type",
+  "turns.status",
+  "turns.items.type",
+  "data.status.type",
+]);
 // Objects under these fields are keyed by names the user picks, such as MCP servers, environment variables, headers and tool parameters.
 const MAP_FIELDS = new Set([
   "env",

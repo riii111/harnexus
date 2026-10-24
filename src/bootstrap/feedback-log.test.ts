@@ -338,6 +338,31 @@ describe("selectLog shapes of a reused pid", () => {
   });
 });
 
+describe("selectLog shapes of an ended bridge", () => {
+  test("keeps the shapes and startup lines of a bridge whose only lines in the window are relayed messages", () => {
+    const parsed = parseLog(
+      lines(
+        at("08:00", 5, { event: "bridge_started", commit: "0123456789ab" }),
+        at("09:10", 5, { event: "rpc_message", method: "turn/start" }),
+        at("09:10", 5, {
+          event: "rpc_shape",
+          direction: "app_to_server",
+          kind: "request",
+          method: "turn/start",
+          shape: "0123456789abcdef",
+          paths: ["id:number"],
+        }),
+        at("10:30", 5, { event: "server_closed" }),
+      ),
+    );
+
+    const selection = selectLog(parsed.lines, WINDOW);
+
+    expect(selection.context.map(eventOf)).toEqual(["bridge_started 5"]);
+    expect(selection.shapes.map(({ paths }) => paths)).toEqual([["id:number"]]);
+  });
+});
+
 describe("loggedStarts", () => {
   test("keeps each bridge's last start and the Codex CLI it met", () => {
     const parsed = parseLog(
