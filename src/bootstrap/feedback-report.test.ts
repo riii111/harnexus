@@ -147,7 +147,9 @@ describe("formatFeedback", () => {
     const report = formatFeedback(
       facts({
         bridges: { mine: [{ pid: 7, startedAtMs: NOW - 60_000 }], others: 0 },
-        loggedStarts: [{ pid: 7, commit: "0000000000aa", sdk: "0.3.304" }],
+        loggedStarts: [
+          { pid: 7, commit: "0000000000aa", sdk: "0.3.304", codex: null },
+        ],
       }),
     );
 
@@ -159,7 +161,9 @@ describe("formatFeedback", () => {
       facts({
         codeChangedAtMs: NOW - 7_200_000,
         bridges: { mine: [{ pid: 7, startedAtMs: NOW - 60_000 }], others: 1 },
-        loggedStarts: [{ pid: 7, commit: COMMIT.slice(0, 12), sdk: "0.3.304" }],
+        loggedStarts: [
+          { pid: 7, commit: COMMIT.slice(0, 12), sdk: "0.3.304", codex: null },
+        ],
       }),
     );
 
@@ -200,15 +204,59 @@ describe("formatFeedback", () => {
     const report = formatFeedback({
       ...base,
       setup: { ...base.setup, otherCheckout: true },
-      app: { startedAtMs: NOW - 3_600_000, updatedAtMs: NOW - 60_000 },
+      app: {
+        startedAtMs: NOW - 3_600_000,
+        installedCodex: "0.164.0",
+        runningCodex: ["0.163.0-alpha.10.2"],
+      },
     });
 
     expect(report).toContain(
       "warn Checkout: the app was set up from another harnexus checkout",
     );
     expect(report).toContain(
-      "warn App process: running since 2026-10-24T09:00:00Z; updated at 2026-10-24T09:59:00Z while running",
+      "warn App process: running since 2026-10-24T09:00:00Z; its bridges met Codex CLI 0.163.0-alpha.10.2 while 0.164.0 is installed",
     );
+  });
+
+  test("tells an unread launchd from one with nothing registered", () => {
+    const base = facts({});
+    const unread = formatFeedback({
+      ...base,
+      setup: { ...base.setup, launchd: "unreadable" },
+    });
+    const none = formatFeedback({
+      ...base,
+      setup: { ...base.setup, launchd: "none" },
+    });
+
+    expect(unread).toContain("launchd could not be read");
+    expect(none).toContain("nothing registered with launchd");
+  });
+
+  test("does not take a commit on HEAD for older code when the bridge logged the same commit", () => {
+    const report = formatFeedback(
+      facts({
+        head: { commit: COMMIT, branch: "main", movedAtMs: NOW - 1000 },
+        bridges: { mine: [{ pid: 7, startedAtMs: NOW - 60_000 }], others: 0 },
+        loggedStarts: [
+          { pid: 7, commit: COMMIT.slice(0, 12), sdk: "0.3.304", codex: null },
+        ],
+      }),
+    );
+
+    expect(report).toContain("ok   Running bridges");
+  });
+
+  test("takes HEAD's move after a bridge that logged no start for older code", () => {
+    const report = formatFeedback(
+      facts({
+        head: { commit: COMMIT, branch: "main", movedAtMs: NOW - 1000 },
+        bridges: { mine: [{ pid: 7, startedAtMs: NOW - 60_000 }], others: 0 },
+      }),
+    );
+
+    expect(report).toContain("warn Running bridges");
   });
 
   test("tells a log that starts after the window from one read only in part", () => {
@@ -273,7 +321,7 @@ const facts = (overrides: Partial<FeedbackFacts>): FeedbackFacts => ({
   bridges: { mine: [], others: 0 },
   loggedStarts: [],
   setup: {
-    source: "launchd",
+    launchd: "registered",
     otherCheckout: false,
     settings: {
       permissionMode: "auto",
@@ -285,7 +333,7 @@ const facts = (overrides: Partial<FeedbackFacts>): FeedbackFacts => ({
     bun: { path: "/Users/me/.bun/bin/bun", version: "1.4.4" },
     pinnedBun: "1.4.4",
   },
-  app: { startedAtMs: null, updatedAtMs: null },
+  app: { startedAtMs: null, installedCodex: null, runningCodex: [] },
   doctor: [],
   log: { state: "off" },
   ...overrides,

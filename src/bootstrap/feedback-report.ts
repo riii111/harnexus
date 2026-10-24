@@ -178,18 +178,22 @@ export type FeedbackFacts = {
   current: { sdk: string | null; claudeCode: string | null };
   changes: GitChanges | null;
   dependencies: readonly DependencyState[];
-  // The newest of HEAD's last move and the times of the code and packages a bridge loads at start.
+  // The newest time of the code, packages and launcher a bridge loads at start, tests left out.
   codeChangedAtMs: number | null;
   bridges: { mine: readonly RunningBridge[]; others: number };
   loggedStarts: readonly LoggedStart[];
   setup: {
-    source: "launchd" | "shell";
+    launchd: "registered" | "none" | "unreadable";
     otherCheckout: boolean;
     settings: BridgeSettings;
     bun: { path: string; version: string | null } | null;
     pinnedBun: string | null;
   };
-  app: { startedAtMs: number | null; updatedAtMs: number | null };
+  app: {
+    startedAtMs: number | null;
+    installedCodex: string | null;
+    runningCodex: readonly string[];
+  };
   doctor: readonly Check[];
   log: LogFacts;
 };
@@ -249,7 +253,7 @@ const changesCheck = (changes: GitChanges | null): Check => {
     return {
       status: "warn",
       name: "Local changes",
-      detail: "unknown; git is not available",
+      detail: "unknown; git status did not run",
     };
   const parts = [
     changes.code.length > 0 ? `changed ${changes.code.join(", ")}` : null,
@@ -298,6 +302,7 @@ const bridgeChecks = (facts: FeedbackFacts): Check[] => {
   const started = new Map(
     facts.loggedStarts.map((start) => [start.pid, start]),
   );
+  // The commit and SDK a bridge logged at start are compared first; file times also catch an edit or install not committed, and HEAD's move stands in for the commit of a bridge that logged none.
   const isStale = ({ pid, startedAtMs }: RunningBridge) => {
     const logged = started.get(pid);
     const current = facts.head?.commit ?? null;
@@ -309,10 +314,13 @@ const bridgeChecks = (facts: FeedbackFacts): Check[] => {
         logged.sdk !== facts.current.sdk)
     )
       return true;
+    const changed = [
+      facts.codeChangedAtMs,
+      logged === undefined ? (facts.head?.movedAtMs ?? null) : null,
+    ];
     return (
       startedAtMs !== null &&
-      facts.codeChangedAtMs !== null &&
-      startedAtMs < facts.codeChangedAtMs
+      changed.some((time) => time !== null && startedAtMs < time)
     );
   };
   const stale = mine.filter(isStale);
@@ -341,20 +349,7 @@ const bridgeChecks = (facts: FeedbackFacts): Check[] => {
 
 const setupChecks = (facts: FeedbackFacts): Check[] => {
   const { setup, app, platform } = facts;
-  const checks: Check[] = [
-    setup.source === "launchd"
-      ? {
-          status: "ok",
-          name: "Setup source",
-          detail: "the environment bun run open-app registered for the app",
-        }
-      : {
-          status: "warn",
-          name: "Setup source",
-          detail:
-            "nothing registered with launchd, so this shell's environment is shown; run bun run open-app",
-        },
-  ];
+  const checks: Check[] = [SETUP_SOURCE[setup.launchd]];
   if (setup.otherCheckout)
     checks.push({
       status: "warn",
@@ -370,17 +365,17 @@ const setupChecks = (facts: FeedbackFacts): Check[] => {
       .join(" "),
   });
   if (setup.bun !== null) checks.push(appBunCheck(setup.bun, setup.pinnedBun));
-  const updatedWhileRunning =
-    app.startedAtMs !== null &&
-    app.updatedAtMs !== null &&
-    app.updatedAtMs > app.startedAtMs;
+  // The app keeps the Codex CLI it started with, so a running bridge that met another version than the one installed means the app was updated while it ran.
+  const older = app.runningCodex.filter(
+    (version) => app.installedCodex !== null && version !== app.installedCodex,
+  );
   checks.push({
-    status: updatedWhileRunning ? "warn" : "ok",
+    status: older.length > 0 ? "warn" : "ok",
     name: "App process",
     detail:
       app.startedAtMs === null
         ? "not running"
-        : `running since ${iso(app.startedAtMs)}${updatedWhileRunning && app.updatedAtMs !== null ? `; updated at ${iso(app.updatedAtMs)} while running, so quit and reopen it` : ""}`,
+        : `running since ${iso(app.startedAtMs)}${older.length > 0 ? `; its bridges met Codex CLI ${older.join(", ")} while ${app.installedCodex} is installed, so the app was updated while running; quit and reopen it` : ""}`,
   });
   checks.push({
     status: platform.macos === null ? "warn" : "ok",
@@ -388,6 +383,26 @@ const setupChecks = (facts: FeedbackFacts): Check[] => {
     detail: `${platform.macos === null ? "not macOS" : `macOS ${platform.macos}`} on ${platform.arch}`,
   });
   return checks;
+};
+
+const SETUP_SOURCE: Record<FeedbackFacts["setup"]["launchd"], Check> = {
+  registered: {
+    status: "ok",
+    name: "Setup source",
+    detail: "the environment bun run open-app registered for the app",
+  },
+  none: {
+    status: "warn",
+    name: "Setup source",
+    detail:
+      "nothing registered with launchd, so this shell's environment is shown; run bun run open-app",
+  },
+  unreadable: {
+    status: "warn",
+    name: "Setup source",
+    detail:
+      "launchd could not be read, so this shell's environment is shown and the paths may not be the app's",
+  },
 };
 
 const appBunCheck = (

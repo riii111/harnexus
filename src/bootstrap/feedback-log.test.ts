@@ -158,6 +158,30 @@ describe("selectLog", () => {
     expect(selection.context.map(eventOf)).toEqual(["bridge_started 7"]);
   });
 
+  test("keeps the newest startup lines within their share of the budget", () => {
+    const parsed = parseLog(
+      lines(
+        ...Array.from({ length: 100 }, (_, index) =>
+          at(`08:${String(index % 60).padStart(2, "0")}`, index, {
+            event: "bridge_started",
+            commit: "0123456789ab",
+          }),
+        ),
+        ...Array.from({ length: 100 }, (_, index) =>
+          at("09:30", index, { event: "claude_turn", step: "refused" }),
+        ),
+      ),
+    );
+
+    const selection = selectLog(parsed.lines, { ...WINDOW, budget: 3000 });
+
+    expect(selection.context.join("\n").length).toBeLessThanOrEqual(900);
+    expect(selection.window.length).toBeGreaterThan(0);
+    expect(
+      [...selection.context, ...selection.window].join("\n").length,
+    ).toBeLessThanOrEqual(3000);
+  });
+
   test("counts relayed messages by method instead of printing them", () => {
     const parsed = parseLog(
       lines(
@@ -230,7 +254,7 @@ describe("selectLog", () => {
 });
 
 describe("loggedStarts", () => {
-  test("keeps each bridge's last start", () => {
+  test("keeps each bridge's last start and the Codex CLI it met", () => {
     const parsed = parseLog(
       lines(
         at("08:00", 1, { event: "bridge_started", commit: "aaaaaaaaaaaa" }),
@@ -239,12 +263,13 @@ describe("loggedStarts", () => {
           commit: "bbbbbbbbbbbb",
           sdk: "0.3.304",
         }),
+        at("08:31", 1, { event: "codex_version", version: "0.130.0" }),
         at("08:40", null, { event: "bridge_started", commit: "cccccccccccc" }),
       ),
     );
 
     expect(loggedStarts(parsed.lines)).toEqual([
-      { pid: 1, commit: "bbbbbbbbbbbb", sdk: "0.3.304" },
+      { pid: 1, commit: "bbbbbbbbbbbb", sdk: "0.3.304", codex: "0.130.0" },
     ]);
   });
 });

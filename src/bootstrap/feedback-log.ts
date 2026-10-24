@@ -134,21 +134,24 @@ export const selectLog = (
     if (line.timeMs >= sinceMs || !STARTUP_EVENTS.has(line.event)) continue;
     if (pids.has(line.pid)) latest.set(`${line.pid}:${line.event}`, line);
   }
-  const context = collapse(
+  const startup = collapse(
     [...latest.values()].sort((a, b) => a.timeMs - b.timeMs),
   );
+  // Many bridges over a long window could fill the report with startup lines alone, so they get a share and the newest are kept.
+  const context = keepWithin(startup, Math.floor(budget * CONTEXT_SHARE));
   const rows = collapse(inWindow);
-  const room = Math.max(0, budget - size(context));
-  const kept = keepWithin(rows, room);
+  const kept = keepWithin(rows, Math.max(0, budget - size(context)));
   return {
     context: context.map(({ text }) => text),
     window: kept.map(({ text }) => text),
-    omitted: rows.length - kept.length,
+    omitted: rows.length - kept.length + startup.length - context.length,
     messages,
   };
 };
 
 type Row = { line: LogLine; text: string };
+
+const CONTEXT_SHARE = 0.3;
 
 // Repeats of one line from one bridge, such as a refusal on every retry, print once with their count.
 const collapse = (lines: readonly LogLine[]): Row[] => {
@@ -198,18 +201,25 @@ export type LoggedStart = {
   pid: number;
   commit: string | null;
   sdk: string | null;
+  codex: string | null;
 };
 
-// The last start line of each bridge names the commit and SDK it loaded.
+// The last start line of each bridge names the commit and SDK it loaded, and the Codex CLI version it met follows it.
 export const loggedStarts = (lines: readonly LogLine[]): LoggedStart[] => {
   const starts = new Map<number, LoggedStart>();
   for (const line of lines) {
-    if (line.event !== "bridge_started" || line.pid === null) continue;
-    starts.set(line.pid, {
-      pid: line.pid,
-      commit: stringOrNull(line.fields.commit),
-      sdk: stringOrNull(line.fields.sdk),
-    });
+    if (line.pid === null) continue;
+    if (line.event === "bridge_started") {
+      starts.set(line.pid, {
+        pid: line.pid,
+        commit: stringOrNull(line.fields.commit),
+        sdk: stringOrNull(line.fields.sdk),
+        codex: null,
+      });
+    } else if (line.event === "codex_version") {
+      const start = starts.get(line.pid);
+      if (start !== undefined) start.codex = stringOrNull(line.fields.version);
+    }
   }
   return [...starts.values()];
 };

@@ -18,6 +18,7 @@ import {
 } from "./checkout.ts";
 import {
   CODEX_IN_APP,
+  DEFAULT_APP,
   type DoctorSetup,
   doctorChecks,
   shellSetup,
@@ -53,6 +54,13 @@ const NEW_ISSUE =
 const LOG_BUDGET_CHARS = 36_000;
 const LOG_READ_LIMIT_BYTES = 32 * 1024 * 1024;
 const LOG_CHUNK_BYTES = 1024 * 1024;
+const PUBLIC_ROOTS = [
+  "/opt/homebrew/",
+  "/usr/local/",
+  "/usr/bin/",
+  "/bin/",
+  "/nix/store/",
+];
 
 const now = Date.now();
 const args = readArgs(process.argv.slice(2));
@@ -80,7 +88,7 @@ process.stderr.write(
   "Collecting the report; asking Claude Code about the login can take up to half a minute.\n",
 );
 
-const setup = await appSetup();
+const { setup, launchd } = await appSetup();
 const processes = await readCommandOutput("/bin/ps", [
   "-axo",
   "pid=,ppid=,etime=,command=",
@@ -94,7 +102,7 @@ const [
   dependencies,
   changes,
   macos,
-  appUpdatedAt,
+  installedCodex,
   bun,
   codeChangedAt,
   log,
@@ -109,8 +117,11 @@ const [
         read.isOk() ? read.value.trim() : null,
       )
     : null,
-  statFileIfExists(join(setup.app, "Contents", "Info.plist")).then((found) =>
-    found.isOk() && found.value !== null ? found.value.modifiedMs : null,
+  readCommandOutput(
+    setup.env.HARNEXUS_CODEX_PATH || join(setup.app, CODEX_IN_APP),
+    ["--version"],
+  ).then((read) =>
+    read.isOk() ? versionOf(/(\d+\.\d+\.\d+\S*)/.exec(read.value)?.[1]) : null,
   ),
   registeredBun(),
   newestCodeChange(),
@@ -130,11 +141,11 @@ const facts: FeedbackFacts = {
   current: { sdk: sdk.version, claudeCode: sdk.claudeCodeVersion },
   changes,
   dependencies,
-  codeChangedAtMs: maxOf([head?.movedAtMs ?? null, codeChangedAt]),
+  codeChangedAtMs: codeChangedAt,
   bridges,
   loggedStarts: log.starts.filter(({ pid }) => running.has(pid)),
   setup: {
-    source: setup.source,
+    launchd,
     otherCheckout:
       setup.source === "launchd" &&
       setup.env.CODEX_CLI_PATH !== undefined &&
@@ -145,7 +156,15 @@ const facts: FeedbackFacts = {
   },
   app: {
     startedAtMs: appStartedAt(processes, setup.app, now),
-    updatedAtMs: appUpdatedAt,
+    installedCodex,
+    runningCodex: [
+      ...new Set(
+        log.starts
+          .filter(({ pid }) => running.has(pid))
+          .map(({ codex }) => codex)
+          .filter((version) => version !== null),
+      ),
+    ],
   },
   doctor,
   log: log.facts,
@@ -181,18 +200,24 @@ function readArgs(argv: readonly string[]) {
 }
 
 // The app runs with what open-app registered with launchd, and a variable launchd lacks takes its default there rather than this shell's value.
-async function appSetup(): Promise<DoctorSetup> {
+async function appSetup(): Promise<{
+  setup: DoctorSetup;
+  launchd: "registered" | "none" | "unreadable";
+}> {
   const shell = shellSetup();
   const launchd = await readLaunchd();
-  if (launchd.isErr() || Object.keys(launchd.value.env).length === 0)
-    return shell;
+  if (launchd.isErr()) return { setup: shell, launchd: "unreadable" };
   const env = launchd.value.env;
+  if (Object.keys(env).length === 0) return { setup: shell, launchd: "none" };
   const codex = env.HARNEXUS_CODEX_PATH;
   const suffix = `/${CODEX_IN_APP}`;
   return {
-    env,
-    app: codex?.endsWith(suffix) ? codex.slice(0, -suffix.length) : shell.app,
-    source: "launchd",
+    setup: {
+      env,
+      app: codex?.endsWith(suffix) ? codex.slice(0, -suffix.length) : shell.app,
+      source: "launchd",
+    },
+    launchd: "registered",
   };
 }
 
@@ -260,7 +285,12 @@ async function newestCodeChange() {
   const listed = await listFilesDeepIfExists(join(REPO, "src"));
   const sources =
     listed.isOk() && listed.value !== null
-      ? listed.value.filter((path) => path.endsWith(".ts"))
+      ? listed.value.filter(
+          (path) =>
+            path.endsWith(".ts") &&
+            !path.endsWith(".test.ts") &&
+            !path.split("/").includes("testing"),
+        )
       : [];
   for (const path of [
     ...sources.map((source) => join(REPO, "src", source)),
@@ -289,7 +319,7 @@ async function readAppLog(runningPids: ReadonlySet<number>) {
   if (read === null)
     return unreadLog({
       state: "unreadable",
-      reason: `cannot read ${logPath}; the bridge writes it once the app runs with harnexus`,
+      reason: `cannot read ${logPath}; the bridge creates it once the app runs with harnexus`,
     });
   let parsed = parseLog(read.text);
   const started = new Set(loggedStarts(parsed.lines).map(({ pid }) => pid));
@@ -345,9 +375,11 @@ async function readLogFiles(
   const texts: string[] = [];
   let budget = LOG_READ_LIMIT_BYTES;
   let reachedStart = true;
-  for (const file of [logPath, `${logPath}.1`]) {
+  const files = [logPath, `${logPath}.1`];
+  for (const [index, file] of files.entries()) {
     const read = await readBack(file, enough, budget);
     if (read === null) continue;
+    if (read.failed && read.text === "") return null;
     // The file moved aside ends where the current one begins, so its own cut last line is closed off rather than joined to the next.
     texts.unshift(
       texts.length === 0 || read.text.endsWith("\n") || read.text === ""
@@ -356,7 +388,15 @@ async function readLogFiles(
     );
     budget -= read.bytes;
     reachedStart = read.reachedStart;
-    if (!read.reachedStart || enough(read.text) || budget <= 0) break;
+    if (!read.reachedStart || enough(read.text) || budget <= 0) {
+      // Lines left in an older file not read mean the start was not reached.
+      const older = files[index + 1];
+      if (reachedStart && older !== undefined) {
+        const found = await statFileIfExists(older);
+        if (found.isErr() || found.value !== null) reachedStart = false;
+      }
+      break;
+    }
   }
   return texts.length === 0 ? null : { text: texts.join(""), reachedStart };
 }
@@ -376,10 +416,14 @@ async function readBack(
   const size = found.value.size;
   let start = size;
   let text = "";
+  let failed = false;
   while (start > 0 && size - start < limit) {
     const next = Math.max(0, start - LOG_CHUNK_BYTES, size - limit);
     const chunk = await readFileSlice(path, next, start - next);
-    if (chunk.isErr()) break;
+    if (chunk.isErr()) {
+      failed = true;
+      break;
+    }
     text = chunk.value + text;
     start = next;
     if (enough(wholeLines(text, start))) break;
@@ -389,6 +433,7 @@ async function readBack(
     text: whole,
     bytes: size - start,
     reachedStart: start === 0,
+    failed,
   };
 }
 
@@ -403,13 +448,29 @@ function firstTime(text: string) {
   return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
 }
 
+// A path set by hand can sit anywhere, so outside the home folder and the usual install places it prints by role.
 function knownPaths(appSetup: DoctorSetup) {
   const home = homedir();
   const state = loadStatePath(appSetup.env);
+  const log = state.andThen((path) => loadLogPath(appSetup.env, path));
+  const custom = [
+    { path: log.isOk() ? log.value?.path : undefined, name: "<log>" },
+    { path: appSetup.env.HARNEXUS_CODEX_PATH, name: "<codex>" },
+    { path: appSetup.env.HARNEXUS_BUN_PATH, name: "<bun>" },
+    { path: appSetup.env.CODEX_CLI_PATH, name: "<launcher>" },
+  ].filter(
+    (entry): entry is { path: string; name: string } =>
+      entry.path !== undefined &&
+      !entry.path.startsWith(`${home}/`) &&
+      !entry.path.startsWith(`${appSetup.app}/`) &&
+      !entry.path.startsWith(`${REPO}/`) &&
+      !PUBLIC_ROOTS.some((root) => entry.path?.startsWith(root)),
+  );
   return [
     { path: REPO, name: "<checkout>" },
     ...(state.isOk() ? [{ path: dirname(state.value), name: "<state>" }] : []),
-    ...(appSetup.app === "/Applications/ChatGPT.app"
+    ...custom,
+    ...(appSetup.app === DEFAULT_APP
       ? []
       : [{ path: appSetup.app, name: "<app>" }]),
     { path: home, name: "~" },
