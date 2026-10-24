@@ -706,7 +706,7 @@ describe("harnexus-task templates", () => {
       "> ```\n> [q](quoted.md)\n> ```\n\n";
     await writeFile(
       template,
-      `${examples}<!--\n[old](gone.md)\n-->\nWrite \`[text](\` then <rules>\n[$s](linked.md)\n</rules>\n\n    ![i](linked.md)\n`,
+      `${examples}<!--\n- [old](gone.md)\n\n# Old\n[x](gone.md)\n-->\nWrite \`[text](\` then <rules>\n[$s](linked.md)\n</rules>\n\n    ![i](linked.md)\n`,
     );
     await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
       templates: { worker: template },
@@ -716,7 +716,7 @@ describe("harnexus-task templates", () => {
 
     expect([sent.code, sent.err]).toEqual([0, ""]);
     expect(harnexus.calls.at(-1)?.arguments.prompt).toBe(
-      `${examples}<!--\n[old](gone.md)\n-->\nWrite \`[text](\` then <rules>\n[$s](${linked})\n</rules>\n\n    ![i](${linked})\n`,
+      `${examples}<!--\n- [old](gone.md)\n\n# Old\n[x](gone.md)\n-->\nWrite \`[text](\` then <rules>\n[$s](${linked})\n</rules>\n\n    ![i](${linked})\n`,
     );
   });
 

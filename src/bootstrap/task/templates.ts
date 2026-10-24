@@ -67,6 +67,10 @@ const links = (template: string) => {
     last = end;
   }
   marked += template.slice(last);
+  // A comment spanning blocks would be split by the parser, so its text is blanked first, keeping the lines.
+  marked = marked.replace(/<!--[\s\S]*?-->/g, (comment) =>
+    comment.replace(/[^\n]/g, " "),
+  );
   const seen = new Set<string>();
   const see = (children: string, destination: string) => {
     seen.add(destination);
