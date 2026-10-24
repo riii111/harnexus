@@ -100,7 +100,7 @@ const stopServer = {
 };
 const claude = await withClaude({
   ...pipes.value,
-  observer: createObserver(logger.log),
+  observer: createObserver(logger.log, { shapes: "sampled" }),
 });
 if (
   process.argv.includes("--launcher") &&

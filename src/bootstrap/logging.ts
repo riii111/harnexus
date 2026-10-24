@@ -163,6 +163,7 @@ const serializeLogEvent = (entry: LogEvent) => {
       return serializeRouteEvent(entry);
     case "rpc_message":
     case "rpc_unobserved":
+    case "rpc_shape":
       return serializeObservationEvent(entry);
   }
 };
