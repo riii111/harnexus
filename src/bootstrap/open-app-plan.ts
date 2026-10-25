@@ -44,6 +44,7 @@ export const REGISTERED_ENV_NAMES = [
   "HARNEXUS_STATE_PATH",
   "HARNEXUS_UNVERIFIED_CODEX",
   "HARNEXUS_PERMISSION_MODE",
+  "HARNEXUS_CALL_SOCKET",
 ] as const;
 
 // The environment reaches the app only when it starts, so a running app keeps the setup it was opened with.
