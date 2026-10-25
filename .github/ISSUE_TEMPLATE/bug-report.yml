@@ -12,7 +12,7 @@ body:
         ```
 
         The report has no conversation text, code or credentials.
-        It shows versions, model ids, error tags, the start of thread ids, and paths under your home folder as `~`; read it before pasting.
+        It shows versions, model ids, error tags, the start of thread ids, the field names and type and status words of messages between the app and Codex, and paths under your home folder as `~`; read it before pasting.
   - type: textarea
     id: what-happened
     attributes:

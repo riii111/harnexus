@@ -4,8 +4,11 @@ import { loadLogPath, loadStatePath } from "../runtime/config.ts";
 import {
   listFilesDeepIfExists,
   readFileSlice,
+  readTextFileIfExists,
   statFileIfExists,
 } from "../runtime/fs.boundary.ts";
+import { parseJson } from "../runtime/json.boundary.ts";
+import { isObject } from "../runtime/object.ts";
 import { readCommandOutput, runCommand } from "../runtime/process.boundary.ts";
 import { bridgeSettings, SDK_PACKAGE } from "./bridge-identity.ts";
 import {
@@ -28,6 +31,11 @@ import {
   selectLog,
 } from "./feedback-log.ts";
 import {
+  diffShapes,
+  fixtureShapes,
+  type RecordedShape,
+} from "./feedback-protocol.ts";
+import {
   appStartedAt,
   classifyChanges,
   DEFAULT_WINDOW_MS,
@@ -49,7 +57,8 @@ const LAUNCHER = join(REPO, "bin", "harnexus-codex");
 const NEW_ISSUE =
   "https://github.com/riii111/harnexus/issues/new?template=bug-report.yml";
 // GitHub refuses an issue body over 65,536 characters, and the form's other fields need room too.
-const LOG_BUDGET_CHARS = 36_000;
+const LOG_BUDGET_CHARS = 30_000;
+const FIXTURES = join(REPO, "test", "fixtures", "app-server");
 const LOG_READ_LIMIT_BYTES = 32 * 1024 * 1024;
 const LOG_CHUNK_BYTES = 1024 * 1024;
 const PUBLIC_ROOTS = [
@@ -154,6 +163,10 @@ const facts: FeedbackFacts = {
   },
   doctor,
   log: log.facts,
+  protocol:
+    log.facts.state === "read" && log.facts.selection.shapes.length > 0
+      ? diffShapes(log.facts.selection.shapes, await testedShapes())
+      : null,
 };
 
 // A pipe takes a long report in several writes, so the exit waits until all of it is handed over.
@@ -445,6 +458,25 @@ function knownPaths(appSetup: DoctorSetup) {
       : [{ path: appSetup.app, name: "<app>" }]),
     { path: home, name: "~" },
   ];
+}
+
+async function testedShapes(): Promise<RecordedShape[]> {
+  const listed = await listFilesDeepIfExists(FIXTURES);
+  if (listed.isErr() || listed.value === null) return [];
+  const records = [];
+  for (const name of listed.value.filter((path) => path.endsWith(".jsonl"))) {
+    const text = await readTextFileIfExists(join(FIXTURES, name));
+    if (text.isErr() || text.value === null) continue;
+    for (const line of text.value.split("\n")) {
+      const parsed = line.trim() === "" ? null : parseJson(line);
+      if (parsed?.isOk() && isObject(parsed.value)) {
+        const { direction, message } = parsed.value;
+        if (direction === "app_to_server" || direction === "server_to_app")
+          records.push({ direction, message } as const);
+      }
+    }
+  }
+  return fixtureShapes(records);
 }
 
 function maxOf(times: readonly (number | null)[]) {
