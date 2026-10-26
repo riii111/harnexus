@@ -64,6 +64,7 @@ const comment = (fields: Partial<PrComment>): PrComment => ({
   line: 42,
   reply: false,
   resolved: false,
+  approved: false,
   ...fields,
 });
 
@@ -459,6 +460,41 @@ describe("runCycle", () => {
     expect(String(calls.sent[1]?.prompt)).not.toContain("discussion_r1");
   });
 
+  test("sends a person's approvals and follows up only on the one with a body", async () => {
+    const { world, calls, cycle, later } = await fixture();
+    const approval = (id: number, body: string) =>
+      comment({
+        id: `review:${id}`,
+        kind: "review",
+        author: "tanaka",
+        url: `${PR}#pullrequestreview-${id}`,
+        body,
+        path: null,
+        line: null,
+        approved: true,
+      });
+    world.comments = [approval(1, "LGTM, one nit"), approval(2, "")];
+    await cycle();
+
+    expect(calls.sent).toHaveLength(1);
+    const prompt = String(calls.sent[0]?.prompt);
+    expect(prompt).toContain(`PR ${PR} がApproveされました。`);
+    expect(prompt).toContain(
+      `1. [tanaka・Approve] 本文あり ${PR}#pullrequestreview-1`,
+    );
+    expect(prompt).toContain(
+      `2. [tanaka・Approve] 本文なし ${PR}#pullrequestreview-2`,
+    );
+
+    world.turns = [delegatedTurn(NOON, calls.sent[0]?.prompt, "確認しました")];
+    later(1);
+    await cycle();
+
+    expect(calls.sent).toHaveLength(2);
+    expect(String(calls.sent[1]?.prompt)).toContain("pullrequestreview-1");
+    expect(String(calls.sent[1]?.prompt)).not.toContain("pullrequestreview-2");
+  });
+
   test("takes only the turn our message started as its answer", async () => {
     const { world, calls, cycle, later } = await fixture();
     world.comments = [comment({})];
@@ -742,7 +778,8 @@ describe("runCycle", () => {
     await cycle();
 
     expect(String(calls.sent[0]?.prompt)).toContain("CodeRabbitのレビュー完了");
-    expect((await state()).delivered?.findings[0]?.bot).toBe("coderabbit");
+    const delivered = (await state()).delivered?.findings[0];
+    expect([delivered?.bot, delivered?.approval]).toEqual(["coderabbit", null]);
   });
 
   test("waits for and names a review bot the config describes instead of CodeRabbit", async () => {

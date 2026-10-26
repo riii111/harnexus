@@ -138,6 +138,7 @@ const pull = {
         createdAt: "2026-10-23T00:00:00Z",
         body: "",
         author: null,
+        state: "APPROVED",
       },
     ],
   },
@@ -177,13 +178,21 @@ describe("createGitHub", () => {
         comment.line,
         comment.reply,
         comment.resolved,
+        comment.approved,
       ]),
     ).toEqual([
-      ["inline:11", "coderabbitai[bot]", 4, false, true],
-      ["inline:12", "owner", 4, true, true],
-      ["review:21", "ghost", null, false, false],
-      ["issue:31", "coderabbitai[bot]", null, false, false],
+      ["inline:11", "coderabbitai[bot]", 4, false, true, false],
+      ["inline:12", "owner", 4, true, true, false],
+      ["review:21", "ghost", null, false, false, true],
+      ["issue:31", "coderabbitai[bot]", null, false, false, false],
     ]);
+    // An issue comment has no state, so asking for one would fail the whole query.
+    expect(posts[0]?.query).toContain(
+      "reviews(first: 100) { nodes { databaseId url createdAt body author { __typename login } state }",
+    );
+    expect(posts[0]?.query).toContain(
+      "comments(first: 100) { nodes { databaseId url createdAt body author { __typename login } }",
+    );
     expect(detail.failedRequired).toEqual([
       { name: "build", url: "https://ci.example/1" },
       { name: "deploy", url: null },

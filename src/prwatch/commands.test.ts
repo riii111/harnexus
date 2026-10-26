@@ -78,6 +78,7 @@ const detail: PrDetail = {
       line: 3,
       reply: false,
       resolved: false,
+      approved: false,
     },
     {
       id: "issue:2",
@@ -90,6 +91,7 @@ const detail: PrDetail = {
       line: null,
       reply: false,
       resolved: false,
+      approved: false,
     },
   ],
 };

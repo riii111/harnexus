@@ -31,9 +31,17 @@ export const messageOf = (
   }
 
   const reasons = [...new Set(events.map(reasonOf))];
+  const approvals = events.filter(
+    (event) => event.type === "finding" && event.finding.approval !== null,
+  ).length;
+  const lead =
+    approvals === lines.length
+      ? `PR ${pr} がApproveされました。`
+      : `PR ${pr} で対応が必要なことを、PRの監視から知らせます。`;
   return (
-    `${headerOf(instructions)}PR ${pr} で対応が必要なことを、PRの監視から知らせます。\n` +
-    `理由：${reasons.join("・")}\n${mismatch}${GUIDE}\n\n${numbered(lines)}`
+    `${headerOf(instructions)}${lead}\n` +
+    `理由：${reasons.join("・")}\n${mismatch}${GUIDE}\n\n${numbered(lines)}` +
+    (approvals > 0 ? `\n\n${APPROVAL_GUIDE}` : "")
   );
 };
 
@@ -46,8 +54,13 @@ export const followUpOf = (
   "この指摘だけをGitHubで読んで判定し、リンクを添えて報告してください。\n\n" +
   numbered(missing.map((finding) => findingLine(finding)));
 
+// An approval without a body has nothing to judge, so the answer need not link it.
 export const missingFrom = (answer: string, findings: readonly Finding[]) =>
-  findings.filter((finding) => !answer.includes(anchorOf(finding.url)));
+  findings.filter(
+    (finding) =>
+      finding.approval !== "without_body" &&
+      !answer.includes(anchorOf(finding.url)),
+  );
 
 // How to fix and report is the worker's own, so the watch only carries the instructions the config gives it.
 const headerOf = (instructions: string | null) =>
@@ -58,12 +71,19 @@ const GUIDE =
   // The links let the watch tell which findings an answer left out.
   "各項目のリンクを添えて報告してください。";
 
+// An approval is not a request to merge; what follows it is the owner's call.
+const APPROVAL_GUIDE =
+  "本文ありのApproveはGitHubで読み、ほかの指摘と同じ形で判定してください。\n" +
+  "本文なしのApproveは判定不要です。\n" +
+  "Approveはマージの依頼ではありません。マージはownerに頼まれたときだけ行ってください。\n" +
+  "これ以降のpushは、ownerのOKを待ってからにしてください。";
+
 const reasonOf = (event: WatchEvent) => {
   switch (event.type) {
     case "review_done":
       return `${event.name}のレビュー完了`;
     case "finding":
-      return "レビュー・コメント";
+      return event.finding.approval === null ? "レビュー・コメント" : "Approve";
     case "conflict":
       return "コンフリクト";
     case "ci_failed":
@@ -88,7 +108,18 @@ const lineOf = (event: WatchEvent) => {
 };
 
 const findingLine = (finding: Finding) =>
-  `[${finding.label}] ${placeOf(finding)}${finding.url}`;
+  `[${finding.label}] ${placeOf(finding)}${bodyNote(finding)}${finding.url}`;
+
+const bodyNote = (finding: Finding) => {
+  switch (finding.approval) {
+    case null:
+      return "";
+    case "with_body":
+      return "本文あり ";
+    case "without_body":
+      return "本文なし ";
+  }
+};
 
 const placeOf = (finding: Finding) =>
   finding.path === null
