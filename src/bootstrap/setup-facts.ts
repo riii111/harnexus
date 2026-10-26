@@ -1,8 +1,12 @@
 import { join } from "node:path";
+import type { Result } from "better-result";
 import { readTextFileIfExists } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
-import { readCommandOutput } from "../runtime/process.boundary.ts";
+import {
+  type CommandFailed,
+  readCommandOutput,
+} from "../runtime/process.boundary.ts";
 import { SDK_PACKAGE } from "./bridge-identity.ts";
 import { readInstalledPackage, versionOf } from "./checkout.ts";
 import { parseTimedProcesses, type TimedProcess } from "./feedback-report.ts";
@@ -14,7 +18,7 @@ export type SetupFacts = {
   sdk: { version: string | null; claudeCodeVersion: string | null };
   pinnedBun: string | null;
   dependencies: Record<string, string>;
-  processes: TimedProcess[] | null;
+  processes: Result<TimedProcess[], CommandFailed>;
   launchd: Awaited<ReturnType<typeof readLaunchd>>;
 };
 
@@ -32,17 +36,13 @@ export const collectSetupFacts = async (
     readInstalledPackage(repo, SDK_PACKAGE),
     readManifest(repo),
     readCommandOutput("/bin/ps", ["-axo", "pid=,ppid=,etime=,command="]).then(
-      (read) => (read.isOk() ? parseTimedProcesses(read.value) : null),
+      (read) => read.map(parseTimedProcesses),
     ),
   ]);
-  const manager = manifest.packageManager;
   return {
     codex,
     sdk,
-    pinnedBun:
-      typeof manager === "string" && manager.startsWith("bun@")
-        ? versionOf(manager.slice("bun@".length))
-        : null,
+    pinnedBun: pinnedBunOf(manifest),
     dependencies: isObject(manifest.dependencies)
       ? Object.fromEntries(
           Object.entries(manifest.dependencies).filter(
@@ -53,6 +53,16 @@ export const collectSetupFacts = async (
     processes,
     launchd,
   };
+};
+
+export const readPinnedBun = async (repo: string) =>
+  pinnedBunOf(await readManifest(repo));
+
+const pinnedBunOf = (manifest: Record<string, unknown>) => {
+  const manager = manifest.packageManager;
+  return typeof manager === "string" && manager.startsWith("bun@")
+    ? versionOf(manager.slice("bun@".length))
+    : null;
 };
 
 // The CLI prints its name before the version, as in "codex-cli 0.163.0-alpha.10.2".

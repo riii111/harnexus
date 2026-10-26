@@ -102,7 +102,7 @@ const setupFacts = await collectSetupFacts(
   codexPathOf(setup),
   launchdRead,
 );
-const processes = setupFacts.processes ?? [];
+const processes = setupFacts.processes.unwrapOr([]);
 const bridges = findBridges(processes, REPO, now);
 const running = new Set(bridges.mine.map(({ pid }) => pid));
 const [doctor, head, dependencies, changes, macos, bun, codeChangedAt, log] =
