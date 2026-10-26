@@ -400,6 +400,10 @@ type Command = keyof typeof COMMANDS;
 
 export type TaskRun = { code: number; stdout: string; stderr: string };
 
+// harnexus-task runs apart from the checkout, so its help and crash name the checkout's report command.
+export const FEEDBACK_HINT =
+  "To report a bug, run bun run feedback --since 2h in the harnexus checkout and paste its output into a bug report.";
+
 export const runTask = async (
   argv: readonly string[],
   deps: TaskDeps,
@@ -408,7 +412,7 @@ export const runTask = async (
   if (parsed.isErr()) {
     const { message, usage, code } = parsed.error;
     return code === 0
-      ? { code, stdout: usage, stderr: "" }
+      ? { code, stdout: `${usage}${FEEDBACK_HINT}\n`, stderr: "" }
       : { code, stdout: "", stderr: `${usage}${NAME}: ${message}\n` };
   }
   const result = await COMMANDS[parsed.value.command](parsed.value, deps);

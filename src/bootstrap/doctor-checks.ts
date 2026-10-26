@@ -17,6 +17,7 @@ import {
   fallbackCheck,
   logChecks,
   processChecks,
+  refusedCheck,
 } from "./doctor-report.ts";
 import { registrationChecks } from "./launchd-plan.ts";
 import { registeredEnvironment } from "./open-app-plan.ts";
@@ -59,15 +60,15 @@ export const doctorChecks = async (
       stateChecks(setup),
       launcherCheck().then((check) => [check]),
       launchdChecks(setup, facts.launchd),
-      facts.processes === null
-        ? [
-            {
-              status: "fail" as const,
-              name: "Processes",
-              detail: "cannot list processes",
-            },
-          ]
-        : processChecks(facts.processes, REPO),
+      facts.processes.isOk()
+        ? processChecks(facts.processes.value, REPO)
+        : [
+            refusedCheck(
+              "Processes",
+              "cannot list processes",
+              facts.processes.error.cause,
+            ),
+          ],
       logSummaryChecks(setup),
       lastFallbackCheck(setup).then((check) => [check]),
       lastCompatibilityCheck(setup).then((check) => [check]),
@@ -173,11 +174,11 @@ async function stateChecks(setup: DoctorSetup): Promise<Check[]> {
           name: "State directory",
           detail: `${dirname(path.value)} is writable`,
         }
-      : {
-          status: "fail",
-          name: "State directory",
-          detail: writable.error.message,
-        },
+      : refusedCheck(
+          "State directory",
+          writable.error.message,
+          writable.error.cause,
+        ),
   ];
 }
 
