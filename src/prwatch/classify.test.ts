@@ -36,6 +36,7 @@ const comment = (fields: Partial<PrComment>): PrComment => ({
   line: 42,
   reply: false,
   resolved: false,
+  approved: false,
   ...fields,
 });
 
@@ -140,6 +141,31 @@ describe("classify", () => {
       expected: "empty review",
     },
     {
+      name: "a reviewer's approval with a body",
+      fields: { kind: "review", approved: true, body: "LGTM" },
+      expected: "notified",
+    },
+    {
+      name: "a reviewer's approval without a body",
+      fields: { kind: "review", approved: true, body: "" },
+      expected: "notified",
+    },
+    {
+      name: "the owner's own approval",
+      fields: { author: "Owner", kind: "review", approved: true, body: "" },
+      expected: "owner",
+    },
+    {
+      name: "a CodeRabbit approval without actionable comments",
+      fields: {
+        author: "coderabbitai[bot]",
+        kind: "review",
+        approved: true,
+        body: "",
+      },
+      expected: "CodeRabbit review without actionable comments",
+    },
+    {
       name: "a CodeRabbit finding in a resolved thread",
       fields: { author: "coderabbitai[bot]", resolved: true },
       expected: "resolved CodeRabbit thread",
@@ -188,6 +214,39 @@ describe("classify", () => {
       "CodeRabbit",
       "CodeRabbit・レビュー",
       "tanaka",
+    ]);
+  });
+
+  test("labels a person's approval and records whether it has a body", () => {
+    const verdicts = classify(
+      [
+        comment({ id: "review:1", kind: "review", approved: true, body: "ok" }),
+        comment({ id: "review:2", kind: "review", approved: true, body: " " }),
+        comment({ id: "review:3", kind: "review", body: "why?" }),
+        comment({
+          id: "review:4",
+          kind: "review",
+          author: "coderabbitai[bot]",
+          approved: true,
+          body: "**Actionable comments posted: 1**",
+        }),
+      ],
+      "owner",
+      RULES,
+      BOTS,
+    );
+
+    expect(
+      verdicts.map((verdict) =>
+        "finding" in verdict
+          ? [verdict.finding.label, verdict.finding.approval]
+          : verdict.ignored,
+      ),
+    ).toEqual([
+      ["reviewer・Approve", "with_body"],
+      ["reviewer・Approve", "without_body"],
+      ["reviewer", null],
+      ["CodeRabbit・レビュー", null],
     ]);
   });
 

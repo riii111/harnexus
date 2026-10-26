@@ -80,6 +80,7 @@ export type PrComment = {
   line: number | null;
   reply: boolean;
   resolved: boolean;
+  approved: boolean;
 };
 
 type Post = (
@@ -329,6 +330,9 @@ const THREAD_NODE = `id isResolved comments(first: 100) { nodes { ${COMMENT_NODE
 
 const PLAIN_NODE = "databaseId url createdAt body author { __typename login }";
 
+// An issue comment has no state, so only reviews ask for it.
+const REVIEW_NODE = `${PLAIN_NODE} state`;
+
 const CONTEXT_NODE = `__typename
   ... on StatusContext { context state targetUrl isRequired(pullRequestNumber: $number) }
   ... on CheckRun { name conclusion detailsUrl isRequired(pullRequestNumber: $number) }`;
@@ -342,7 +346,7 @@ const detailQuery = (
       id contexts(first: 100) { nodes { ${CONTEXT_NODE} } ${PAGE_INFO} }
     } } } }
     reviewThreads(first: 100) { nodes { ${THREAD_NODE} } ${PAGE_INFO} }
-    reviews(first: 100) { nodes { ${PLAIN_NODE} } ${PAGE_INFO} }
+    reviews(first: 100) { nodes { ${REVIEW_NODE} } ${PAGE_INFO} }
     comments(first: 100) { nodes { ${PLAIN_NODE} } ${PAGE_INFO} }
   } }
 }`;
@@ -354,7 +358,7 @@ const PAGES = {
     field: "reviewThreads",
     node: THREAD_NODE,
   },
-  reviews: { on: "PullRequest", field: "reviews", node: PLAIN_NODE },
+  reviews: { on: "PullRequest", field: "reviews", node: REVIEW_NODE },
   comments: { on: "PullRequest", field: "comments", node: PLAIN_NODE },
   threadComments: {
     on: "PullRequestReviewThread",
@@ -482,6 +486,7 @@ const inlineOf = (
     line: typeof line === "number" ? line : null,
     reply: isObject(node.replyTo),
     resolved,
+    approved: false,
   };
 };
 
@@ -498,6 +503,7 @@ const plainOf =
     line: null,
     reply: false,
     resolved: false,
+    approved: node.state === "APPROVED",
   });
 
 // GraphQL drops the [bot] suffix that REST, the web and the ignore list use for apps.

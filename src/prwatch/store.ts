@@ -204,11 +204,19 @@ const upgradedEvent = (event: WatchEvent): WatchEvent => {
     : old;
 };
 
+// A finding written before approvals were told is never one.
 const upgradedFinding = (finding: Finding): Finding => {
-  if (finding.bot !== undefined) return finding;
-
   const { coderabbit, ...rest } = finding as Finding & { coderabbit?: boolean };
-  return { ...rest, bot: coderabbit === true ? "coderabbit" : null };
+  return {
+    ...rest,
+    bot:
+      finding.bot !== undefined
+        ? finding.bot
+        : coderabbit === true
+          ? "coderabbit"
+          : null,
+    approval: finding.approval ?? null,
+  };
 };
 
 export const saveWatchState = (

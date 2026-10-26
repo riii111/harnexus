@@ -16,7 +16,11 @@ export type Finding = {
   line: number | null;
   url: string;
   createdAt: string;
+  // A person's approval, which is told even without a body; null for any other finding.
+  approval: Approval | null;
 };
+
+export type Approval = "with_body" | "without_body";
 
 export const classify = (
   comments: readonly PrComment[],
@@ -57,7 +61,11 @@ const ignoredReason = (
       return `resolved ${bot.name} thread`;
   }
 
-  if (comment.kind === "review" && comment.body.trim() === "")
+  if (
+    comment.kind === "review" &&
+    !isApproval(comment, bot) &&
+    comment.body.trim() === ""
+  )
     return "empty review";
   return null;
 };
@@ -77,9 +85,23 @@ const findingOf = (comment: PrComment, bot: ReviewBot | null): Finding => ({
   line: comment.line,
   url: comment.url,
   createdAt: comment.createdAt,
+  approval: approvalOf(comment, bot),
 });
 
+// A review bot's approval is read like its other reviews.
+const isApproval = (comment: PrComment, bot: ReviewBot | null) =>
+  bot === null && comment.kind === "review" && comment.approved;
+
+const approvalOf = (
+  comment: PrComment,
+  bot: ReviewBot | null,
+): Approval | null => {
+  if (!isApproval(comment, bot)) return null;
+  return comment.body.trim() === "" ? "without_body" : "with_body";
+};
+
 const labelOf = (comment: PrComment, bot: ReviewBot | null) => {
+  if (isApproval(comment, bot)) return `${comment.author}・Approve`;
   if (bot === null) return comment.author;
   if (comment.kind === "review") return `${bot.name}・レビュー`;
   const severity = severityOf(bot, comment.body);
