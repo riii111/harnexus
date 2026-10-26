@@ -40,6 +40,8 @@ const ignoredReason = (
 ) => {
   if (comment.author.toLowerCase() === owner.toLowerCase()) return "owner";
   if (rules.some((rule) => matches(rule, comment))) return "ignore rule";
+  // Findings are left on the code or in a review; the conversation carries requests and replies such as "will look".
+  if (comment.kind === "issue_comment") return "issue comment";
 
   if (bot !== null) {
     // A bot's replies answer the owner in a thread already reported when it opened.

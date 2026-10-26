@@ -62,7 +62,7 @@ describe("classify", () => {
     {
       name: "a reviewer's issue comment",
       fields: { kind: "issue_comment" },
-      expected: "notified",
+      expected: "issue comment",
     },
     {
       name: "a new CodeRabbit thread",
