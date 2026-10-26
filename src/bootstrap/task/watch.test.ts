@@ -302,10 +302,9 @@ describe("runCycle", () => {
     world.comments = [
       ...world.comments,
       comment({
-        id: "issue:4",
-        kind: "issue_comment",
+        id: "inline:4",
         author: "tanaka",
-        url: `${PR}#issuecomment-4`,
+        url: `${PR}#discussion_r4`,
         createdAt: world.now.toISOString(),
       }),
     ];
@@ -314,7 +313,7 @@ describe("runCycle", () => {
     expect(calls.sent).toHaveLength(1);
     const prompt = String(calls.sent[0]?.prompt);
     expect(prompt).toContain("理由：レビュー・コメント\n");
-    expect(prompt).toContain(`1. [tanaka] src/pay.kt:42 ${PR}#issuecomment-4`);
+    expect(prompt).toContain(`1. [tanaka] src/pay.kt:42 ${PR}#discussion_r4`);
     expect(prompt).not.toContain("2. ");
   });
 
@@ -366,17 +365,16 @@ describe("runCycle", () => {
     world.comments = [
       comment({}),
       comment({
-        id: "issue:5",
-        kind: "issue_comment",
+        id: "inline:5",
         author: "tanaka",
-        url: `${PR}#issuecomment-5`,
+        url: `${PR}#discussion_r5`,
         createdAt: world.now.toISOString(),
       }),
     ];
     await cycle();
 
     expect(calls.sent).toHaveLength(1);
-    expect(String(calls.sent[0]?.prompt)).toContain("issuecomment-5");
+    expect(String(calls.sent[0]?.prompt)).toContain("discussion_r5");
     expect(String(calls.sent[0]?.prompt)).not.toContain("discussion_r1");
   });
 
@@ -408,10 +406,9 @@ describe("runCycle", () => {
     world.comments = [
       comment({}),
       comment({
-        id: "issue:5",
-        kind: "issue_comment",
+        id: "inline:5",
         author: "tanaka",
-        url: `${PR}#issuecomment-5`,
+        url: `${PR}#discussion_r5`,
         createdAt: world.now.toISOString(),
       }),
     ];
@@ -425,7 +422,7 @@ describe("runCycle", () => {
     await cycle();
 
     expect(calls.sent).toHaveLength(2);
-    expect(String(calls.sent[1]?.prompt)).toContain(`${PR}#issuecomment-5`);
+    expect(String(calls.sent[1]?.prompt)).toContain(`${PR}#discussion_r5`);
     expect(String(calls.sent[1]?.prompt)).not.toContain("discussion_r1");
     expect((await state()).followUp).toEqual([]);
   });
@@ -471,10 +468,9 @@ describe("runCycle", () => {
     world.comments = [
       comment({}),
       comment({
-        id: "issue:5",
-        kind: "issue_comment",
+        id: "inline:5",
         author: "tanaka",
-        url: `${PR}#issuecomment-5`,
+        url: `${PR}#discussion_r5`,
         createdAt: world.now.toISOString(),
       }),
     ];
@@ -495,7 +491,7 @@ describe("runCycle", () => {
     await cycle();
 
     expect(calls.sent).toHaveLength(2);
-    expect(String(calls.sent[1]?.prompt)).toContain("issuecomment-5");
+    expect(String(calls.sent[1]?.prompt)).toContain("discussion_r5");
   });
 
   test("holds CodeRabbit's findings while its review runs and sends a person's comment at once", async () => {
