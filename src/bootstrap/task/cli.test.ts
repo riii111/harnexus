@@ -13,7 +13,13 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { listLinks } from "../../prwatch/store.ts";
-import { runTask, TASK_DEPS, type TaskDeps, watchPaths } from "./cli.ts";
+import {
+  FEEDBACK_HINT,
+  runTask,
+  TASK_DEPS,
+  type TaskDeps,
+  watchPaths,
+} from "./cli.ts";
 import { callApp, type SaveJson, saveJson } from "./session.ts";
 
 const SKILLS = join(import.meta.dir, "../../../test/fixtures/task-skills");
@@ -156,6 +162,27 @@ const launchFixture = async () => {
     );
   return { ...base, data, launch };
 };
+
+describe("harnexus-task --help", () => {
+  test.each([
+    { name: "every subcommand", args: ["--help"] },
+    { name: "one subcommand", args: ["launch", "--help"] },
+  ])("shows how to report a bug after the usage of $name", async ({ args }) => {
+    const run = await runTask(args, { ...TASK_DEPS, env: {} });
+
+    expect(run.code).toBe(0);
+    expect(run.stdout).toStartWith("usage:\n");
+    expect(run.stdout).toEndWith(`\n${FEEDBACK_HINT}\n`);
+  });
+
+  test("leaves the hint out of a usage error", async () => {
+    const run = await runTask(["launch"], { ...TASK_DEPS, env: {} });
+
+    expect(run.code).toBe(2);
+    expect(run.stderr).toContain("--request is required");
+    expect(run.stderr).not.toContain(FEEDBACK_HINT);
+  });
+});
 
 describe("harnexus-task launch", () => {
   test("creates the worker once and reports the actual model", async () => {

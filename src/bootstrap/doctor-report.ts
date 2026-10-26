@@ -123,6 +123,27 @@ export const logChecks = (text: string, path: string, now: number): Check[] => {
   ];
 };
 
+// A sandbox refuses with EPERM where file modes refuse with EACCES, so EPERM says only that this shell may not look, not what the app can do.
+export const refusedCheck = (
+  name: string,
+  detail: string,
+  cause: unknown,
+): Check => {
+  const code = isObject(cause) ? cause.code : undefined;
+  if (code === "EPERM")
+    return {
+      status: "warn",
+      name,
+      detail: `${detail}: not permitted to this shell (EPERM), as in a sandbox; run this outside the sandbox to check`,
+    };
+  return {
+    status: "fail",
+    name,
+    detail:
+      code === "EACCES" ? `${detail}: permission denied (EACCES)` : detail,
+  };
+};
+
 export const fallbackCheck = (record: unknown): Check => {
   if (record === null)
     return {

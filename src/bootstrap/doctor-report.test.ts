@@ -6,6 +6,7 @@ import {
   logChecks,
   parseProcesses,
   processChecks,
+  refusedCheck,
 } from "./doctor-report.ts";
 
 describe("parseProcesses", () => {
@@ -205,6 +206,45 @@ describe("logChecks", () => {
       { status: "ok", detail: "listening 0" },
       { status: "ok", detail: "none" },
     ]);
+  });
+});
+
+describe("refusedCheck", () => {
+  test("warns that a sandbox may have refused an EPERM", () => {
+    expect(
+      refusedCheck("Processes", "cannot list processes", { code: "EPERM" }),
+    ).toEqual({
+      status: "warn",
+      name: "Processes",
+      detail:
+        "cannot list processes: not permitted to this shell (EPERM), as in a sandbox; run this outside the sandbox to check",
+    });
+  });
+
+  test.each([
+    {
+      name: "file modes refusing it",
+      cause: { code: "EACCES" },
+      expected: "cannot write to /state: permission denied (EACCES)",
+    },
+    {
+      name: "another failure",
+      cause: { code: "ENOENT" },
+      expected: "cannot write to /state",
+    },
+    {
+      name: "a cause without a code",
+      cause: null,
+      expected: "cannot write to /state",
+    },
+  ])("fails on $name", ({ cause, expected }) => {
+    expect(
+      refusedCheck("State directory", "cannot write to /state", cause),
+    ).toEqual({
+      status: "fail",
+      name: "State directory",
+      detail: expected,
+    });
   });
 });
 
