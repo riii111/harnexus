@@ -346,7 +346,7 @@ describe("createGitHub", () => {
   test.each([
     {
       name: "a run still in progress",
-      runs: [run("IN_PROGRESS", null, "2026-10-23T00:00:00Z", null)],
+      runs: [run(1, "IN_PROGRESS", null, "2026-10-23T00:00:00Z", null)],
       expected: {
         state: "PENDING",
         description: "",
@@ -357,12 +357,14 @@ describe("createGitHub", () => {
       name: "a run started again after one that failed",
       runs: [
         run(
+          1,
           "COMPLETED",
           "FAILURE",
           "2026-10-23T00:00:00Z",
           "2026-10-23T00:01:00Z",
         ),
         run(
+          2,
           "COMPLETED",
           "SUCCESS",
           "2026-10-23T00:05:00Z",
@@ -373,6 +375,38 @@ describe("createGitHub", () => {
         state: "SUCCESS",
         description: "",
         createdAt: "2026-10-23T00:06:00Z",
+      },
+    },
+    {
+      name: "a queued run with no start time after one that succeeded",
+      runs: [
+        run(
+          1,
+          "COMPLETED",
+          "SUCCESS",
+          "2026-10-23T00:00:00Z",
+          "2026-10-23T00:01:00Z",
+        ),
+        run(2, "QUEUED", null, null, null),
+      ],
+      expected: { state: "PENDING", description: "", createdAt: "" },
+    },
+    {
+      name: "a skipped run with no start time after one that succeeded",
+      runs: [
+        run(
+          1,
+          "COMPLETED",
+          "SUCCESS",
+          "2026-10-23T00:00:00Z",
+          "2026-10-23T00:01:00Z",
+        ),
+        run(2, "COMPLETED", "SKIPPED", null, "2026-10-23T00:05:00Z"),
+      ],
+      expected: {
+        state: "SKIPPED",
+        description: "",
+        createdAt: "2026-10-23T00:05:00Z",
       },
     },
     { name: "no run of that name", runs: [], expected: null },
@@ -407,7 +441,7 @@ describe("createGitHub", () => {
     ).unwrap();
 
     expect(posts[0]?.query).toContain(
-      'b0: checkSuites(first: 50) { nodes { checkRuns(last: 1, filterBy: { checkName: "Claude AI Review" })',
+      'b0: checkSuites(first: 50) { nodes { checkRuns(last: 1, filterBy: { checkName: "Claude AI Review" }) { nodes { databaseId',
     );
     expect(posts[0]?.query).not.toContain("status {");
     expect(summaries[0]?.bots).toEqual({ claude: expected });
@@ -513,8 +547,9 @@ describe("createGitHub", () => {
 });
 
 const run = (
+  databaseId: number,
   status: string,
   conclusion: string | null,
-  startedAt: string,
+  startedAt: string | null,
   completedAt: string | null,
-) => ({ status, conclusion, startedAt, completedAt });
+) => ({ databaseId, status, conclusion, startedAt, completedAt });

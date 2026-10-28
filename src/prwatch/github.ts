@@ -296,7 +296,7 @@ const summaryFields = (bots: readonly ReviewBot[]) => {
     bot.status === null || !("checkRun" in bot.status)
       ? []
       : [
-          `b${index}: checkSuites(first: ${MAX_SUITES}) { nodes { checkRuns(last: 1, filterBy: { checkName: ${JSON.stringify(bot.status.checkRun)} }) { nodes { status conclusion startedAt completedAt } } } }`,
+          `b${index}: checkSuites(first: ${MAX_SUITES}) { nodes { checkRuns(last: 1, filterBy: { checkName: ${JSON.stringify(bot.status.checkRun)} }) { nodes { databaseId status conclusion startedAt completedAt } } } }`,
         ],
   );
   const status =
@@ -450,14 +450,12 @@ const summaryOf = (
   };
 };
 
-// A run started again is a later run of the same name, so the latest start is the one that counts.
+// A run started again is a later run of the same name, so the latest one counts; ids grow with creation, while a queued run has no start time yet.
 const checkRunStatusOf = (suites: unknown): BotStatus | null => {
   const runs = nodesOf(suites).flatMap((suite) => nodesOf(suite.checkRuns));
   const run = runs.reduce<Record<string, unknown> | null>(
     (latest, next) =>
-      latest === null || text(next.startedAt) > text(latest.startedAt)
-        ? next
-        : latest,
+      latest === null || idOf(next) > idOf(latest) ? next : latest,
     null,
   );
   if (run === null) return null;
@@ -610,3 +608,6 @@ const nodesOf = (connection: unknown): Record<string, unknown>[] =>
 const text = (value: unknown) => (typeof value === "string" ? value : "");
 
 const linkOf = (value: unknown) => (typeof value === "string" ? value : null);
+
+const idOf = (node: Record<string, unknown>) =>
+  typeof node.databaseId === "number" ? node.databaseId : -1;
