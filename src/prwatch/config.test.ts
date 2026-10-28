@@ -64,7 +64,40 @@ describe("loadConfig", () => {
     ]);
   });
 
+  test("takes the Claude preset and a described bot that waits for a check run", async () => {
+    const config = await configWith({
+      reviewBots: [
+        "claude",
+        {
+          id: "other",
+          name: "OtherBot",
+          login: "other-reviewer[bot]",
+          status: { checkRun: "Other Review" },
+        },
+      ],
+    });
+
+    expect(
+      config.unwrap().reviewBots.map((bot) => [bot.id, bot.status]),
+    ).toEqual([
+      ["claude", { checkRun: "Claude AI Review" }],
+      ["other", { checkRun: "Other Review" }],
+    ]);
+  });
+
   test.each([
+    {
+      name: "a status that names both a commit status and a check run",
+      reviewBots: [
+        {
+          id: "x",
+          name: "X",
+          login: "x[bot]",
+          status: { context: "X", completed: "done", checkRun: "X" },
+        },
+      ],
+      message: "reviewBots",
+    },
     {
       name: "a severity that is not a regular expression",
       reviewBots: [

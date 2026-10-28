@@ -5,9 +5,9 @@ export type ReviewBot = {
   // Shown to the worker.
   name: string;
   login: string;
-  // The commit status the bot keeps while it reviews a head.
+  // What the bot keeps on a head while it reviews it: a commit status, or the check run of the workflow that runs it.
   // Without one, its findings are sent as they come and no completion is told.
-  status: { context: string; completed: string } | null;
+  status: BotProgress | null;
   // A review body without this text carries no findings of its own; null takes every review body.
   actionableReview: string | null;
   // A PR comment with this text says the bot found nothing, which the watch checks against the findings it saw.
@@ -15,6 +15,10 @@ export type ReviewBot = {
   // Read from an inline finding; the first group is the severity shown to the worker.
   severity: string | null;
 };
+
+export type BotProgress =
+  | { context: string; completed: string }
+  | { checkRun: string };
 
 export const PRESETS = {
   coderabbit: {
@@ -26,6 +30,17 @@ export const PRESETS = {
     noActionable: "No actionable comments were generated",
     // CodeRabbit opens a finding with a bold category and severity, such as **🟠 Major**.
     severity: String.raw`\*\*[^*\n]*?\b(Critical|Major|Minor|Trivial|Info)\*\*`,
+  },
+  // Claude posts its review with no body and a free-form summary comment, so only its inline findings are read.
+  claude: {
+    id: "claude",
+    name: "Claude",
+    login: "claude[bot]",
+    status: { checkRun: "Claude AI Review" },
+    actionableReview: null,
+    noActionable: null,
+    // The review prompt has Claude open a finding with its severity in brackets, such as [warning].
+    severity: String.raw`^\[(critical|warning|suggestion)\]`,
   },
 } as const satisfies Record<string, ReviewBot>;
 

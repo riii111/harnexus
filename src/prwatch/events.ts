@@ -148,10 +148,11 @@ const reviewDone = (
 
 const reviewCompleted = (detail: PrDetail, bot: ReviewBot) => {
   const status = detail.bots[bot.id];
+  if (bot.status === null || status == null || status.state !== "SUCCESS")
+    return false;
+  // A check run has no description; its success alone says the review ended.
   return (
-    bot.status !== null &&
-    status != null &&
-    status.state === "SUCCESS" &&
+    !("completed" in bot.status) ||
     status.description.includes(bot.status.completed)
   );
 };

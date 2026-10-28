@@ -343,6 +343,120 @@ describe("createGitHub", () => {
     expect(summaries[1]).toBeNull();
   });
 
+  test.each([
+    {
+      name: "a run still in progress",
+      runs: [run("IN_PROGRESS", null, "2026-10-23T00:00:00Z", null)],
+      expected: {
+        state: "PENDING",
+        description: "",
+        createdAt: "2026-10-23T00:00:00Z",
+      },
+    },
+    {
+      name: "a run started again after one that failed",
+      runs: [
+        run(
+          "COMPLETED",
+          "FAILURE",
+          "2026-10-23T00:00:00Z",
+          "2026-10-23T00:01:00Z",
+        ),
+        run(
+          "COMPLETED",
+          "SUCCESS",
+          "2026-10-23T00:05:00Z",
+          "2026-10-23T00:06:00Z",
+        ),
+      ],
+      expected: {
+        state: "SUCCESS",
+        description: "",
+        createdAt: "2026-10-23T00:06:00Z",
+      },
+    },
+    { name: "no run of that name", runs: [], expected: null },
+  ])("reads a check run bot's progress from $name", async ({
+    runs,
+    expected,
+  }) => {
+    const suites = {
+      nodes: [
+        { checkRuns: { nodes: runs.slice(0, 1) } },
+        { checkRuns: { nodes: [] } },
+        { checkRuns: { nodes: runs.slice(1) } },
+      ],
+    };
+    const { github, posts } = fake({
+      data: {
+        p0: {
+          pullRequest: {
+            ...pull,
+            commits: { nodes: [{ commit: { ...commit, b0: suites } }] },
+          },
+        },
+      },
+    });
+
+    const summaries = (
+      await github.summaries(
+        "owner",
+        [{ repo: "org/pay", number: 7 }],
+        [PRESETS.claude],
+      )
+    ).unwrap();
+
+    expect(posts[0]?.query).toContain(
+      'b0: checkSuites(first: 50) { nodes { checkRuns(last: 1, filterBy: { checkName: "Claude AI Review" })',
+    );
+    expect(posts[0]?.query).not.toContain("status {");
+    expect(summaries[0]?.bots).toEqual({ claude: expected });
+  });
+
+  test("leaves a check run bot's own failed run out of the failed required checks", async () => {
+    const reviewRun = {
+      __typename: "CheckRun",
+      name: "Claude AI Review",
+      conclusion: "FAILURE",
+      isRequired: true,
+    };
+    const checks = pull.checks.nodes[0]?.commit.statusCheckRollup.contexts;
+    const { github } = fake({
+      data: {
+        repository: {
+          pullRequest: {
+            ...pull,
+            checks: {
+              nodes: [
+                {
+                  commit: {
+                    statusCheckRollup: {
+                      contexts: {
+                        nodes: [...(checks?.nodes ?? []), reviewRun],
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    const detail = (
+      await github.detail("owner", { repo: "org/pay", number: 7 }, [
+        PRESETS.claude,
+      ])
+    ).unwrap();
+
+    expect(detail.failedRequired.map((check) => check.name)).toEqual([
+      "build",
+      "CodeRabbit",
+      "deploy",
+    ]);
+  });
+
   test("reads no commit status when no configured bot keeps one", async () => {
     const { github, posts } = fake({ data: { p0: { pullRequest: pull } } });
 
@@ -397,3 +511,10 @@ describe("createGitHub", () => {
     expect(JSON.stringify(failed)).not.toContain("secret-token");
   });
 });
+
+const run = (
+  status: string,
+  conclusion: string | null,
+  startedAt: string,
+  completedAt: string | null,
+) => ({ status, conclusion, startedAt, completedAt });
