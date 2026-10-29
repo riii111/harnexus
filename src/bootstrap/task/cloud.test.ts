@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   chmod,
   mkdir,
@@ -85,8 +86,36 @@ const fixture = async () => {
     };
   };
   const args = async (n: number) =>
+    (await readFile(join(fake, `args.${n}`), "utf8"))
+      .trim()
+      .split("\n")
+      .map((arg) =>
+        /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(arg) &&
+        arg !== FIRST &&
+        arg !== SECOND
+          ? "<generated>"
+          : arg,
+      );
+  const rawArgs = async (n: number) =>
     (await readFile(join(fake, `args.${n}`), "utf8")).trim().split("\n");
-  return { root, fake, work, prompt, plan, run, args, env };
+  const sessionDir = (key: string) =>
+    join(
+      root,
+      "state/taskctl/cloud-claude",
+      createHash("sha256").update(key).digest("hex").slice(0, 16),
+    );
+  return {
+    root,
+    fake,
+    work,
+    prompt,
+    plan,
+    run,
+    args,
+    rawArgs,
+    env,
+    sessionDir,
+  };
 };
 
 describe("harnexus-task claude", () => {
@@ -113,6 +142,8 @@ describe("harnexus-task claude", () => {
       "json",
       "--permission-mode",
       "auto",
+      "--session-id",
+      "<generated>",
     ]);
     expect(await readFile(join(f.fake, "stdin.1"), "utf8")).toBe(
       "review this diff",
@@ -204,6 +235,8 @@ describe("harnexus-task claude", () => {
       "plan",
       "--model",
       "claude-opus-5-5",
+      "--session-id",
+      "<generated>",
     ]);
   });
 
@@ -292,7 +325,8 @@ describe("harnexus-task claude", () => {
       f.prompt,
     ]);
     expect(failed.code).toBe(1);
-    expect(failed.err).toContain("no result in its output");
+    expect(failed.err).toContain("without a result");
+    expect(failed.err).toContain("--recover");
   });
 
   test("names the install step when the Claude wrapper is missing", async () => {
@@ -326,7 +360,10 @@ describe("harnexus-task claude", () => {
     ]);
     expect(busy.code).toBe(1);
     expect(busy.err).toContain("another claude run");
-    await writeFile(lock, JSON.stringify({ pid: 2 ** 22 + 12345 }));
+    await writeFile(
+      lock,
+      JSON.stringify({ pid: 2 ** 22 + 12345, token: "old" }),
+    );
     await f.plan(2, result(FIRST, "ok"));
     const taken = await f.run([
       "--session",
@@ -369,5 +406,230 @@ describe("harnexus-task claude", () => {
     const failed = await f.run(argv);
     expect(failed.code).not.toBe(0);
     expect(failed.err).toContain(message);
+  });
+});
+
+const START = ["--session", "s", "--start", "--prompt-file"] as const;
+const RESUME = ["--session", "s", "--resume", "--prompt-file"] as const;
+
+// A killed process nobody has reaped yet still answers signal 0, so its state is read instead.
+const alive = async (pid: number) => {
+  const stat = await readFile(`/proc/${pid}/stat`, "utf8").catch(() => null);
+  return (
+    stat !== null && !stat.slice(stat.lastIndexOf(")") + 2).startsWith("Z")
+  );
+};
+
+describe("harnexus-task claude under the session lock", () => {
+  test("refuses a second start while the first is running", async () => {
+    const f = await fixture();
+    const gate = join(f.fake, "gate");
+    const slow = join(f.root, "slow-claude");
+    await writeFile(
+      slow,
+      `#!/usr/bin/env bash\ncat > /dev/null\nwhile [ ! -f "${gate}" ]; do sleep 0.05; done\ncat "$FAKE_DIR/out.1"\n`,
+    );
+    await chmod(slow, 0o755);
+    await f.plan(1, result(FIRST, "ok"));
+    const first = f.run([...START, f.prompt], {
+      HARNEXUS_CLAUDE_CLOUD_BIN: slow,
+    });
+    await Bun.sleep(300);
+    const second = await f.run([...START, f.prompt], {
+      HARNEXUS_CLAUDE_CLOUD_BIN: slow,
+    });
+    expect(second.code).toBe(1);
+    expect(second.err).toContain("another claude run");
+    await writeFile(gate, "");
+    expect((await first).code).toBe(0);
+  });
+
+  test("holds the lock until the state is saved", async () => {
+    const f = await fixture();
+    await f.plan(1, result(FIRST, "ok"));
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let saving: () => void = () => {};
+    const reached = new Promise<void>((resolve) => {
+      saving = resolve;
+    });
+    const first = runTask(["claude", ...START, f.prompt], {
+      ...TASK_DEPS,
+      cwd: f.work,
+      env: f.env,
+      saveJson: async (path, data, options) => {
+        if (path.endsWith("state.json")) {
+          saving();
+          await held;
+        }
+        return TASK_DEPS.saveJson(path, data, options);
+      },
+    });
+    await reached;
+    const resumed = await f.run([...RESUME, f.prompt]);
+    const started = await f.run([...START, f.prompt]);
+    release();
+    expect((await first).code).toBe(0);
+    expect(resumed.err).toContain("another claude run");
+    expect(started.err).toContain("another claude run");
+  });
+
+  test("leaves a lock another run took in the meantime", async () => {
+    const f = await fixture();
+    const lock = join(f.sessionDir("s"), "lock.json");
+    const thief = join(f.root, "thief-claude");
+    await writeFile(
+      thief,
+      `#!/usr/bin/env bash\ncat > /dev/null\nprintf '{"pid":${process.pid},"token":"other"}' > "${lock}"\ncat "$FAKE_DIR/out.1"\n`,
+    );
+    await chmod(thief, 0o755);
+    await f.plan(1, result(FIRST, "ok"));
+    const done = await f.run([...START, f.prompt], {
+      HARNEXUS_CLAUDE_CLOUD_BIN: thief,
+    });
+    expect(done.code).toBe(0);
+    expect(JSON.parse(await readFile(lock, "utf8")).token).toBe("other");
+  });
+
+  test("takes a dead holder's lock only once", async () => {
+    const f = await fixture();
+    await mkdir(f.sessionDir("s"), { recursive: true });
+    const lock = join(f.sessionDir("s"), "lock.json");
+    await writeFile(
+      lock,
+      JSON.stringify({ pid: 2 ** 22 + 999, token: "dead" }),
+    );
+    await f.plan(1, result(FIRST, "ok"));
+    await f.plan(2, result(SECOND, "ok"));
+    const both = await Promise.all([
+      f.run([...START, f.prompt]),
+      f.run(["--session", "t", ...START.slice(2), f.prompt]),
+    ]);
+    expect(both.map((r) => r.code)).toEqual([0, 0]);
+  });
+});
+
+describe("harnexus-task claude with an unknown result", () => {
+  test("refuses to start again and recovers the same session by adopting it", async () => {
+    const f = await fixture();
+    await f.plan(1, "not json", 0);
+    const lost = await f.run([...START, f.prompt]);
+    expect(lost.code).toBe(1);
+    expect(lost.err).toContain("--recover");
+    const pending = (await f.run(["--session", "s"])).out?.pending;
+    const id = pending.sessionId;
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    expect((await f.rawArgs(1)).slice(-2)).toEqual(["--session-id", id]);
+
+    const again = await f.run([...START, f.prompt]);
+    expect(again.code).toBe(1);
+    expect(again.err).toContain("did not report back");
+    expect(await readFile(join(f.fake, "count"), "utf8")).toBe("1\n");
+
+    await f.plan(2, result(id, "continued"));
+    const adopted = await f.run([...RESUME, f.prompt, "--recover", "adopt"]);
+    expect(adopted.out).toMatchObject({ sessionId: id, result: "continued" });
+    expect((await f.rawArgs(2)).slice(-2)).toEqual(["--resume", id]);
+    expect((await f.run(["--session", "s"])).out?.pending).toBeNull();
+  });
+
+  test("discard releases the pending turn so a start can run", async () => {
+    const f = await fixture();
+    await f.plan(1, "not json");
+    await f.run([...START, f.prompt]);
+    await f.plan(2, result(FIRST, "fresh"));
+    const fresh = await f.run([...START, f.prompt, "--recover", "discard"]);
+    expect(fresh.out).toMatchObject({ sessionId: FIRST, result: "fresh" });
+  });
+
+  test("rejects --recover without a pending turn", async () => {
+    const f = await fixture();
+    const failed = await f.run([...START, f.prompt, "--recover", "discard"]);
+    expect(failed.err).toContain("only when a turn is pending");
+  });
+
+  test("keeps the pending turn when the state cannot be saved", async () => {
+    const f = await fixture();
+    await f.plan(1, result(FIRST, "ok"));
+    const done = await runTask(["claude", ...START, f.prompt], {
+      ...TASK_DEPS,
+      cwd: f.work,
+      env: f.env,
+      saveJson: async (path, data, options) =>
+        path.endsWith("state.json")
+          ? TASK_DEPS.saveJson("/proc/denied/state.json", data, options)
+          : TASK_DEPS.saveJson(path, data, options),
+    });
+    expect(done.code).toBe(1);
+    expect(done.stderr).toContain("--recover");
+    expect((await f.run(["--session", "s"])).out?.pending).not.toBeNull();
+  });
+
+  test("stops a process that ignores SIGTERM and has a child, then keeps the turn pending", async () => {
+    const f = await fixture();
+    const stubborn = join(f.root, "stubborn-claude");
+    const pids = join(f.root, "pids");
+    await writeFile(
+      stubborn,
+      `#!/usr/bin/env bash\ntrap '' TERM\ncat > /dev/null\nsleep 300 &\necho "$$ $!" > "${pids}"\nwhile true; do sleep 1; done\n`,
+    );
+    await chmod(stubborn, 0o755);
+    const timed = await f.run([...START, f.prompt], {
+      HARNEXUS_CLAUDE_CLOUD_BIN: stubborn,
+      HARNEXUS_CLAUDE_TIMEOUT_MS: "400",
+      HARNEXUS_CLAUDE_KILL_GRACE_MS: "300",
+    });
+    expect(timed.code).toBe(1);
+    expect(timed.err).toContain("timeout");
+    const [parent, child] = (await readFile(pids, "utf8"))
+      .trim()
+      .split(" ")
+      .map(Number);
+    expect(await alive(parent ?? 0)).toBe(false);
+    expect(await alive(child ?? 0)).toBe(false);
+    await expect(
+      readFile(join(f.sessionDir("s"), "lock.json")),
+    ).rejects.toThrow();
+    const again = await f.run([...START, f.prompt]);
+    expect(again.err).toContain("did not report back");
+  });
+});
+
+describe("harnexus-task claude settings", () => {
+  test("a resume keeps the permission mode the session started with unless one is named", async () => {
+    const f = await fixture();
+    await f.plan(1, result(FIRST, "a"));
+    await f.run([...START, f.prompt, "--permission-mode", "plan"]);
+    await f.plan(2, result(FIRST, "b"));
+    await f.run([...RESUME, f.prompt]);
+    expect(await f.args(2)).toContain("plan");
+    await f.plan(3, result(FIRST, "c"));
+    const changed = await f.run([
+      ...RESUME,
+      f.prompt,
+      "--permission-mode",
+      "auto",
+    ]);
+    expect(changed.out?.permissionMode).toBe("auto");
+    expect((await f.args(3))[4]).toBe("auto");
+  });
+
+  test("rejects a relative HARNEXUS_CLAUDE_CLOUD_BIN instead of ignoring it", async () => {
+    const f = await fixture();
+    const failed = await f.run([...START, f.prompt], {
+      HARNEXUS_CLAUDE_CLOUD_BIN: "claude",
+    });
+    expect(failed.code).toBe(1);
+    expect(failed.err).toContain("must be an absolute path");
+  });
+
+  test("rejects a bad timeout value", async () => {
+    const f = await fixture();
+    const failed = await f.run([...START, f.prompt], {
+      HARNEXUS_CLAUDE_TIMEOUT_MS: "soon",
+    });
+    expect(failed.err).toContain("HARNEXUS_CLAUDE_TIMEOUT_MS");
   });
 });

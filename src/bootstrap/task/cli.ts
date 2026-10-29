@@ -20,7 +20,12 @@ import type { WatchPaths } from "../../prwatch/watcher.ts";
 import { isObject } from "../../runtime/object.ts";
 import { runCommand } from "../../runtime/process.boundary.ts";
 import { type OptionTypes, parseOptions } from "./args.boundary.ts";
-import { type ClaudeArgs, claudeSession, PERMISSION_MODES } from "./cloud.ts";
+import {
+  type ClaudeArgs,
+  claudeSession,
+  PERMISSION_MODES,
+  RECOVERIES,
+} from "./cloud.ts";
 import { detectEnvironment, refuseInCloud } from "./environment.ts";
 import { asText, type Fields, fail, jsonEqual, truthy } from "./format.ts";
 import {
@@ -92,7 +97,8 @@ type Args = {
   start: boolean;
   resume: boolean;
   cwd?: string;
-  permissionMode: string;
+  permissionMode?: string;
+  recover?: string;
 };
 
 const worktreeTarget = (project: unknown) => ({
@@ -419,8 +425,10 @@ const claude = (args: Args, deps: TaskDeps) => {
   const given: ClaudeArgs = {
     mode,
     session: args.session ?? "",
-    permissionMode: args.permissionMode,
   };
+  if (args.permissionMode !== undefined)
+    given.permissionMode = args.permissionMode;
+  if (args.recover !== undefined) given.recover = args.recover;
   if (args.promptFile !== undefined) given.promptFile = args.promptFile;
   if (args.model !== undefined) given.model = args.model;
   if (args.cwd !== undefined) given.cwd = args.cwd;
@@ -508,6 +516,7 @@ const OPTIONS: Record<Command, OptionTypes> = {
     model: { type: "string" },
     cwd: { type: "string" },
     "permission-mode": { type: "string" },
+    recover: { type: "string" },
   },
 };
 
@@ -523,7 +532,7 @@ const USAGE = {
     "watch [--dry-run [--pr PR]... | --release PR | --status | --sender | --link PR]",
   environment: "environment",
   claude:
-    "claude --session NAME [--start | --resume] [--prompt-file FILE] [--model MODEL] [--cwd DIR] [--permission-mode auto|plan]",
+    "claude --session NAME [--start | --resume] [--prompt-file FILE] [--model MODEL] [--cwd DIR] [--permission-mode auto|plan] [--recover adopt|discard]",
 } satisfies Record<Command, string>;
 
 const usageOf = (commands: readonly Command[]) =>
@@ -567,7 +576,6 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
     status: values.status === true,
     start: values.start === true,
     resume: values.resume === true,
-    permissionMode: "auto",
     sender: values.sender === true,
     prs: command === "watch" && Array.isArray(values.pr) ? values.pr : [],
   };
@@ -620,6 +628,12 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
         );
       args.permissionMode = mode;
     }
+  }
+  const recover = text("recover");
+  if (recover !== undefined) {
+    if (!(RECOVERIES as readonly string[]).includes(recover))
+      return shown(`--recover must be one of ${RECOVERIES.join(", ")}`);
+    args.recover = recover;
   }
   const model = text("model");
   if (model !== undefined) args.model = model;
