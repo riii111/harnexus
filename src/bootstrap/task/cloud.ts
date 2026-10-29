@@ -196,9 +196,9 @@ const locked = (
           turns: Number(state?.turns ?? 0),
           history: Array.isArray(state?.history) ? state.history : [],
         };
-        yield* Result.await(
-          removeFile(pendingPath).then((r) => r.mapError(ioFailed)),
-        );
+        // Keep the recovery record until the next turn has passed validation
+        // and its pending record is saved. A bad cwd or unavailable binary
+        // must not erase the only durable reference to the lost session.
         pending = null;
       }
     } else if (args.recover !== undefined) {

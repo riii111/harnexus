@@ -598,6 +598,29 @@ describe("harnexus-task claude with an unknown result", () => {
 });
 
 describe("harnexus-task claude settings", () => {
+  test("keeps the pending session when an adopt fails validation", async () => {
+    const f = await fixture();
+    await f.plan(1, "{}");
+    expect((await f.run([...START, f.prompt])).code).toBe(1);
+    const before = await f.run(["--session", "s"]);
+    expect(before.out?.pending?.sessionId).toBeString();
+    const failed = await f.run([
+      ...RESUME,
+      f.prompt,
+      "--recover",
+      "adopt",
+      "--cwd",
+      f.root,
+    ]);
+    expect(failed.code).toBe(1);
+    expect(failed.err).toContain("--cwd cannot change it");
+    const after = await f.run(["--session", "s"]);
+    expect(after.out?.pending).toEqual(before.out?.pending);
+    expect((await f.run([...START, f.prompt])).err).toContain(
+      "did not report back",
+    );
+  });
+
   test("a resume keeps the permission mode the session started with unless one is named", async () => {
     const f = await fixture();
     await f.plan(1, result(FIRST, "a"));
