@@ -782,6 +782,39 @@ describe("runCycle", () => {
     expect([delivered?.bot, delivered?.approval]).toEqual(["coderabbit", null]);
   });
 
+  test("waits for Claude's check run and labels its findings by the severity they open with", async () => {
+    const { world, calls, cycle, later } = await fixture({
+      reviewBots: ["claude"],
+    });
+    const claudeRun = (state: string) => ({
+      claude: { state, description: "", createdAt: "2026-10-23T01:00:00Z" },
+    });
+    world.summary = summary({ bots: claudeRun("PENDING") });
+    world.comments = [
+      comment({ author: "claude[bot]", body: "[warning] 重複します。" }),
+      comment({ id: "inline:9", url: `${PR}#discussion_r9` }),
+    ];
+    await cycle();
+
+    expect(calls.sent).toHaveLength(1);
+    expect(String(calls.sent[0]?.prompt)).not.toContain("discussion_r1");
+
+    world.turns = [
+      delegatedTurn(NOON, calls.sent[0]?.prompt, `${PR}#discussion_r9`),
+    ];
+    world.summary = summary({
+      updatedAt: "2026-10-23T02:00:00Z",
+      bots: claudeRun("SUCCESS"),
+    });
+    later(1);
+    await cycle();
+
+    expect(String(calls.sent[1]?.prompt)).toContain("Claudeのレビュー完了");
+    expect(String(calls.sent[1]?.prompt)).toContain(
+      `[Claude・warning] src/pay.kt:42 ${PR}#discussion_r1`,
+    );
+  });
+
   test("waits for and names a review bot the config describes instead of CodeRabbit", async () => {
     const { world, calls, cycle, later } = await fixture({
       reviewBots: [

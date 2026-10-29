@@ -47,11 +47,12 @@ export type PrSummary = {
   head: string;
   updatedAt: string;
   mergeable: string;
-  // The commit status of each review bot that keeps one, by the bot's id.
+  // The progress of each review bot that keeps one, by the bot's id.
   bots: Record<string, BotStatus | null>;
   rollup: string | null;
 };
 
+// A check run is read into a commit status's terms: PENDING until it completes, then its conclusion, with an empty description.
 export type BotStatus = {
   state: string;
   description: string;
@@ -281,13 +282,21 @@ const errorsOf = (errors: unknown[]) =>
 
 const TOKEN_TTL_MS = 10 * 60_000;
 
-// Each bot's status is read under an alias by its place in the list; JSON's string escapes are valid GraphQL.
+// Each bot's progress is read under an alias by its place in the list; JSON's string escapes are valid GraphQL.
+// A check run is looked up in every check suite of the head, since the suite of the workflow that runs it has no stable id.
 const summaryFields = (bots: readonly ReviewBot[]) => {
   const contexts = bots.flatMap((bot, index) =>
-    bot.status === null
+    bot.status === null || !("context" in bot.status)
       ? []
       : [
           `b${index}: context(name: ${JSON.stringify(bot.status.context)}) { state description createdAt }`,
+        ],
+  );
+  const runs = bots.flatMap((bot, index) =>
+    bot.status === null || !("checkRun" in bot.status)
+      ? []
+      : [
+          `b${index}: checkSuites(first: ${MAX_SUITES}) { nodes { checkRuns(last: 1, filterBy: { checkName: ${JSON.stringify(bot.status.checkRun)} }) { nodes { databaseId status conclusion startedAt completedAt } } } }`,
         ],
   );
   const status =
@@ -295,9 +304,13 @@ const summaryFields = (bots: readonly ReviewBot[]) => {
   return `state isDraft headRefOid updatedAt mergeable
   commits(last: 1) { nodes { commit {
     ${status}
+    ${runs.join("\n    ")}
     statusCheckRollup { state }
   } } }`;
 };
+
+// A head gets one check suite per app that checks it, far fewer than this.
+const MAX_SUITES = 50;
 
 // One aliased query for every PR of an account, which GitHub counts as a single point.
 const summaryQuery = (refs: readonly PrRef[], bots: readonly ReviewBot[]) => {
@@ -420,11 +433,38 @@ const summaryOf = (
     updatedAt: text(pull.updatedAt),
     mergeable: text(pull.mergeable),
     bots: Object.fromEntries(
-      bots.flatMap((bot, index) =>
-        bot.status === null ? [] : [[bot.id, botStatusOf(status[`b${index}`])]],
-      ),
+      bots.flatMap((bot, index) => {
+        if (bot.status === null) return [];
+        const alias = `b${index}`;
+        return [
+          [
+            bot.id,
+            "context" in bot.status
+              ? botStatusOf(status[alias])
+              : checkRunStatusOf(commit[alias]),
+          ],
+        ];
+      }),
     ),
     rollup: typeof rollup === "string" ? rollup : null,
+  };
+};
+
+// A run started again is a later run of the same name, so the latest one counts; ids grow with creation, while a queued run has no start time yet.
+const checkRunStatusOf = (suites: unknown): BotStatus | null => {
+  const runs = nodesOf(suites).flatMap((suite) => nodesOf(suite.checkRuns));
+  const run = runs.reduce<Record<string, unknown> | null>(
+    (latest, next) =>
+      latest === null || idOf(next) > idOf(latest) ? next : latest,
+    null,
+  );
+  if (run === null) return null;
+
+  const completed = run.status === "COMPLETED";
+  return {
+    state: completed ? text(run.conclusion) : "PENDING",
+    description: "",
+    createdAt: text(completed ? run.completedAt : run.startedAt),
   };
 };
 
@@ -519,16 +559,28 @@ const failedRequired = (
 ): FailedCheck[] => {
   const rollup = lastCommit(pull.checks).statusCheckRollup;
   const contexts = nodesOf(isObject(rollup) ? rollup.contexts : null);
-  const progress = new Set(bots.flatMap((bot) => bot.status?.context ?? []));
+  const statuses = new Set(
+    bots.flatMap((bot) =>
+      bot.status !== null && "context" in bot.status ? bot.status.context : [],
+    ),
+  );
+  const runs = new Set(
+    bots.flatMap((bot) =>
+      bot.status !== null && "checkRun" in bot.status
+        ? bot.status.checkRun
+        : [],
+    ),
+  );
 
   return contexts.flatMap((context) => {
     if (context.isRequired !== true) return [];
     if (context.__typename === "CheckRun")
-      return FAILED_RUNS.has(text(context.conclusion))
+      return FAILED_RUNS.has(text(context.conclusion)) &&
+        !runs.has(text(context.name))
         ? [{ name: text(context.name), url: linkOf(context.detailsUrl) }]
         : [];
     return FAILED_STATUSES.has(text(context.state)) &&
-      !progress.has(text(context.context))
+      !statuses.has(text(context.context))
       ? [{ name: text(context.context), url: linkOf(context.targetUrl) }]
       : [];
   });
@@ -556,3 +608,6 @@ const nodesOf = (connection: unknown): Record<string, unknown>[] =>
 const text = (value: unknown) => (typeof value === "string" ? value : "");
 
 const linkOf = (value: unknown) => (typeof value === "string" ? value : null);
+
+const idOf = (node: Record<string, unknown>) =>
+  typeof node.databaseId === "number" ? node.databaseId : -1;

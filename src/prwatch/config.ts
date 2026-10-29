@@ -71,7 +71,13 @@ const REVIEW_BOT = z.strictObject({
   name: z.string().min(1),
   login: LOGIN,
   status: z
-    .strictObject({ context: z.string().min(1), completed: z.string().min(1) })
+    .union([
+      z.strictObject({
+        context: z.string().min(1),
+        completed: z.string().min(1),
+      }),
+      z.strictObject({ checkRun: z.string().min(1) }),
+    ])
     .nullable()
     .default(null),
   actionableReview: z.string().min(1).nullable().default(null),
