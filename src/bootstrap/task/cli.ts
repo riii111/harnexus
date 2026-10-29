@@ -20,6 +20,8 @@ import type { WatchPaths } from "../../prwatch/watcher.ts";
 import { isObject } from "../../runtime/object.ts";
 import { runCommand } from "../../runtime/process.boundary.ts";
 import { type OptionTypes, parseOptions } from "./args.boundary.ts";
+import { type ClaudeArgs, claudeSession, PERMISSION_MODES } from "./cloud.ts";
+import { detectEnvironment, refuseInCloud } from "./environment.ts";
 import { asText, type Fields, fail, jsonEqual, truthy } from "./format.ts";
 import {
   callerId,
@@ -56,6 +58,8 @@ export type TaskDeps = {
   env: Env;
   runGit: GitRunner;
   saveJson: SaveJson;
+  // Where a claude turn runs unless --cwd says otherwise; the process's own directory when absent.
+  cwd?: string;
   // Only the watch writes as it runs, since it never returns.
   print: (line: string) => void;
 };
@@ -83,6 +87,12 @@ type Args = {
   status: boolean;
   sender: boolean;
   link?: string;
+  session?: string;
+  promptFile?: string;
+  start: boolean;
+  resume: boolean;
+  cwd?: string;
+  permissionMode: string;
 };
 
 const worktreeTarget = (project: unknown) => ({
@@ -104,6 +114,7 @@ const sameTask = (recorded: unknown, data: Fields) =>
 
 const launch = (args: Args, deps: TaskDeps) =>
   Result.gen(async function* () {
+    yield* refuseInCloud(deps.env, "launch");
     const data = yield* Result.await(launchRequest(args.request ?? ""));
     const session = yield* Result.await(launchSession(data, deps));
     if (session.state !== null) {
@@ -141,6 +152,7 @@ const launch = (args: Args, deps: TaskDeps) =>
 
 const review = (args: Args, deps: TaskDeps) =>
   Result.gen(async function* () {
+    yield* refuseInCloud(deps.env, "review");
     const git = gitIn(deps.runGit, deps.env);
     let data = yield* Result.await(
       reviewRequest(args.request ?? "", deps.env, git),
@@ -221,12 +233,14 @@ const requestedSession = (path: string, deps: TaskDeps) =>
 const state = (args: Args, deps: TaskDeps) =>
   Result.gen(async function* () {
     if (args.request === undefined) return await listState(deps.env);
+    yield* refuseInCloud(deps.env, "state --request");
     const session = yield* Result.await(requestedSession(args.request, deps));
     return await session.show();
   });
 
 const resolve = (args: Args, deps: TaskDeps) =>
   Result.gen(async function* () {
+    yield* refuseInCloud(deps.env, "resolve");
     const thread = args.threadId
       ? yield* chatId(args.threadId, "--thread-id")
       : null;
@@ -243,6 +257,7 @@ const PR_NUMBER =
 // The number goes last so the title still reads as the task, while a search for the PR finds the worker.
 const name = (args: Args, deps: TaskDeps) =>
   Result.gen(async function* () {
+    yield* refuseInCloud(deps.env, "name");
     const matched = PR_NUMBER.exec(args.pr ?? "");
     const number = matched?.[1] ?? matched?.[2];
     if (number === undefined)
@@ -325,6 +340,8 @@ export const watchPaths = (env: Env): WatchPaths => ({
 });
 
 const watch = async (args: Args, deps: TaskDeps) => {
+  const refused = refuseInCloud(deps.env, "watch");
+  if (refused.isErr()) return Result.err(refused.error);
   const paths = watchPaths(deps.env);
   if (args.release !== undefined) return release(paths.state, args.release);
   if (args.status) return status(paths.state);
@@ -394,7 +411,36 @@ const linkOnly = (deps: TaskDeps, value: string) =>
     });
   });
 
-const COMMANDS = { launch, review, state, resolve, name, watch };
+const environment = async (_args: Args, deps: TaskDeps) =>
+  (await detectEnvironment(deps.env)).map((found): Fields => ({ ...found }));
+
+const claude = (args: Args, deps: TaskDeps) => {
+  const mode = args.start ? "start" : args.resume ? "resume" : "state";
+  const given: ClaudeArgs = {
+    mode,
+    session: args.session ?? "",
+    permissionMode: args.permissionMode,
+  };
+  if (args.promptFile !== undefined) given.promptFile = args.promptFile;
+  if (args.model !== undefined) given.model = args.model;
+  if (args.cwd !== undefined) given.cwd = args.cwd;
+  return claudeSession(given, {
+    env: deps.env,
+    saveJson: deps.saveJson,
+    ...(deps.cwd === undefined ? {} : { cwd: deps.cwd }),
+  });
+};
+
+const COMMANDS = {
+  launch,
+  review,
+  state,
+  resolve,
+  name,
+  watch,
+  environment,
+  claude,
+};
 
 type Command = keyof typeof COMMANDS;
 
@@ -453,6 +499,16 @@ const OPTIONS: Record<Command, OptionTypes> = {
     sender: { type: "boolean" },
     link: { type: "string" },
   },
+  environment: {},
+  claude: {
+    session: { type: "string" },
+    "prompt-file": { type: "string" },
+    start: { type: "boolean" },
+    resume: { type: "boolean" },
+    model: { type: "string" },
+    cwd: { type: "string" },
+    "permission-mode": { type: "string" },
+  },
 };
 
 const USAGE = {
@@ -465,6 +521,9 @@ const USAGE = {
   name: "name --pr PR",
   watch:
     "watch [--dry-run [--pr PR]... | --release PR | --status | --sender | --link PR]",
+  environment: "environment",
+  claude:
+    "claude --session NAME [--start | --resume] [--prompt-file FILE] [--model MODEL] [--cwd DIR] [--permission-mode auto|plan]",
 } satisfies Record<Command, string>;
 
 const usageOf = (commands: readonly Command[]) =>
@@ -506,12 +565,17 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
     sent: values.sent === true,
     dryRun: values["dry-run"] === true,
     status: values.status === true,
+    start: values.start === true,
+    resume: values.resume === true,
+    permissionMode: "auto",
     sender: values.sender === true,
     prs: command === "watch" && Array.isArray(values.pr) ? values.pr : [],
   };
   const request = text("request");
   if (request !== undefined) args.request = request;
-  else if (!["state", "name", "watch"].includes(command))
+  else if (
+    !["state", "name", "watch", "environment", "claude"].includes(command)
+  )
     return shown("--request is required");
   const pr = text("pr");
   if (pr !== undefined) args.pr = pr;
@@ -536,6 +600,27 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
     );
   if (command === "resolve" && values.sent === values["not-sent"])
     return shown("exactly one of --sent and --not-sent is required");
+  if (command === "claude") {
+    const session = text("session");
+    if (session === undefined) return shown("--session is required");
+    args.session = session;
+    if (args.start && args.resume)
+      return shown("use only one of --start and --resume");
+    const promptFile = text("prompt-file");
+    if (promptFile !== undefined) args.promptFile = promptFile;
+    else if (args.start || args.resume)
+      return shown("--prompt-file is required with --start and --resume");
+    const cwd = text("cwd");
+    if (cwd !== undefined) args.cwd = cwd;
+    const mode = text("permission-mode");
+    if (mode !== undefined) {
+      if (!(PERMISSION_MODES as readonly string[]).includes(mode))
+        return shown(
+          `--permission-mode must be one of ${PERMISSION_MODES.join(", ")}`,
+        );
+      args.permissionMode = mode;
+    }
+  }
   const model = text("model");
   if (model !== undefined) args.model = model;
   const thinking = text("thinking");

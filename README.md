@@ -102,3 +102,41 @@ Set `HARNEXUS_APP_PATH` if the app is installed outside `/Applications/ChatGPT.a
 
 The app's call socket lets processes running as your user create and message chats.
 To disable it, launch with `HARNEXUS_CALL_SOCKET=off bun run open-app`.
+
+## harnexus-task in Codex Cloud
+
+`harnexus-task` can tell where it runs, and can run Claude inside a Cloud task.
+It cannot create or resume other Cloud tasks, so those commands fail with that reason.
+
+```sh
+harnexus-task environment
+```
+
+prints `{"environment": "cloud" | "local" | "unknown", "source": ..., "note": ...}`.
+The first match decides:
+
+1. `HARNEXUS_EXECUTION_ENV=cloud|local`. Any other value is an error.
+2. A nonempty `CODEX_ENVIRONMENT_ID` means `cloud`.
+   This is a variable observed in Cloud tasks, not a documented guarantee; the value is never printed.
+3. `local` only when the harnexus call socket accepts a connection.
+   A missing variable alone never means local.
+4. Otherwise `unknown`.
+
+In Cloud, `launch`, `review`, `resolve`, `name`, `watch` and `state --request` need the Codex App, so they fail with a message naming Cloud.
+Pin `HARNEXUS_EXECUTION_ENV=local` where `CODEX_ENVIRONMENT_ID` is set but the App is reachable.
+
+Claude runs inside the current task through the `claude-cloud` wrapper (default `/workspace/.cloud-setup/bin/claude-cloud`, override with an absolute `HARNEXUS_CLAUDE_CLOUD_BIN`):
+
+```sh
+harnexus-task claude --session NAME --start  --prompt-file FILE [--model M] [--cwd DIR] [--permission-mode auto|plan]
+harnexus-task claude --session NAME --resume --prompt-file FILE
+harnexus-task claude --session NAME
+```
+
+- It runs `claude -p --output-format json --permission-mode auto`, with the prompt on stdin, and prints the result, the `sessionId` and the state path as JSON.
+- `--resume` runs `--resume <session_id>` in the directory the session started in.
+  The state is kept under `$XDG_STATE_HOME/taskctl/cloud-claude/`; only a well-formed `session_id` is recorded.
+- A session is a fresh context in the same task, not another Cloud task.
+  It lasts as long as the task's filesystem; a new Cloud task starts with none.
+- A turn that fails after Claude started keeps its session, so the next call resumes it.
+  An unreachable network (wrapper exit 75) sends nothing and records nothing.

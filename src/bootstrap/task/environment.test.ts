@@ -1,0 +1,144 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { runTask, TASK_DEPS } from "./cli.ts";
+import { detectEnvironment } from "./environment.ts";
+
+const cleanups: (() => Promise<unknown>)[] = [];
+
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+});
+
+const scratch = async () => {
+  const root = await mkdtemp(join(tmpdir(), "harnexus-env-"));
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  return root;
+};
+
+const listen = async (path: string) => {
+  const server = createServer((socket) => socket.end());
+  await new Promise<void>((resolve) => server.listen(path, resolve));
+  cleanups.push(() => new Promise((resolve) => server.close(resolve)));
+};
+
+describe("detectEnvironment", () => {
+  test.each([
+    { name: "explicit cloud", env: { HARNEXUS_EXECUTION_ENV: "cloud" } },
+    { name: "explicit local", env: { HARNEXUS_EXECUTION_ENV: "local" } },
+  ])("takes $name", async ({ env }) => {
+    const found = (await detectEnvironment(env)).unwrap();
+    expect(found.environment).toBe(env.HARNEXUS_EXECUTION_ENV as "cloud");
+    expect(found.source).toBe("explicit");
+  });
+
+  test("lets the explicit value win over the Cloud hint", async () => {
+    const found = (
+      await detectEnvironment({
+        HARNEXUS_EXECUTION_ENV: "local",
+        CODEX_ENVIRONMENT_ID: "env_1",
+      })
+    ).unwrap();
+    expect(found.environment).toBe("local");
+  });
+
+  test("rejects an unknown explicit value", async () => {
+    const found = await detectEnvironment({ HARNEXUS_EXECUTION_ENV: "Cloud" });
+    expect(found.isErr()).toBe(true);
+    expect(found.isErr() && found.error.message).toContain(
+      "must be cloud or local",
+    );
+  });
+
+  test("reads a nonempty CODEX_ENVIRONMENT_ID as Cloud and names it a guess without printing it", async () => {
+    const found = (
+      await detectEnvironment({ CODEX_ENVIRONMENT_ID: "env_secret_value" })
+    ).unwrap();
+    expect(found.environment).toBe("cloud");
+    expect(found.source).toBe("CODEX_ENVIRONMENT_ID");
+    expect(found.note).toContain("not a documented guarantee");
+    expect(JSON.stringify(found)).not.toContain("env_secret_value");
+  });
+
+  test("does not read an empty CODEX_ENVIRONMENT_ID as Cloud", async () => {
+    const root = await scratch();
+    const found = (
+      await detectEnvironment({
+        CODEX_ENVIRONMENT_ID: "",
+        HARNEXUS_CALL_SOCKET: join(root, "none.sock"),
+      })
+    ).unwrap();
+    expect(found.environment).toBe("unknown");
+  });
+
+  test("is unknown, not local, when no variable and no socket exist", async () => {
+    const root = await scratch();
+    const found = (
+      await detectEnvironment({
+        HARNEXUS_CALL_SOCKET: join(root, "none.sock"),
+      })
+    ).unwrap();
+    expect(found.environment).toBe("unknown");
+    expect(found.note).toContain("HARNEXUS_EXECUTION_ENV");
+  });
+
+  test("is local once the harnexus socket accepts a connection", async () => {
+    const root = await scratch();
+    const path = join(root, "call.sock");
+    await listen(path);
+    const found = (
+      await detectEnvironment({ HARNEXUS_CALL_SOCKET: path })
+    ).unwrap();
+    expect(found.environment).toBe("local");
+    expect(found.source).toBe("harnexus-socket");
+  });
+});
+
+describe("harnexus-task environment", () => {
+  test("prints the detection as JSON", async () => {
+    const run = await runTask(["environment"], {
+      ...TASK_DEPS,
+      env: { HARNEXUS_EXECUTION_ENV: "cloud" },
+    });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout)).toMatchObject({
+      environment: "cloud",
+      source: "explicit",
+    });
+  });
+
+  test("fails on an invalid explicit value", async () => {
+    const run = await runTask(["environment"], {
+      ...TASK_DEPS,
+      env: { HARNEXUS_EXECUTION_ENV: "both" },
+    });
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain(
+      "HARNEXUS_EXECUTION_ENV must be cloud or local",
+    );
+  });
+});
+
+describe("Cloud refusals", () => {
+  test.each([
+    { name: "launch", argv: ["launch", "--request", "/x.json"] },
+    { name: "review", argv: ["review", "--request", "/x.json"] },
+    { name: "resolve", argv: ["resolve", "--request", "/x.json", "--sent"] },
+    { name: "name", argv: ["name", "--pr", "1"] },
+    { name: "watch", argv: ["watch", "--status"] },
+    { name: "state --request", argv: ["state", "--request", "/x.json"] },
+  ])("$name names Cloud and the alternative instead of a socket hint", async ({
+    argv,
+  }) => {
+    const run = await runTask(argv, {
+      ...TASK_DEPS,
+      env: { CODEX_ENVIRONMENT_ID: "env_1" },
+    });
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain("unavailable in Cloud");
+    expect(run.stderr).toContain("harnexus-task claude");
+    expect(run.stderr).not.toContain("call socket");
+  });
+});
