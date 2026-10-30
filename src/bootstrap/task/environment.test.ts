@@ -62,6 +62,29 @@ describe("detectEnvironment", () => {
     expect(JSON.stringify(found)).not.toContain("env_secret_value");
   });
 
+  test("reads a Claude Code cloud session as Cloud on Claude", async () => {
+    const found = (
+      await detectEnvironment({ CLAUDE_CODE_REMOTE: "true" })
+    ).unwrap();
+
+    expect(found).toMatchObject({
+      environment: "cloud",
+      source: "CLAUDE_CODE_REMOTE",
+      host: "claude",
+    });
+  });
+
+  test("names the Cloud an explicit cloud runs on", async () => {
+    const found = (
+      await detectEnvironment({
+        HARNEXUS_EXECUTION_ENV: "cloud",
+        CLAUDE_CODE_REMOTE: "true",
+      })
+    ).unwrap();
+
+    expect(found).toMatchObject({ source: "explicit", host: "claude" });
+  });
+
   test("does not read an empty CODEX_ENVIRONMENT_ID as Cloud", async () => {
     const root = await scratch();
     const found = (
@@ -140,5 +163,16 @@ describe("Cloud refusals", () => {
     expect(run.stderr).toContain("unavailable in Cloud");
     expect(run.stderr).toContain("harnexus-task claude");
     expect(run.stderr).not.toContain("call socket");
+  });
+
+  test("points a Claude Code cloud session to a new cloud session", async () => {
+    const run = await runTask(["launch", "--request", "/x.json"], {
+      ...TASK_DEPS,
+      env: { CLAUDE_CODE_REMOTE: "true" },
+    });
+
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain("unavailable in Cloud");
+    expect(run.stderr).toContain("create_session");
   });
 });
