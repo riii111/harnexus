@@ -63,7 +63,11 @@ esac
 `;
 
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+  execFileSync(
+    "git",
+    ["-c", "user.name=t", "-c", "user.email=t@t", "-C", cwd, ...args],
+    { encoding: "utf8" },
+  ).trim();
 
 const fixture = async () => {
   const root = await mkdtemp(join(tmpdir(), "harnexus-orch-"));
