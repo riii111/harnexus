@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -44,7 +45,8 @@ const result = (sessionId: string, text: string, isError = false) =>
   });
 
 const fixture = async () => {
-  const root = await mkdtemp(join(tmpdir(), "harnexus-cloud-"));
+  // macOS reaches tmpdir through the /var link, while pwd in the fake prints /private/var.
+  const root = await realpath(await mkdtemp(join(tmpdir(), "harnexus-cloud-")));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
   const fake = join(root, "fake");
   const work = join(root, "work");
