@@ -166,7 +166,8 @@ describe("createCloudRuntime turns", () => {
       shown: "a2",
     });
     expect(env.sessionIds.get("thread-1")).toBe("copy-3");
-    expect(env.discarded).toEqual(["copy-0", "copy-1", "copy-2"]);
+    // copy-4 was started before the reply's copy ended and is removed unread.
+    expect(env.discarded).toEqual(["copy-0", "copy-1", "copy-2", "copy-4"]);
   });
 
   test("finds its prompt only after where the app was shown, so an earlier same text is not taken", async () => {
@@ -416,7 +417,7 @@ describe("createCloudRuntime turns", () => {
     await env.runtime.run(turn.running);
 
     expect(turn.outcome).toEqual({ status: "completed" });
-    expect(env.discarded).toEqual([]);
+    expect(env.discarded).not.toContain("copy-0");
   });
 
   test("ends the wait at the limit and leaves later replies to the idle copies", async () => {
@@ -438,7 +439,7 @@ describe("createCloudRuntime turns", () => {
     expect(turn.texts().at(-1)).toContain("still working");
   });
 
-  test("copies again as soon as a copy ends for 20 seconds, then every 3 seconds until a minute, then every 10 seconds", async () => {
+  test("starts a copy every 1.5 seconds for 20 seconds, then waits 3 seconds between copies until a minute, then 10 seconds", async () => {
     const env = linked({
       copies: [
         [
@@ -449,13 +450,16 @@ describe("createCloudRuntime turns", () => {
       shown: null,
       waitLimitMs: 90_000,
     });
+    // Copies take no time here, so the waits alone show when each copy starts.
+    env.copyMs = 0;
     const turn = env.turn("long job");
 
     await env.runtime.run(turn.running);
 
     expect(env.waits).toEqual([
-      ...Array<number>(8).fill(0),
-      ...Array<number>(8).fill(3_000),
+      0,
+      ...Array<number>(14).fill(1_500),
+      ...Array<number>(13).fill(3_000),
       ...Array<number>(3).fill(10_000),
     ]);
   });
@@ -463,15 +467,65 @@ describe("createCloudRuntime turns", () => {
   test("fails once copies have kept failing for 20 seconds, saying the message was delivered", async () => {
     const env = linked({ copies: [], shown: null });
     env.copyFailure = "network down";
+    env.copyMs = 0;
     const turn = env.turn("hi");
 
     await env.runtime.run(turn.running);
 
     expect(turn.failure?._tag).toBe("CloudCopyFailed");
     expect(turn.failure?.message).toContain("reached the Cloud session");
-    // The first copy fails once it ends, 2.5 seconds in; the next ones wait 3 seconds each, and the first ending at least 20 seconds after it ends the turn.
-    expect(env.clock - 1_000).toBe(24_500);
-    expect(env.waits).toEqual([0, 3_000, 3_000, 3_000, 3_000]);
+    // The copy started 1.5 seconds after the first is the last to overlap; once copies fail they wait 3 seconds each, and the first at least 20 seconds after the first failure ends the turn.
+    expect(env.clock - 1_000).toBe(22_500);
+    expect(env.waits).toEqual([0, 1_500, ...Array<number>(7).fill(3_000)]);
+  });
+
+  test("starts the next copy before the current one ends", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "hi")],
+        [prompt("p1", "hi"), endReply("a1", "ok")],
+      ],
+      shown: null,
+    });
+    let release = () => {};
+    env.duringCopy = (call) =>
+      call === 1
+        ? new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve();
+    const turn = env.turn("hi");
+
+    const running = env.runtime.run(turn.running);
+    await env.untilCopied(2);
+    release();
+    await running;
+
+    expect(turn.texts()).toEqual(["ok"]);
+    expect(turn.outcome).toEqual({ status: "completed" });
+  });
+
+  test("drops a copy that overlapped the one shown and read the session before it", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "hi"), reply("a1", "m1", text("working"), "tool_use")],
+        [prompt("p1", "hi")],
+        [
+          prompt("p1", "hi"),
+          reply("a1", "m1", text("working"), "tool_use"),
+          endReply("a2", "done"),
+        ],
+      ],
+      shown: null,
+    });
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts()).toEqual(["working", "done"]);
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(env.discarded).toContain("copy-2");
+    expect(env.cloudOf("thread-1")?.shown).toBe("a2");
   });
 
   test.each([
@@ -492,8 +546,10 @@ describe("createCloudRuntime turns", () => {
 
     await env.runtime.run(turn.running);
 
+    // The copy started before the first one ended is the only other one.
+    await env.tick();
     expect(turn.failure?._tag).toBe("CloudCopyFailed");
-    expect(env.copyCalls).toBe(1);
+    expect(env.copyCalls).toBe(2);
     expect(env.events).toContainEqual({ event: "claude_cloud", step });
   });
 
@@ -667,6 +723,8 @@ const setup = ({
     clock: 1_000,
     waits: [] as number[],
     copyMs: 2_500,
+    // Runs while that copy is being made and is waited for before it ends.
+    duringCopy: async (_call: number) => {},
     // Set to make every copy say it may have run a model turn.
     copyStop: null as "ran_model" | "unchecked" | null,
     copyFailure: null as string | null,
@@ -762,9 +820,11 @@ const setup = ({
     },
     copy: async () => {
       env.copyCalls += 1;
+      const call = env.copyCalls;
       env.clock += env.copyMs;
       // A waiter stays until the count it waits for is reached.
       copyWaiters = copyWaiters.filter((wake) => !wake());
+      await env.duringCopy(call);
       if (env.copyFailure !== null) {
         return Result.err({
           _tag: "CloudCopyFailed",
@@ -772,11 +832,8 @@ const setup = ({
           message: env.copyFailure,
         });
       }
-      const sessionId = `copy-${env.copyCalls}`;
-      contents.set(
-        sessionId,
-        copies[Math.min(env.copyCalls, copies.length) - 1] ?? [],
-      );
+      const sessionId = `copy-${call}`;
+      contents.set(sessionId, copies[Math.min(call, copies.length) - 1] ?? []);
       if (env.copyStop !== null) {
         return Result.err({
           _tag: "CloudCopyFailed",

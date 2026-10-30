@@ -93,6 +93,13 @@ export type CloudDeps = {
 
 type Copied = { copy: string; records: SessionMessage[] };
 
+// overlapped: started while the copy before it still ran, so it may have read the session before that one did.
+type Started = {
+  at: number;
+  overlapped: boolean;
+  copied: Promise<Result<Copied, CopyFailure> | null>;
+};
+
 // What a turn the app started waits for: every text it sent, in order, then a reply that ends Claude's turn.
 type Follow = {
   texts: string[];
@@ -289,20 +296,51 @@ export const createCloudRuntime = <Tag extends string>(
     const { threadId } = turn;
     const startedAt = now();
     let failingSince: number | null = null;
+    let ended = false;
+    // While a reply is young, the next copy starts before the current one ends, so a reply shows up sooner after Claude ends it.
+    let next: Started | null = null;
+    // How many records the latest copy shown held; a copy that overlapped it and holds fewer read the session earlier.
+    let shownCount = 0;
+    const startNext = (after: number): Started => ({
+      at: after,
+      overlapped: true,
+      copied: sleep(Math.max(0, after - now()), follow.woken).then(() =>
+        ended || follow.stop || closed
+          ? null
+          : fetchCopy(threadId, cloudSessionId),
+      ),
+    });
+    const end = () => {
+      ended = true;
+      if (next !== null) void discardStarted(next);
+    };
     for (;;) {
-      await sleep(
-        pollMs(now() - startedAt, failingSince !== null),
-        follow.woken,
-      );
+      if (next === null) {
+        await sleep(
+          pollMs(now() - startedAt, failingSince !== null),
+          follow.woken,
+        );
+      }
       if (follow.stop || closed || turn.state().interrupting) {
         log({ event: "claude_cloud", step: "stopped" });
+        end();
         turn.apply(
           renderNotice(turn.state(), STOPPED_WAITING, "commentary", now()),
         );
         turn.finish({ status: "interrupted" }, null);
         return;
       }
-      const copied = await copyOf(threadId, cloudSessionId);
+      const current: Started = next ?? {
+        at: now(),
+        overlapped: false,
+        copied: fetchCopy(threadId, cloudSessionId),
+      };
+      next =
+        failingSince === null && current.at - startedAt < BACK_TO_BACK_FOR_MS
+          ? startNext(current.at + OVERLAP_MS)
+          : null;
+      const copied = await current.copied;
+      if (copied === null) continue;
       if (copied.isErr()) {
         failingSince ??= now();
         if (
@@ -311,6 +349,7 @@ export const createCloudRuntime = <Tag extends string>(
         ) {
           continue;
         }
+        end();
         turn.fail({
           _tag: "CloudCopyFailed",
           message: `${COPY_FAILED}: ${copied.error.message}`,
@@ -318,6 +357,11 @@ export const createCloudRuntime = <Tag extends string>(
         return;
       }
       failingSince = null;
+      if (current.overlapped && copied.value.records.length < shownCount) {
+        await discardCopy(copied.value.copy);
+        continue;
+      }
+      shownCount = copied.value.records.length;
       const progress = advance(follow, copied.value.records);
       if (progress.shown.length > 0) {
         turn.apply(renderRecords(turn.state(), progress.shown, now()));
@@ -337,11 +381,13 @@ export const createCloudRuntime = <Tag extends string>(
         follow.sending === 0 &&
         follow.matched === follow.texts.length
       ) {
+        end();
         turn.finish({ status: "completed" }, null);
         return;
       }
       if (now() - startedAt >= waitLimitMs) {
         log({ event: "claude_cloud", step: "wait_limit" });
+        end();
         turn.apply(
           renderNotice(turn.state(), WAIT_LIMIT_REACHED, "commentary", now()),
         );
@@ -414,59 +460,70 @@ export const createCloudRuntime = <Tag extends string>(
     turn.finish({ status: "completed" }, null);
   };
 
-  // One copy runs at a time per thread, so a turn and the idle check never read the session at once.
+  // One idle copy runs at a time per thread; a turn's copies skip the queue, and an idle copy that ends while a turn runs is dropped.
   const copyOf = (threadId: string, cloudSessionId: string) =>
-    copies.run(threadId, async (): Promise<Result<Copied, CopyFailure>> => {
-      if (halted.has(threadId)) {
-        return Result.err({
-          _tag: "CloudCopyStopped",
-          stopped: "ran_model",
-          message: COPY_STOPPED,
-        });
-      }
-      const startedAt = now();
-      const copied = await copy(cloudSessionId);
-      if (copied.isErr()) {
-        const { stopped } = copied.error;
-        if (stopped !== null) halted.add(threadId);
-        log(
-          stopped === null
-            ? {
-                event: "claude_cloud",
-                step: "copy_failed",
-                error: copied.error._tag,
-              }
-            : {
-                event: "claude_cloud",
-                step:
-                  stopped === "ran_model" ? "copy_ran_model" : "copy_unchecked",
-              },
-        );
-        return Result.err(copied.error);
-      }
-      const read = await readCopy(copied.value);
-      if (read.isErr()) {
-        await discardCopy(copied.value);
-        log({
-          event: "claude_cloud",
-          step: "copy_failed",
-          error: read.error._tag,
-        });
-        return Result.err({
-          _tag: read.error._tag,
-          stopped: null,
-          message: COPY_UNREADABLE,
-        });
-      }
-      const all = mainRecords(read.value);
+    copies.run(threadId, () => fetchCopy(threadId, cloudSessionId));
+
+  const fetchCopy = async (
+    threadId: string,
+    cloudSessionId: string,
+  ): Promise<Result<Copied, CopyFailure>> => {
+    if (halted.has(threadId)) {
+      return Result.err({
+        _tag: "CloudCopyStopped",
+        stopped: "ran_model",
+        message: COPY_STOPPED,
+      });
+    }
+    const startedAt = now();
+    const copied = await copy(cloudSessionId);
+    if (copied.isErr()) {
+      const { stopped } = copied.error;
+      if (stopped !== null) halted.add(threadId);
+      log(
+        stopped === null
+          ? {
+              event: "claude_cloud",
+              step: "copy_failed",
+              error: copied.error._tag,
+            }
+          : {
+              event: "claude_cloud",
+              step:
+                stopped === "ran_model" ? "copy_ran_model" : "copy_unchecked",
+            },
+      );
+      return Result.err(copied.error);
+    }
+    const read = await readCopy(copied.value);
+    if (read.isErr()) {
+      await discardCopy(copied.value);
       log({
         event: "claude_cloud",
-        step: "copied",
-        records: all.length,
-        ms: now() - startedAt,
+        step: "copy_failed",
+        error: read.error._tag,
       });
-      return Result.ok({ copy: copied.value, records: all });
+      return Result.err({
+        _tag: read.error._tag,
+        stopped: null,
+        message: COPY_UNREADABLE,
+      });
+    }
+    const all = mainRecords(read.value);
+    log({
+      event: "claude_cloud",
+      step: "copied",
+      records: all.length,
+      ms: now() - startedAt,
     });
+    return Result.ok({ copy: copied.value, records: all });
+  };
+
+  // A copy started for a turn that has ended is removed once it is written.
+  const discardStarted = async (started: Started) => {
+    const copied = await started.copied;
+    if (copied?.isOk()) await discardCopy(copied.value.copy);
+  };
 
   // The thread reads the newest copy from now on, so the one it read before is removed once that is saved.
   const keepCopy = async (
@@ -733,6 +790,8 @@ const COPY_STOPPED =
 const COPY_UNREADABLE = "the copy of the Cloud session could not be read";
 
 const BACK_TO_BACK_FOR_MS = 20_000;
+
+const OVERLAP_MS = 1_500;
 
 const FAST_POLL_MS = 3_000;
 
