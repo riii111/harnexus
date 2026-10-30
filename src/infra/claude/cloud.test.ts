@@ -348,9 +348,45 @@ describe("stabilizeCopy", () => {
     }
   });
 
-  // Two teleports of one session, as Claude Code writes them: the same records under new uuids.
-  const writeCopy = async (configDir: string, copy: string, ids: string[]) => {
-    const [prompt, answer, again] = ids;
+  const COPIED_AT = Date.parse("2026-10-30T08:00:00.000Z");
+
+  // Two teleports of one session, as Claude Code writes them: the same records under new uuids, then the records teleport adds when it runs.
+  const writeCopy = async (
+    configDir: string,
+    copy: string,
+    ids: string[],
+    ranAt: string | null = null,
+  ) => {
+    const [prompt, answer, again, note, command] = ids;
+    const own =
+      ranAt === null
+        ? []
+        : [
+            {
+              type: "user",
+              uuid: note,
+              parentUuid: again,
+              timestamp: ranAt,
+              sessionId: copy,
+              isMeta: true,
+              message: {
+                role: "user",
+                content:
+                  "This session is being continued from another machine.",
+              },
+            },
+            {
+              type: "user",
+              uuid: command,
+              parentUuid: note,
+              timestamp: ranAt,
+              sessionId: copy,
+              message: {
+                role: "user",
+                content: "<command-name>/usage</command-name>",
+              },
+            },
+          ];
     const lines = [
       {
         type: "user",
@@ -376,7 +412,12 @@ describe("stabilizeCopy", () => {
         sessionId: copy,
         message: { role: "assistant", content: [{ type: "text", text: "3" }] },
       },
-      { type: "last-prompt", leafUuid: again, sessionId: copy },
+      ...own,
+      {
+        type: "last-prompt",
+        leafUuid: own.at(-1)?.uuid ?? again,
+        sessionId: copy,
+      },
     ];
     const folder = join(configDir, "projects", "-state-cloud-copies");
     await mkdir(folder, { recursive: true });
@@ -417,8 +458,16 @@ describe("stabilizeCopy", () => {
     );
 
     const stabilized = await Promise.all([
-      stabilizeCopy("11111111-1111-4111-8111-111111111111", configDir),
-      stabilizeCopy("22222222-2222-4222-8222-222222222222", configDir),
+      stabilizeCopy(
+        "11111111-1111-4111-8111-111111111111",
+        COPIED_AT,
+        configDir,
+      ),
+      stabilizeCopy(
+        "22222222-2222-4222-8222-222222222222",
+        COPIED_AT,
+        configDir,
+      ),
     ]);
     const [a, b] = [await read(first), await read(second)];
 
@@ -431,12 +480,52 @@ describe("stabilizeCopy", () => {
     expect(a[0].sessionId).toBe("11111111-1111-4111-8111-111111111111");
   });
 
+  test("leaves out the records teleport writes when it runs, so every copy ends with the same record", async () => {
+    const configDir = await mkdtemp(join(tmpdir(), "harnexus-copy-"));
+    folders.push(configDir);
+    const ids = (prefix: string) =>
+      [1, 2, 3, 4, 5].map((n) => `${prefix}-0000-4000-8000-00000000000${n}`);
+    const first = await writeCopy(
+      configDir,
+      "11111111-1111-4111-8111-111111111111",
+      ids("aaaaaaaa"),
+      "2026-10-30T08:00:02.000Z",
+    );
+    const second = await writeCopy(
+      configDir,
+      "22222222-2222-4222-8222-222222222222",
+      ids("bbbbbbbb"),
+      "2026-10-30T08:05:02.000Z",
+    );
+
+    await stabilizeCopy(
+      "11111111-1111-4111-8111-111111111111",
+      COPIED_AT,
+      configDir,
+    );
+    await stabilizeCopy(
+      "22222222-2222-4222-8222-222222222222",
+      COPIED_AT + 5 * 60_000,
+      configDir,
+    );
+    const [a, b] = [await read(first), await read(second)];
+
+    expect(a.map((line) => line.uuid)).toEqual(b.map((line) => line.uuid));
+    expect(a.map((line) => line.type)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
+      "last-prompt",
+    ]);
+  });
+
   test("fails when the copy cannot be found", async () => {
     const configDir = await mkdtemp(join(tmpdir(), "harnexus-copy-"));
     folders.push(configDir);
 
     const stabilized = await stabilizeCopy(
       "33333333-3333-4333-8333-333333333333",
+      COPIED_AT,
       configDir,
     );
 

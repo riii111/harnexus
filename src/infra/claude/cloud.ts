@@ -125,6 +125,7 @@ export const copyCloudSession = async (
 ): Promise<Result<string, CloudCopyFailed>> => {
   const ready = await prepareDirectory(cwd);
   if (ready.isErr()) return copyFailed(ready.error.message);
+  const copiedAt = Date.now();
   const ran = await cli.run(
     cli.file,
     [
@@ -166,7 +167,7 @@ export const copyCloudSession = async (
       ? copyFailed(COPY_RAN_MODEL, "ran_model")
       : copyFailed(COPY_UNCHECKED, "unchecked");
   }
-  const stable = await stabilizeCopy(sessionId, configDir);
+  const stable = await stabilizeCopy(sessionId, copiedAt, configDir);
   if (stable.isErr()) {
     await removeCloudCopy(sessionId, configDir);
     return copyFailed(stable.error.message);
@@ -180,8 +181,10 @@ class CloudCopyUnstable extends TaggedError("CloudCopyUnstable")<{
 
 // Each teleport copy gives the records new uuids, which would change the turn ids, pages and cursors the app holds; a record's uuid is rewritten from when it was written, its kind and its content, so every copy names a record the same way.
 // Every occurrence of an old uuid is replaced, so the links between records, such as parentUuid, follow; a record without a time keeps its uuid.
+// teleport ends each copy with records of its own, the note that the session goes on here and the /cost command, timed when the copy ran; they are left out, so every copy ends with the Cloud session's last record. A Cloud record written while the copy ran is left out too and comes with the next copy.
 export const stabilizeCopy = async (
   copySessionId: string,
+  copiedAt: number,
   configDir: string = claudeConfigDir(process.env),
 ): Promise<Result<void, CloudCopyUnstable>> => {
   const unstable = (message: string) =>
@@ -196,33 +199,37 @@ export const stabilizeCopy = async (
   }
   const renamed = new Map<string, string>();
   const seen = new Map<string, number>();
+  const kept: string[] = [];
   for (const line of text.value.split("\n")) {
     const parsed = parseJson(line);
-    if (parsed.isErr() || !isObject(parsed.value)) continue;
-    const { uuid, timestamp, type } = parsed.value;
+    const record =
+      parsed.isOk() && isObject(parsed.value) ? parsed.value : null;
+    if (record !== null && writtenSince(record.timestamp, copiedAt)) continue;
+    kept.push(line);
+    if (record === null) continue;
+    const { uuid, timestamp, type } = record;
     if (typeof uuid !== "string" || !UUID.test(uuid)) continue;
     if (typeof timestamp !== "string" || typeof type !== "string") continue;
     const body = JSON.stringify(
-      parsed.value.message ??
-        parsed.value.attachment ??
-        parsed.value.subtype ??
-        null,
+      record.message ?? record.attachment ?? record.subtype ?? null,
     );
     const key = `${type}@${timestamp}#${body}`;
     const count = seen.get(key) ?? 0;
     seen.set(key, count + 1);
     renamed.set(uuid, uuidFrom(`${key}#${count}`));
   }
-  const stable = text.value.replace(
-    UUID_IN_TEXT,
-    (id) => renamed.get(id) ?? id,
-  );
+  const stable = kept
+    .join("\n")
+    .replace(UUID_IN_TEXT, (id) => renamed.get(id) ?? id);
   if (stable === text.value) return Result.ok();
   const written = await writeFileAtomic(found.value, stable);
   return written.isErr()
     ? unstable("the copy of the Cloud session could not be rewritten")
     : Result.ok();
 };
+
+const writtenSince = (timestamp: unknown, time: number) =>
+  typeof timestamp === "string" && Date.parse(timestamp) >= time;
 
 const UUID_IN_TEXT = new RegExp(UUID.source.slice(1, -1), "g");
 
