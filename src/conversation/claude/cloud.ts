@@ -289,7 +289,10 @@ export const createCloudRuntime = <Tag extends string>(
     const startedAt = now();
     let failingSince: number | null = null;
     for (;;) {
-      await sleep(pollMs(now() - startedAt), follow.woken);
+      await sleep(
+        pollMs(now() - startedAt, failingSince !== null),
+        follow.woken,
+      );
       if (follow.stop || closed || turn.state().interrupting) {
         log({ event: "claude_cloud", step: "stopped" });
         turn.apply(
@@ -626,9 +629,13 @@ const newFollow = (text: string, after: string | null): Follow => {
   };
 };
 
-// A short reply comes within the first minute, so it is copied often then; a longer job is copied less often, since every copy starts claude and rewrites the whole session.
-const pollMs = (waited: number) =>
-  waited < FAST_POLL_FOR_MS ? FAST_POLL_MS : POLL_MS;
+// A short reply comes within the first seconds, so it is copied again as soon as a copy ends, which already takes a few seconds; then less often, since every copy starts claude and rewrites the whole session.
+// A failing copy may end at once, so it is not tried again without a wait.
+const pollMs = (waited: number, failing: boolean) => {
+  if (failing) return FAST_POLL_MS;
+  if (waited < BACK_TO_BACK_FOR_MS) return 0;
+  return waited < FAST_POLL_FOR_MS ? FAST_POLL_MS : POLL_MS;
+};
 
 const cloudCommandOf = (text: string | null) => {
   const matched = text === null ? null : CLOUD_COMMAND.exec(text.trim());
@@ -720,6 +727,8 @@ const COPY_STOPPED =
   "copies of this chat stopped because one may have run a model turn; restart harnexus after checking bun run doctor";
 
 const COPY_UNREADABLE = "the copy of the Cloud session could not be read";
+
+const BACK_TO_BACK_FOR_MS = 20_000;
 
 const FAST_POLL_MS = 3_000;
 

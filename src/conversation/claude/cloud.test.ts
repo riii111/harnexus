@@ -433,7 +433,7 @@ describe("createCloudRuntime turns", () => {
     expect(turn.texts().at(-1)).toContain("still working");
   });
 
-  test("copies every 3 seconds for the first minute, then every 10 seconds", async () => {
+  test("copies again as soon as a copy ends for 20 seconds, then every 3 seconds until a minute, then every 10 seconds", async () => {
     const env = linked({
       copies: [
         [
@@ -449,7 +449,8 @@ describe("createCloudRuntime turns", () => {
     await env.runtime.run(turn.running);
 
     expect(env.waits).toEqual([
-      ...Array<number>(20).fill(3_000),
+      ...Array<number>(8).fill(0),
+      ...Array<number>(8).fill(3_000),
       ...Array<number>(3).fill(10_000),
     ]);
   });
@@ -463,8 +464,9 @@ describe("createCloudRuntime turns", () => {
 
     expect(turn.failure?._tag).toBe("CloudCopyFailed");
     expect(turn.failure?.message).toContain("reached the Cloud session");
-    // The first copy fails 3 seconds in, and the first one at least 20 seconds after it ends the turn.
-    expect(env.clock - 1_000).toBe(24_000);
+    // The first copy fails once it ends, 2.5 seconds in; the next ones wait 3 seconds each, and the first ending at least 20 seconds after it ends the turn.
+    expect(env.clock - 1_000).toBe(24_500);
+    expect(env.waits).toEqual([0, 3_000, 3_000, 3_000, 3_000]);
   });
 
   test.each([
@@ -656,9 +658,10 @@ const setup = ({
     innerRuns,
     ownStarts,
     copyCalls: 0,
-    // The clock moves only by the waits between copies, which are kept in order.
+    // The clock moves by the waits between copies, which are kept in order, and by each copy.
     clock: 1_000,
     waits: [] as number[],
+    copyMs: 2_500,
     // Set to make every copy say it may have run a model turn.
     copyStop: null as "ran_model" | "unchecked" | null,
     copyFailure: null as string | null,
@@ -754,6 +757,7 @@ const setup = ({
     },
     copy: async () => {
       env.copyCalls += 1;
+      env.clock += env.copyMs;
       // A waiter stays until the count it waits for is reached.
       copyWaiters = copyWaiters.filter((wake) => !wake());
       if (env.copyFailure !== null) {
