@@ -6,6 +6,7 @@ import { type Env, homeOf } from "./request.ts";
 
 export const EXECUTION_ENV = "HARNEXUS_EXECUTION_ENV";
 const CLOUD_HINT_ENV = "CODEX_ENVIRONMENT_ID";
+const CLAUDE_CLOUD_ENV = "CLAUDE_CODE_REMOTE";
 const PROBE_TIMEOUT_MS = 1500;
 
 export type ExecutionEnvironment = "cloud" | "local" | "unknown";
@@ -13,7 +14,14 @@ export type ExecutionEnvironment = "cloud" | "local" | "unknown";
 export type Detected = {
   environment: ExecutionEnvironment;
   // Names where the answer came from; never a value of the environment.
-  source: "explicit" | typeof CLOUD_HINT_ENV | "harnexus-socket" | "none";
+  source:
+    | "explicit"
+    | typeof CLOUD_HINT_ENV
+    | typeof CLAUDE_CLOUD_ENV
+    | "harnexus-socket"
+    | "none";
+  // Which Cloud runs the command, when it says so; an explicit cloud with neither variable names none.
+  host?: "codex" | "claude" | null;
   note: string;
 };
 
@@ -32,17 +40,32 @@ export const declaredEnvironment = (
     return Result.ok({
       environment: explicit,
       source: "explicit",
+      ...(explicit === "cloud" && { host: hostOf(env) }),
       note: `set by ${EXECUTION_ENV}`,
     });
   }
-  const hint = env[CLOUD_HINT_ENV];
-  if (hint !== undefined && hint !== "")
+  const host = hostOf(env);
+  if (host === "codex")
     return Result.ok({
       environment: "cloud",
       source: CLOUD_HINT_ENV,
+      host,
       note: GUESS_NOTE,
     });
+  if (host === "claude")
+    return Result.ok({
+      environment: "cloud",
+      source: CLAUDE_CLOUD_ENV,
+      host,
+      note: `${CLAUDE_CLOUD_ENV} is set in Claude Code cloud sessions`,
+    });
   return Result.ok(null);
+};
+
+const hostOf = (env: Env) => {
+  const codex = env[CLOUD_HINT_ENV];
+  if (codex !== undefined && codex !== "") return "codex";
+  return env[CLAUDE_CLOUD_ENV] === "true" ? "claude" : null;
 };
 
 // Local is only claimed once the harnexus call socket answers a connection; a missing variable proves nothing.
@@ -65,7 +88,7 @@ export const detectEnvironment = async (
   return Result.ok({
     environment: "unknown",
     source: "none",
-    note: `no ${EXECUTION_ENV}, no ${CLOUD_HINT_ENV} and no harnexus call socket; set ${EXECUTION_ENV}=cloud|local`,
+    note: `no ${EXECUTION_ENV}, no ${CLOUD_HINT_ENV}, no ${CLAUDE_CLOUD_ENV}=true and no harnexus call socket; set ${EXECUTION_ENV}=cloud|local`,
   });
 };
 
@@ -73,6 +96,10 @@ const CLOUD_ALTERNATIVE =
   "Cloud cannot create or resume other tasks or threads from here. " +
   "For a Claude turn inside this task use `harnexus-task claude`; " +
   "PR notifications are not built for Cloud, so check the PR with gh";
+
+const CLAUDE_CLOUD_ALTERNATIVE =
+  "In a Claude Code cloud session, start a worker as a new cloud session with create_session, " +
+  "and follow its PR with subscribe_pr_activity from that session";
 
 // A command that needs the Codex App fails with the Cloud reason instead of a missing-socket hint.
 export const refuseInCloud = (
@@ -82,7 +109,11 @@ export const refuseInCloud = (
   declaredEnvironment(env).andThen((declared) =>
     declared?.environment === "cloud"
       ? fail(
-          `${command} needs the Codex App and is unavailable in Cloud. ${CLOUD_ALTERNATIVE}`,
+          `${command} needs the Codex App and is unavailable in Cloud. ${
+            declared.host === "claude"
+              ? CLAUDE_CLOUD_ALTERNATIVE
+              : CLOUD_ALTERNATIVE
+          }`,
         )
       : Result.ok(),
   );

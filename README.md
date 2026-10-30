@@ -136,18 +136,20 @@ It cannot create or resume other Cloud tasks, so those commands fail with that r
 harnexus-task environment
 ```
 
-prints `{"environment": "cloud" | "local" | "unknown", "source": ..., "note": ...}`.
+prints `{"environment": "cloud" | "local" | "unknown", "source": ..., "note": ...}`, with `"host": "codex" | "claude" | null` for a Cloud, null when it cannot tell which.
 The first match decides:
 
 1. `HARNEXUS_EXECUTION_ENV=cloud|local`. Any other value is an error.
 2. A nonempty `CODEX_ENVIRONMENT_ID` means `cloud`.
    This is a variable observed in Cloud tasks, not a documented guarantee; the value is never printed.
-3. `local` only when the harnexus call socket accepts a connection.
+3. `CLAUDE_CODE_REMOTE=true`, set in Claude Code cloud sessions, means `cloud` on Claude.
+4. `local` only when the harnexus call socket accepts a connection.
    A missing variable alone never means local.
-4. Otherwise `unknown`.
+5. Otherwise `unknown`.
 
 In Cloud, `launch`, `review`, `resolve`, `name`, `watch` and `state --request` need the Codex App, so they fail with a message naming Cloud.
-Pin `HARNEXUS_EXECUTION_ENV=local` where `CODEX_ENVIRONMENT_ID` is set but the App is reachable.
+In a Claude Code cloud session the message points to starting a worker as a new cloud session instead.
+Pin `HARNEXUS_EXECUTION_ENV=local` where `CODEX_ENVIRONMENT_ID` or `CLAUDE_CODE_REMOTE=true` is set but the App is reachable.
 
 `harnexus-task` is not on `PATH` in Cloud.
 Build it once from a checkout with Bun 1.4.4 and call it by its absolute path:
