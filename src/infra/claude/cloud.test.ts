@@ -2,11 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { Result } from "better-result";
 import {
   type CloudCli,
+  claudeCliFile,
   copyCloudSession,
   parseCloudSessionId,
   sendToCloud,
 } from "./cloud.ts";
-import { type ClaudeRun, ClaudeRunFailed } from "./run.boundary.ts";
+import {
+  bundledClaude,
+  type ClaudeRun,
+  ClaudeRunFailed,
+} from "./run.boundary.ts";
 
 const COPY = "467614f6-4ec9-44b7-a282-e2c79981140d";
 
@@ -65,6 +70,27 @@ describe("parseCloudSessionId", () => {
     { name: "an empty text", text: "" },
   ])("refuses $name", ({ text }) => {
     expect(parseCloudSessionId(text)).toBeNull();
+  });
+});
+
+describe("claudeCliFile", () => {
+  test("prefers HARNEXUS_CLAUDE_CLI, then the SDK's claude, then claude on the PATH", () => {
+    expect(
+      claudeCliFile(
+        { HARNEXUS_CLAUDE_CLI: "/opt/claude" },
+        () => "/sdk/claude",
+      ),
+    ).toBe("/opt/claude");
+    expect(claudeCliFile({}, () => "/sdk/claude")).toBe("/sdk/claude");
+    expect(claudeCliFile({}, () => null)).toBe("claude");
+  });
+
+  test("finds the SDK's claude for this platform", () => {
+    const found = bundledClaude();
+
+    expect(found).toEndWith(
+      `/claude-agent-sdk-${process.platform}-${process.arch}/claude`,
+    );
   });
 });
 

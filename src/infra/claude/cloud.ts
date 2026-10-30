@@ -2,7 +2,7 @@ import { Result, TaggedError } from "better-result";
 import { removeFile } from "../../runtime/fs.boundary.ts";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
-import { type ClaudeRun, runClaude } from "./run.boundary.ts";
+import { bundledClaude, type ClaudeRun, runClaude } from "./run.boundary.ts";
 import { claudeConfigDir, findSessionFile } from "./transcripts.ts";
 
 // A Cloud session is named by claude.ai as session_… or cse_…, and its page URL ends in that id.
@@ -29,11 +29,16 @@ export type CloudCli = {
   killGraceMs?: number;
 };
 
-// HARNEXUS_CLAUDE_CLI names the claude command when it is not on the PATH the app starts the bridge with.
+// The SDK's own claude is used by default, since it already holds the sign-in the bridge runs with; a claude installed elsewhere may stop to ask macOS for keychain access when the app starts it. HARNEXUS_CLAUDE_CLI names another one.
+export const claudeCliFile = (
+  env: Record<string, string | undefined>,
+  bundled: () => string | null = bundledClaude,
+) => env.HARNEXUS_CLAUDE_CLI || bundled() || "claude";
+
 export const cloudCli = (
   env: Record<string, string | undefined>,
 ): CloudCli => ({
-  file: env.HARNEXUS_CLAUDE_CLI || "claude",
+  file: claudeCliFile(env),
   env,
   run: runClaude,
 });

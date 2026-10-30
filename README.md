@@ -115,7 +115,7 @@ The session id or its `claude.ai/code/...` URL both work.
 The chat then shows the session's conversation; what you send there goes to the session, and its replies appear as they are copied.
 
 - Messages are sent with `claude -p --cloud <id>`, and the session is copied with `claude --teleport <id> -p /cost`, which answers without a model turn.
-  Both use the `claude` command you signed in with; set `HARNEXUS_CLAUDE_CLI` to its absolute path if the app does not find it.
+  Both use the claude binary the Claude Agent SDK ships, which already holds the sign-in harnexus runs with; set `HARNEXUS_CLAUDE_CLI` to an absolute path to use another one.
   Copies are kept beside the thread state in `cloud-copies/`, and only the latest one per chat.
 - After you send a message, the chat copies the session every 10 seconds until Claude ends its turn, or for at most an hour.
   Otherwise it copies every 5 minutes, and shows what the session did meanwhile as a turn of Claude's own.

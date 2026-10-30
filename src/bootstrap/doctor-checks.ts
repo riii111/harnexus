@@ -1,4 +1,5 @@
 import { dirname, join } from "node:path";
+import { claudeCliFile } from "../infra/claude/cloud.ts";
 import { readClaudeLogin } from "../infra/claude/session.ts";
 import { isVerifiedCodex } from "../infra/codex/versions.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
@@ -78,7 +79,7 @@ export const doctorChecks = async (
   ).flat();
 
 async function claudeCloudCheck(setup: DoctorSetup): Promise<Check> {
-  const file = setup.env.HARNEXUS_CLAUDE_CLI || "claude";
+  const file = claudeCliFile(setup.env);
   const [help, version] = await Promise.all([
     readCommandOutput(file, ["--help"]),
     readCommandOutput(file, ["--version"]),
