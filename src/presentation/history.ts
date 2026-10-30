@@ -105,12 +105,11 @@ export const renderRecords = (
   messages: readonly SessionMessage[],
   now: number,
 ): Rendered => {
-  let rendered: Rendered = { state, notifications: [] };
+  let current = state;
+  const notifications: Rendered["notifications"] = [];
   const add = (next: Rendered) => {
-    rendered = {
-      state: next.state,
-      notifications: [...rendered.notifications, ...next.notifications],
-    };
+    current = next.state;
+    notifications.push(...next.notifications);
   };
   for (const message of mainRecords(messages)) {
     const at = timeOf(message) ?? now;
@@ -118,11 +117,11 @@ export const renderRecords = (
     if (message.type === "user") {
       const prompt = promptOf(body);
       if (prompt === null) {
-        add(renderSdkMessage(rendered.state, toolResultsOf(message, body), at));
+        add(renderSdkMessage(current, toolResultsOf(message, body), at));
       } else if (promptTextOf(message) !== null) {
         add(
           renderUserInput(
-            rendered.state,
+            current,
             [
               { type: "text", text: prompt.text, text_elements: [] },
               ...prompt.images,
@@ -133,10 +132,10 @@ export const renderRecords = (
         );
       }
     } else if (isAssistantBody(body)) {
-      add(renderSdkMessage(rendered.state, assistantOf(message, body), at));
+      add(renderSdkMessage(current, assistantOf(message, body), at));
     }
   }
-  return rendered;
+  return { state: current, notifications };
 };
 
 export type LiveTurn = {

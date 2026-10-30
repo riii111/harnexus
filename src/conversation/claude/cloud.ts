@@ -105,8 +105,6 @@ type Follow = {
   woken: Promise<void>;
 };
 
-// A thread linked to a Claude Cloud session sends its messages there with the claude CLI and shows the session through local copies of it; every other thread goes to the runtime it wraps.
-// A Cloud thread's own turns show what the session did while no turn of the app waited for it, such as work it did on its own or messages typed on claude.ai.
 export const createCloudRuntime = <Tag extends string>(
   inner: TurnRuntime<Tag>,
   {
@@ -242,7 +240,6 @@ export const createCloudRuntime = <Tag extends string>(
       });
       return;
     }
-    // A turn stopped while it waited behind another is never sent.
     if (turn.state().interrupting) {
       turn.finish({ status: "interrupted" }, null);
       return;
@@ -326,7 +323,12 @@ export const createCloudRuntime = <Tag extends string>(
         copied.value.copy,
         follow.last ?? threads.cloudOf(threadId)?.shown ?? null,
       );
-      if (progress.done) {
+      // A message sent while the copy was saved is waited for too.
+      if (
+        progress.done &&
+        follow.sending === 0 &&
+        follow.matched === follow.texts.length
+      ) {
         turn.finish({ status: "completed" }, null);
         return;
       }
@@ -372,7 +374,7 @@ export const createCloudRuntime = <Tag extends string>(
       } else {
         shown.push(message);
       }
-      follow.last = recordKey(message);
+      follow.last = message.uuid;
     }
     const last = all.at(-1);
     const done =
@@ -493,7 +495,6 @@ export const createCloudRuntime = <Tag extends string>(
       if (cloud.shown !== null && at === -1) {
         log({ event: "claude_cloud", step: "compacted" });
       }
-      // Nothing new, so the copy the thread reads already shows it all.
       if (at === all.length - 1 || all.length === 0) {
         await discardCopy(copied.value.copy);
         continue;
@@ -615,7 +616,6 @@ const newFollow = (text: string, after: string | null): Follow => {
   };
 };
 
-// /cloud is answered by the bridge; with nothing after it, it explains how to link.
 const cloudCommandOf = (input: RunningTurn<string>["input"]) => {
   if (input.toolOutput !== null || input.items.length === 0) return null;
   const matched = /^\/cloud(?:\s+(\S+))?\s*$/.exec(input.text.trim());
@@ -631,16 +631,12 @@ const forget = (follow: Follow, text: string) => {
 const samePrompt = (message: SessionMessage, text: string) =>
   promptTextOf(message)?.trim() === text.trim();
 
-// The bridge rewrites each copy's uuids from what the records hold, so a record keeps its uuid from copy to copy.
-const recordKey = (message: SessionMessage) => message.uuid;
-
-const keyOf = (message: SessionMessage | undefined) =>
-  message === undefined ? null : recordKey(message);
+const keyOf = (message: SessionMessage | undefined) => message?.uuid ?? null;
 
 const keyOfLast = (all: readonly SessionMessage[]) => keyOf(all.at(-1));
 
 const indexOf = (all: readonly SessionMessage[], key: string | null) =>
-  key === null ? -1 : all.findIndex((message) => recordKey(message) === key);
+  key === null ? -1 : all.findIndex((message) => message.uuid === key);
 
 // Where the records after uuid start; a record no longer in the copy, such as one Claude compacted away, leaves nothing to skip.
 const indexAfter = (all: readonly SessionMessage[], uuid: string | null) => {

@@ -393,34 +393,47 @@ describe("createCloudRuntime turns", () => {
     expect(env.copyCalls).toBe(3);
   });
 
-  test("stops copying a thread whose copy did not report its turns", async () => {
+  test.each([
+    { name: "did not report its turns", turns: null, step: "copy_unchecked" },
+    { name: "ran a model turn", turns: 1, step: "copy_ran_model" },
+  ])("stops copying a thread whose copy $name", async ({ turns, step }) => {
     const env = linked({ copies: [[prompt("p1", "hi")]], shown: null });
-    env.copyTurns = null;
+    env.copyTurns = turns;
     const turn = env.turn("hi");
 
     await env.runtime.run(turn.running);
 
     expect(turn.failure?._tag).toBe("CloudCopyFailed");
     expect(env.copyCalls).toBe(1);
-    expect(env.events).toContainEqual({
-      event: "claude_cloud",
-      step: "copy_unchecked",
-    });
+    expect(env.events).toContainEqual({ event: "claude_cloud", step });
   });
 
-  test("stops copying a thread whose copy ran a model turn", async () => {
-    const env = linked({ copies: [[prompt("p1", "hi")]], shown: null });
-    env.copyTurns = 1;
-    const turn = env.turn("hi");
+  test("waits for a message sent while the finished reply's copy was saved", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "first"), endReply("a1", "one")],
+        [
+          prompt("p1", "first"),
+          endReply("a1", "one"),
+          prompt("p2", "second"),
+          endReply("a2", "two"),
+        ],
+      ],
+      shown: null,
+    });
+    const turn = env.turn("first");
+    let steered: Promise<unknown> = Promise.resolve();
+    env.duringSave = () => {
+      env.duringSave = () => {};
+      steered = env.runtime.steer(turn.running, { text: "second", images: [] });
+    };
 
     await env.runtime.run(turn.running);
+    await steered;
 
-    expect(turn.failure?._tag).toBe("CloudCopyFailed");
-    expect(env.copyCalls).toBe(1);
-    expect(env.events).toContainEqual({
-      event: "claude_cloud",
-      step: "copy_ran_model",
-    });
+    expect(env.sends.map((sent) => sent.text)).toEqual(["first", "second"]);
+    expect(turn.texts()).toEqual(["one", "two"]);
+    expect(turn.outcome).toEqual({ status: "completed" });
   });
 
   test("passes a thread with no Cloud session to the runtime it wraps", async () => {
@@ -570,6 +583,8 @@ const setup = ({
     copyTurns: 0 as number | null,
     copyFailure: null as string | null,
     saveFails: false,
+    // Runs while a copy is being saved.
+    duringSave: () => {},
     sendAnswer: { kind: "sent" } as CloudSend,
     // Answers for the next sends in order, before sendAnswer.
     sendQueue: [] as CloudSend[],
@@ -640,6 +655,8 @@ const setup = ({
         return Result.ok({} as never);
       },
       setCloudCopy: async (threadId, copy, shown) => {
+        env.duringSave();
+        await Promise.resolve();
         sessionIds.set(threadId, copy);
         if (env.saveFails) {
           return Result.err({ _tag: "StatePersistFailed" }) as never;

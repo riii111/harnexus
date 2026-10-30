@@ -145,7 +145,7 @@ export const connectClaudeThreads = ({
     copy: (cloudSessionId) =>
       cloud === undefined
         ? Promise.resolve(Result.err({ _tag: "CloudOff", message: CLOUD_OFF }))
-        : copyInto(cloud.cli, cloudSessionId, cloud.copyDir),
+        : copyCloudInto(cloud.cli, cloudSessionId, cloud.copyDir),
     readCopy: (copySessionId) => readSession(copySessionId),
     discardCopy: cloud?.discardCopy ?? ((copy) => removeCloudCopy(copy)),
     replayHistory: readHistory,
@@ -247,7 +247,7 @@ const THREAD_NOTE = {
 };
 
 // The folder is made on first use, so a bridge that never links a Cloud session leaves nothing behind.
-const copyInto = async (
+export const copyCloudInto = async (
   cli: CloudCli,
   cloudSessionId: string,
   copyDir: string,
@@ -257,7 +257,8 @@ const copyInto = async (
     return Result.err({ _tag: ready.error._tag, message: ready.error.message });
   }
   const copied = await copyCloudSession(cli, cloudSessionId, copyDir);
-  if (copied.isErr()) return copied;
+  // A copy that may have run a model turn goes back as it is, so the runtime stops copying whether or not it could be read.
+  if (copied.isErr() || copied.value.turns !== 0) return copied;
   // A copy whose uuids could not be made stable would show its records again, so it is dropped.
   const stable = await stabilizeCopy(copied.value.sessionId);
   if (stable.isErr()) {

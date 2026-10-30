@@ -26,7 +26,6 @@ export const parseCloudSessionId = (text: string): string | null => {
 export type RunClaude = typeof runClaude;
 
 export type CloudCli = {
-  // The claude CLI the user signed in with, which owns the Cloud sessions; the SDK's bundled one is not used for them.
   file: string;
   env: Record<string, string | undefined>;
   run: RunClaude;

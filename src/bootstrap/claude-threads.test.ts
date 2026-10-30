@@ -17,7 +17,7 @@ import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import { createMemoryCronRecord } from "../infra/codex/testing/cron-record.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
-import { connectClaudeThreads } from "./claude-threads.ts";
+import { connectClaudeThreads, copyCloudInto } from "./claude-threads.ts";
 
 let dir: string;
 
@@ -27,6 +27,32 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
+});
+
+describe("copyCloudInto", () => {
+  test("returns a copy that ran a model turn as it is, even when the copy cannot be read", async () => {
+    const copied = await copyCloudInto(
+      {
+        file: "claude",
+        env: {},
+        run: async () =>
+          Result.ok({
+            status: 0,
+            stdout: JSON.stringify({
+              is_error: false,
+              num_turns: 1,
+              session_id: "44444444-4444-4444-8444-444444444444",
+            }),
+            stderr: "",
+            ended: "exit" as const,
+          }),
+      },
+      "session_01Cloud",
+      join(dir, "cloud-copies"),
+    );
+
+    expect(copied.isOk() && copied.value.turns).toBe(1);
+  });
 });
 
 describe("connectClaudeThreads", () => {

@@ -147,7 +147,6 @@ const cloudCopyCheck = (entries: readonly LogEntry[]): Check => {
   };
 };
 
-// A sandbox refuses with EPERM where file modes refuse with EACCES, so EPERM says only that this shell may not look, not what the app can do.
 // A Cloud thread sends with claude -p --cloud and copies with claude --teleport, so the claude command must offer both; Cloud threads are optional, so their absence only warns.
 export const cloudCheck = (
   file: string,
@@ -182,6 +181,7 @@ export const cloudCheck = (
 
 const CLOUD_CHECKED_ON = "2.1.314";
 
+// A sandbox refuses with EPERM where file modes refuse with EACCES, so EPERM says only that this shell may not look, not what the app can do.
 export const refusedCheck = (
   name: string,
   detail: string,
