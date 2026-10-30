@@ -4,7 +4,6 @@ Use Claude in the Codex App.
 
 <img width="445" height="511" alt="image" src="https://github.com/user-attachments/assets/c5424fe5-50a6-48b9-bc43-98259c427658" />
 
-
 Also supported:
 
 - Side chats
