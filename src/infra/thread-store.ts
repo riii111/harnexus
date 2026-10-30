@@ -416,25 +416,24 @@ const createThreadStore = (
   };
 };
 
+const ownerWhere = (
+  mappings: ReadonlyMap<string, ThreadMapping>,
+  owns: (mapping: ThreadMapping) => boolean,
+) => [...mappings.values()].find(owns)?.threadId;
+
 const ownerOfSession = (
   mappings: ReadonlyMap<string, ThreadMapping>,
   sessionId: string,
-) => {
-  for (const mapping of mappings.values()) {
-    if (mapping.sessionId === sessionId) return mapping.threadId;
-  }
-  return undefined;
-};
+) => ownerWhere(mappings, (mapping) => mapping.sessionId === sessionId);
 
 const ownerOfCloud = (
   mappings: ReadonlyMap<string, ThreadMapping>,
   cloudSessionId: string,
-) => {
-  for (const mapping of mappings.values()) {
-    if (mapping.cloud?.sessionId === cloudSessionId) return mapping.threadId;
-  }
-  return undefined;
-};
+) =>
+  ownerWhere(
+    mappings,
+    (mapping) => mapping.cloud?.sessionId === cloudSessionId,
+  );
 
 const notFound = (threadId: string) =>
   new ThreadNotFound({

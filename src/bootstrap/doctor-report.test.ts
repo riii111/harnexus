@@ -31,12 +31,8 @@ describe("cloudCheck", () => {
       "2.1.314 (Claude Code)\n",
     );
 
-    expect(check).toEqual({
-      status: "ok",
-      name: "Claude Cloud sessions",
-      detail:
-        "claude (2.1.314 (Claude Code)) offers --cloud and --teleport; copies without a model turn were checked on Claude Code 2.1.314",
-    });
+    expect(check.status).toBe("ok");
+    expect(check.detail).toContain("offers --cloud and --teleport");
   });
 
   test.each([

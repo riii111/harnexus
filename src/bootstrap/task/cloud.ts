@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Result } from "better-result";
+import { printAnswer, UUID } from "../../infra/claude/print.ts";
 import { processAlive, runClaude } from "../../infra/claude/run.boundary.ts";
 import {
   checkAccess,
@@ -9,7 +10,6 @@ import {
   removeFile,
   writeFileExclusive,
 } from "../../runtime/fs.boundary.ts";
-import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 import { asText, type Fields, fail, isBlank } from "./format.ts";
 import { type Env, ioFailed, readText, singleLine } from "./request.ts";
@@ -18,8 +18,6 @@ import { load, type SaveJson, stateRoot } from "./session.ts";
 export const CLOUD_CLAUDE_BIN = "/workspace/.cloud-setup/bin/claude-cloud";
 const DEFAULT_TIMEOUT_MS = 60 * 60_000;
 const DEFAULT_KILL_GRACE_MS = 5_000;
-const SESSION_ID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const KEY = /^[\p{L}\p{N}_][\p{L}\p{N}_.:/-]{0,127}$/u;
 const NETWORK_EXIT = 75;
 
@@ -131,21 +129,13 @@ const release = async (lock: string, token: string) => {
 
 type Outcome = { sessionId: string | null; isError: boolean; text: string };
 
-// Print mode answers one object, or an array of events ending in it.
 const outcomeOf = (stdout: string): Outcome | null => {
-  const parsed = parseJson(stdout);
-  if (parsed.isErr()) return null;
-  const events: unknown[] = Array.isArray(parsed.value)
-    ? parsed.value
-    : [parsed.value];
-  const last = events
-    .filter((event) => isObject(event) && event.type === "result")
-    .at(-1);
-  if (!isObject(last)) return null;
+  const last = printAnswer(stdout);
+  if (last === null || last.type !== "result") return null;
   const id = last.session_id;
   const result = last.result;
   return {
-    sessionId: typeof id === "string" && SESSION_ID.test(id) ? id : null,
+    sessionId: typeof id === "string" && UUID.test(id) ? id : null,
     isError: last.is_error === true || last.subtype !== "success",
     text: typeof result === "string" ? result : asText(result),
   };
@@ -217,7 +207,7 @@ const locked = (
       resuming &&
       (state === null ||
         typeof state.sessionId !== "string" ||
-        !SESSION_ID.test(state.sessionId) ||
+        !UUID.test(state.sessionId) ||
         typeof state.cwd !== "string")
     )
       return fail(

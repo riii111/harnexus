@@ -208,27 +208,62 @@ describe("sendToCloud", () => {
 });
 
 describe("copyCloudSession", () => {
-  test("teleports with the /cost prompt in the given folder and returns the copy", async () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    for (const root of roots.splice(0)) {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // teleport writes the copy under the config folder, which the fake does when told the copy exists.
+  const copying = async (answer: object | string, writes = true) => {
+    const root = await mkdtemp(join(tmpdir(), "harnexus-copy-"));
+    roots.push(root);
+    const configDir = join(root, "config");
+    const record = join(configDir, "projects", "-copies", `${COPY}.jsonl`);
     const calls: Call[] = [];
-    const cli = cliAnswering(
-      Result.ok(
-        exited(
-          JSON.stringify({
-            type: "result",
-            subtype: "success",
-            is_error: false,
-            num_turns: 0,
-            total_cost_usd: 0,
-            session_id: COPY,
-          }),
-        ),
-      ),
-      calls,
+    const cli: CloudCli = {
+      file: "/usr/local/bin/claude",
+      env: {},
+      run: async (file, args, input, options) => {
+        calls.push({ file, args, input, cwd: options.cwd });
+        if (writes) {
+          await mkdir(join(configDir, "projects", "-copies"), {
+            recursive: true,
+          });
+          await writeFile(
+            record,
+            `${JSON.stringify({ type: "user", uuid: "aaaaaaaa-0000-4000-8000-000000000001", timestamp: "2026-10-30T07:00:00.000Z", message: { role: "user", content: "hi" } })}\n`,
+          );
+        }
+        return Result.ok(
+          exited(typeof answer === "string" ? answer : JSON.stringify(answer)),
+        );
+      },
+    };
+    const cwd = join(root, "copies");
+    const copied = await copyCloudSession(cli, "session_01Nfj", {
+      cwd,
+      configDir,
+    });
+    return { copied, calls, cwd, record };
+  };
+
+  const exists = (path: string) =>
+    readFile(path).then(
+      () => true,
+      () => false,
     );
 
-    const copied = await copyCloudSession(cli, "session_01Nfj", "/state/cloud");
+  test("teleports with the /cost prompt in its own folder and returns the stable copy", async () => {
+    const { copied, calls, cwd, record } = await copying({
+      type: "result",
+      is_error: false,
+      num_turns: 0,
+      session_id: COPY,
+    });
 
-    expect(copied.unwrap()).toEqual({ sessionId: COPY, turns: 0 });
+    expect(copied.unwrap()).toBe(COPY);
     expect(calls).toEqual([
       {
         file: "/usr/local/bin/claude",
@@ -241,62 +276,67 @@ describe("copyCloudSession", () => {
           "json",
         ],
         input: "",
-        cwd: "/state/cloud",
+        cwd,
       },
     ]);
+    expect(await readFile(record, "utf8")).not.toContain(
+      "aaaaaaaa-0000-4000-8000-000000000001",
+    );
   });
 
-  test("reports the turns a copy ran, so a model call can be noticed", async () => {
-    const cli = cliAnswering(
-      Result.ok(
-        exited(
-          JSON.stringify({ is_error: false, num_turns: 1, session_id: COPY }),
-        ),
-      ),
-    );
+  test.each([
+    { name: "ran a model turn", turns: 1, stopped: "ran_model" },
+    {
+      name: "did not report its turns",
+      turns: undefined,
+      stopped: "unchecked",
+    },
+  ])("removes a copy that $name and says copies must stop", async ({
+    turns,
+    stopped,
+  }) => {
+    const { copied, record } = await copying({
+      is_error: false,
+      num_turns: turns,
+      session_id: COPY,
+    });
 
-    const copied = await copyCloudSession(cli, "session_01Nfj", "/");
-
-    expect(copied.unwrap().turns).toBe(1);
+    expect(copied.isErr() && copied.error.stopped).toBe(stopped);
+    expect(await exists(record)).toBe(false);
   });
 
   test.each([
     {
-      name: "an error printed by the CLI",
-      run: Result.ok(
-        exited("", 1, "Error: Session not found: session_01Nfj\n"),
-      ),
-      message: "Session not found: session_01Nfj",
-    },
-    {
       name: "a result marked as an error",
-      run: Result.ok(
-        exited(
-          JSON.stringify({
-            is_error: true,
-            result: "Remote Control session expired",
-            session_id: COPY,
-          }),
-        ),
-      ),
+      answer: {
+        is_error: true,
+        result: "Remote Control session expired",
+        session_id: COPY,
+      },
+      writes: true,
       message: "Remote Control session expired",
     },
     {
       name: "a result without a usable session id",
-      run: Result.ok(
-        exited(JSON.stringify({ is_error: false, session_id: "x" })),
-      ),
+      answer: { is_error: false, num_turns: 0, session_id: "x" },
+      writes: true,
       message: "claude --teleport answered without a copy",
     },
-  ])("fails on $name", async ({ run, message }) => {
-    const copied = await copyCloudSession(
-      cliAnswering(run),
-      "session_01Nfj",
-      "/",
-    );
+    {
+      name: "a copy that was never written",
+      answer: { is_error: false, num_turns: 0, session_id: COPY },
+      writes: false,
+      message: "the copy of the Cloud session was not found",
+    },
+  ])("fails on $name without stopping copies", async ({
+    answer,
+    writes,
+    message,
+  }) => {
+    const { copied } = await copying(answer, writes);
 
-    expect(copied.isErr()).toBe(true);
     expect(copied.isErr() && copied.error.message).toBe(message);
+    expect(copied.isErr() && copied.error.stopped).toBeNull();
   });
 });
 

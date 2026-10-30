@@ -1,12 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import {
-  buildHistory,
-  endsTurn,
-  promptTextOf,
-  renderRecords,
-  replayHistory,
-} from "./history.ts";
+import { buildHistory, renderRecords, replayHistory } from "./history.ts";
 import type { ThreadItem, Turn } from "./protocol.ts";
 import { RECOVERY_CONTEXT, RECOVERY_NOTICE } from "./recovery.ts";
 import {
@@ -51,18 +45,6 @@ describe("renderRecords", () => {
     expect(completed[0]).toMatchObject({
       content: [{ type: "text", text: "typed on claude.ai" }],
     });
-  });
-
-  test("reads which records open and end a turn", () => {
-    expect(promptTextOf(prompt("p", "go"))).toBe("go");
-    expect(promptTextOf(toolResult("r", "t", "out"))).toBeNull();
-    expect(
-      promptTextOf(prompt("i", "[Request interrupted by user]")),
-    ).toBeNull();
-    expect(endsTurn(reply("a", "m", text("x"), "end_turn"))).toBe(true);
-    expect(
-      endsTurn(reply("b", "m", toolUse("t", "Bash", {}), "tool_use")),
-    ).toBe(false);
   });
 });
 

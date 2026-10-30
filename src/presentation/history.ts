@@ -83,15 +83,11 @@ export const mainRecords = (messages: readonly SessionMessage[]) =>
 export const promptTextOf = (message: SessionMessage) => {
   if (message.type !== "user") return null;
   const prompt = promptOf(message.message);
-  if (
-    prompt === null ||
-    INTERRUPTED.test(prompt.text) ||
-    LOCAL_COMMAND.test(prompt.text)
-  ) {
-    return null;
-  }
-  return prompt.text;
+  return prompt !== null && opensTurn(prompt) ? prompt.text : null;
 };
+
+const opensTurn = (prompt: Prompt) =>
+  !INTERRUPTED.test(prompt.text) && !LOCAL_COMMAND.test(prompt.text);
 
 // Claude ends a turn with a reply that asks for no tool.
 export const endsTurn = (message: SessionMessage) =>
@@ -99,7 +95,7 @@ export const endsTurn = (message: SessionMessage) =>
   isObject(message.message) &&
   message.message.stop_reason === "end_turn";
 
-// A turn that shows records as they are copied, such as a Cloud thread's, renders them as the live turn renders Claude's messages; a prompt typed elsewhere is shown as the user's message.
+// A turn that shows records as they are copied, such as a Cloud thread's, renders the main records it is given as the live turn renders Claude's messages; a prompt typed elsewhere is shown as the user's message.
 export const renderRecords = (
   state: TurnState,
   messages: readonly SessionMessage[],
@@ -111,14 +107,14 @@ export const renderRecords = (
     current = next.state;
     notifications.push(...next.notifications);
   };
-  for (const message of mainRecords(messages)) {
+  for (const message of messages) {
     const at = timeOf(message) ?? now;
     const body = message.message;
     if (message.type === "user") {
       const prompt = promptOf(body);
       if (prompt === null) {
         add(renderSdkMessage(current, toolResultsOf(message, body), at));
-      } else if (promptTextOf(message) !== null) {
+      } else if (opensTurn(prompt)) {
         add(
           renderUserInput(
             current,

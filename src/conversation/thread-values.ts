@@ -1,4 +1,5 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+import type { Result } from "better-result";
 import { isClaudeEffort } from "../infra/claude/models.ts";
 import type { CloudLink, ThreadStore } from "../infra/thread-store.ts";
 import type { Thread } from "./thread-request.ts";
@@ -181,9 +182,15 @@ export const createThreadValues = (
     if (store.get(threadId) !== undefined) saveEffort(threadId, effort);
   };
 
-  const setSessionId = async (threadId: string, sessionId: string | null) => {
+  const setSessionId = (threadId: string, sessionId: string | null) => {
     sessionIds.set(threadId, sessionId);
-    const saved = await store.setSessionId(threadId, sessionId);
+    return logUnsaved(store.setSessionId(threadId, sessionId));
+  };
+
+  const logUnsaved = async <T extends Result<unknown, { _tag: StoreTag }>>(
+    saving: Promise<T>,
+  ) => {
+    const saved = await saving;
     if (saved.isErr()) {
       log({
         event: "claude_turn",
@@ -235,21 +242,13 @@ export const createThreadValues = (
   };
 
   // The copy read last is used even if its save fails, since the earlier copy is removed once a new one is read.
-  const setCloudCopy = async (
+  const setCloudCopy = (
     threadId: string,
     copySessionId: string,
     shown: string | null,
   ) => {
     sessionIds.set(threadId, copySessionId);
-    const saved = await store.setCloudCopy(threadId, copySessionId, shown);
-    if (saved.isErr()) {
-      log({
-        event: "claude_turn",
-        step: "session_not_saved",
-        error: saved.error._tag,
-      });
-    }
-    return saved;
+    return logUnsaved(store.setCloudCopy(threadId, copySessionId, shown));
   };
 
   // True once per pick, so only the first reopen after it carries the whole history.

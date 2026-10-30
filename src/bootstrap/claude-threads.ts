@@ -21,7 +21,6 @@ import {
   copyCloudSession,
   removeCloudCopy,
   sendToCloud,
-  stabilizeCopy,
 } from "../infra/claude/cloud.ts";
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
 import { createCallGateway } from "../infra/codex/call-gateway.ts";
@@ -30,7 +29,6 @@ import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
 import { buildHistory, replayHistory } from "../presentation/history.ts";
-import { prepareDirectory } from "../runtime/fs.boundary.ts";
 import { resizeImage } from "../runtime/image.boundary.ts";
 
 type Runtime = Parameters<typeof createClaudeRuntime>[0];
@@ -68,11 +66,7 @@ export const connectClaudeThreads = ({
   codexHome: string;
   cronRecord: Parameters<typeof createCodexLink>[0]["cronRecord"];
   // Where Cloud sessions are reached and copied; without it a thread cannot link one.
-  cloud?: {
-    cli: CloudCli;
-    copyDir: string;
-    discardCopy?: (copySessionId: string) => Promise<void>;
-  };
+  cloud?: { cli: CloudCli; copyDir: string };
   send: (message: object) => void;
   log: (event: ClaudeLogEvent | RouteEvent | CloudLogEvent) => void;
 }) => {
@@ -142,12 +136,15 @@ export const connectClaudeThreads = ({
       cloud === undefined
         ? Promise.resolve({ kind: "rejected", message: CLOUD_OFF })
         : sendToCloud(cloud.cli, cloudSessionId, text, cwd),
+    // The folder is made on first use, so a bridge that never links a Cloud session leaves nothing behind.
     copy: (cloudSessionId) =>
       cloud === undefined
-        ? Promise.resolve(Result.err({ _tag: "CloudOff", message: CLOUD_OFF }))
-        : copyCloudInto(cloud.cli, cloudSessionId, cloud.copyDir),
+        ? Promise.resolve(
+            Result.err({ _tag: "CloudOff", stopped: null, message: CLOUD_OFF }),
+          )
+        : copyCloudSession(cloud.cli, cloudSessionId, { cwd: cloud.copyDir }),
     readCopy: (copySessionId) => readSession(copySessionId),
-    discardCopy: cloud?.discardCopy ?? ((copy) => removeCloudCopy(copy)),
+    discardCopy: (copySessionId) => removeCloudCopy(copySessionId),
     replayHistory: readHistory,
     send,
     log,
@@ -244,31 +241,6 @@ const THREAD_NOTE = {
       text: "This thread runs on Claude through Harnexus; its conversation is kept in Claude's session record.",
     },
   ],
-};
-
-// The folder is made on first use, so a bridge that never links a Cloud session leaves nothing behind.
-export const copyCloudInto = async (
-  cli: CloudCli,
-  cloudSessionId: string,
-  copyDir: string,
-) => {
-  const ready = await prepareDirectory(copyDir);
-  if (ready.isErr()) {
-    return Result.err({ _tag: ready.error._tag, message: ready.error.message });
-  }
-  const copied = await copyCloudSession(cli, cloudSessionId, copyDir);
-  // A copy that may have run a model turn goes back as it is, so the runtime stops copying whether or not it could be read.
-  if (copied.isErr() || copied.value.turns !== 0) return copied;
-  // A copy whose uuids could not be made stable would show its records again, so it is dropped.
-  const stable = await stabilizeCopy(copied.value.sessionId);
-  if (stable.isErr()) {
-    await removeCloudCopy(copied.value.sessionId);
-    return Result.err({
-      _tag: stable.error._tag,
-      message: stable.error.message,
-    });
-  }
-  return copied;
 };
 
 const CLOUD_OFF = "Cloud sessions are not set up for this bridge";

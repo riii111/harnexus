@@ -1,7 +1,6 @@
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
 import {
-  type CloudCopy,
   type CloudSend,
   parseCloudSessionId,
 } from "../../infra/claude/cloud.ts";
@@ -18,6 +17,7 @@ import type { TurnEvent } from "../controller.ts";
 import { type Refusal, refusalMessage } from "../thread-request.ts";
 import type { ThreadValues } from "../thread-values.ts";
 import type { RunningTurn, TurnRuntime } from "../turn-runtime.ts";
+import { typedText } from "./runtime.ts";
 
 // A Cloud thread's turns log their failure tags beside the Claude runtime's, so the log takes any tag a runtime writes.
 export type CloudLogEvent = CloudEvent | TurnEvent;
@@ -41,13 +41,19 @@ export type CloudEvent =
         | "own_turn"
         | "wait_limit"
         | "stopped"
-        | "compacted";
+        | "compacted"
+        | "copy_ran_model"
+        | "copy_unchecked";
     }
   | { event: "claude_cloud"; step: "copied"; records: number; ms: number }
-  | { event: "claude_cloud"; step: "copy_failed"; error: string }
-  | { event: "claude_cloud"; step: "copy_ran_model" | "copy_unchecked" };
+  | { event: "claude_cloud"; step: "copy_failed"; error: string };
 
-type CopyFailure = { _tag: string; message: string };
+// stopped says the copy may have run a model turn, so the chat is not copied again.
+type CopyFailure = {
+  _tag: string;
+  stopped: "ran_model" | "unchecked" | null;
+  message: string;
+};
 
 export type CloudDeps = {
   threads: Pick<
@@ -65,7 +71,7 @@ export type CloudDeps = {
     text: string,
     cwd: string,
   ) => Promise<CloudSend>;
-  copy: (cloudSessionId: string) => Promise<Result<CloudCopy, CopyFailure>>;
+  copy: (cloudSessionId: string) => Promise<Result<string, CopyFailure>>;
   readCopy: (
     copySessionId: string,
   ) => Promise<Result<SessionMessage[], { _tag: string }>>;
@@ -81,9 +87,7 @@ export type CloudDeps = {
   now?: () => number;
   // Waits the time, or less once woken; a turn being stopped wakes its wait.
   sleep?: (ms: number, woken: Promise<void>) => Promise<void>;
-  schedule?: (run: () => void, ms: number) => () => void;
-  pollMs?: number;
-  idleMs?: number;
+  schedule?: (run: () => Promise<void>, ms: number) => () => void;
   waitLimitMs?: number;
 };
 
@@ -95,7 +99,7 @@ type Follow = {
   matched: number;
   // Messages sent while the turn runs whose send has not answered yet.
   sending: number;
-  // The keys of the turn's first prompt, once a copy holds it, and of the last record shown in the turn.
+  // The turn's first prompt, once a copy holds it, and the last record shown in the turn.
   record: string | null;
   last: string | null;
   // How far the app was shown when the turn was sent, so the prompt is looked for only after it.
@@ -119,8 +123,6 @@ export const createCloudRuntime = <Tag extends string>(
     now = Date.now,
     sleep = defaultSleep,
     schedule = defaultSchedule,
-    pollMs = POLL_MS,
-    idleMs = IDLE_MS,
     waitLimitMs = WAIT_LIMIT_MS,
   }: CloudDeps,
 ): TurnRuntime<Tag | CloudFailureTag> => {
@@ -129,7 +131,7 @@ export const createCloudRuntime = <Tag extends string>(
   const follows = new Map<string, Follow>();
   const records = new Map<string, Map<string, string>>();
   const busy = new Set<string>();
-  // A thread whose copy ran a model turn is not copied again until the bridge restarts, so the cost is not repeated.
+  // A thread whose copy may have run a model turn is not copied again until the bridge restarts, so the cost is not repeated.
   const halted = new Set<string>();
   const pendingOwn = new Map<string, Copied>();
   const copies = createSerialQueue();
@@ -139,7 +141,9 @@ export const createCloudRuntime = <Tag extends string>(
 
   const run = async (turn: Turn) => {
     const command =
-      turn.input.startedBy === "app" ? cloudCommandOf(turn.input) : null;
+      turn.input.startedBy === "app"
+        ? cloudCommandOf(typedText(turn.input))
+        : null;
     if (command !== null) {
       await link(turn, command);
       return;
@@ -285,7 +289,7 @@ export const createCloudRuntime = <Tag extends string>(
     const startedAt = now();
     let failures = 0;
     for (;;) {
-      await sleep(pollMs, follow.woken);
+      await sleep(POLL_MS, follow.woken);
       if (follow.stop || closed || turn.state().interrupting) {
         log({ event: "claude_cloud", step: "stopped" });
         turn.apply(
@@ -294,15 +298,12 @@ export const createCloudRuntime = <Tag extends string>(
         turn.finish({ status: "interrupted" }, null);
         return;
       }
-      const copied = halted.has(threadId)
-        ? Result.err<Copied, CopyFailure>({
-            _tag: "CloudCopyRanModel",
-            message: COPY_RAN_MODEL,
-          })
-        : await copyOf(threadId, cloudSessionId);
+      const copied = await copyOf(threadId, cloudSessionId);
       if (copied.isErr()) {
         failures += 1;
-        if (failures < COPY_FAILURE_LIMIT && !halted.has(threadId)) continue;
+        if (failures < COPY_FAILURE_LIMIT && copied.error.stopped === null) {
+          continue;
+        }
         turn.fail({
           _tag: "CloudCopyFailed",
           message: `${COPY_FAILED}: ${copied.error.message}`,
@@ -323,9 +324,9 @@ export const createCloudRuntime = <Tag extends string>(
         copied.value.copy,
         follow.last ?? threads.cloudOf(threadId)?.shown ?? null,
       );
-      // A message sent while the copy was saved is waited for too.
+      // Checked after the save, so a message sent meanwhile is waited for too.
       if (
-        progress.done &&
+        progress.ended &&
         follow.sending === 0 &&
         follow.matched === follow.texts.length
       ) {
@@ -356,7 +357,7 @@ export const createCloudRuntime = <Tag extends string>(
           break;
         }
       }
-      if (found === -1) return { shown: [], done: false };
+      if (found === -1) return { shown: [], ended: false };
       follow.record = keyOf(all[found]);
       follow.matched = 1;
       follow.last = follow.record;
@@ -377,13 +378,9 @@ export const createCloudRuntime = <Tag extends string>(
       follow.last = message.uuid;
     }
     const last = all.at(-1);
-    const done =
-      follow.sending === 0 &&
-      follow.matched === follow.texts.length &&
-      last !== undefined &&
-      endsTurn(last) &&
-      all.length - 1 > lastPrompt;
-    return { shown, done };
+    const ended =
+      last !== undefined && endsTurn(last) && all.length - 1 > lastPrompt;
+    return { shown, ended };
   };
 
   const showOwn = async (turn: Turn, cloud: CloudLink) => {
@@ -413,39 +410,46 @@ export const createCloudRuntime = <Tag extends string>(
   // One copy runs at a time per thread, so a turn and the idle check never read the session at once.
   const copyOf = (threadId: string, cloudSessionId: string) =>
     copies.run(threadId, async (): Promise<Result<Copied, CopyFailure>> => {
+      if (halted.has(threadId)) {
+        return Result.err({
+          _tag: "CloudCopyStopped",
+          stopped: "ran_model",
+          message: COPY_STOPPED,
+        });
+      }
       const startedAt = now();
       const copied = await copy(cloudSessionId);
       if (copied.isErr()) {
-        log({
-          event: "claude_cloud",
-          step: "copy_failed",
-          error: copied.error._tag,
-        });
+        const { stopped } = copied.error;
+        if (stopped !== null) halted.add(threadId);
+        log(
+          stopped === null
+            ? {
+                event: "claude_cloud",
+                step: "copy_failed",
+                error: copied.error._tag,
+              }
+            : {
+                event: "claude_cloud",
+                step:
+                  stopped === "ran_model" ? "copy_ran_model" : "copy_unchecked",
+              },
+        );
         return Result.err(copied.error);
       }
-      // A copy that ran a model turn, or one whose turns the CLI did not report, may cost, so the thread is not copied again.
-      if (copied.value.turns !== 0) {
-        halted.add(threadId);
-        log({
-          event: "claude_cloud",
-          step:
-            copied.value.turns === null ? "copy_unchecked" : "copy_ran_model",
-        });
-        await discardCopy(copied.value.sessionId);
-        return Result.err({
-          _tag: "CloudCopyRanModel",
-          message: COPY_RAN_MODEL,
-        });
-      }
-      const read = await readCopy(copied.value.sessionId);
+      const read = await readCopy(copied.value);
       if (read.isErr()) {
-        await discardCopy(copied.value.sessionId);
+        await discardCopy(copied.value);
         log({
           event: "claude_cloud",
           step: "copy_failed",
           error: read.error._tag,
         });
-        return Result.err({ _tag: read.error._tag, message: COPY_UNREADABLE });
+        return Result.err({
+          _tag: read.error._tag,
+          stopped: null,
+          message: COPY_UNREADABLE,
+        });
       }
       const all = mainRecords(read.value);
       log({
@@ -454,7 +458,7 @@ export const createCloudRuntime = <Tag extends string>(
         records: all.length,
         ms: now() - startedAt,
       });
-      return Result.ok({ copy: copied.value.sessionId, records: all });
+      return Result.ok({ copy: copied.value, records: all });
     });
 
   // The thread reads the newest copy from now on, so the one it read before is removed once that is saved.
@@ -509,9 +513,7 @@ export const createCloudRuntime = <Tag extends string>(
 
   const plan = (ms: number) => {
     if (closed) return;
-    cancelTick = schedule(() => {
-      void tick().then(() => plan(idleMs));
-    }, ms);
+    cancelTick = schedule(() => tick().then(() => plan(IDLE_MS)), ms);
   };
 
   const stopFollowing = (threadId: string) => {
@@ -550,7 +552,12 @@ export const createCloudRuntime = <Tag extends string>(
       log({ event: "claude_cloud", step: "send_unknown" });
       turn.markOutcomeUnknown();
       turn.apply(
-        renderNotice(turn.state(), STEER_UNKNOWN, "commentary", now()),
+        renderNotice(
+          turn.state(),
+          refusalMessage("cloud_send_unknown"),
+          "commentary",
+          now(),
+        ),
       );
       return null;
     }
@@ -616,11 +623,12 @@ const newFollow = (text: string, after: string | null): Follow => {
   };
 };
 
-const cloudCommandOf = (input: RunningTurn<string>["input"]) => {
-  if (input.toolOutput !== null || input.items.length === 0) return null;
-  const matched = /^\/cloud(?:\s+(\S+))?\s*$/.exec(input.text.trim());
+const cloudCommandOf = (text: string | null) => {
+  const matched = text === null ? null : CLOUD_COMMAND.exec(text.trim());
   return matched === null ? null : (matched[1] ?? "");
 };
+
+const CLOUD_COMMAND = /^\/cloud(?:\s+(\S+))?\s*$/;
 
 // A message whose send failed is no longer waited for; one not yet matched is taken from the end, so the order of the others stays.
 const forget = (follow: Follow, text: string) => {
@@ -653,8 +661,8 @@ const defaultSleep = (ms: number, woken: Promise<void>) =>
     });
   });
 
-const defaultSchedule = (run: () => void, ms: number) => {
-  const timer = setTimeout(run, ms);
+const defaultSchedule = (run: () => Promise<void>, ms: number) => {
+  const timer = setTimeout(() => void run(), ms);
   timer.unref?.();
   return () => clearTimeout(timer);
 };
@@ -695,17 +703,14 @@ const LINKED =
 const STOPPED_WAITING =
   "Stopped waiting here. The Cloud session keeps working; stop it on claude.ai if needed. Later replies appear here when they are copied.";
 
-const STEER_UNKNOWN =
-  "That message may or may not have reached the Cloud session; check the session on claude.ai before sending it again.";
-
 const WAIT_LIMIT_REACHED =
   "The Cloud session is still working. Its later replies appear here when they are copied.";
 
 const COPY_FAILED =
   "The message reached the Cloud session, but its replies could not be copied; the session keeps working, so check it on claude.ai rather than sending again";
 
-const COPY_RAN_MODEL =
-  "copying the Cloud session ran a model turn, so copies of it are stopped until harnexus restarts; run bun run doctor";
+const COPY_STOPPED =
+  "copies of this chat stopped because one may have run a model turn; restart harnexus after checking bun run doctor";
 
 const COPY_UNREADABLE = "the copy of the Cloud session could not be read";
 

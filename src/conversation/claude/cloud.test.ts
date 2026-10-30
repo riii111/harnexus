@@ -18,11 +18,14 @@ import {
   type TurnOutcome,
   type TurnState,
 } from "../../presentation/turn.ts";
+import { createGate } from "../testing/harness.ts";
+import { refusalMessage } from "../thread-request.ts";
 import type { RunningTurn, TurnInput, TurnRuntime } from "../turn-runtime.ts";
 import {
   type CloudDeps,
   type CloudEvent,
   createCloudRuntime,
+  serializeCloudEvent,
 } from "./cloud.ts";
 
 const CLOUD_ID = "session_01NfjPqrX1AK5RmKyV182VYD";
@@ -86,6 +89,16 @@ describe("createCloudRuntime /cloud", () => {
     expect(turn.texts().at(-1)).toContain(expected);
     expect(env.copyCalls).toBe(0);
     expect(env.links).toEqual([]);
+  });
+
+  test("removes the copy when the link cannot be saved", async () => {
+    const env = setup({ copies: [[prompt("p1", "hello")]] });
+    env.linkFails = true;
+
+    await env.runtime.run(env.turn(`/cloud ${CLOUD_ID}`).running);
+
+    expect(env.discarded).toEqual(["copy-1"]);
+    expect(env.sent).toEqual([]);
   });
 
   test("tells why a session could not be copied and leaves the thread unlinked", async () => {
@@ -186,7 +199,8 @@ describe("createCloudRuntime turns", () => {
       shown: null,
     });
     const turn = env.turn("first");
-    env.sleepUntil = env.untilSteered;
+    const steered = createGate();
+    env.wait = () => steered.promise;
     const running = env.runtime.run(turn.running);
     await env.untilSent(1);
 
@@ -194,7 +208,7 @@ describe("createCloudRuntime turns", () => {
       text: "second",
       images: [],
     });
-    env.steered();
+    steered.open();
     await running;
 
     expect(refusal).toBeNull();
@@ -243,7 +257,8 @@ describe("createCloudRuntime turns", () => {
   });
 
   test("stops waiting when the turn is stopped and says the session keeps working", async () => {
-    const env = linked({ copies: [], shown: null, sleepUntilWoken: true });
+    const env = linked({ copies: [], shown: null });
+    env.wait = (woken) => woken;
     const turn = env.turn("hi");
     const running = env.runtime.run(turn.running);
     await env.untilSent(1);
@@ -297,7 +312,8 @@ describe("createCloudRuntime turns", () => {
     });
     const turn = env.turn("first");
     let answerSecond = () => {};
-    env.sleepUntil = env.untilSteered;
+    const steered = createGate();
+    env.wait = () => steered.promise;
     const running = env.runtime.run(turn.running);
     await env.untilSent(1);
     env.duringSend = (text) =>
@@ -311,7 +327,7 @@ describe("createCloudRuntime turns", () => {
       text: "second",
       images: [],
     });
-    env.steered();
+    steered.open();
     await env.untilCopied(2);
     expect(turn.outcome).toBeNull();
     answerSecond();
@@ -328,7 +344,8 @@ describe("createCloudRuntime turns", () => {
       shown: null,
     });
     const turn = env.turn("first");
-    env.sleepUntil = env.untilSteered;
+    const steered = createGate();
+    env.wait = () => steered.promise;
     const running = env.runtime.run(turn.running);
     await env.untilSent(1);
     env.sendQueue.push({ kind: "unknown", message: "timeout" });
@@ -337,15 +354,50 @@ describe("createCloudRuntime turns", () => {
       text: "second",
       images: [],
     });
-    env.steered();
+    steered.open();
     await running;
 
     expect(refusal).toBeNull();
     expect(turn.outcomeUnknown).toBe(true);
-    expect(turn.texts()).toContain(
-      "That message may or may not have reached the Cloud session; check the session on claude.ai before sending it again.",
-    );
+    expect(turn.texts()).toContain(refusalMessage("cloud_send_unknown"));
     expect(turn.outcome).toEqual({ status: "completed" });
+  });
+
+  test("refuses a message the session refused and stops waiting for it", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "first"), endReply("a1", "one")]],
+      shown: null,
+    });
+    const turn = env.turn("first");
+    const steered = createGate();
+    env.wait = () => steered.promise;
+    const running = env.runtime.run(turn.running);
+    await env.untilSent(1);
+    env.sendQueue.push({ kind: "rejected", message: "archived" });
+
+    const refusal = await env.runtime.steer(turn.running, {
+      text: "second",
+      images: [],
+    });
+    steered.open();
+    await running;
+
+    expect(refusal).toBe("cloud_not_sent");
+    expect(turn.outcome).toEqual({ status: "completed" });
+  });
+
+  test("stops waiting when the bridge closes", async () => {
+    const env = linked({ copies: [], shown: null });
+    env.wait = (woken) => woken;
+    const turn = env.turn("hi");
+    const running = env.runtime.run(turn.running);
+    await env.untilSent(1);
+
+    env.runtime.closeAll();
+    await running;
+
+    expect(turn.outcome).toEqual({ status: "interrupted" });
+    expect(env.copyCalls).toBe(0);
   });
 
   test("keeps the previous copy while the new one could not be saved", async () => {
@@ -394,11 +446,19 @@ describe("createCloudRuntime turns", () => {
   });
 
   test.each([
-    { name: "did not report its turns", turns: null, step: "copy_unchecked" },
-    { name: "ran a model turn", turns: 1, step: "copy_ran_model" },
-  ])("stops copying a thread whose copy $name", async ({ turns, step }) => {
+    {
+      name: "did not report its turns",
+      stopped: "unchecked" as const,
+      step: "copy_unchecked",
+    },
+    {
+      name: "ran a model turn",
+      stopped: "ran_model" as const,
+      step: "copy_ran_model",
+    },
+  ])("stops copying a thread whose copy $name", async ({ stopped, step }) => {
     const env = linked({ copies: [[prompt("p1", "hi")]], shown: null });
-    env.copyTurns = turns;
+    env.copyStop = stopped;
     const turn = env.turn("hi");
 
     await env.runtime.run(turn.running);
@@ -534,12 +594,10 @@ type Env = ReturnType<typeof setup>;
 
 const setup = ({
   copies,
-  sleepUntilWoken = false,
   waitLimitMs,
   link,
 }: {
   copies: SessionMessage[][];
-  sleepUntilWoken?: boolean;
   waitLimitMs?: number;
   link?: CloudLink;
 }) => {
@@ -555,13 +613,9 @@ const setup = ({
   const innerRuns: string[] = [];
   const ownStarts: string[] = [];
   const contents = new Map<string, SessionMessage[]>();
-  const ticks: (() => void)[] = [];
+  const ticks: (() => Promise<void>)[] = [];
   let sendWaiters: (() => boolean)[] = [];
   let copyWaiters: (() => boolean)[] = [];
-  let steered = () => {};
-  const steeredOnce = new Promise<void>((resolve) => {
-    steered = resolve;
-  });
   let turns = 0;
   if (link !== undefined) {
     clouds.set("thread-1", link);
@@ -580,9 +634,11 @@ const setup = ({
     innerRuns,
     ownStarts,
     copyCalls: 0,
-    copyTurns: 0 as number | null,
+    // Set to make every copy say it may have run a model turn.
+    copyStop: null as "ran_model" | "unchecked" | null,
     copyFailure: null as string | null,
     saveFails: false,
+    linkFails: false,
     // Runs while a copy is being saved.
     duringSave: () => {},
     sendAnswer: { kind: "sent" } as CloudSend,
@@ -591,10 +647,8 @@ const setup = ({
     // Runs when a send starts and is waited for before it answers.
     duringSend: async (_text: string) => {},
     cloudOf: (threadId: string) => clouds.get(threadId) ?? null,
-    // Replaces the wait between copies while set.
-    sleepUntil: null as (() => Promise<void>) | null,
-    untilSteered: () => steeredOnce,
-    steered: () => steered(),
+    // The wait between copies; it ends at once unless a test holds it.
+    wait: (_woken: Promise<void>): Promise<void> => Promise.resolve(),
     untilCopied: (count: number) =>
       new Promise<void>((resolve) => {
         if (env.copyCalls >= count) {
@@ -620,13 +674,7 @@ const setup = ({
           return true;
         });
       }),
-    tick: async () => {
-      const run = ticks.shift();
-      run?.();
-      // The tick runs its copies one after another; give them time to settle.
-      for (let index = 0; index < 20; index++) await Promise.resolve();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    },
+    tick: () => ticks.shift()?.() ?? Promise.resolve(),
     turn: (
       typed: string,
       options: {
@@ -648,6 +696,9 @@ const setup = ({
         return true;
       },
       linkCloud: async (threadId, cloud, copy) => {
+        if (env.linkFails) {
+          return Result.err({ _tag: "StatePersistFailed" }) as never;
+        }
         links.push({ threadId, cloud, copy });
         clouds.set(threadId, cloud);
         owners.set(cloud.sessionId, threadId);
@@ -683,6 +734,7 @@ const setup = ({
       if (env.copyFailure !== null) {
         return Result.err({
           _tag: "CloudCopyFailed",
+          stopped: null,
           message: env.copyFailure,
         });
       }
@@ -691,7 +743,14 @@ const setup = ({
         sessionId,
         copies[Math.min(env.copyCalls, copies.length) - 1] ?? [],
       );
-      return Result.ok({ sessionId, turns: env.copyTurns });
+      if (env.copyStop !== null) {
+        return Result.err({
+          _tag: "CloudCopyFailed",
+          stopped: env.copyStop,
+          message: "may have run a model turn",
+        });
+      }
+      return Result.ok(sessionId);
     },
     readCopy: async (copy) => Result.ok(contents.get(copy) ?? []),
     discardCopy: async (copy) => {
@@ -701,12 +760,7 @@ const setup = ({
     send: (message) => sent.push(message),
     log: (event) => events.push(event),
     now: () => 1_000,
-    sleep: (_ms, woken) =>
-      env.sleepUntil !== null
-        ? env.sleepUntil()
-        : sleepUntilWoken
-          ? woken
-          : Promise.resolve(),
+    sleep: (_ms, woken) => env.wait(woken),
     schedule: (run) => {
       ticks.push(run);
       return () => {};
@@ -839,3 +893,17 @@ const fakeTurn = (
   };
   return result;
 };
+
+describe("serializeCloudEvent", () => {
+  test("keeps only the step, counts, durations and error tags", () => {
+    expect(
+      serializeCloudEvent({
+        event: "claude_cloud",
+        step: "copied",
+        records: 3,
+        ms: 900,
+        ...{ session: CLOUD_ID, text: "secret" },
+      } as CloudEvent),
+    ).toEqual({ event: "claude_cloud", step: "copied", records: 3, ms: 900 });
+  });
+});

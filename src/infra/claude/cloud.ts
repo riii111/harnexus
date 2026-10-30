@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import { Result, TaggedError } from "better-result";
 import {
+  prepareDirectory,
   readTextFileIfExists,
   removeFile,
   writeFileAtomic,
 } from "../../runtime/fs.boundary.ts";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
+import { printAnswer, UUID } from "./print.ts";
 import { bundledClaude, type ClaudeRun, runClaude } from "./run.boundary.ts";
 import { claudeConfigDir, findSessionFile } from "./transcripts.ts";
 
@@ -14,8 +16,6 @@ import { claudeConfigDir, findSessionFile } from "./transcripts.ts";
 const CLOUD_SESSION = /^(?:session|cse)_[A-Za-z0-9]{8,64}$/;
 const CLOUD_URL =
   /^(?:https?:\/\/)?claude\.ai\/code\/((?:session|cse)_[A-Za-z0-9]{8,64})(?:[/?#].*)?$/;
-const COPY_ID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export const parseCloudSessionId = (text: string): string | null => {
   const trimmed = text.trim();
@@ -29,8 +29,6 @@ export type CloudCli = {
   file: string;
   env: Record<string, string | undefined>;
   run: RunClaude;
-  timeoutMs?: number;
-  killGraceMs?: number;
 };
 
 // The SDK's own claude is used by default, since it already holds the sign-in the bridge runs with; a claude installed elsewhere may stop to ask macOS for keychain access when the app starts it. HARNEXUS_CLAUDE_CLI names another one.
@@ -67,8 +65,8 @@ export const sendToCloud = async (
     {
       cwd,
       env: cli.env,
-      timeoutMs: cli.timeoutMs ?? SEND_TIMEOUT_MS,
-      killGraceMs: cli.killGraceMs ?? KILL_GRACE_MS,
+      timeoutMs: SEND_TIMEOUT_MS,
+      killGraceMs: KILL_GRACE_MS,
     },
   );
   if (ran.isErr()) {
@@ -83,7 +81,7 @@ const sendOutcome = (run: ClaudeRun): CloudSend => {
   if (run.ended !== "exit") {
     return { kind: "unknown", message: `claude --cloud ended by ${run.ended}` };
   }
-  const answer = lastJson(run.stdout);
+  const answer = printAnswer(run.stdout);
   if (answer !== null && answer.ok === true) return { kind: "sent" };
   if (answer !== null && answer.ok === false) {
     return {
@@ -104,19 +102,29 @@ const sendOutcome = (run: ClaudeRun): CloudSend => {
   };
 };
 
+// stopped: the copy may have run a model turn, or did not say how many it ran, so the chat must not be copied again.
 class CloudCopyFailed extends TaggedError("CloudCopyFailed")<{
+  stopped: "ran_model" | "unchecked" | null;
   message: string;
 }> {}
 
-// sessionId names the local copy; turns counts model turns the copy ran, which the /cost prompt keeps at zero, and is null when the CLI did not say.
-export type CloudCopy = { sessionId: string; turns: number | null };
+const copyFailed = (
+  message: string,
+  stopped: CloudCopyFailed["stopped"] = null,
+) => Result.err(new CloudCopyFailed({ stopped, message }));
 
-// teleport writes a new local record of the Cloud conversation each time; /cost is answered by the CLI itself, so no model turn runs and nothing reaches the Cloud session.
+// teleport writes a new local record of the Cloud conversation each time, in cwd's project folder; /cost is answered by the CLI itself, so no model turn runs and nothing reaches the Cloud session.
+// The copy is returned with its uuids made stable, and removed when it cannot be.
 export const copyCloudSession = async (
   cli: CloudCli,
   cloudSessionId: string,
-  cwd: string,
-): Promise<Result<CloudCopy, CloudCopyFailed>> => {
+  {
+    cwd,
+    configDir = claudeConfigDir(process.env),
+  }: { cwd: string; configDir?: string },
+): Promise<Result<string, CloudCopyFailed>> => {
+  const ready = await prepareDirectory(cwd);
+  if (ready.isErr()) return copyFailed(ready.error.message);
   const ran = await cli.run(
     cli.file,
     [
@@ -131,33 +139,39 @@ export const copyCloudSession = async (
     {
       cwd,
       env: cli.env,
-      timeoutMs: cli.timeoutMs ?? COPY_TIMEOUT_MS,
-      killGraceMs: cli.killGraceMs ?? KILL_GRACE_MS,
+      timeoutMs: COPY_TIMEOUT_MS,
+      killGraceMs: KILL_GRACE_MS,
     },
   );
-  if (ran.isErr()) {
-    return Result.err(new CloudCopyFailed({ message: ran.error.message }));
-  }
-  const answer = lastJson(ran.value.stdout);
+  if (ran.isErr()) return copyFailed(ran.error.message);
+  const answer = printAnswer(ran.value.stdout);
   const sessionId = answer?.session_id;
   if (
     ran.value.ended !== "exit" ||
     answer === null ||
     answer.is_error === true ||
     typeof sessionId !== "string" ||
-    !COPY_ID.test(sessionId)
+    !UUID.test(sessionId)
   ) {
-    return Result.err(
-      new CloudCopyFailed({
-        message:
-          firstLine(ran.value.stderr) ??
-          textOf(answer?.result) ??
-          "claude --teleport answered without a copy",
-      }),
+    return copyFailed(
+      firstLine(ran.value.stderr) ??
+        textOf(answer?.result) ??
+        "claude --teleport answered without a copy",
     );
   }
-  const turns = typeof answer.num_turns === "number" ? answer.num_turns : null;
-  return Result.ok({ sessionId, turns });
+  const turns = answer.num_turns;
+  if (turns !== 0) {
+    await removeCloudCopy(sessionId, configDir);
+    return typeof turns === "number"
+      ? copyFailed(COPY_RAN_MODEL, "ran_model")
+      : copyFailed(COPY_UNCHECKED, "unchecked");
+  }
+  const stable = await stabilizeCopy(sessionId, configDir);
+  if (stable.isErr()) {
+    await removeCloudCopy(sessionId, configDir);
+    return copyFailed(stable.error.message);
+  }
+  return Result.ok(sessionId);
 };
 
 class CloudCopyUnstable extends TaggedError("CloudCopyUnstable")<{
@@ -210,10 +224,7 @@ export const stabilizeCopy = async (
     : Result.ok();
 };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-const UUID_IN_TEXT =
-  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
+const UUID_IN_TEXT = new RegExp(UUID.source.slice(1, -1), "g");
 
 // A version 8 uuid made from a digest of the text.
 const uuidFrom = (text: string) => {
@@ -234,16 +245,6 @@ export const removeCloudCopy = async (
   await removeFile(found.value);
 };
 
-// Print mode answers one object, or an array of events ending in it.
-const lastJson = (stdout: string): Record<string, unknown> | null => {
-  const parsed = parseJson(stdout);
-  if (parsed.isErr()) return null;
-  const value = Array.isArray(parsed.value)
-    ? parsed.value.at(-1)
-    : parsed.value;
-  return isObject(value) ? value : null;
-};
-
 const textOf = (value: unknown) =>
   typeof value === "string" && value.trim() !== "" ? value.trim() : null;
 
@@ -255,7 +256,13 @@ const firstLine = (text: string) =>
       ?.replace(/^Error:\s*/, ""),
   );
 
-export const COPY_PROMPT = "/cost";
+const COPY_PROMPT = "/cost";
+
+const COPY_RAN_MODEL =
+  "copying the Cloud session ran a model turn, so copies of this chat stop until harnexus restarts; run bun run doctor";
+
+const COPY_UNCHECKED =
+  "claude --teleport did not say whether copying ran a model turn, so copies of this chat stop until harnexus restarts; run bun run doctor";
 
 const SEND_TIMEOUT_MS = 60_000;
 
