@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
 import {
@@ -93,7 +94,7 @@ type Copied = { copy: string; records: SessionMessage[] };
 type Follow = {
   texts: string[];
   matched: number;
-  // The record of the turn's first prompt, once a copy holds it, and the last record shown in the turn.
+  // The keys of the turn's first prompt, once a copy holds it, and of the last record shown in the turn.
   record: string | null;
   last: string | null;
   // How far the app was shown when the turn was sent, so the prompt is looked for only after it.
@@ -194,7 +195,7 @@ export const createCloudRuntime = <Tag extends string>(
       refuse(`${LINK_NOT_COPIED}: ${copied.error.message}`);
       return;
     }
-    const shown = copied.value.records.at(-1)?.uuid ?? null;
+    const shown = keyOfLast(copied.value.records);
     const linked = await threads.linkCloud(
       threadId,
       { sessionId: cloudSessionId, shown },
@@ -310,8 +311,10 @@ export const createCloudRuntime = <Tag extends string>(
       if (progress.shown.length > 0) {
         turn.apply(renderRecords(turn.state(), progress.shown, now()));
       }
-      if (follow.record !== null)
-        noteRecord(threadId, turn.turnId, follow.record);
+      // The history the app reads is built from the latest copy, so the turn names its prompt by that copy's uuid.
+      const prompt =
+        copied.value.records[indexOf(copied.value.records, follow.record)];
+      if (prompt !== undefined) noteRecord(threadId, turn.turnId, prompt.uuid);
       await keepCopy(
         threadId,
         copied.value.copy,
@@ -346,7 +349,7 @@ export const createCloudRuntime = <Tag extends string>(
         }
       }
       if (found === -1) return { shown: [], done: false };
-      follow.record = all[found]?.uuid ?? null;
+      follow.record = keyOf(all[found]);
       follow.matched = 1;
       follow.last = follow.record;
     }
@@ -363,7 +366,7 @@ export const createCloudRuntime = <Tag extends string>(
       } else {
         shown.push(message);
       }
-      follow.last = message.uuid;
+      follow.last = recordKey(message);
     }
     const last = all.at(-1);
     const done =
@@ -394,11 +397,7 @@ export const createCloudRuntime = <Tag extends string>(
       const first = shown[0];
       if (first !== undefined) noteRecord(threadId, turn.turnId, first.uuid);
     }
-    await keepCopy(
-      threadId,
-      copied.value.copy,
-      all.at(-1)?.uuid ?? cloud.shown,
-    );
+    await keepCopy(threadId, copied.value.copy, keyOfLast(all) ?? cloud.shown);
     turn.finish({ status: "completed" }, null);
   };
 
@@ -480,7 +479,7 @@ export const createCloudRuntime = <Tag extends string>(
       if (cloud.shown !== null && at === -1) {
         // Claude compacted the session, so the record the app was shown is gone; the copy's end becomes where it stands.
         log({ event: "claude_cloud", step: "compacted" });
-        await keepCopy(threadId, copied.value.copy, all.at(-1)?.uuid ?? null);
+        await keepCopy(threadId, copied.value.copy, keyOfLast(all));
         continue;
       }
       // Nothing new, so the copy the thread reads already shows it all.
@@ -605,8 +604,24 @@ const cloudCommandOf = (input: RunningTurn<string>["input"]) => {
 const samePrompt = (message: SessionMessage, text: string) =>
   promptTextOf(message)?.trim() === text.trim();
 
-const indexOf = (all: readonly SessionMessage[], uuid: string | null) =>
-  uuid === null ? -1 : all.findIndex((message) => message.uuid === uuid);
+// A copy may give its records new uuids, so a record is known by when it was written, its kind and its content; one without a time falls back to its uuid.
+const recordKey = (message: SessionMessage) => {
+  const at = (message as { timestamp?: unknown }).timestamp;
+  if (typeof at !== "string") return message.uuid;
+  const content = createHash("sha256")
+    .update(JSON.stringify(message.message) ?? "")
+    .digest("hex")
+    .slice(0, 16);
+  return `${message.type}@${at}#${content}`;
+};
+
+const keyOf = (message: SessionMessage | undefined) =>
+  message === undefined ? null : recordKey(message);
+
+const keyOfLast = (all: readonly SessionMessage[]) => keyOf(all.at(-1));
+
+const indexOf = (all: readonly SessionMessage[], key: string | null) =>
+  key === null ? -1 : all.findIndex((message) => recordKey(message) === key);
 
 // Where the records after uuid start; a record no longer in the copy, such as one Claude compacted away, leaves nothing to skip.
 const indexAfter = (all: readonly SessionMessage[], uuid: string | null) => {

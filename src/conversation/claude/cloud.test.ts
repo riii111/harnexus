@@ -151,6 +151,37 @@ describe("createCloudRuntime turns", () => {
     expect(env.discarded).toEqual(["copy-0", "copy-1", "copy-2"]);
   });
 
+  test("shows each record once when every copy gives the records new uuids", async () => {
+    const at = (second: number) => `2026-10-30T07:00:0${second}.000Z`;
+    const copy = (suffix: string, done: boolean) => [
+      prompt(`p0${suffix}`, "ready?", at(0)),
+      reply(`r0${suffix}`, "m0", text("ready"), "end_turn", at(1)),
+      prompt(`p1${suffix}`, "1+2?", at(2)),
+      reply(`a1${suffix}`, "m1", text("working"), "tool_use", at(3)),
+      ...(done
+        ? [reply(`a2${suffix}`, "m2", text("3"), "end_turn", at(4))]
+        : []),
+    ];
+    const env = setup({
+      copies: [
+        [
+          prompt("p0", "ready?", at(0)),
+          reply("r0", "m0", text("ready"), "end_turn", at(1)),
+        ],
+        copy("-b", false),
+        copy("-c", true),
+      ],
+    });
+    await env.runtime.run(env.turn(`/cloud ${CLOUD_ID}`).running);
+    const turn = env.turn("1+2?");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts()).toEqual(["working", "3"]);
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(env.runtime.recordOf("thread-1", "turn-2")).toBe("p1-c");
+  });
+
   test("finds its prompt only after where the app was shown, so an earlier same text is not taken", async () => {
     const env = linked({
       copies: [
