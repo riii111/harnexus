@@ -156,9 +156,10 @@ const locked = (
         ? state.reviewer
         : null;
     const checkout = String(data.checkout);
-    const model = args.model ?? (reviewer === null ? DEFAULT_MODEL : undefined);
+    // An empty value falls back like a missing one, as for a reviewer chat in the app.
+    const model = args.model || (reviewer === null ? DEFAULT_MODEL : undefined);
     const thinking =
-      args.thinking ?? (reviewer === null ? DEFAULT_THINKING : undefined);
+      args.thinking || (reviewer === null ? DEFAULT_THINKING : undefined);
     const chosen = [
       ...(model === undefined ? [] : ["-m", model]),
       ...(thinking === undefined
@@ -218,10 +219,13 @@ const locked = (
       );
     }
     const { status, stdout, stderr, ended } = ran.value;
-    if (ended !== "exit")
+    // A stopped run may have started its reviewer, which is named so it can be checked.
+    if (ended !== "exit") {
+      const started = replyOf(stdout).threadId ?? reviewer;
       return fail(
-        `codex was stopped (${ended === "timeout" ? "timeout" : "output over the limit"}); ${recoveryHint}`,
+        `codex was stopped (${ended === "timeout" ? "timeout" : "output over the limit"})${started === null ? "" : ` in reviewer ${started}`}; ${recoveryHint}`,
       );
+    }
     const reply = replyOf(stdout);
     // A run that failed or never named its thread reviewed nothing, so the candidate can be sent again.
     if (status !== 0 || reply.failure !== null || reply.answer === null) {
@@ -249,18 +253,21 @@ const locked = (
       return fail("codex answered without naming its thread");
     }
     const heads = Array.isArray(state?.heads) ? state.heads : [];
-    yield* Result.await(
-      deps.saveJson(
-        statePath,
-        {
-          reviewer: threadId,
-          candidate: data,
-          heads: [...heads, data.head],
-          updatedAt: new Date().toISOString(),
-        },
-        { exclusive: false },
-      ),
+    const saved = await deps.saveJson(
+      statePath,
+      {
+        reviewer: threadId,
+        candidate: data,
+        heads: [...heads, data.head],
+        updatedAt: new Date().toISOString(),
+      },
+      { exclusive: false },
     );
+    // The pending record stays, so the review is not taken as done; its answer is still shown.
+    if (saved.isErr())
+      return fail(
+        `${saved.error.message}; reviewer ${threadId} answered, but it was not recorded, ${recoveryHint}. Its answer:\n${reply.answer}`,
+      );
     yield* Result.await(unsent());
     return Result.ok<Fields>({
       status: "completed",

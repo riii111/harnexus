@@ -204,4 +204,5 @@ In a Claude Code cloud session (`CLAUDE_CODE_REMOTE=true`), `review --request RE
 - A head already reviewed is refused. A run that failed, such as one without a login, records nothing, so the same head can be sent again.
 - A reviewer whose record is gone, such as after the machine was rebuilt, is forgotten, and the next run starts a new one.
 - A run that ended without a result leaves `pending.json`; check the reviewer, then send the head again with `--recover discard`.
+- A review takes a minute or two, longer than a Bash tool call waits by default, so run it in the background or with a timeout of at least `HARNEXUS_REVIEW_TIMEOUT_MS`; a caller stopped early leaves the run going, and its result unknown.
 - `codex` is found on `PATH` unless `HARNEXUS_CODEX_BIN` names an absolute path. `HARNEXUS_REVIEW_TIMEOUT_MS` (default 30 minutes) and `HARNEXUS_REVIEW_KILL_GRACE_MS` bound a run, and the state is kept under `$XDG_STATE_HOME/taskctl/cloud-review/`.

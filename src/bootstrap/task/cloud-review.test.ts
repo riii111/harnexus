@@ -241,6 +241,49 @@ describe("harnexus-task review in a Claude Code cloud session", () => {
     expect(await cwd(2)).toBe(checkout);
   });
 
+  test("passes a chosen model and thinking to the first head and to a resume", async () => {
+    const { commit, plan, review, args } = await fixture();
+    commit("test: candidate");
+    await plan(1, { out: events(REVIEWER, "判定: 修正必要") });
+    await review(["--model", "gpt-x", "--thinking", "high"]);
+    commit("fix: candidate");
+    await plan(2, { out: events(REVIEWER, "判定: LGTM") });
+
+    await review(["--thinking", "low"]);
+
+    expect((await args(1)).slice(-5)).toEqual([
+      "-m",
+      "gpt-x",
+      "-c",
+      'model_reasoning_effort="high"',
+      "-",
+    ]);
+    expect((await args(2)).slice(-3)).toEqual([
+      "-c",
+      'model_reasoning_effort="low"',
+      "-",
+    ]);
+  });
+
+  test("keeps the reviewer after a resume that failed for another reason", async () => {
+    const { commit, plan, review, args } = await fixture();
+    commit("test: candidate");
+    await plan(1, { out: events(REVIEWER, "判定: 修正必要") });
+    await review();
+    commit("fix: candidate");
+    await plan(2, { exit: 1, stderr: "Error: stream disconnected\n" });
+
+    const failed = await review();
+
+    expect([failed.code, failed.err]).toEqual([
+      1,
+      expect.stringContaining("stream disconnected"),
+    ]);
+    await plan(3, { out: events(REVIEWER, "判定: LGTM") });
+    expect((await review()).out.reviewer).toBe(REVIEWER);
+    expect((await args(3)).slice(0, 3)).toEqual(["exec", "resume", REVIEWER]);
+  });
+
   test("refuses a head it already reviewed", async () => {
     const { commit, plan, review, calls } = await fixture();
     const head = commit("test: candidate");
