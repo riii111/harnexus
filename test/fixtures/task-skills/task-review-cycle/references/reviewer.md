@@ -8,4 +8,4 @@ workerの作業ディレクトリ: {checkout}
 レビュー対象のコミット範囲: {base}...{head}
 PRのURL: {pr_url}
 
-[レビュー時の確認事項](../SKILL.md#レビュー時の確認事項)と[返却方法](reply-{worker_ai}.md)に従ってください。
+[レビュー時の確認事項](../SKILL.md#レビュー時の確認事項)と[返却方法](reply-{reply_to}.md)に従ってください。

@@ -228,7 +228,13 @@ const PR_URL = new RegExp(
   "u",
 );
 
-export const reviewRequest = (path: string, env: Env, git: Git) =>
+// A Claude Code cloud session works in its own checkout, so there the checkout only has to be the top level of a repository.
+export const reviewRequest = (
+  path: string,
+  env: Env,
+  git: Git,
+  { anyCheckout = false }: { anyCheckout?: boolean } = {},
+) =>
   Result.gen(async function* () {
     const data = yield* Result.await(
       readRequest(
@@ -264,11 +270,13 @@ export const reviewRequest = (path: string, env: Env, git: Git) =>
     const checkout = await realPathOrSelf(requested);
     const worktrees = await realPathOrSelf(join(codexHome(env), "worktrees"));
     const refused = fail(
-      `checkout must be the top level of a worker worktree ${worktrees}/<id>/<name>`,
+      anyCheckout
+        ? "checkout must be the absolute path of a repository's top level"
+        : `checkout must be the top level of a worker worktree ${worktrees}/<id>/<name>`,
     );
     if (
       !requested.startsWith("/") ||
-      dirname(dirname(checkout)) !== worktrees ||
+      (!anyCheckout && dirname(dirname(checkout)) !== worktrees) ||
       !(await isDirectory(checkout))
     )
       return refused;
@@ -349,12 +357,17 @@ export const sessionValue = async (data: Fields, key: string) => {
     : (value ?? null);
 };
 
-export const reviewFields = (data: Fields) =>
+// replyTo names how the reviewer returns its result: the worker's chat in the app, or, in a Claude Code cloud session, the run's own answer.
+export const reviewFields = (
+  data: Fields,
+  replyTo: string = String(data.workerAI),
+) =>
   Result.gen(async function* () {
     return Result.ok<Record<string, string>>({
       task_id: String(data.taskId),
       document_refs: yield* Result.await(documentRefs(data.documentRefs)),
       worker_ai: String(data.workerAI),
+      reply_to: replyTo,
       worker_chat_id: String(data.workerChatId),
       checkout: String(data.checkout),
       pr_url: truthy(data.prUrl) ? String(data.prUrl) : "null",
