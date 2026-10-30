@@ -1542,7 +1542,7 @@ export const createClaudeRuntime = ({
 };
 
 export const isClaudeTurnEvent = (
-  entry: ClaudeLogEvent,
+  entry: ClaudeLogEvent | TurnEvent,
 ): entry is ClaudeTurnEvent => Object.hasOwn(CLAUDE_STEPS, entry.step);
 
 export const serializeClaudeTurnEvent = (entry: ClaudeTurnEvent) => {

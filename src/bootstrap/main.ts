@@ -1,6 +1,7 @@
 import { constants } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { cloudCli } from "../infra/claude/cloud.ts";
 import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import {
   claudeSessionExists,
@@ -50,6 +51,8 @@ import {
 import { codexHome } from "./task/request.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
+
+const CLOUD_COPY_FOLDER = "cloud-copies";
 
 // Must match bin/harnexus-codex.
 const SERVER_OUTPUT_FD = 3;
@@ -207,6 +210,11 @@ async function withClaude(relay: {
     claudeModels: catalog.models,
     codexHome: codexHome(process.env),
     cronRecord: openCronRecord(cronRecordPath(statePath.value)),
+    // Copies of Cloud sessions are written beside the thread state, apart from any project the user works in.
+    cloud: {
+      cli: cloudCli(process.env),
+      copyDir: join(dirname(statePath.value), CLOUD_COPY_FOLDER),
+    },
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: (event) => {
       logger.log(event);

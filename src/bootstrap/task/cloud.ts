@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Result } from "better-result";
+import { processAlive, runClaude } from "../../infra/claude/run.boundary.ts";
 import {
   checkAccess,
   isDirectory,
@@ -10,7 +11,6 @@ import {
 } from "../../runtime/fs.boundary.ts";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
-import { processAlive, runClaude } from "./claude-run.boundary.ts";
 import { asText, type Fields, fail, isBlank } from "./format.ts";
 import { type Env, ioFailed, readText, singleLine } from "./request.ts";
 import { load, type SaveJson, stateRoot } from "./session.ts";

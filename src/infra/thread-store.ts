@@ -17,11 +17,16 @@ import { createSerialQueue } from "../runtime/serial-queue.ts";
 
 export type RewindPoint = { sessionId: string; at: string | null };
 
+// A thread that shows a Claude Cloud session: sessionId names the Cloud session, and shown is the last record of it the app was given, so a later copy shows only what came after.
+export type CloudLink = { sessionId: string; shown: string | null };
+
 // Only identifiers are kept, so the file never holds conversation text.
 type ThreadMapping = {
   readonly threadId: string;
   readonly sessionId: string | null;
   readonly rewind?: RewindPoint;
+  // Set on a thread linked to a Cloud session, whose sessionId then names the latest local copy of it.
+  readonly cloud?: CloudLink;
   readonly model: string;
   // The effort level the app last picked for the thread, or null to leave Claude on the user's settings.
   readonly effort: string | null;
@@ -48,6 +53,16 @@ type StoreFiles = {
 };
 
 class ThreadNotFound extends TaggedError("ThreadNotFound")<{
+  threadId: string;
+  message: string;
+}> {}
+
+class CloudSessionTaken extends TaggedError("CloudSessionTaken")<{
+  threadId: string;
+  message: string;
+}> {}
+
+class ThreadHasConversation extends TaggedError("ThreadHasConversation")<{
   threadId: string;
   message: string;
 }> {}
@@ -272,6 +287,55 @@ const createThreadStore = (
             );
       }),
 
+    cloudOwner: (cloudSessionId: string) =>
+      ownerOfCloud(mappings, cloudSessionId),
+
+    cloudThreadIds: () =>
+      [...mappings.values()]
+        .filter((mapping) => mapping.cloud !== undefined)
+        .map((mapping) => mapping.threadId),
+
+    // Only a thread with no conversation takes a Cloud session, and the check runs in the file queue with the write, so of two threads linking one session at once only the first gets it.
+    linkCloud: (threadId: string, cloud: CloudLink, copySessionId: string) =>
+      persistThenCommit<
+        ThreadNotFound | ThreadHasConversation | CloudSessionTaken
+      >((current) => {
+        const mapping = current.get(threadId);
+        if (mapping === undefined) return Result.err(notFound(threadId));
+        if (mapping.sessionId !== null || mapping.cloud !== undefined) {
+          return Result.err(
+            new ThreadHasConversation({
+              threadId,
+              message: "the thread already holds a conversation",
+            }),
+          );
+        }
+        const owner = ownerOfCloud(current, cloud.sessionId);
+        return owner === undefined
+          ? Result.ok({ ...withSession(mapping, copySessionId), cloud })
+          : Result.err(
+              new CloudSessionTaken({
+                threadId,
+                message: "the Cloud session is already shown in another thread",
+              }),
+            );
+      }),
+
+    // A new copy replaces the one the thread read, together with how far the app was shown, so a restart resumes from the same point.
+    setCloudCopy: (
+      threadId: string,
+      copySessionId: string,
+      shown: string | null,
+    ) =>
+      update(threadId, (mapping) =>
+        mapping.cloud === undefined
+          ? mapping
+          : {
+              ...withSession(mapping, copySessionId),
+              cloud: { ...mapping.cloud, shown },
+            },
+      ),
+
     addMessageId: (threadId: string, messageId: string) =>
       update(threadId, (mapping) =>
         mapping.messageIds.includes(messageId)
@@ -362,6 +426,16 @@ const ownerOfSession = (
   return undefined;
 };
 
+const ownerOfCloud = (
+  mappings: ReadonlyMap<string, ThreadMapping>,
+  cloudSessionId: string,
+) => {
+  for (const mapping of mappings.values()) {
+    if (mapping.cloud?.sessionId === cloudSessionId) return mapping.threadId;
+  }
+  return undefined;
+};
+
 const notFound = (threadId: string) =>
   new ThreadNotFound({
     threadId,
@@ -439,6 +513,7 @@ const pickMappingFields = (mapping: ThreadMapping): ThreadMapping => ({
   threadId: mapping.threadId,
   sessionId: mapping.sessionId,
   ...(mapping.rewind === undefined ? {} : { rewind: { ...mapping.rewind } }),
+  ...(mapping.cloud === undefined ? {} : { cloud: { ...mapping.cloud } }),
   model: mapping.model,
   effort: mapping.effort,
   worktree: mapping.worktree,
@@ -453,6 +528,10 @@ const isThreadMapping = (value: unknown): value is ThreadMapping =>
     (isObject(value.rewind) &&
       isNonEmptyString(value.rewind.sessionId) &&
       (value.rewind.at === null || isNonEmptyString(value.rewind.at)))) &&
+  (value.cloud === undefined ||
+    (isObject(value.cloud) &&
+      isNonEmptyString(value.cloud.sessionId) &&
+      (value.cloud.shown === null || isNonEmptyString(value.cloud.shown)))) &&
   isNonEmptyString(value.model) &&
   (value.effort === null || isNonEmptyString(value.effort)) &&
   isNonEmptyString(value.worktree) &&

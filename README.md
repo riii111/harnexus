@@ -102,6 +102,30 @@ Set `HARNEXUS_APP_PATH` if the app is installed outside `/Applications/ChatGPT.a
 The app's call socket lets processes running as your user create and message chats.
 To disable it, launch with `HARNEXUS_CALL_SOCKET=off bun run open-app`.
 
+## Claude Cloud sessions in a chat
+
+A Claude chat can show a [Claude Code cloud session](https://code.claude.com/docs/en/claude-code-on-the-web) and send it your messages.
+Start a new Claude chat and send:
+
+```text
+/cloud session_01AbC...
+```
+
+The session id or its `claude.ai/code/...` URL both work.
+The chat then shows the session's conversation; what you send there goes to the session, and its replies appear as they are copied.
+
+- Messages are sent with `claude -p --cloud <id>`, and the session is copied with `claude --teleport <id> -p /cost`, which answers without a model turn.
+  Both use the `claude` command you signed in with; set `HARNEXUS_CLAUDE_CLI` to its absolute path if the app does not find it.
+  Copies are kept beside the thread state in `cloud-copies/`, and only the latest one per chat.
+- After you send a message, the chat copies the session every 10 seconds until Claude ends its turn, or for at most an hour.
+  Otherwise it copies every 5 minutes, and shows what the session did meanwhile as a turn of Claude's own.
+  While the Mac sleeps nothing is copied; the first copy after waking shows what happened.
+- Stopping a turn here only stops waiting; the session keeps working until you stop it on claude.ai.
+- A Cloud chat sends text only, and cannot be rewound or compacted.
+  Messages sent while Claude is working are queued by the session and read between its tool calls.
+- If the session compacts its conversation, earlier messages no longer appear in a later copy; the chat shows the conversation from the compaction on.
+- A copy that ran a model turn stops copies of that chat until the bridge restarts. `bun run doctor` shows whether `claude` offers `--cloud` and `--teleport`.
+
 ## harnexus-task in Codex Cloud
 
 `harnexus-task` can tell where it runs, and can run Claude inside a Cloud task.

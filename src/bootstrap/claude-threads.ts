@@ -1,3 +1,8 @@
+import { Result } from "better-result";
+import {
+  type CloudLogEvent,
+  createCloudRuntime,
+} from "../conversation/claude/cloud.ts";
 import {
   type ClaudeLogEvent,
   createClaudeRuntime,
@@ -11,6 +16,12 @@ import { createSubagentRequests } from "../conversation/subagent-requests.ts";
 import { createSubagentRestore } from "../conversation/subagent-restore.ts";
 import { createSubagents } from "../conversation/subagents.ts";
 import { createThreadValues } from "../conversation/thread-values.ts";
+import {
+  type CloudCli,
+  copyCloudSession,
+  removeCloudCopy,
+  sendToCloud,
+} from "../infra/claude/cloud.ts";
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
 import { createCallGateway } from "../infra/codex/call-gateway.ts";
 import { createCodexLink } from "../infra/codex/codex-link.ts";
@@ -18,6 +29,7 @@ import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
 import { buildHistory, replayHistory } from "../presentation/history.ts";
+import { prepareDirectory } from "../runtime/fs.boundary.ts";
 import { resizeImage } from "../runtime/image.boundary.ts";
 
 type Runtime = Parameters<typeof createClaudeRuntime>[0];
@@ -37,6 +49,7 @@ export const connectClaudeThreads = ({
   codexHome,
   cronRecord,
   permissionMode = "auto",
+  cloud,
   send,
   log,
 }: {
@@ -53,8 +66,14 @@ export const connectClaudeThreads = ({
   permissionMode?: Runtime["permissionMode"];
   codexHome: string;
   cronRecord: Parameters<typeof createCodexLink>[0]["cronRecord"];
+  // Where Cloud sessions are reached and copied; without it a thread cannot link one.
+  cloud?: {
+    cli: CloudCli;
+    copyDir: string;
+    discardCopy?: (copySessionId: string) => Promise<void>;
+  };
   send: (message: object) => void;
-  log: (event: ClaudeLogEvent | RouteEvent) => void;
+  log: (event: ClaudeLogEvent | RouteEvent | CloudLogEvent) => void;
 }) => {
   const delegations = createDelegationWatch();
   const openLink = (callerThreadId: string) =>
@@ -73,31 +92,36 @@ export const connectClaudeThreads = ({
     readSubagents,
     log,
   });
-  const runtime = createClaudeRuntime({
+  const readHistory = async (
+    threadId: string,
+    sessionId: string,
+    cwd: string,
+  ) => {
+    const read = await readSession(sessionId);
+    if (read.isErr()) {
+      log({ event: "claude_history_unreadable", error: read.error._tag });
+      return [];
+    }
+    // A picked conversation's agents are read back first, so its replay names them as a later read does.
+    await subagentRestore.restore(threadId, sessionId, cwd, read.value);
+    return replayHistory(
+      buildHistory(
+        read.value,
+        { threadId, cwd },
+        subagents.agentRefOf(threadId),
+      ),
+      threadId,
+      Date.now(),
+    );
+  };
+  const claude = createClaudeRuntime({
     threads,
     permissionMode,
     startSession,
     findSession,
     listConversations,
     lastRecordOf,
-    readHistory: async (threadId, sessionId, cwd) => {
-      const read = await readSession(sessionId);
-      if (read.isErr()) {
-        log({ event: "claude_history_unreadable", error: read.error._tag });
-        return [];
-      }
-      // A picked conversation's agents are read back first, so its replay names them as a later read does.
-      await subagentRestore.restore(threadId, sessionId, cwd, read.value);
-      return replayHistory(
-        buildHistory(
-          read.value,
-          { threadId, cwd },
-          subagents.agentRefOf(threadId),
-        ),
-        threadId,
-        Date.now(),
-      );
-    },
+    readHistory,
     renameThread: (threadId, name) =>
       request(
         "thread/name/set",
@@ -110,6 +134,22 @@ export const connectClaudeThreads = ({
     effortRule,
     subagents,
     resizeImage,
+  });
+  const runtime = createCloudRuntime(claude, {
+    threads,
+    sendToCloud: (cloudSessionId, text, cwd) =>
+      cloud === undefined
+        ? Promise.resolve({ kind: "rejected", message: CLOUD_OFF })
+        : sendToCloud(cloud.cli, cloudSessionId, text, cwd),
+    copy: (cloudSessionId) =>
+      cloud === undefined
+        ? Promise.resolve(Result.err({ _tag: "CloudOff", message: CLOUD_OFF }))
+        : copyInto(cloud.cli, cloudSessionId, cloud.copyDir),
+    readCopy: (copySessionId) => readSession(copySessionId),
+    discardCopy: cloud?.discardCopy ?? ((copy) => removeCloudCopy(copy)),
+    replayHistory: readHistory,
+    send,
+    log,
   });
   const turns = createTurnController({
     store,
@@ -204,6 +244,21 @@ const THREAD_NOTE = {
     },
   ],
 };
+
+// The folder is made on first use, so a bridge that never links a Cloud session leaves nothing behind.
+const copyInto = async (
+  cli: CloudCli,
+  cloudSessionId: string,
+  copyDir: string,
+) => {
+  const ready = await prepareDirectory(copyDir);
+  if (ready.isErr()) {
+    return Result.err({ _tag: ready.error._tag, message: ready.error.message });
+  }
+  return copyCloudSession(cli, cloudSessionId, copyDir);
+};
+
+const CLOUD_OFF = "Cloud sessions are not set up for this bridge";
 
 const INJECT_TIMEOUT_MS = 30_000;
 

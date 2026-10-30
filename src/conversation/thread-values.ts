@@ -1,6 +1,6 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import { isClaudeEffort } from "../infra/claude/models.ts";
-import type { ThreadStore } from "../infra/thread-store.ts";
+import type { CloudLink, ThreadStore } from "../infra/thread-store.ts";
 import type { Thread } from "./thread-request.ts";
 import type { ErrorTag } from "./turn-runtime.ts";
 
@@ -218,6 +218,40 @@ export const createThreadValues = (
     });
   };
 
+  const cloudOf = (threadId: string): CloudLink | null =>
+    store.get(threadId)?.cloud ?? null;
+
+  // Like a picked conversation, a linked Cloud session applies only once the store holds it, and its first reopen carries the whole history.
+  const linkCloud = async (
+    threadId: string,
+    cloud: CloudLink,
+    copySessionId: string,
+  ) => {
+    const linked = await store.linkCloud(threadId, cloud, copySessionId);
+    if (linked.isErr()) return linked;
+    sessionIds.set(threadId, copySessionId);
+    picked.add(threadId);
+    return linked;
+  };
+
+  // The copy read last is used even if its save fails, since the earlier copy is removed once a new one is read.
+  const setCloudCopy = async (
+    threadId: string,
+    copySessionId: string,
+    shown: string | null,
+  ) => {
+    sessionIds.set(threadId, copySessionId);
+    const saved = await store.setCloudCopy(threadId, copySessionId, shown);
+    if (saved.isErr()) {
+      log({
+        event: "claude_turn",
+        step: "session_not_saved",
+        error: saved.error._tag,
+      });
+    }
+    return saved;
+  };
+
   // True once per pick, so only the first reopen after it carries the whole history.
   const takePicked = (threadId: string) => picked.delete(threadId);
 
@@ -241,5 +275,10 @@ export const createThreadValues = (
     changeModel,
     changeEffort,
     setSessionId,
+    cloudOf,
+    linkCloud,
+    setCloudCopy,
+    cloudThreadIds: () => store.cloudThreadIds(),
+    cloudOwner: (cloudSessionId: string) => store.cloudOwner(cloudSessionId),
   };
 };

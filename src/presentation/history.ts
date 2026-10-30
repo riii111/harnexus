@@ -70,6 +70,75 @@ export const buildHistory = (
   return turns;
 };
 
+// A record of the main conversation the app can show; a subagent's records and hidden ones such as a compact summary are left out, as history leaves them out.
+export const mainRecords = (messages: readonly SessionMessage[]) =>
+  messages.filter(
+    (message) =>
+      message.parent_tool_use_id === null &&
+      !isMetaMessage(message) &&
+      (message.type === "user" || message.type === "assistant"),
+  );
+
+// The text of a record that opens a turn, or null for tool results, a stop and a local command such as the /cost a Cloud copy runs.
+export const promptTextOf = (message: SessionMessage) => {
+  if (message.type !== "user") return null;
+  const prompt = promptOf(message.message);
+  if (
+    prompt === null ||
+    INTERRUPTED.test(prompt.text) ||
+    LOCAL_COMMAND.test(prompt.text)
+  ) {
+    return null;
+  }
+  return prompt.text;
+};
+
+// Claude ends a turn with a reply that asks for no tool.
+export const endsTurn = (message: SessionMessage) =>
+  message.type === "assistant" &&
+  isObject(message.message) &&
+  message.message.stop_reason === "end_turn";
+
+// A turn that shows records as they are copied, such as a Cloud thread's, renders them as the live turn renders Claude's messages; a prompt typed elsewhere is shown as the user's message.
+export const renderRecords = (
+  state: TurnState,
+  messages: readonly SessionMessage[],
+  now: number,
+): Rendered => {
+  let rendered: Rendered = { state, notifications: [] };
+  const add = (next: Rendered) => {
+    rendered = {
+      state: next.state,
+      notifications: [...rendered.notifications, ...next.notifications],
+    };
+  };
+  for (const message of mainRecords(messages)) {
+    const at = timeOf(message) ?? now;
+    const body = message.message;
+    if (message.type === "user") {
+      const prompt = promptOf(body);
+      if (prompt === null) {
+        add(renderSdkMessage(rendered.state, toolResultsOf(message, body), at));
+      } else if (promptTextOf(message) !== null) {
+        add(
+          renderUserInput(
+            rendered.state,
+            [
+              { type: "text", text: prompt.text, text_elements: [] },
+              ...prompt.images,
+            ],
+            null,
+            at,
+          ),
+        );
+      }
+    } else if (isAssistantBody(body)) {
+      add(renderSdkMessage(rendered.state, assistantOf(message, body), at));
+    }
+  }
+  return rendered;
+};
+
 export type LiveTurn = {
   turnId: string;
   record: string | null;

@@ -124,6 +124,40 @@ export const logChecks = (text: string, path: string, now: number): Check[] => {
 };
 
 // A sandbox refuses with EPERM where file modes refuse with EACCES, so EPERM says only that this shell may not look, not what the app can do.
+// A Cloud thread sends with claude -p --cloud and copies with claude --teleport, so the claude command must offer both; Cloud threads are optional, so their absence only warns.
+export const cloudCheck = (
+  file: string,
+  help: string | null,
+  version: string | null,
+): Check => {
+  const name = "Claude Cloud sessions";
+  if (help === null) {
+    return {
+      status: "warn",
+      name,
+      detail: `cannot run ${file}; set HARNEXUS_CLAUDE_CLI to the claude command to use Cloud threads`,
+    };
+  }
+  const missing = ["--cloud", "--teleport"].filter(
+    (flag) => !new RegExp(`(^|\\s)${flag}(\\s|$)`, "m").test(help),
+  );
+  const shown = version?.trim().split("\n")[0] ?? "unknown version";
+  if (missing.length > 0) {
+    return {
+      status: "warn",
+      name,
+      detail: `${file} (${shown}) lacks ${missing.join(" and ")}; update Claude Code to use Cloud threads`,
+    };
+  }
+  return {
+    status: "ok",
+    name,
+    detail: `${file} (${shown}) offers --cloud and --teleport; copies without a model turn were checked on Claude Code ${CLOUD_CHECKED_ON}`,
+  };
+};
+
+const CLOUD_CHECKED_ON = "2.1.314";
+
 export const refusedCheck = (
   name: string,
   detail: string,

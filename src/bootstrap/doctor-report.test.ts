@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  cloudCheck,
   failed,
   fallbackCheck,
   formatReport,
@@ -19,6 +20,41 @@ describe("parseProcesses", () => {
       { pid: 101, ppid: 1, command: "/usr/bin/codex app-server" },
       { pid: 102, ppid: 101, command: "bun src/bootstrap/main.ts" },
     ]);
+  });
+});
+
+describe("cloudCheck", () => {
+  test("passes a claude command that offers both flags", () => {
+    const check = cloudCheck(
+      "claude",
+      "  --cloud [description|session_id|url]  Create a cloud session\n  --teleport [session]  Resume a teleport session\n",
+      "2.1.314 (Claude Code)\n",
+    );
+
+    expect(check).toEqual({
+      status: "ok",
+      name: "Claude Cloud sessions",
+      detail:
+        "claude (2.1.314 (Claude Code)) offers --cloud and --teleport; copies without a model turn were checked on Claude Code 2.1.314",
+    });
+  });
+
+  test.each([
+    {
+      name: "a command that cannot run",
+      help: null,
+      expected: "cannot run claude; set HARNEXUS_CLAUDE_CLI",
+    },
+    {
+      name: "a command without --teleport",
+      help: "  --cloud [description]  Create a cloud session\n  --teleport-legacy\n",
+      expected: "lacks --teleport; update Claude Code",
+    },
+  ])("warns on $name", ({ help, expected }) => {
+    const check = cloudCheck("claude", help, "2.0.0");
+
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain(expected);
   });
 });
 
