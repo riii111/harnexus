@@ -131,7 +131,8 @@ const locked = (
           return fail(`review session must keep the original ${key}`);
       }
       // A head the reviewer could not judge is sent again once what it lacked is given, such as a document it could not read.
-      const judged = state?.verdict === "LGTM" || state?.verdict === "修正必要";
+      // A state saved before verdicts were kept has none, and counts as judged.
+      const judged = state?.verdict !== "判定保留" && state?.verdict !== null;
       if (judged && jsonEqual(previous.head ?? null, data.head))
         return fail(
           `head ${asText(data.head)} was already reviewed by ${asText(state?.reviewer)}; commit a fix before asking again`,

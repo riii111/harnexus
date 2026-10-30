@@ -304,6 +304,23 @@ describe("harnexus-task review in a Claude Code cloud session", () => {
     ]);
   });
 
+  test("counts a head recorded before verdicts were kept as judged", async () => {
+    const { commit, plan, review } = await fixture();
+    commit("test: candidate");
+    await plan(1, { out: events(REVIEWER, "判定: 判定保留") });
+    const first = await review();
+    const saved = JSON.parse(await readFile(first.out.state, "utf8"));
+    delete saved.verdict;
+    await writeFile(first.out.state, JSON.stringify(saved));
+
+    const again = await review();
+
+    expect([again.code, again.err]).toEqual([
+      1,
+      expect.stringContaining("was already reviewed"),
+    ]);
+  });
+
   test("refuses a head it already reviewed", async () => {
     const { commit, plan, review, calls } = await fixture();
     const head = commit("test: candidate");
