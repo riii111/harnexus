@@ -94,8 +94,10 @@ export type CloudDeps = {
 type Copied = { copy: string; records: SessionMessage[] };
 
 // A copy holds the session as it was when the copy started, since records written later are left out, so of two copies the one started later is never older.
+// overlapped: started while another copy ran, so it is checked against what was shown before it is used.
 type Started = {
   at: number;
+  overlapped: boolean;
   copied: Promise<Result<Copied, CopyFailure>>;
 };
 
@@ -299,6 +301,8 @@ export const createCloudRuntime = <Tag extends string>(
     const running: Started[] = [];
     // When the copy last shown started; a copy started before it is older and dropped.
     let shownAt = Number.NEGATIVE_INFINITY;
+    // When the latest copy started, so copies keep OVERLAP_MS apart even when one ends sooner.
+    let lastAt = Number.NEGATIVE_INFINITY;
     // Copies overlap only once one has worked, so a copy that runs a model turn is caught before a second one starts.
     let copiedOnce = false;
     const overlapping = () =>
@@ -325,7 +329,10 @@ export const createCloudRuntime = <Tag extends string>(
       for (;;) {
         if (running.length === 0) {
           await sleep(
-            pollMs(now() - startedAt, failingSince !== null),
+            Math.max(
+              pollMs(now() - startedAt, failingSince !== null),
+              lastAt + OVERLAP_MS - now(),
+            ),
             follow.woken,
           );
         }
@@ -342,8 +349,10 @@ export const createCloudRuntime = <Tag extends string>(
           latest === undefined ||
           (overlapping() && now() - latest.at >= OVERLAP_MS)
         ) {
+          lastAt = now();
           running.push({
-            at: now(),
+            at: lastAt,
+            overlapped: latest !== undefined,
             copied: fetchCopy(threadId, cloudSessionId),
           });
         }
@@ -351,7 +360,15 @@ export const createCloudRuntime = <Tag extends string>(
         if (ended === null) continue;
         running.splice(running.indexOf(ended.started), 1);
         const { copied } = ended;
-        if (ended.started.at < shownAt) {
+        // The session only grows between compactions, so an overlapping copy without the last record shown read it before that record arrived; a compaction is taken by the next copy that does not overlap.
+        const shownLast = follow.last ?? follow.after;
+        if (
+          ended.started.at < shownAt ||
+          (ended.started.overlapped &&
+            copied.isOk() &&
+            shownLast !== null &&
+            indexOf(copied.value.records, shownLast) === -1)
+        ) {
           if (copied.isOk()) await discardCopy(copied.value.copy);
           continue;
         }
