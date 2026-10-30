@@ -93,11 +93,10 @@ export type CloudDeps = {
 
 type Copied = { copy: string; records: SessionMessage[] };
 
-// overlapped: started while the copy before it still ran, so it may have read the session before that one did.
+// A copy holds the session as it was when the copy started, since records written later are left out, so of two copies the one started later is never older.
 type Started = {
   at: number;
-  overlapped: boolean;
-  copied: Promise<Result<Copied, CopyFailure> | null>;
+  copied: Promise<Result<Copied, CopyFailure>>;
 };
 
 // What a turn the app started waits for: every text it sent, in order, then a reply that ends Claude's turn.
@@ -296,26 +295,35 @@ export const createCloudRuntime = <Tag extends string>(
     const { threadId } = turn;
     const startedAt = now();
     let failingSince: number | null = null;
-    let ended = false;
-    // While a reply is young, the next copy starts before the current one ends, so a reply shows up sooner after Claude ends it.
-    let next: Started | null = null;
-    // How many records the latest copy shown held; a copy that overlapped it and holds fewer read the session earlier.
-    let shownCount = 0;
+    // While a reply is young, a copy starts every OVERLAP_MS without waiting for the ones running, and each is read as soon as it ends.
+    const running: Started[] = [];
+    // When the copy last shown started; a copy started before it is older and dropped.
+    let shownAt = Number.NEGATIVE_INFINITY;
     // Copies overlap only once one has worked, so a copy that runs a model turn is caught before a second one starts.
     let copiedOnce = false;
-    const startNext = (after: number): Started => ({
-      at: after,
-      overlapped: true,
-      copied: sleep(Math.max(0, after - now()), follow.woken).then(() =>
-        ended || follow.stop || closed
-          ? null
-          : fetchCopy(threadId, cloudSessionId),
-      ),
-    });
-    // A copy started for the next round is removed however the wait ends.
+    const overlapping = () =>
+      copiedOnce &&
+      failingSince === null &&
+      now() - startedAt < BACK_TO_BACK_FOR_MS &&
+      running.length < OVERLAP_LIMIT;
+    // The first copy to end, or null once it is time to start another or the turn is being stopped.
+    const nextEnded = () => {
+      const latest = running.at(-1);
+      const due =
+        latest !== undefined && overlapping()
+          ? sleep(Math.max(0, latest.at + OVERLAP_MS - now()), follow.woken)
+          : follow.woken;
+      return Promise.race([
+        ...running.map((started) =>
+          started.copied.then((copied) => ({ started, copied })),
+        ),
+        due.then(() => null),
+      ]);
+    };
+    // Copies still running are removed once written, however the wait ends.
     try {
       for (;;) {
-        if (next === null) {
+        if (running.length === 0) {
           await sleep(
             pollMs(now() - startedAt, failingSince !== null),
             follow.woken,
@@ -329,19 +337,24 @@ export const createCloudRuntime = <Tag extends string>(
           turn.finish({ status: "interrupted" }, null);
           return;
         }
-        const current: Started = next ?? {
-          at: now(),
-          overlapped: false,
-          copied: fetchCopy(threadId, cloudSessionId),
-        };
-        next =
-          copiedOnce &&
-          failingSince === null &&
-          current.at - startedAt < BACK_TO_BACK_FOR_MS
-            ? startNext(current.at + OVERLAP_MS)
-            : null;
-        const copied = await current.copied;
-        if (copied === null) continue;
+        const latest = running.at(-1);
+        if (
+          latest === undefined ||
+          (overlapping() && now() - latest.at >= OVERLAP_MS)
+        ) {
+          running.push({
+            at: now(),
+            copied: fetchCopy(threadId, cloudSessionId),
+          });
+        }
+        const ended = await nextEnded();
+        if (ended === null) continue;
+        running.splice(running.indexOf(ended.started), 1);
+        const { copied } = ended;
+        if (ended.started.at < shownAt) {
+          if (copied.isOk()) await discardCopy(copied.value.copy);
+          continue;
+        }
         if (copied.isErr()) {
           failingSince ??= now();
           if (
@@ -358,11 +371,7 @@ export const createCloudRuntime = <Tag extends string>(
         }
         failingSince = null;
         copiedOnce = true;
-        if (current.overlapped && copied.value.records.length < shownCount) {
-          await discardCopy(copied.value.copy);
-          continue;
-        }
-        shownCount = copied.value.records.length;
+        shownAt = ended.started.at;
         const progress = advance(follow, copied.value.records);
         if (progress.shown.length > 0) {
           turn.apply(renderRecords(turn.state(), progress.shown, now()));
@@ -396,8 +405,7 @@ export const createCloudRuntime = <Tag extends string>(
         }
       }
     } finally {
-      ended = true;
-      if (next !== null) void discardStarted(next);
+      for (const started of running) void discardStarted(started);
     }
   };
 
@@ -526,7 +534,7 @@ export const createCloudRuntime = <Tag extends string>(
   // A copy started for a turn that has ended is removed once it is written.
   const discardStarted = async (started: Started) => {
     const copied = await started.copied;
-    if (copied?.isOk()) await discardCopy(copied.value.copy);
+    if (copied.isOk()) await discardCopy(copied.value.copy);
   };
 
   // The thread reads the newest copy from now on, so the one it read before is removed once that is saved.
@@ -796,6 +804,8 @@ const COPY_UNREADABLE = "the copy of the Cloud session could not be read";
 const BACK_TO_BACK_FOR_MS = 20_000;
 
 const OVERLAP_MS = 1_500;
+
+const OVERLAP_LIMIT = 3;
 
 const FAST_POLL_MS = 3_000;
 

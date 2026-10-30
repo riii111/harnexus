@@ -507,28 +507,31 @@ describe("createCloudRuntime turns", () => {
     expect(turn.outcome).toEqual({ status: "completed" });
   });
 
-  test("drops a copy that overlapped the one shown and read the session before it", async () => {
+  test("shows a copy as soon as it ends while an older one still runs, then drops the older one", async () => {
     const env = linked({
       copies: [
-        [prompt("p1", "hi"), reply("a1", "m1", text("working"), "tool_use")],
-        [prompt("p1", "hi"), reply("a1", "m1", text("working"), "tool_use")],
         [prompt("p1", "hi")],
-        [
-          prompt("p1", "hi"),
-          reply("a1", "m1", text("working"), "tool_use"),
-          endReply("a2", "done"),
-        ],
+        [prompt("p1", "hi")],
+        [prompt("p1", "hi"), endReply("a1", "ok")],
       ],
       shown: null,
     });
+    let release = () => {};
+    env.duringCopy = (call) =>
+      call === 2
+        ? new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve();
     const turn = env.turn("hi");
 
     await env.runtime.run(turn.running);
 
-    expect(turn.texts()).toEqual(["working", "done"]);
+    expect(turn.texts()).toEqual(["ok"]);
     expect(turn.outcome).toEqual({ status: "completed" });
-    expect(env.discarded).toContain("copy-3");
-    expect(env.cloudOf("thread-1")?.shown).toBe("a2");
+    expect(env.sessionIds.get("thread-1")).toBe("copy-3");
+    release();
+    await env.untilDiscarded("copy-2");
   });
 
   test.each([
@@ -767,6 +770,12 @@ const setup = ({
           return true;
         });
       }),
+    // Settles once that copy has been removed.
+    untilDiscarded: async (copy: string) => {
+      while (!discarded.includes(copy)) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    },
     tick: () => ticks.shift()?.() ?? Promise.resolve(),
     turn: (
       typed: string,
