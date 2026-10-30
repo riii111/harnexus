@@ -74,6 +74,35 @@ describe("detectEnvironment", () => {
     });
   });
 
+  test("reads a session with both Cloud variables as Codex", async () => {
+    const found = (
+      await detectEnvironment({
+        CODEX_ENVIRONMENT_ID: "env_1",
+        CLAUDE_CODE_REMOTE: "true",
+      })
+    ).unwrap();
+
+    expect(found).toMatchObject({
+      source: "CODEX_ENVIRONMENT_ID",
+      host: "codex",
+    });
+  });
+
+  test.each([
+    { value: "false" },
+    { value: "" },
+  ])("does not read CLAUDE_CODE_REMOTE=$value as Cloud", async ({ value }) => {
+    const root = await scratch();
+    const found = (
+      await detectEnvironment({
+        CLAUDE_CODE_REMOTE: value,
+        HARNEXUS_CALL_SOCKET: join(root, "none.sock"),
+      })
+    ).unwrap();
+
+    expect(found.environment).toBe("unknown");
+  });
+
   test("names the Cloud an explicit cloud runs on", async () => {
     const found = (
       await detectEnvironment({

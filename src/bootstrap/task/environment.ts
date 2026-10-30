@@ -88,7 +88,7 @@ export const detectEnvironment = async (
   return Result.ok({
     environment: "unknown",
     source: "none",
-    note: `no ${EXECUTION_ENV}, no ${CLOUD_HINT_ENV} and no harnexus call socket; set ${EXECUTION_ENV}=cloud|local`,
+    note: `no ${EXECUTION_ENV}, no ${CLOUD_HINT_ENV}, no ${CLAUDE_CLOUD_ENV}=true and no harnexus call socket; set ${EXECUTION_ENV}=cloud|local`,
   });
 };
 
