@@ -287,9 +287,9 @@ export const createCloudRuntime = <Tag extends string>(
   ) => {
     const { threadId } = turn;
     const startedAt = now();
-    let failures = 0;
+    let failingSince: number | null = null;
     for (;;) {
-      await sleep(POLL_MS, follow.woken);
+      await sleep(pollMs(now() - startedAt), follow.woken);
       if (follow.stop || closed || turn.state().interrupting) {
         log({ event: "claude_cloud", step: "stopped" });
         turn.apply(
@@ -300,8 +300,11 @@ export const createCloudRuntime = <Tag extends string>(
       }
       const copied = await copyOf(threadId, cloudSessionId);
       if (copied.isErr()) {
-        failures += 1;
-        if (failures < COPY_FAILURE_LIMIT && copied.error.stopped === null) {
+        failingSince ??= now();
+        if (
+          copied.error.stopped === null &&
+          now() - failingSince < COPY_FAILING_LIMIT_MS
+        ) {
           continue;
         }
         turn.fail({
@@ -310,7 +313,7 @@ export const createCloudRuntime = <Tag extends string>(
         });
         return;
       }
-      failures = 0;
+      failingSince = null;
       const progress = advance(follow, copied.value.records);
       if (progress.shown.length > 0) {
         turn.apply(renderRecords(turn.state(), progress.shown, now()));
@@ -623,6 +626,10 @@ const newFollow = (text: string, after: string | null): Follow => {
   };
 };
 
+// A short reply comes within the first minute, so it is copied often then; a longer job is copied less often, since every copy starts claude and rewrites the whole session.
+const pollMs = (waited: number) =>
+  waited < FAST_POLL_FOR_MS ? FAST_POLL_MS : POLL_MS;
+
 const cloudCommandOf = (text: string | null) => {
   const matched = text === null ? null : CLOUD_COMMAND.exec(text.trim());
   return matched === null ? null : (matched[1] ?? "");
@@ -714,6 +721,10 @@ const COPY_STOPPED =
 
 const COPY_UNREADABLE = "the copy of the Cloud session could not be read";
 
+const FAST_POLL_MS = 3_000;
+
+const FAST_POLL_FOR_MS = 60_000;
+
 const POLL_MS = 10_000;
 
 const IDLE_MS = 5 * 60_000;
@@ -722,4 +733,5 @@ const FIRST_TICK_MS = 15_000;
 
 const WAIT_LIMIT_MS = 60 * 60_000;
 
-const COPY_FAILURE_LIMIT = 3;
+// Measured in time rather than tries, since the wait between copies changes.
+const COPY_FAILING_LIMIT_MS = 20_000;

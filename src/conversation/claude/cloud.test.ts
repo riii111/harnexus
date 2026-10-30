@@ -433,7 +433,28 @@ describe("createCloudRuntime turns", () => {
     expect(turn.texts().at(-1)).toContain("still working");
   });
 
-  test("fails after copies keep failing, saying the message was delivered", async () => {
+  test("copies every 3 seconds for the first minute, then every 10 seconds", async () => {
+    const env = linked({
+      copies: [
+        [
+          prompt("p1", "long job"),
+          reply("a1", "m1", text("working"), "tool_use"),
+        ],
+      ],
+      shown: null,
+      waitLimitMs: 90_000,
+    });
+    const turn = env.turn("long job");
+
+    await env.runtime.run(turn.running);
+
+    expect(env.waits).toEqual([
+      ...Array<number>(20).fill(3_000),
+      ...Array<number>(3).fill(10_000),
+    ]);
+  });
+
+  test("fails once copies have kept failing for 20 seconds, saying the message was delivered", async () => {
     const env = linked({ copies: [], shown: null });
     env.copyFailure = "network down";
     const turn = env.turn("hi");
@@ -442,7 +463,8 @@ describe("createCloudRuntime turns", () => {
 
     expect(turn.failure?._tag).toBe("CloudCopyFailed");
     expect(turn.failure?.message).toContain("reached the Cloud session");
-    expect(env.copyCalls).toBe(3);
+    // The first copy fails 3 seconds in, and the first one at least 20 seconds after it ends the turn.
+    expect(env.clock - 1_000).toBe(24_000);
   });
 
   test.each([
@@ -634,6 +656,9 @@ const setup = ({
     innerRuns,
     ownStarts,
     copyCalls: 0,
+    // The clock moves only by the waits between copies, which are kept in order.
+    clock: 1_000,
+    waits: [] as number[],
     // Set to make every copy say it may have run a model turn.
     copyStop: null as "ran_model" | "unchecked" | null,
     copyFailure: null as string | null,
@@ -759,8 +784,12 @@ const setup = ({
     replayHistory: async (_threadId, copy) => [{ replayOf: copy }],
     send: (message) => sent.push(message),
     log: (event) => events.push(event),
-    now: () => 1_000,
-    sleep: (_ms, woken) => env.wait(woken),
+    now: () => env.clock,
+    sleep: (ms, woken) => {
+      env.waits.push(ms);
+      env.clock += ms;
+      return env.wait(woken);
+    },
     schedule: (run) => {
       ticks.push(run);
       return () => {};
