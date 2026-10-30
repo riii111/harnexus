@@ -26,7 +26,12 @@ import {
   PERMISSION_MODES,
   RECOVERIES,
 } from "./cloud.ts";
-import { detectEnvironment, refuseInCloud } from "./environment.ts";
+import { cloudReview } from "./cloud-review.ts";
+import {
+  declaredEnvironment,
+  detectEnvironment,
+  refuseInCloud,
+} from "./environment.ts";
 import { asText, type Fields, fail, jsonEqual, truthy } from "./format.ts";
 import {
   callerId,
@@ -158,7 +163,27 @@ const launch = (args: Args, deps: TaskDeps) =>
 
 const review = (args: Args, deps: TaskDeps) =>
   Result.gen(async function* () {
+    const declared = yield* declaredEnvironment(deps.env);
+    if (declared?.environment === "cloud" && declared.host === "claude")
+      return await cloudReview(
+        {
+          request: args.request ?? "",
+          updateBase: args.updateBase,
+          ...(args.model === undefined ? {} : { model: args.model }),
+          ...(args.thinking === undefined ? {} : { thinking: args.thinking }),
+          ...(args.recover === undefined ? {} : { recover: args.recover }),
+        },
+        {
+          env: deps.env,
+          saveJson: deps.saveJson,
+          git: gitIn(deps.runGit, deps.env),
+        },
+      );
     yield* refuseInCloud(deps.env, "review");
+    if (args.recover !== undefined)
+      return fail(
+        "--recover applies to review only in a Claude Code cloud session",
+      );
     const git = gitIn(deps.runGit, deps.env);
     let data = yield* Result.await(
       reviewRequest(args.request ?? "", deps.env, git),
@@ -490,7 +515,11 @@ const MODEL_OPTIONS = {
 // The Python taskctl's subcommands and options, which callers and permission rules already match.
 const OPTIONS: Record<Command, OptionTypes> = {
   launch: MODEL_OPTIONS,
-  review: { ...MODEL_OPTIONS, "update-base": { type: "boolean" } },
+  review: {
+    ...MODEL_OPTIONS,
+    "update-base": { type: "boolean" },
+    recover: { type: "string" },
+  },
   state: { request: { type: "string" } },
   resolve: {
     request: { type: "string" },
@@ -523,7 +552,7 @@ const OPTIONS: Record<Command, OptionTypes> = {
 const USAGE = {
   launch: "launch --request REQUEST [--model MODEL] [--thinking THINKING]",
   review:
-    "review --request REQUEST [--model MODEL] [--thinking THINKING] [--update-base]",
+    "review --request REQUEST [--model MODEL] [--thinking THINKING] [--update-base] [--recover discard]",
   state: "state [--request REQUEST]",
   resolve:
     "resolve --request REQUEST (--sent | --not-sent) [--thread-id THREAD_ID]",

@@ -148,7 +148,7 @@ The first match decides:
 5. Otherwise `unknown`.
 
 In Cloud, `launch`, `review`, `resolve`, `name`, `watch` and `state --request` need the Codex App, so they fail with a message naming Cloud.
-In a Claude Code cloud session the message points to starting a worker as a new cloud session instead.
+In a Claude Code cloud session the message points to starting a worker as a new cloud session instead, and `review` runs there (below).
 Pin `HARNEXUS_EXECUTION_ENV=local` where `CODEX_ENVIRONMENT_ID` or `CLAUDE_CODE_REMOTE=true` is set but the App is reachable.
 
 `harnexus-task` is not on `PATH` in Cloud.
@@ -188,3 +188,21 @@ harnexus-task claude --session NAME
 
 Verified with the real CLI: a parent Codex session ran `--start` and `--resume` against Claude Code with a login (session `47be678c-e1ef-4049-8521-4a267f4e95c2`, state in `/tmp/harnexus-parent-smoke-state`), and the resume recalled the first turn.
 A run from a Claude session nested inside a task without a login reached only `Not logged in`; that run exercised the error path, not a reply.
+
+### Review in a Claude Code cloud session
+
+In a Claude Code cloud session (`CLAUDE_CODE_REMOTE=true`), `review --request REQUEST [--model M] [--thinking T] [--update-base] [--recover discard]` runs the reviewer itself with the Codex CLI in the same machine and answers when it is done:
+
+```json
+{"status":"completed","verdict":"LGTM","taskId":"...","base":"<sha>","head":"<sha>","reviewer":"<codex thread id>","answer":"<the reviewer's full answer>","state":"..."}
+```
+
+- The request is the same as in the app, but `checkout` may be any repository's top level, and `workerChatId` defaults to `CLAUDE_CODE_SESSION_ID`.
+- The reviewer prompt is the `reviewer` template with `{reply_to}` set to `Cloud`; elsewhere `{reply_to}` is the `workerAI`.
+- The first head starts `codex exec --json --sandbox read-only -C <checkout>` (by default with `-m gpt-6.1-sol` and `model_reasoning_effort="medium"`); later heads resume the same reviewer with `codex exec resume <id> -c sandbox_mode="read-only"` in the checkout. The prompt goes in on stdin.
+- `verdict` is read from the answer's `判定:` line, and is `null` when the answer has none.
+- A head already reviewed is refused. A run that failed, such as one without a login, records nothing, so the same head can be sent again.
+- A reviewer whose record is gone, such as after the machine was rebuilt, is forgotten, and the next run starts a new one.
+- A run that ended without a result leaves `pending.json`; check the reviewer, then send the head again with `--recover discard`.
+- A review takes a minute or two, longer than a Bash tool call waits by default, so run it in the background or with a timeout of at least `HARNEXUS_REVIEW_TIMEOUT_MS`; a caller stopped early leaves the run going, and its result unknown.
+- `codex` is found on `PATH` unless `HARNEXUS_CODEX_BIN` names an absolute path. `HARNEXUS_REVIEW_TIMEOUT_MS` (default 30 minutes) and `HARNEXUS_REVIEW_KILL_GRACE_MS` bound a run, and the state is kept under `$XDG_STATE_HOME/taskctl/cloud-review/`.

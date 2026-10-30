@@ -53,7 +53,7 @@ const binary = (env: Env) => {
     : fail("HARNEXUS_CLAUDE_CLOUD_BIN must be an absolute path");
 };
 
-const milliseconds = (env: Env, name: string, fallback: number) => {
+export const milliseconds = (env: Env, name: string, fallback: number) => {
   const value = env[name];
   if (value === undefined || value === "") return Result.ok(fallback);
   return /^[1-9][0-9]{0,9}$/.test(value)
@@ -95,7 +95,7 @@ const reap = (lock: string, observed: string) =>
   });
 
 // Held from the first check to the saved state, and failing at once instead of waiting.
-const acquire = (lock: string) =>
+export const acquire = (lock: string, holder = "claude run") =>
   Result.gen(async function* () {
     const token = randomUUID();
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -110,19 +110,19 @@ const acquire = (lock: string) =>
         ).then((made) => made.mapError(ioFailed)),
       );
       if (created) return Result.ok(token);
-      const holder = await heldBy(lock);
-      if (holder === null || !dead(holder))
+      const held = await heldBy(lock);
+      if (held === null || !dead(held))
         return fail(
-          `another claude run${typeof holder?.pid === "number" ? ` (pid ${holder.pid})` : ""} is using this session`,
+          `another ${holder}${typeof held?.pid === "number" ? ` (pid ${held.pid})` : ""} is using this session`,
         );
-      const taken = yield* Result.await(reap(lock, String(holder.token)));
-      if (!taken) return fail("another claude run is taking over this session");
+      const taken = yield* Result.await(reap(lock, String(held.token)));
+      if (!taken) return fail(`another ${holder} is taking over this session`);
     }
     return fail(`cannot take ${lock}`);
   });
 
 // Removes only the lock this run took, so a lock another run holds now stays.
-const release = async (lock: string, token: string) => {
+export const release = async (lock: string, token: string) => {
   const holder = await heldBy(lock);
   if (holder?.token === token) await removeFile(lock);
 };
