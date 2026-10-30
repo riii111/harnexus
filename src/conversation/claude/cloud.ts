@@ -312,10 +312,9 @@ export const createCloudRuntime = <Tag extends string>(
       running.length < OVERLAP_LIMIT;
     // The first copy to end, or null once it is time to start another or the turn is being stopped.
     const nextEnded = () => {
-      const latest = running.at(-1);
       const due =
-        latest !== undefined && overlapping()
-          ? sleep(Math.max(0, latest.at + OVERLAP_MS - now()), follow.woken)
+        running.length > 0 && overlapping()
+          ? sleep(Math.max(0, lastAt + OVERLAP_MS - now()), follow.woken)
           : follow.woken;
       return Promise.race([
         ...running.map((started) =>
@@ -344,15 +343,15 @@ export const createCloudRuntime = <Tag extends string>(
           turn.finish({ status: "interrupted" }, null);
           return;
         }
-        const latest = running.at(-1);
         if (
-          latest === undefined ||
-          (overlapping() && now() - latest.at >= OVERLAP_MS)
+          running.length === 0 ||
+          (overlapping() && now() - lastAt >= OVERLAP_MS)
         ) {
+          const overlapped = running.length > 0;
           lastAt = now();
           running.push({
             at: lastAt,
-            overlapped: latest !== undefined,
+            overlapped,
             copied: fetchCopy(threadId, cloudSessionId),
           });
         }

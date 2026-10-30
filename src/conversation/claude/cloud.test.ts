@@ -507,6 +507,40 @@ describe("createCloudRuntime turns", () => {
     await env.untilDiscarded("copy-2");
   });
 
+  test("keeps 1.5 seconds between copy starts while an older copy still runs", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "hi")],
+        [prompt("p1", "hi")],
+        [prompt("p1", "hi")],
+        [prompt("p1", "hi"), endReply("a1", "ok")],
+      ],
+      shown: null,
+    });
+    env.copyMs = 0;
+    // A wait ends after a copy that ends at once, so the copy is read before the next one is due.
+    env.wait = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const starts: number[] = [];
+    let release = () => {};
+    env.duringCopy = (call) => {
+      starts.push(env.clock);
+      return call === 2
+        ? new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve();
+    };
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+    release();
+
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(
+      starts.slice(1).map((at, index) => at - (starts[index] ?? 0)),
+    ).toEqual([1_500, 1_500, 1_500]);
+  });
+
   test("drops an overlapping copy that lacks what was already shown", async () => {
     const env = linked({
       copies: [
@@ -908,10 +942,13 @@ const setup = ({
     send: (message) => sent.push(message),
     log: (event) => events.push(event),
     now: () => env.clock,
+    // A wait ends at the time it was due, so waits that run side by side do not add up.
     sleep: (ms, woken) => {
       env.waits.push(ms);
-      env.clock += ms;
-      return env.wait(woken);
+      const due = env.clock + ms;
+      return env.wait(woken).then(() => {
+        env.clock = Math.max(env.clock, due);
+      });
     },
     schedule: (run) => {
       ticks.push(run);
