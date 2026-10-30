@@ -206,3 +206,34 @@ In a Claude Code cloud session (`CLAUDE_CODE_REMOTE=true`), `review --request RE
 - A run that ended without a result leaves `pending.json`; check the reviewer, then send the head again with `--recover discard`.
 - A review takes a minute or two, longer than a Bash tool call waits by default, so run it in the background or with a timeout of at least `HARNEXUS_REVIEW_TIMEOUT_MS`; a caller stopped early leaves the run going, and its result unknown.
 - `codex` is found on `PATH` unless `HARNEXUS_CODEX_BIN` names an absolute path. `HARNEXUS_REVIEW_TIMEOUT_MS` (default 30 minutes) and `HARNEXUS_REVIEW_KILL_GRACE_MS` bound a run, and the state is kept under `$XDG_STATE_HOME/taskctl/cloud-review/`.
+
+## Hand a task to Claude in a Claude Code cloud session
+
+Claude in a Claude Code cloud session can take a task from a one-line request to a Draft PR, with workers in their own cloud sessions and Codex as the reviewer.
+
+Set up the cloud environment once:
+
+- Add to its setup script the [riii111/dotfiles](https://github.com/riii111/dotfiles) `scripts/cloud-setup.sh` with `HARNEXUS_TASK=1`:
+
+  ```sh
+  curl -fsSLo /tmp/cloud-setup.sh https://raw.githubusercontent.com/riii111/dotfiles/main/scripts/cloud-setup.sh && HARNEXUS_TASK=1 PR_LANGUAGE=ja bash /tmp/cloud-setup.sh
+  ```
+
+  It installs the task skills under `~/.codex/skills`, the reviewer and worker templates in `~/.config/harnexus/task.json`, and with `HARNEXUS_TASK=1` builds `harnexus-task` into `/usr/local/bin`.
+  The build needs Bun 1.4.4 as `bun` or `~/.bun/bin/bun`; without it the session still starts, with only the hooks and skills.
+- Install the Codex CLI and sign it in with a ChatGPT login, given to the environment through an environment variable in its settings, never in the repository.
+- Allow network access to the OpenAI hosts the Codex CLI uses.
+
+Then open a cloud session on the repository and name the skill, the task and how far to go:
+
+```text
+$task-orchestration https://github.com/<owner>/<repo>/issues/<n> draft_pr
+```
+
+`harnexus-task environment` there reports `"host":"claude"`, so the session leads and the skills follow their Claude Code cloud steps:
+
+1. Each task starts a worker as a new cloud session with `create_session`, titled `[<owner>/<repo>#<task id>]`.
+2. The worker commits on its own branch and pushes each commit, then runs `harnexus-task review`, which reviews the head with the Codex CLI ([Review in a Claude Code cloud session](#review-in-a-claude-code-cloud-session)).
+3. After the reviewer's LGTM and the repository's checks, the worker opens a Draft PR, follows it with `subscribe_pr_activity`, and reports to the leading session with `send_message`.
+
+To follow a session from the Codex App, start a new Claude chat and send `/cloud <session URL>` ([Claude Cloud sessions in a chat](#claude-cloud-sessions-in-a-chat)).
