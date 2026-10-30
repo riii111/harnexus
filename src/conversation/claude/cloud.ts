@@ -730,16 +730,16 @@ const pollMs = (waited: number, failing: boolean) => {
   return waited < FAST_POLL_FOR_MS ? FAST_POLL_MS : POLL_MS;
 };
 
-// Besides what the user typed, the first message of a chat another chat opened with create_thread, such as harnexus-task cloud does, can link it; it arrives wrapped in its delegation.
+// Besides what the user typed, the first message of a chat another chat opened with create_thread, such as harnexus-task cloud does, can link it; it arrives wrapped in its delegation, as its <prompt>.
 const commandText = (input: TurnInput) => {
   const typed = typedText(input);
   if (typed !== null || input.toolOutput?.name !== "create_thread")
     return typed;
-  return DELEGATED_INPUT.exec(input.text)?.[1] ?? null;
+  return DELEGATED_PROMPT.exec(input.text)?.[1] ?? null;
 };
 
-const DELEGATED_INPUT =
-  /^\s*<codex_delegation>[\s\S]*?<input>([\s\S]*?)<\/input>\s*<\/codex_delegation>\s*$/;
+const DELEGATED_PROMPT =
+  /^\s*<codex_delegation>[\s\S]*?<prompt>([\s\S]*?)<\/prompt>\s*<\/codex_delegation>\s*$/;
 
 const cloudCommandOf = (text: string | null) => {
   const matched = text === null ? null : CLOUD_COMMAND.exec(text.trim());

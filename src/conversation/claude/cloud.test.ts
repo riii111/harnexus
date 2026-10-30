@@ -1079,7 +1079,7 @@ const fakeTurn = (
     images?: readonly { path: string }[];
     compaction?: boolean;
     startedBy?: "app" | "claude";
-    // A message another chat sent with this tool, wrapped as the app delivers it.
+    // A message another chat sent with this tool, wrapped as the app delivers it: a create_thread's as its <prompt>, a send_message_to_thread's as its <input>.
     delegatedBy?: "create_thread" | "send_message_to_thread" | null;
   },
 ) => {
@@ -1093,7 +1093,9 @@ const fakeTurn = (
   const delegated =
     delegatedBy === null
       ? null
-      : `<codex_delegation>\n  <source_thread_id>th-codex</source_thread_id>\n  <input>${typed}</input>\n</codex_delegation>`;
+      : delegatedBy === "create_thread"
+        ? `<codex_delegation>\n  <source_thread_id>th-codex</source_thread_id>\n  <prompt>${typed}</prompt>\n</codex_delegation>`
+        : `<codex_delegation>\n  <source_thread_id>th-codex</source_thread_id>\n  <input>${typed}</input>\n</codex_delegation>`;
   const input: TurnInput = {
     items:
       typed === "" || delegated !== null ? [] : [{ type: "text", text: typed }],
