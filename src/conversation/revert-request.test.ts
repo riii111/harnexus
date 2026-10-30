@@ -75,7 +75,7 @@ describe("Claude conversation rewind", () => {
         error: {
           code: -32600,
           message:
-            "a Cloud thread shows a conversation that runs on claude.ai, so it cannot be rewound or compacted here",
+            "a Cloud thread shows a conversation that runs on claude.ai, so it cannot be rewound, compacted or opened as a side chat here",
         },
       },
     ]);

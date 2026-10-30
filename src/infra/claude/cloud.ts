@@ -1,5 +1,10 @@
+import { createHash } from "node:crypto";
 import { Result, TaggedError } from "better-result";
-import { removeFile } from "../../runtime/fs.boundary.ts";
+import {
+  readTextFileIfExists,
+  removeFile,
+  writeFileAtomic,
+} from "../../runtime/fs.boundary.ts";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 import { bundledClaude, type ClaudeRun, runClaude } from "./run.boundary.ts";
@@ -104,8 +109,8 @@ class CloudCopyFailed extends TaggedError("CloudCopyFailed")<{
   message: string;
 }> {}
 
-// sessionId names the local copy; turns counts model turns the copy ran, which the /cost prompt keeps at zero.
-export type CloudCopy = { sessionId: string; turns: number };
+// sessionId names the local copy; turns counts model turns the copy ran, which the /cost prompt keeps at zero, and is null when the CLI did not say.
+export type CloudCopy = { sessionId: string; turns: number | null };
 
 // teleport writes a new local record of the Cloud conversation each time; /cost is answered by the CLI itself, so no model turn runs and nothing reaches the Cloud session.
 export const copyCloudSession = async (
@@ -152,8 +157,72 @@ export const copyCloudSession = async (
       }),
     );
   }
-  const turns = typeof answer.num_turns === "number" ? answer.num_turns : 0;
+  const turns = typeof answer.num_turns === "number" ? answer.num_turns : null;
   return Result.ok({ sessionId, turns });
+};
+
+class CloudCopyUnstable extends TaggedError("CloudCopyUnstable")<{
+  message: string;
+}> {}
+
+// Each teleport copy gives the records new uuids, which would change the turn ids, pages and cursors the app holds; a record's uuid is rewritten from when it was written, its kind and its content, so every copy names a record the same way.
+// Every occurrence of an old uuid is replaced, so the links between records, such as parentUuid, follow; a record without a time keeps its uuid.
+export const stabilizeCopy = async (
+  copySessionId: string,
+  configDir: string = claudeConfigDir(process.env),
+): Promise<Result<void, CloudCopyUnstable>> => {
+  const unstable = (message: string) =>
+    Result.err(new CloudCopyUnstable({ message }));
+  const found = await findSessionFile(copySessionId, configDir);
+  if (found.isErr() || found.value === null) {
+    return unstable("the copy of the Cloud session was not found");
+  }
+  const text = await readTextFileIfExists(found.value);
+  if (text.isErr() || text.value === null) {
+    return unstable("the copy of the Cloud session could not be read");
+  }
+  const renamed = new Map<string, string>();
+  const seen = new Map<string, number>();
+  for (const line of text.value.split("\n")) {
+    const parsed = parseJson(line);
+    if (parsed.isErr() || !isObject(parsed.value)) continue;
+    const { uuid, timestamp, type } = parsed.value;
+    if (typeof uuid !== "string" || !UUID.test(uuid)) continue;
+    if (typeof timestamp !== "string" || typeof type !== "string") continue;
+    const body = JSON.stringify(
+      parsed.value.message ??
+        parsed.value.attachment ??
+        parsed.value.subtype ??
+        null,
+    );
+    const key = `${type}@${timestamp}#${body}`;
+    const count = seen.get(key) ?? 0;
+    seen.set(key, count + 1);
+    renamed.set(uuid, uuidFrom(`${key}#${count}`));
+  }
+  const stable = text.value.replace(
+    UUID_IN_TEXT,
+    (id) => renamed.get(id) ?? id,
+  );
+  if (stable === text.value) return Result.ok();
+  const written = await writeFileAtomic(found.value, stable);
+  return written.isErr()
+    ? unstable("the copy of the Cloud session could not be rewritten")
+    : Result.ok();
+};
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const UUID_IN_TEXT =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
+
+// A version 8 uuid made from a digest of the text.
+const uuidFrom = (text: string) => {
+  const hex = createHash("sha256").update(text).digest("hex");
+  const variant = ((Number.parseInt(hex[16] ?? "0", 16) & 0x3) | 0x8).toString(
+    16,
+  );
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 };
 
 // A copy the thread no longer reads is removed; one that cannot be found or removed is left, since it holds nothing the thread needs.

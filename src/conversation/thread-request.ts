@@ -126,7 +126,7 @@ const REFUSAL_MESSAGES = {
   cloud_send_unknown:
     "the message may or may not have reached the Cloud session; check the session on claude.ai before sending it again",
   cloud_unsupported:
-    "a Cloud thread shows a conversation that runs on claude.ai, so it cannot be rewound or compacted here",
+    "a Cloud thread shows a conversation that runs on claude.ai, so it cannot be rewound, compacted or opened as a side chat here",
   model_mismatch:
     "this thread's first turn asked for another model or effort than the thread that created it expected, or did not say which, so it was not run",
   side_chat_unreadable:

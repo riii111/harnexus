@@ -120,7 +120,31 @@ export const logChecks = (text: string, path: string, now: number): Check[] => {
       name: "Refusals",
       detail: refused.length === 0 ? "none" : refused.join("; "),
     },
+    cloudCopyCheck(of("claude_cloud")),
   ];
+};
+
+// A copy that ran a model turn, or did not say, stops copies of its chat until the bridge restarts, which only the log records.
+const cloudCopyCheck = (entries: readonly LogEntry[]): Check => {
+  const count = (step: string) =>
+    entries.filter((entry) => entry.step === step).length;
+  const stopped = entries.filter(
+    (entry) =>
+      entry.step === "copy_ran_model" || entry.step === "copy_unchecked",
+  );
+  const last = stopped.at(-1);
+  if (last !== undefined) {
+    return {
+      status: "warn",
+      name: "Cloud copies",
+      detail: `${stopped.length} stopped in the last 24h (last ${last.time}, ${field(last.step)}); copies of that chat resume after the bridge restarts`,
+    };
+  }
+  return {
+    status: "ok",
+    name: "Cloud copies",
+    detail: `${count("copied")} copied, ${count("copy_failed")} failed in the last 24h`,
+  };
 };
 
 // A sandbox refuses with EPERM where file modes refuse with EACCES, so EPERM says only that this shell may not look, not what the app can do.

@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Result } from "better-result";
 import {
   type CloudCli,
@@ -6,6 +9,7 @@ import {
   copyCloudSession,
   parseCloudSessionId,
   sendToCloud,
+  stabilizeCopy,
 } from "./cloud.ts";
 import {
   bundledClaude,
@@ -293,5 +297,109 @@ describe("copyCloudSession", () => {
 
     expect(copied.isErr()).toBe(true);
     expect(copied.isErr() && copied.error.message).toBe(message);
+  });
+});
+
+describe("stabilizeCopy", () => {
+  const folders: string[] = [];
+  afterEach(async () => {
+    for (const folder of folders.splice(0)) {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  // Two teleports of one session, as Claude Code writes them: the same records under new uuids.
+  const writeCopy = async (configDir: string, copy: string, ids: string[]) => {
+    const [prompt, answer, again] = ids;
+    const lines = [
+      {
+        type: "user",
+        uuid: prompt,
+        parentUuid: null,
+        timestamp: "2026-10-30T07:00:00.000Z",
+        sessionId: copy,
+        message: { role: "user", content: "1+2?" },
+      },
+      {
+        type: "assistant",
+        uuid: answer,
+        parentUuid: prompt,
+        timestamp: "2026-10-30T07:00:01.000Z",
+        sessionId: copy,
+        message: { role: "assistant", content: [{ type: "text", text: "3" }] },
+      },
+      {
+        type: "assistant",
+        uuid: again,
+        parentUuid: answer,
+        timestamp: "2026-10-30T07:00:01.000Z",
+        sessionId: copy,
+        message: { role: "assistant", content: [{ type: "text", text: "3" }] },
+      },
+      { type: "last-prompt", leafUuid: again, sessionId: copy },
+    ];
+    const folder = join(configDir, "projects", "-state-cloud-copies");
+    await mkdir(folder, { recursive: true });
+    const path = join(folder, `${copy}.jsonl`);
+    await writeFile(
+      path,
+      `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`,
+    );
+    return path;
+  };
+
+  const read = async (path: string) =>
+    (await readFile(path, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+
+  test("gives the records of every copy the same uuids and keeps their links", async () => {
+    const configDir = await mkdtemp(join(tmpdir(), "harnexus-copy-"));
+    folders.push(configDir);
+    const first = await writeCopy(
+      configDir,
+      "11111111-1111-4111-8111-111111111111",
+      [
+        "aaaaaaaa-0000-4000-8000-000000000001",
+        "aaaaaaaa-0000-4000-8000-000000000002",
+        "aaaaaaaa-0000-4000-8000-000000000003",
+      ],
+    );
+    const second = await writeCopy(
+      configDir,
+      "22222222-2222-4222-8222-222222222222",
+      [
+        "bbbbbbbb-0000-4000-8000-000000000001",
+        "bbbbbbbb-0000-4000-8000-000000000002",
+        "bbbbbbbb-0000-4000-8000-000000000003",
+      ],
+    );
+
+    const stabilized = await Promise.all([
+      stabilizeCopy("11111111-1111-4111-8111-111111111111", configDir),
+      stabilizeCopy("22222222-2222-4222-8222-222222222222", configDir),
+    ]);
+    const [a, b] = [await read(first), await read(second)];
+
+    expect(stabilized.every((result) => result.isOk())).toBe(true);
+    expect(a.map((line) => line.uuid)).toEqual(b.map((line) => line.uuid));
+    expect(a[0].uuid).not.toBe("aaaaaaaa-0000-4000-8000-000000000001");
+    expect(a[1].parentUuid).toBe(a[0].uuid);
+    expect(a[2].uuid).not.toBe(a[1].uuid);
+    expect(a[3].leafUuid).toBe(a[2].uuid);
+    expect(a[0].sessionId).toBe("11111111-1111-4111-8111-111111111111");
+  });
+
+  test("fails when the copy cannot be found", async () => {
+    const configDir = await mkdtemp(join(tmpdir(), "harnexus-copy-"));
+    folders.push(configDir);
+
+    const stabilized = await stabilizeCopy(
+      "33333333-3333-4333-8333-333333333333",
+      configDir,
+    );
+
+    expect(stabilized.isErr()).toBe(true);
   });
 });

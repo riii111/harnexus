@@ -121,10 +121,11 @@ The chat then shows the session's conversation; what you send there goes to the 
   Otherwise it copies every 5 minutes, and shows what the session did meanwhile as a turn of Claude's own.
   While the Mac sleeps nothing is copied; the first copy after waking shows what happened.
 - Stopping a turn here only stops waiting; the session keeps working until you stop it on claude.ai.
-- A Cloud chat sends text only, and cannot be rewound or compacted.
+- A Cloud chat sends text only, and cannot be rewound, compacted or opened as a side chat.
   Messages sent while Claude is working are queued by the session and read between its tool calls.
 - If the session compacts its conversation, earlier messages no longer appear in a later copy; the chat shows the conversation from the compaction on.
-- A copy that ran a model turn stops copies of that chat until the bridge restarts. `bun run doctor` shows whether `claude` offers `--cloud` and `--teleport`.
+- A copy that ran a model turn, or did not report its turns, stops copies of that chat until the bridge restarts.
+  `bun run doctor` shows whether `claude` offers `--cloud` and `--teleport`, and whether copies stopped in the last 24 hours.
 
 ## harnexus-task in Codex Cloud
 

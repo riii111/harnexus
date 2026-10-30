@@ -151,37 +151,6 @@ describe("createCloudRuntime turns", () => {
     expect(env.discarded).toEqual(["copy-0", "copy-1", "copy-2"]);
   });
 
-  test("shows each record once when every copy gives the records new uuids", async () => {
-    const at = (second: number) => `2026-10-30T07:00:0${second}.000Z`;
-    const copy = (suffix: string, done: boolean) => [
-      prompt(`p0${suffix}`, "ready?", at(0)),
-      reply(`r0${suffix}`, "m0", text("ready"), "end_turn", at(1)),
-      prompt(`p1${suffix}`, "1+2?", at(2)),
-      reply(`a1${suffix}`, "m1", text("working"), "tool_use", at(3)),
-      ...(done
-        ? [reply(`a2${suffix}`, "m2", text("3"), "end_turn", at(4))]
-        : []),
-    ];
-    const env = setup({
-      copies: [
-        [
-          prompt("p0", "ready?", at(0)),
-          reply("r0", "m0", text("ready"), "end_turn", at(1)),
-        ],
-        copy("-b", false),
-        copy("-c", true),
-      ],
-    });
-    await env.runtime.run(env.turn(`/cloud ${CLOUD_ID}`).running);
-    const turn = env.turn("1+2?");
-
-    await env.runtime.run(turn.running);
-
-    expect(turn.texts()).toEqual(["working", "3"]);
-    expect(turn.outcome).toEqual({ status: "completed" });
-    expect(env.runtime.recordOf("thread-1", "turn-2")).toBe("p1-c");
-  });
-
   test("finds its prompt only after where the app was shown, so an earlier same text is not taken", async () => {
     const env = linked({
       copies: [
@@ -217,6 +186,7 @@ describe("createCloudRuntime turns", () => {
       shown: null,
     });
     const turn = env.turn("first");
+    env.sleepUntil = env.untilSteered;
     const running = env.runtime.run(turn.running);
     await env.untilSent(1);
 
@@ -224,6 +194,7 @@ describe("createCloudRuntime turns", () => {
       text: "second",
       images: [],
     });
+    env.steered();
     await running;
 
     expect(refusal).toBeNull();
@@ -285,16 +256,110 @@ describe("createCloudRuntime turns", () => {
     expect(env.copyCalls).toBe(0);
   });
 
-  test("notices a stop that came while the message was being sent", async () => {
+  test("does not send a turn stopped while it waited to start", async () => {
     const env = linked({ copies: [], shown: null });
     const turn = env.turn("hi");
     turn.stop();
 
     await env.runtime.run(turn.running);
 
+    expect(env.sends).toEqual([]);
+    expect(turn.outcome).toEqual({ status: "interrupted" });
+  });
+
+  test("stops after the send when the turn was stopped while sending", async () => {
+    const env = linked({ copies: [], shown: null });
+    const turn = env.turn("hi");
+    env.duringSend = async () => {
+      turn.stop();
+    };
+
+    await env.runtime.run(turn.running);
+
     expect(env.sends.map((sent) => sent.text)).toEqual(["hi"]);
     expect(turn.outcome).toEqual({ status: "interrupted" });
     expect(env.copyCalls).toBe(0);
+  });
+
+  test("keeps waiting for a message whose send has not answered when the first reply ends", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "first"), endReply("a1", "one")],
+        [prompt("p1", "first"), endReply("a1", "one")],
+        [
+          prompt("p1", "first"),
+          endReply("a1", "one"),
+          prompt("p2", "second"),
+          endReply("a2", "two"),
+        ],
+      ],
+      shown: null,
+    });
+    const turn = env.turn("first");
+    let answerSecond = () => {};
+    env.sleepUntil = env.untilSteered;
+    const running = env.runtime.run(turn.running);
+    await env.untilSent(1);
+    env.duringSend = (text) =>
+      text === "second"
+        ? new Promise<void>((resolve) => {
+            answerSecond = resolve;
+          })
+        : Promise.resolve();
+
+    const steering = env.runtime.steer(turn.running, {
+      text: "second",
+      images: [],
+    });
+    env.steered();
+    await env.untilCopied(2);
+    expect(turn.outcome).toBeNull();
+    answerSecond();
+    await steering;
+    await running;
+
+    expect(turn.texts()).toEqual(["one", "two"]);
+    expect(turn.outcome).toEqual({ status: "completed" });
+  });
+
+  test("takes a message that may have reached the session instead of refusing it, and leaves the outcome unknown", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "first"), endReply("a1", "one")]],
+      shown: null,
+    });
+    const turn = env.turn("first");
+    env.sleepUntil = env.untilSteered;
+    const running = env.runtime.run(turn.running);
+    await env.untilSent(1);
+    env.sendQueue.push({ kind: "unknown", message: "timeout" });
+
+    const refusal = await env.runtime.steer(turn.running, {
+      text: "second",
+      images: [],
+    });
+    env.steered();
+    await running;
+
+    expect(refusal).toBeNull();
+    expect(turn.outcomeUnknown).toBe(true);
+    expect(turn.texts()).toContain(
+      "That message may or may not have reached the Cloud session; check the session on claude.ai before sending it again.",
+    );
+    expect(turn.outcome).toEqual({ status: "completed" });
+  });
+
+  test("keeps the previous copy while the new one could not be saved", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "hi"), endReply("a1", "ok")]],
+      shown: null,
+    });
+    env.saveFails = true;
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(env.discarded).toEqual([]);
   });
 
   test("ends the wait at the limit and leaves later replies to the idle copies", async () => {
@@ -326,6 +391,21 @@ describe("createCloudRuntime turns", () => {
     expect(turn.failure?._tag).toBe("CloudCopyFailed");
     expect(turn.failure?.message).toContain("reached the Cloud session");
     expect(env.copyCalls).toBe(3);
+  });
+
+  test("stops copying a thread whose copy did not report its turns", async () => {
+    const env = linked({ copies: [[prompt("p1", "hi")]], shown: null });
+    env.copyTurns = null;
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.failure?._tag).toBe("CloudCopyFailed");
+    expect(env.copyCalls).toBe(1);
+    expect(env.events).toContainEqual({
+      event: "claude_cloud",
+      step: "copy_unchecked",
+    });
   });
 
   test("stops copying a thread whose copy ran a model turn", async () => {
@@ -399,9 +479,9 @@ describe("createCloudRuntime idle copies", () => {
     expect(env.discarded).toEqual(["copy-1"]);
   });
 
-  test("starts showing from the end of a copy Claude compacted", async () => {
+  test("shows what a copy Claude compacted holds, since all of it came after the app was shown", async () => {
     const env = linked({
-      copies: [[prompt("p9", "summary follows"), endReply("a9", "after")]],
+      copies: [[prompt("p9", "go on"), endReply("a9", "after")]],
       shown: "gone",
     });
     env.runtime.listen((threadId) => {
@@ -410,8 +490,12 @@ describe("createCloudRuntime idle copies", () => {
     });
 
     await env.tick();
+    const turn = env.turn("", { startedBy: "claude" });
+    await env.runtime.run(turn.running);
 
-    expect(env.ownStarts).toEqual([]);
+    expect(env.ownStarts).toEqual(["thread-1"]);
+    expect(turn.userTexts()).toEqual(["go on"]);
+    expect(turn.texts()).toEqual(["after"]);
     expect(env.cloudOf("thread-1")?.shown).toBe("a9");
     expect(env.events).toContainEqual({
       event: "claude_cloud",
@@ -459,7 +543,12 @@ const setup = ({
   const ownStarts: string[] = [];
   const contents = new Map<string, SessionMessage[]>();
   const ticks: (() => void)[] = [];
-  let sendWaiters: (() => void)[] = [];
+  let sendWaiters: (() => boolean)[] = [];
+  let copyWaiters: (() => boolean)[] = [];
+  let steered = () => {};
+  const steeredOnce = new Promise<void>((resolve) => {
+    steered = resolve;
+  });
   let turns = 0;
   if (link !== undefined) {
     clouds.set("thread-1", link);
@@ -478,18 +567,42 @@ const setup = ({
     innerRuns,
     ownStarts,
     copyCalls: 0,
-    copyTurns: 0,
+    copyTurns: 0 as number | null,
     copyFailure: null as string | null,
+    saveFails: false,
     sendAnswer: { kind: "sent" } as CloudSend,
+    // Answers for the next sends in order, before sendAnswer.
+    sendQueue: [] as CloudSend[],
+    // Runs when a send starts and is waited for before it answers.
+    duringSend: async (_text: string) => {},
     cloudOf: (threadId: string) => clouds.get(threadId) ?? null,
-    untilSent: (count: number) =>
+    // Replaces the wait between copies while set.
+    sleepUntil: null as (() => Promise<void>) | null,
+    untilSteered: () => steeredOnce,
+    steered: () => steered(),
+    untilCopied: (count: number) =>
       new Promise<void>((resolve) => {
-        if (sends.length >= count) {
+        if (env.copyCalls >= count) {
           resolve();
           return;
         }
+        copyWaiters.push(() => {
+          if (env.copyCalls < count) return false;
+          resolve();
+          return true;
+        });
+      }),
+    // Settles once the runtime has handled the answer to that send.
+    untilSent: (count: number) =>
+      new Promise<void>((resolve) => {
+        if (sends.length >= count) {
+          setTimeout(resolve, 0);
+          return;
+        }
         sendWaiters.push(() => {
-          if (sends.length >= count) resolve();
+          if (sends.length < count) return false;
+          resolve();
+          return true;
         });
       }),
     tick: async () => {
@@ -528,20 +641,28 @@ const setup = ({
       },
       setCloudCopy: async (threadId, copy, shown) => {
         sessionIds.set(threadId, copy);
+        if (env.saveFails) {
+          return Result.err({ _tag: "StatePersistFailed" }) as never;
+        }
         const cloud = clouds.get(threadId);
         if (cloud !== undefined) clouds.set(threadId, { ...cloud, shown });
         return Result.ok({} as never);
       },
     },
     sendToCloud: async (cloud, sentText) => {
-      if (env.sendAnswer.kind !== "rejected")
-        sends.push({ cloud, text: sentText });
-      for (const wake of sendWaiters) wake();
-      sendWaiters = [];
-      return env.sendAnswer;
+      const answer = env.sendQueue.shift() ?? env.sendAnswer;
+      if (answer.kind !== "rejected") sends.push({ cloud, text: sentText });
+      await env.duringSend(sentText);
+      // Woken after the answer is handled, so a caller waiting for the send sees what the runtime did with it.
+      setTimeout(() => {
+        sendWaiters = sendWaiters.filter((wake) => !wake());
+      }, 0);
+      return answer;
     },
     copy: async () => {
       env.copyCalls += 1;
+      // A waiter stays until the count it waits for is reached.
+      copyWaiters = copyWaiters.filter((wake) => !wake());
       if (env.copyFailure !== null) {
         return Result.err({
           _tag: "CloudCopyFailed",
@@ -563,7 +684,12 @@ const setup = ({
     send: (message) => sent.push(message),
     log: (event) => events.push(event),
     now: () => 1_000,
-    sleep: sleepUntilWoken ? (_ms, woken) => woken : async () => {},
+    sleep: (_ms, woken) =>
+      env.sleepUntil !== null
+        ? env.sleepUntil()
+        : sleepUntilWoken
+          ? woken
+          : Promise.resolve(),
     schedule: (run) => {
       ticks.push(run);
       return () => {};

@@ -222,6 +222,11 @@ describe("logChecks", () => {
         detail:
           "request thread/resume claude_thread_moved 2 (last 2026-10-09T11:03:00.000Z); turn busy 1 (last 2026-10-09T11:02:00.000Z)",
       },
+      {
+        status: "ok",
+        name: "Cloud copies",
+        detail: "0 copied, 0 failed in the last 24h",
+      },
     ]);
   });
 
@@ -241,7 +246,36 @@ describe("logChecks", () => {
       },
       { status: "ok", detail: "listening 0" },
       { status: "ok", detail: "none" },
+      { status: "ok", detail: "0 copied, 0 failed in the last 24h" },
     ]);
+  });
+});
+
+describe("logChecks Cloud copies", () => {
+  test("warns about a chat whose copies stopped and counts the others", () => {
+    const checks = logChecks(
+      [
+        line("2026-10-09T11:00:00.000Z", {
+          event: "claude_cloud",
+          step: "copied",
+          records: 4,
+          ms: 900,
+        }),
+        line("2026-10-09T11:01:00.000Z", {
+          event: "claude_cloud",
+          step: "copy_ran_model",
+        }),
+      ].join("\n"),
+      "/state/bridge.log",
+      Date.parse("2026-10-09T12:00:00.000Z"),
+    );
+
+    expect(checks.at(-1)).toEqual({
+      status: "warn",
+      name: "Cloud copies",
+      detail:
+        "1 stopped in the last 24h (last 2026-10-09T11:01:00.000Z, copy_ran_model); copies of that chat resume after the bridge restarts",
+    });
   });
 });
 

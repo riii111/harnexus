@@ -21,6 +21,7 @@ import {
   copyCloudSession,
   removeCloudCopy,
   sendToCloud,
+  stabilizeCopy,
 } from "../infra/claude/cloud.ts";
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
 import { createCallGateway } from "../infra/codex/call-gateway.ts";
@@ -255,7 +256,18 @@ const copyInto = async (
   if (ready.isErr()) {
     return Result.err({ _tag: ready.error._tag, message: ready.error.message });
   }
-  return copyCloudSession(cli, cloudSessionId, copyDir);
+  const copied = await copyCloudSession(cli, cloudSessionId, copyDir);
+  if (copied.isErr()) return copied;
+  // A copy whose uuids could not be made stable would show its records again, so it is dropped.
+  const stable = await stabilizeCopy(copied.value.sessionId);
+  if (stable.isErr()) {
+    await removeCloudCopy(copied.value.sessionId);
+    return Result.err({
+      _tag: stable.error._tag,
+      message: stable.error.message,
+    });
+  }
+  return copied;
 };
 
 const CLOUD_OFF = "Cloud sessions are not set up for this bridge";

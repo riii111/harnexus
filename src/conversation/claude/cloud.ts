@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
 import {
@@ -46,7 +45,7 @@ export type CloudEvent =
     }
   | { event: "claude_cloud"; step: "copied"; records: number; ms: number }
   | { event: "claude_cloud"; step: "copy_failed"; error: string }
-  | { event: "claude_cloud"; step: "copy_ran_model" };
+  | { event: "claude_cloud"; step: "copy_ran_model" | "copy_unchecked" };
 
 type CopyFailure = { _tag: string; message: string };
 
@@ -94,6 +93,8 @@ type Copied = { copy: string; records: SessionMessage[] };
 type Follow = {
   texts: string[];
   matched: number;
+  // Messages sent while the turn runs whose send has not answered yet.
+  sending: number;
   // The keys of the turn's first prompt, once a copy holds it, and of the last record shown in the turn.
   record: string | null;
   last: string | null;
@@ -241,6 +242,11 @@ export const createCloudRuntime = <Tag extends string>(
       });
       return;
     }
+    // A turn stopped while it waited behind another is never sent.
+    if (turn.state().interrupting) {
+      turn.finish({ status: "interrupted" }, null);
+      return;
+    }
     const sent = await sendToCloud(
       cloud.sessionId,
       turn.input.text,
@@ -370,6 +376,7 @@ export const createCloudRuntime = <Tag extends string>(
     }
     const last = all.at(-1);
     const done =
+      follow.sending === 0 &&
       follow.matched === follow.texts.length &&
       last !== undefined &&
       endsTurn(last) &&
@@ -414,9 +421,14 @@ export const createCloudRuntime = <Tag extends string>(
         });
         return Result.err(copied.error);
       }
-      if (copied.value.turns > 0) {
+      // A copy that ran a model turn, or one whose turns the CLI did not report, may cost, so the thread is not copied again.
+      if (copied.value.turns !== 0) {
         halted.add(threadId);
-        log({ event: "claude_cloud", step: "copy_ran_model" });
+        log({
+          event: "claude_cloud",
+          step:
+            copied.value.turns === null ? "copy_unchecked" : "copy_ran_model",
+        });
         await discardCopy(copied.value.sessionId);
         return Result.err({
           _tag: "CloudCopyRanModel",
@@ -443,15 +455,16 @@ export const createCloudRuntime = <Tag extends string>(
       return Result.ok({ copy: copied.value.sessionId, records: all });
     });
 
-  // The thread reads the newest copy from now on, so the one it read before is removed.
+  // The thread reads the newest copy from now on, so the one it read before is removed once that is saved.
   const keepCopy = async (
     threadId: string,
     copySessionId: string,
     shown: string | null,
   ) => {
     const previous = threads.sessionIdOf(threadId);
-    await threads.setCloudCopy(threadId, copySessionId, shown);
-    if (previous !== null && previous !== copySessionId) {
+    const saved = await threads.setCloudCopy(threadId, copySessionId, shown);
+    // Until the new copy is saved, the saved state still names the previous one, which a restart reads.
+    if (saved.isOk() && previous !== null && previous !== copySessionId) {
       await discardCopy(previous);
     }
   };
@@ -476,11 +489,9 @@ export const createCloudRuntime = <Tag extends string>(
       }
       const all = copied.value.records;
       const at = indexOf(all, cloud.shown);
+      // Claude compacted the session past the record the app was shown, so everything the copy holds came after it and is shown.
       if (cloud.shown !== null && at === -1) {
-        // Claude compacted the session, so the record the app was shown is gone; the copy's end becomes where it stands.
         log({ event: "claude_cloud", step: "compacted" });
-        await keepCopy(threadId, copied.value.copy, keyOfLast(all));
-        continue;
       }
       // Nothing new, so the copy the thread reads already shows it all.
       if (at === all.length - 1 || all.length === 0) {
@@ -519,21 +530,30 @@ export const createCloudRuntime = <Tag extends string>(
     const follow = follows.get(turn.threadId);
     if (follow === undefined || follow.stop) return "steer_not_sent";
     if (input.images.length > 0) return "cloud_images";
+    // Counted before it is sent, so a reply that arrives meanwhile does not end the turn before this message is answered.
+    follow.texts.push(input.text);
+    follow.sending += 1;
     const sent = await sendToCloud(
       cloud.sessionId,
       input.text,
       turn.record.worktree,
     );
+    follow.sending -= 1;
+    if (sent.kind !== "sent") forget(follow, input.text);
     if (sent.kind === "rejected") {
       log({ event: "claude_cloud", step: "send_rejected" });
       return "cloud_not_sent";
     }
+    // The message may have reached the session, so it is taken rather than refused, which would run it again as a turn; the thread is left with an unknown outcome to check before going on.
     if (sent.kind === "unknown") {
       log({ event: "claude_cloud", step: "send_unknown" });
-      return "cloud_send_unknown";
+      turn.markOutcomeUnknown();
+      turn.apply(
+        renderNotice(turn.state(), STEER_UNKNOWN, "commentary", now()),
+      );
+      return null;
     }
     log({ event: "claude_cloud", step: "sent" });
-    follow.texts.push(input.text);
     return null;
   };
 
@@ -585,6 +605,7 @@ const newFollow = (text: string, after: string | null): Follow => {
   return {
     texts: [text],
     matched: 0,
+    sending: 0,
     record: null,
     last: null,
     after,
@@ -601,19 +622,17 @@ const cloudCommandOf = (input: RunningTurn<string>["input"]) => {
   return matched === null ? null : (matched[1] ?? "");
 };
 
+// A message whose send failed is no longer waited for; one not yet matched is taken from the end, so the order of the others stays.
+const forget = (follow: Follow, text: string) => {
+  const at = follow.texts.lastIndexOf(text);
+  if (at >= follow.matched) follow.texts.splice(at, 1);
+};
+
 const samePrompt = (message: SessionMessage, text: string) =>
   promptTextOf(message)?.trim() === text.trim();
 
-// A copy may give its records new uuids, so a record is known by when it was written, its kind and its content; one without a time falls back to its uuid.
-const recordKey = (message: SessionMessage) => {
-  const at = (message as { timestamp?: unknown }).timestamp;
-  if (typeof at !== "string") return message.uuid;
-  const content = createHash("sha256")
-    .update(JSON.stringify(message.message) ?? "")
-    .digest("hex")
-    .slice(0, 16);
-  return `${message.type}@${at}#${content}`;
-};
+// The bridge rewrites each copy's uuids from what the records hold, so a record keeps its uuid from copy to copy.
+const recordKey = (message: SessionMessage) => message.uuid;
 
 const keyOf = (message: SessionMessage | undefined) =>
   message === undefined ? null : recordKey(message);
@@ -679,6 +698,9 @@ const LINKED =
 
 const STOPPED_WAITING =
   "Stopped waiting here. The Cloud session keeps working; stop it on claude.ai if needed. Later replies appear here when they are copied.";
+
+const STEER_UNKNOWN =
+  "That message may or may not have reached the Cloud session; check the session on claude.ai before sending it again.";
 
 const WAIT_LIMIT_REACHED =
   "The Cloud session is still working. Its later replies appear here when they are copied.";
