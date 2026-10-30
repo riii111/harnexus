@@ -541,6 +541,53 @@ describe("createCloudRuntime turns", () => {
     ).toEqual([1_500, 1_500, 1_500]);
   });
 
+  test("drops a copy that ends after a newer one was shown, while the turn goes on", async () => {
+    const working = reply("a1", "m1", text("working"), "tool_use");
+    const more = reply("a2", "m2", text("more"), "tool_use");
+    const env = linked({
+      copies: [
+        [prompt("p1", "hi"), working],
+        [prompt("p1", "hi")],
+        [prompt("p1", "hi"), working, more],
+        [prompt("p1", "hi"), working, more, endReply("a3", "done")],
+      ],
+      shown: null,
+    });
+    let release = () => {};
+    env.duringCopy = (call) => {
+      if (call === 2)
+        return new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      // The older copy ends while the newest one still runs.
+      if (call === 4) {
+        release();
+        return new Promise<void>((resolve) => setTimeout(resolve, 5));
+      }
+      return Promise.resolve();
+    };
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts()).toEqual(["working", "more", "done"]);
+    expect(turn.userTexts()).toEqual([]);
+    expect(env.discarded).toContain("copy-2");
+  });
+
+  test("takes a compacted session from a copy that does not overlap", async () => {
+    const env = linked({
+      copies: [[], [prompt("p1", "hi"), endReply("a1", "ok")]],
+      shown: "gone",
+    });
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts()).toEqual(["ok"]);
+    expect(turn.outcome).toEqual({ status: "completed" });
+  });
+
   test("drops an overlapping copy that lacks what was already shown", async () => {
     const env = linked({
       copies: [
@@ -592,7 +639,6 @@ describe("createCloudRuntime turns", () => {
 
     await env.runtime.run(turn.running);
 
-    await env.tick();
     expect(turn.failure?._tag).toBe("CloudCopyFailed");
     expect(env.copyCalls).toBe(1);
     expect(env.events).toContainEqual({ event: "claude_cloud", step });
