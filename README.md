@@ -4,7 +4,6 @@ Use Claude in the Codex App.
 
 <img width="445" height="511" alt="image" src="https://github.com/user-attachments/assets/c5424fe5-50a6-48b9-bc43-98259c427658" />
 
-
 Also supported:
 
 - Side chats
@@ -102,3 +101,63 @@ Set `HARNEXUS_APP_PATH` if the app is installed outside `/Applications/ChatGPT.a
 
 The app's call socket lets processes running as your user create and message chats.
 To disable it, launch with `HARNEXUS_CALL_SOCKET=off bun run open-app`.
+
+## harnexus-task in Codex Cloud
+
+`harnexus-task` can tell where it runs, and can run Claude inside a Cloud task.
+It cannot create or resume other Cloud tasks, so those commands fail with that reason.
+
+```sh
+harnexus-task environment
+```
+
+prints `{"environment": "cloud" | "local" | "unknown", "source": ..., "note": ...}`.
+The first match decides:
+
+1. `HARNEXUS_EXECUTION_ENV=cloud|local`. Any other value is an error.
+2. A nonempty `CODEX_ENVIRONMENT_ID` means `cloud`.
+   This is a variable observed in Cloud tasks, not a documented guarantee; the value is never printed.
+3. `local` only when the harnexus call socket accepts a connection.
+   A missing variable alone never means local.
+4. Otherwise `unknown`.
+
+In Cloud, `launch`, `review`, `resolve`, `name`, `watch` and `state --request` need the Codex App, so they fail with a message naming Cloud.
+Pin `HARNEXUS_EXECUTION_ENV=local` where `CODEX_ENVIRONMENT_ID` is set but the App is reachable.
+
+`harnexus-task` is not on `PATH` in Cloud.
+Build it once from a checkout with Bun 1.4.4 and call it by its absolute path:
+
+```sh
+bash scripts/install-cloud-task.sh [--prefix DIR] [--bun /absolute/path/to/bun]
+# installs /workspace/.cloud-setup/bin/harnexus-task by default; nothing is added to PATH
+```
+
+If Bun is missing, the script prints the `npm install --prefix /workspace/.cloud-setup/bun bun@1.4.4` command to run first.
+It does not change the Cloud environment settings.
+
+Claude runs inside the current task through the `claude-cloud` wrapper (default `/workspace/.cloud-setup/bin/claude-cloud`, override with an absolute `HARNEXUS_CLAUDE_CLOUD_BIN`; a relative value is an error):
+
+```sh
+harnexus-task claude --session NAME --start  --prompt-file FILE [--model M] [--cwd DIR] [--permission-mode auto|plan]
+harnexus-task claude --session NAME --resume --prompt-file FILE [--permission-mode auto|plan]
+harnexus-task claude --session NAME [--start|--resume ...] --recover adopt|discard
+harnexus-task claude --session NAME
+```
+
+- It runs `claude -p --output-format json --permission-mode ...` with the prompt on stdin, and prints the result, the `sessionId` and the state path as JSON.
+  A start names its session up front with `--session-id`.
+- A resume keeps the session's permission mode unless `--permission-mode` is given.
+  It runs in the directory the session started in.
+- The check, the Claude run and the saved state all happen under one lock that fails at once instead of waiting.
+  A dead holder's lock is taken over once; a lock a run did not take is never removed by it.
+- A `pending.json` is written before Claude runs and removed once the state is saved.
+  If Claude ends without a result (no JSON, timeout, output over 16 MiB, or the state cannot be saved) the turn is unknown and nothing runs again on its own.
+  Check what it did, then use `--recover adopt` with `--resume` to continue the pre-named session, or `--recover discard` to drop the record.
+  Only an unreachable network (wrapper exit 75) or a process that never started releases the record by itself.
+- `HARNEXUS_CLAUDE_TIMEOUT_MS` (default 1 hour) stops a turn: SIGTERM to its process group, SIGKILL after `HARNEXUS_CLAUDE_KILL_GRACE_MS` (default 5 s), and the command waits for the exit before it releases the lock.
+- The state is kept under `$XDG_STATE_HOME/taskctl/cloud-claude/`; only a well-formed `session_id` is recorded.
+- A session is a fresh context in the same task, not another Cloud task.
+  It lasts as long as the task's filesystem; a new Cloud task starts with none.
+
+Verified with the real CLI: a parent Codex session ran `--start` and `--resume` against Claude Code with a login (session `47be678c-e1ef-4049-8521-4a267f4e95c2`, state in `/tmp/harnexus-parent-smoke-state`), and the resume recalled the first turn.
+A run from a Claude session nested inside a task without a login reached only `Not logged in`; that run exercised the error path, not a reply.

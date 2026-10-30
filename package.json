@@ -15,6 +15,7 @@
     "call": "bun --no-env-file --config=/dev/null src/bootstrap/call.ts",
     "task": "bun --no-env-file --config=/dev/null src/bootstrap/task/main.ts",
     "build:task": "bun --no-env-file --config=/dev/null src/bootstrap/task/check-bun.ts && bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/bootstrap/task/main.ts --outfile dist/harnexus-task",
+    "install:task:cloud": "bash scripts/install-cloud-task.sh",
     "install:task": "bun run build:task && mkdir -p \"$HOME/.local/bin\" && install -m 0755 dist/harnexus-task \"$HOME/.local/bin/.harnexus-task.tmp\" && mv -f \"$HOME/.local/bin/.harnexus-task.tmp\" \"$HOME/.local/bin/harnexus-task\""
   },
   "devDependencies": {
