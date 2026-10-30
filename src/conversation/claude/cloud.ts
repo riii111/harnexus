@@ -35,7 +35,6 @@ export type CloudEvent =
       step:
         | "linked"
         | "link_refused"
-        | "sent"
         | "send_rejected"
         | "send_unknown"
         | "own_turn"
@@ -45,6 +44,7 @@ export type CloudEvent =
         | "copy_ran_model"
         | "copy_unchecked";
     }
+  | { event: "claude_cloud"; step: "sent"; ms: number }
   | { event: "claude_cloud"; step: "copied"; records: number; ms: number }
   | { event: "claude_cloud"; step: "copy_failed"; error: string };
 
@@ -248,6 +248,7 @@ export const createCloudRuntime = <Tag extends string>(
       turn.finish({ status: "interrupted" }, null);
       return;
     }
+    const sendStartedAt = now();
     const sent = await sendToCloud(
       cloud.sessionId,
       turn.input.text,
@@ -270,7 +271,7 @@ export const createCloudRuntime = <Tag extends string>(
       });
       return;
     }
-    log({ event: "claude_cloud", step: "sent" });
+    log({ event: "claude_cloud", step: "sent", ms: now() - sendStartedAt });
     const follow = newFollow(turn.input.text, cloud.shown);
     follows.set(threadId, follow);
     try {
@@ -542,6 +543,7 @@ export const createCloudRuntime = <Tag extends string>(
     // Counted before it is sent, so a reply that arrives meanwhile does not end the turn before this message is answered.
     follow.texts.push(input.text);
     follow.sending += 1;
+    const sendStartedAt = now();
     const sent = await sendToCloud(
       cloud.sessionId,
       input.text,
@@ -567,7 +569,7 @@ export const createCloudRuntime = <Tag extends string>(
       );
       return null;
     }
-    log({ event: "claude_cloud", step: "sent" });
+    log({ event: "claude_cloud", step: "sent", ms: now() - sendStartedAt });
     return null;
   };
 
@@ -683,6 +685,8 @@ const defaultSchedule = (run: () => Promise<void>, ms: number) => {
 
 export const serializeCloudEvent = (entry: CloudEvent) => {
   switch (entry.step) {
+    case "sent":
+      return { event: entry.event, step: entry.step, ms: entry.ms };
     case "copied":
       return {
         event: entry.event,
