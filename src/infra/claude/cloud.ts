@@ -1,6 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { Result, TaggedError } from "better-result";
 import {
+  listDirectoryIfExists,
   prepareDirectory,
   readTextFileIfExists,
   removeFile,
@@ -8,6 +10,7 @@ import {
 } from "../../runtime/fs.boundary.ts";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
+import type { CloudCheckouts } from "./cloud-checkouts.ts";
 import { printAnswer, UUID } from "./print.ts";
 import { bundledClaude, type ClaudeRun, runClaude } from "./run.boundary.ts";
 import { claudeConfigDir, findSessionFile } from "./transcripts.ts";
@@ -120,42 +123,33 @@ export const copyCloudSession = async (
   cloudSessionId: string,
   {
     cwd,
+    checkouts,
     configDir = claudeConfigDir(process.env),
-  }: { cwd: string; configDir?: string },
+  }: { cwd: string; checkouts: CloudCheckouts; configDir?: string },
 ): Promise<Result<string, CloudCopyFailed>> => {
-  const ready = await prepareDirectory(cwd);
-  if (ready.isErr()) return copyFailed(ready.error.message);
-  const copiedAt = Date.now();
-  const ran = await cli.run(
-    cli.file,
-    [
-      "--teleport",
-      cloudSessionId,
-      "-p",
-      COPY_PROMPT,
-      "--output-format",
-      "json",
-    ],
-    "",
-    {
-      cwd,
-      env: cli.env,
-      timeoutMs: COPY_TIMEOUT_MS,
-      killGraceMs: KILL_GRACE_MS,
-    },
-  );
+  const known = checkouts.repositoryOf(cloudSessionId);
+  let ran = await teleport(cli, cloudSessionId, known, { cwd, checkouts });
+  // A refused teleport writes no copy and runs no model turn, so trying again from the checkout its refusal names costs nothing more.
+  const named =
+    known === null && ran.isOk() ? repositoryIn(ran.value.refusal) : null;
+  if (named !== null) {
+    checkouts.remember(cloudSessionId, named);
+    ran = await teleport(cli, cloudSessionId, named, { cwd, checkouts });
+  }
   if (ran.isErr()) return copyFailed(ran.error.message);
-  const answer = printAnswer(ran.value.stdout);
+  const { run, refusal, copiedAt } = ran.value;
+  const answer = printAnswer(run.stdout);
   const sessionId = answer?.session_id;
   if (
-    ran.value.ended !== "exit" ||
+    run.ended !== "exit" ||
     answer === null ||
     answer.is_error === true ||
     typeof sessionId !== "string" ||
     !UUID.test(sessionId)
   ) {
     return copyFailed(
-      firstLine(ran.value.stderr) ??
+      refusal ??
+        firstLine(run.stderr) ??
         textOf(answer?.result) ??
         "claude --teleport answered without a copy",
     );
@@ -173,6 +167,91 @@ export const copyCloudSession = async (
     return copyFailed(stable.error.message);
   }
   return Result.ok(sessionId);
+};
+
+// In print mode teleport prints nothing when it refuses; the reason is written only to its debug log, which is removed once read.
+const teleport = async (
+  cli: CloudCli,
+  cloudSessionId: string,
+  repository: string | null,
+  { cwd, checkouts }: { cwd: string; checkouts: CloudCheckouts },
+): Promise<
+  Result<
+    { run: ClaudeRun; refusal: string | null; copiedAt: number },
+    { message: string }
+  >
+> => {
+  const logDir = join(cwd, LOG_FOLDER);
+  const ready = await prepareDirectory(logDir);
+  if (ready.isErr()) return Result.err(ready.error);
+  const folder =
+    repository === null
+      ? Result.ok({ dir: cwd, release: () => {} })
+      : await checkouts.take(repository);
+  if (folder.isErr()) return Result.err(folder.error);
+  const log = join(logDir, `${randomUUID()}.log`);
+  const copiedAt = Date.now();
+  try {
+    const ran = await cli.run(
+      cli.file,
+      [
+        "--teleport",
+        cloudSessionId,
+        "-p",
+        COPY_PROMPT,
+        "--output-format",
+        "json",
+        "--debug-file",
+        log,
+        // A checkout may hold a branch the Cloud session wrote, so its settings, hooks and MCP servers are never loaded here.
+        "--setting-sources",
+        "user",
+        "--strict-mcp-config",
+      ],
+      "",
+      {
+        cwd: folder.value.dir,
+        env: cli.env,
+        timeoutMs: COPY_TIMEOUT_MS,
+        killGraceMs: KILL_GRACE_MS,
+      },
+    );
+    const logged = await readTextFileIfExists(log);
+    await removeFile(log);
+    if (ran.isErr()) return Result.err(ran.error);
+    return Result.ok({
+      run: ran.value,
+      refusal: logged.isOk() ? refusalIn(logged.value ?? "") : null,
+      copiedAt,
+    });
+  } finally {
+    folder.value.release();
+  }
+};
+
+// A copy whose bridge stopped while it ran leaves its debug log, which holds the session's details, so the logs left over are removed when the bridge starts.
+export const sweepCloudLogs = async (copyDir: string) => {
+  const logDir = join(copyDir, LOG_FOLDER);
+  const names = await listDirectoryIfExists(logDir);
+  if (names.isErr() || names.value === null) return;
+  for (const name of names.value) {
+    if (name.endsWith(".log")) await removeFile(join(logDir, name));
+  }
+};
+
+const refusalIn = (log: string) => {
+  const found = REFUSAL.exec(log)?.[1];
+  return found === undefined
+    ? null
+    : textOf(found.replace(/"$/, "").replaceAll("\\n", " "));
+};
+
+const repositoryIn = (refusal: string | null) => {
+  const found = refusal === null ? undefined : CHECKOUT_OF.exec(refusal)?.[1];
+  if (found === undefined) return null;
+  return found.split("/").some((part) => part === "." || part === "..")
+    ? null
+    : found;
 };
 
 class CloudCopyUnstable extends TaggedError("CloudCopyUnstable")<{
@@ -264,6 +343,12 @@ const firstLine = (text: string) =>
   );
 
 const COPY_PROMPT = "/cost";
+
+const LOG_FOLDER = "logs";
+
+const REFUSAL = /Teleport in print mode failed: (.*)$/m;
+
+const CHECKOUT_OF = /from a checkout of ([\w.-]+\/[\w.-]+?)\.(?:\s|$)/;
 
 const COPY_RAN_MODEL =
   "copying the Cloud session ran a model turn, so copies of this chat stop until harnexus restarts; run bun run doctor";

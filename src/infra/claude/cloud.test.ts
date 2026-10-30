@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result } from "better-result";
+import { runCommand } from "../../runtime/process.boundary.ts";
 import {
   type CloudCli,
   claudeCliFile,
@@ -10,7 +18,9 @@ import {
   parseCloudSessionId,
   sendToCloud,
   stabilizeCopy,
+  sweepCloudLogs,
 } from "./cloud.ts";
+import { createCloudCheckouts } from "./cloud-checkouts.ts";
 import {
   bundledClaude,
   type ClaudeRun,
@@ -43,6 +53,24 @@ const exited = (stdout: string, status = 0, stderr = ""): ClaudeRun => ({
   stdout,
   stderr,
   ended: "exit",
+});
+
+describe("sweepCloudLogs", () => {
+  test("removes the debug logs a stopped bridge left and keeps the rest", async () => {
+    const root = await mkdtemp(join(tmpdir(), "harnexus-cloud-logs-"));
+    await mkdir(join(root, "logs"));
+    await writeFile(join(root, "logs", "left.log"), "debug");
+    await writeFile(join(root, "logs", "note.txt"), "kept");
+
+    await sweepCloudLogs(root);
+
+    expect(await readdir(join(root, "logs"))).toEqual(["note.txt"]);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("does nothing before any copy made the folder", async () => {
+    await sweepCloudLogs(join(tmpdir(), "harnexus-cloud-logs-missing"));
+  });
 });
 
 describe("parseCloudSessionId", () => {
@@ -215,56 +243,13 @@ describe("copyCloudSession", () => {
     }
   });
 
-  // teleport writes the copy under the config folder, which the fake does when told the copy exists.
-  const copying = async (answer: object | string, writes = true) => {
-    const root = await mkdtemp(join(tmpdir(), "harnexus-copy-"));
-    roots.push(root);
-    const configDir = join(root, "config");
-    const record = join(configDir, "projects", "-copies", `${COPY}.jsonl`);
-    const calls: Call[] = [];
-    const cli: CloudCli = {
-      file: "/usr/local/bin/claude",
-      env: {},
-      run: async (file, args, input, options) => {
-        calls.push({ file, args, input, cwd: options.cwd });
-        if (writes) {
-          await mkdir(join(configDir, "projects", "-copies"), {
-            recursive: true,
-          });
-          await writeFile(
-            record,
-            `${JSON.stringify({ type: "user", uuid: "aaaaaaaa-0000-4000-8000-000000000001", timestamp: "2026-10-30T07:00:00.000Z", message: { role: "user", content: "hi" } })}\n`,
-          );
-        }
-        return Result.ok(
-          exited(typeof answer === "string" ? answer : JSON.stringify(answer)),
-        );
-      },
-    };
-    const cwd = join(root, "copies");
-    const copied = await copyCloudSession(cli, "session_01Nfj", {
-      cwd,
-      configDir,
-    });
-    return { copied, calls, cwd, record };
-  };
-
-  const exists = (path: string) =>
-    readFile(path).then(
-      () => true,
-      () => false,
-    );
-
   test("teleports with the /cost prompt in its own folder and returns the stable copy", async () => {
-    const { copied, calls, cwd, record } = await copying({
-      type: "result",
-      is_error: false,
-      num_turns: 0,
-      session_id: COPY,
-    });
+    const copier = await copying([{ answer: COPIED }]);
+
+    const copied = await copier.copy();
 
     expect(copied.unwrap()).toBe(COPY);
-    expect(calls).toEqual([
+    expect(copier.calls).toEqual([
       {
         file: "/usr/local/bin/claude",
         args: [
@@ -274,14 +259,85 @@ describe("copyCloudSession", () => {
           "/cost",
           "--output-format",
           "json",
+          "--debug-file",
+          expect.stringMatching(
+            new RegExp(`^${copier.cwd}/logs/[0-9a-f-]{36}\\.log$`),
+          ),
+          "--setting-sources",
+          "user",
+          "--strict-mcp-config",
         ],
         input: "",
-        cwd,
+        cwd: copier.cwd,
       },
     ]);
-    expect(await readFile(record, "utf8")).not.toContain(
+    expect(await readFile(copier.record, "utf8")).not.toContain(
       "aaaaaaaa-0000-4000-8000-000000000001",
     );
+  });
+
+  test("copies a session made in a repository from the checkout its refusal names, and goes there first next time", async () => {
+    const copier = await copying([
+      { refusal: NOT_IN_REPO, status: 1 },
+      { answer: COPIED },
+      { answer: COPIED },
+    ]);
+
+    const first = await copier.copy();
+    const second = await copier.copy();
+
+    expect(first.unwrap()).toBe(COPY);
+    expect(second.unwrap()).toBe(COPY);
+    const checkout = join(copier.root, "checkouts", "riii111", "harnexus", "0");
+    expect(copier.calls.map((call) => call.cwd)).toEqual([
+      copier.cwd,
+      checkout,
+      checkout,
+    ]);
+    expect(await originOf(checkout)).toBe(
+      "https://github.com/riii111/harnexus",
+    );
+  });
+
+  test("removes teleport's debug log once it is read", async () => {
+    const copier = await copying([{ refusal: NOT_IN_REPO, status: 1 }, {}]);
+
+    await copier.copy();
+
+    expect(await readdir(join(copier.cwd, "logs"))).toEqual([]);
+  });
+
+  test.each([
+    {
+      name: "a refusal outside a repository",
+      plays: [
+        { refusal: '"Teleport in print mode failed: Session not found"' },
+      ],
+      message: "Session not found",
+    },
+    {
+      name: "a refusal from the checkout as well",
+      plays: [
+        { refusal: NOT_IN_REPO, status: 1 },
+        {
+          refusal:
+            '"Teleport in print mode failed: Git working directory is not clean.\\nCommit or stash your changes."',
+          status: 1,
+        },
+      ],
+      message:
+        "Git working directory is not clean. Commit or stash your changes.",
+    },
+  ])("fails with the reason teleport logged on $name", async ({
+    plays,
+    message,
+  }) => {
+    const copier = await copying(plays);
+
+    const copied = await copier.copy();
+
+    expect(copied.isErr() && copied.error.message).toBe(message);
+    expect(copier.calls).toHaveLength(plays.length);
   });
 
   test.each([
@@ -295,49 +351,98 @@ describe("copyCloudSession", () => {
     turns,
     stopped,
   }) => {
-    const { copied, record } = await copying({
-      is_error: false,
-      num_turns: turns,
-      session_id: COPY,
-    });
+    const copier = await copying([
+      { answer: { is_error: false, num_turns: turns, session_id: COPY } },
+    ]);
+
+    const copied = await copier.copy();
 
     expect(copied.isErr() && copied.error.stopped).toBe(stopped);
-    expect(await exists(record)).toBe(false);
+    expect(await exists(copier.record)).toBe(false);
   });
 
   test.each([
     {
       name: "a result marked as an error",
-      answer: {
-        is_error: true,
-        result: "Remote Control session expired",
-        session_id: COPY,
+      play: {
+        answer: {
+          is_error: true,
+          result: "Remote Control session expired",
+          session_id: COPY,
+        },
       },
-      writes: true,
       message: "Remote Control session expired",
     },
     {
       name: "a result without a usable session id",
-      answer: { is_error: false, num_turns: 0, session_id: "x" },
-      writes: true,
+      play: { answer: { is_error: false, num_turns: 0, session_id: "x" } },
       message: "claude --teleport answered without a copy",
     },
     {
       name: "a copy that was never written",
-      answer: { is_error: false, num_turns: 0, session_id: COPY },
-      writes: false,
+      play: { answer: COPIED, writes: false },
       message: "the copy of the Cloud session was not found",
     },
-  ])("fails on $name without stopping copies", async ({
-    answer,
-    writes,
-    message,
-  }) => {
-    const { copied } = await copying(answer, writes);
+  ])("fails on $name without stopping copies", async ({ play, message }) => {
+    const copier = await copying([play]);
+
+    const copied = await copier.copy();
 
     expect(copied.isErr() && copied.error.message).toBe(message);
     expect(copied.isErr() && copied.error.stopped).toBeNull();
   });
+
+  // Each call plays the next answer: a refusal goes to the debug log as teleport writes it, and a copy is written under the config folder unless told otherwise.
+  const copying = async (plays: readonly Play[]) => {
+    const root = await mkdtemp(join(tmpdir(), "harnexus-copy-"));
+    roots.push(root);
+    const configDir = join(root, "config");
+    const record = join(configDir, "projects", "-copies", `${COPY}.jsonl`);
+    const calls: Call[] = [];
+    const cli: CloudCli = {
+      file: "/usr/local/bin/claude",
+      env: {},
+      run: async (file, args, input, options) => {
+        calls.push({ file, args, input, cwd: options.cwd });
+        const play = plays[calls.length - 1] ?? {};
+        const log = args[args.indexOf("--debug-file") + 1] ?? "";
+        await writeFile(
+          log,
+          `2026-10-30T07:00:00.000Z [DEBUG] Session is for repository\n${play.refusal === undefined ? "" : `2026-10-30T07:00:00.001Z [ERROR] ${play.refusal}\n`}`,
+        );
+        if (play.answer !== undefined && play.writes !== false) {
+          await mkdir(join(configDir, "projects", "-copies"), {
+            recursive: true,
+          });
+          await writeFile(
+            record,
+            `${JSON.stringify({ type: "user", uuid: "aaaaaaaa-0000-4000-8000-000000000001", timestamp: "2026-10-30T07:00:00.000Z", message: { role: "user", content: "hi" } })}\n`,
+          );
+        }
+        const stdout =
+          play.answer === undefined
+            ? ""
+            : typeof play.answer === "string"
+              ? play.answer
+              : JSON.stringify(play.answer);
+        return Result.ok(exited(stdout, play.status ?? 0));
+      },
+    };
+    const cwd = join(root, "copies");
+    const checkouts = createCloudCheckouts(
+      join(root, "checkouts"),
+      process.env,
+    );
+    const copy = () =>
+      copyCloudSession(cli, "session_01Nfj", { cwd, checkouts, configDir });
+    return { copy, calls, cwd, record, root };
+  };
+
+  const exists = (path: string) =>
+    readFile(path).then(
+      () => true,
+      () => false,
+    );
 });
 
 describe("stabilizeCopy", () => {
@@ -532,3 +637,31 @@ describe("stabilizeCopy", () => {
     expect(stabilized.isErr()).toBe(true);
   });
 });
+
+type Play = {
+  refusal?: string;
+  answer?: object | string;
+  status?: number;
+  writes?: boolean;
+};
+
+const COPIED = {
+  type: "result",
+  is_error: false,
+  num_turns: 0,
+  session_id: COPY,
+};
+
+const NOT_IN_REPO =
+  "Teleport in print mode failed: You must run claude --teleport session_01Nfj from a checkout of riii111/harnexus.";
+
+const originOf = async (dir: string) =>
+  (
+    await runCommand(
+      "git",
+      ["-C", dir, "config", "--get", "remote.origin.url"],
+      process.env,
+    )
+  )
+    .unwrap()
+    .stdout.trim();

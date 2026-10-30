@@ -22,6 +22,7 @@ import {
   removeCloudCopy,
   sendToCloud,
 } from "../infra/claude/cloud.ts";
+import type { CloudCheckouts } from "../infra/claude/cloud-checkouts.ts";
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
 import { createCallGateway } from "../infra/codex/call-gateway.ts";
 import { createCodexLink } from "../infra/codex/codex-link.ts";
@@ -66,7 +67,7 @@ export const connectClaudeThreads = ({
   codexHome: string;
   cronRecord: Parameters<typeof createCodexLink>[0]["cronRecord"];
   // Where Cloud sessions are reached and copied; without it a thread cannot link one.
-  cloud?: { cli: CloudCli; copyDir: string };
+  cloud?: { cli: CloudCli; copyDir: string; checkouts: CloudCheckouts };
   send: (message: object) => void;
   log: (event: ClaudeLogEvent | RouteEvent | CloudLogEvent) => void;
 }) => {
@@ -142,7 +143,10 @@ export const connectClaudeThreads = ({
         ? Promise.resolve(
             Result.err({ _tag: "CloudOff", stopped: null, message: CLOUD_OFF }),
           )
-        : copyCloudSession(cloud.cli, cloudSessionId, { cwd: cloud.copyDir }),
+        : copyCloudSession(cloud.cli, cloudSessionId, {
+            cwd: cloud.copyDir,
+            checkouts: cloud.checkouts,
+          }),
     readCopy: (copySessionId) => readSession(copySessionId),
     discardCopy: (copySessionId) => removeCloudCopy(copySessionId),
     replayHistory: readHistory,
