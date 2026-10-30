@@ -117,7 +117,7 @@ The chat then shows the session's conversation; what you send there goes to the 
 - Messages are sent with `claude -p --cloud <id>`, and the session is copied with `claude --teleport <id> -p /cost`, which answers without a model turn.
   Both use the claude binary the Claude Agent SDK ships, which already holds the sign-in harnexus runs with; set `HARNEXUS_CLAUDE_CLI` to an absolute path to use another one.
   Copies are kept beside the thread state in `cloud-copies/`, and only the latest one per chat.
-- After you send a message, the chat copies the session again as soon as each copy ends for the first 20 seconds, then every 3 seconds until a minute has passed and every 10 seconds after that, until Claude ends its turn, or for at most an hour.
+- After you send a message, the chat copies the session until Claude ends its turn, or for at most an hour: for the first 20 seconds, once a copy has worked, the next one starts 1.5 seconds after the one before it started without waiting for it to end, then it waits 3 seconds between copies until a minute has passed and 10 seconds after that.
   Otherwise it copies every 5 minutes, and shows what the session did meanwhile as a turn of Claude's own.
   While the Mac sleeps nothing is copied; the first copy after waking shows what happened.
 - Stopping a turn here only stops waiting; the session keeps working until you stop it on claude.ai.

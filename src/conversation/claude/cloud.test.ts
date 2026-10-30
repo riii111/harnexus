@@ -166,7 +166,8 @@ describe("createCloudRuntime turns", () => {
       shown: "a2",
     });
     expect(env.sessionIds.get("thread-1")).toBe("copy-3");
-    expect(env.discarded).toEqual(["copy-0", "copy-1", "copy-2"]);
+    // copy-4 was started before the reply's copy ended and is removed unread.
+    expect(env.discarded).toEqual(["copy-0", "copy-1", "copy-2", "copy-4"]);
   });
 
   test("finds its prompt only after where the app was shown, so an earlier same text is not taken", async () => {
@@ -438,7 +439,7 @@ describe("createCloudRuntime turns", () => {
     expect(turn.texts().at(-1)).toContain("still working");
   });
 
-  test("copies again as soon as a copy ends for 20 seconds, then every 3 seconds until a minute, then every 10 seconds", async () => {
+  test("after the first copy, starts a copy every 1.5 seconds for 20 seconds, then waits 3 seconds between copies until a minute, then 10 seconds", async () => {
     const env = linked({
       copies: [
         [
@@ -449,13 +450,17 @@ describe("createCloudRuntime turns", () => {
       shown: null,
       waitLimitMs: 90_000,
     });
+    // Copies take no time here, so the waits alone show when each copy starts.
+    env.copyMs = 0;
     const turn = env.turn("long job");
 
     await env.runtime.run(turn.running);
 
+    // A copy that ends at once still leaves 1.5 seconds before the next one starts.
     expect(env.waits).toEqual([
-      ...Array<number>(8).fill(0),
-      ...Array<number>(8).fill(3_000),
+      0,
+      ...Array<number>(14).fill(1_500),
+      ...Array<number>(13).fill(3_000),
       ...Array<number>(3).fill(10_000),
     ]);
   });
@@ -463,15 +468,157 @@ describe("createCloudRuntime turns", () => {
   test("fails once copies have kept failing for 20 seconds, saying the message was delivered", async () => {
     const env = linked({ copies: [], shown: null });
     env.copyFailure = "network down";
+    env.copyMs = 0;
     const turn = env.turn("hi");
 
     await env.runtime.run(turn.running);
 
     expect(turn.failure?._tag).toBe("CloudCopyFailed");
     expect(turn.failure?.message).toContain("reached the Cloud session");
-    // The first copy fails once it ends, 2.5 seconds in; the next ones wait 3 seconds each, and the first ending at least 20 seconds after it ends the turn.
-    expect(env.clock - 1_000).toBe(24_500);
-    expect(env.waits).toEqual([0, 3_000, 3_000, 3_000, 3_000]);
+    // No copy has worked, so none overlap; each waits 3 seconds, and the first at least 20 seconds after the first failure ends the turn.
+    expect(env.clock - 1_000).toBe(21_000);
+    expect(env.waits).toEqual([0, ...Array<number>(7).fill(3_000)]);
+  });
+
+  test("shows a copy as soon as it ends while an older one still runs, then drops the older one", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "hi")],
+        [prompt("p1", "hi")],
+        [prompt("p1", "hi"), endReply("a1", "ok")],
+      ],
+      shown: null,
+    });
+    let release = () => {};
+    env.duringCopy = (call) =>
+      call === 2
+        ? new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve();
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts()).toEqual(["ok"]);
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(env.sessionIds.get("thread-1")).toBe("copy-3");
+    release();
+    await env.untilDiscarded("copy-2");
+  });
+
+  test("keeps 1.5 seconds between copy starts while an older copy still runs", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "hi")],
+        [prompt("p1", "hi")],
+        [prompt("p1", "hi")],
+        [prompt("p1", "hi"), endReply("a1", "ok")],
+      ],
+      shown: null,
+    });
+    env.copyMs = 0;
+    // A wait ends after a copy that ends at once, so the copy is read before the next one is due.
+    env.wait = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const starts: number[] = [];
+    let release = () => {};
+    env.duringCopy = (call) => {
+      starts.push(env.clock);
+      return call === 2
+        ? new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve();
+    };
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+    release();
+
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(
+      starts.slice(1).map((at, index) => at - (starts[index] ?? 0)),
+    ).toEqual([1_500, 1_500, 1_500]);
+  });
+
+  test("drops a copy that ends after a newer one was shown, while the turn goes on", async () => {
+    const working = reply("a1", "m1", text("working"), "tool_use");
+    const more = reply("a2", "m2", text("more"), "tool_use");
+    const env = linked({
+      copies: [
+        [prompt("p1", "hi"), working],
+        [prompt("p1", "hi")],
+        [prompt("p1", "hi"), working, more],
+        [prompt("p1", "hi"), working, more, endReply("a3", "done")],
+      ],
+      shown: null,
+    });
+    let release = () => {};
+    env.duringCopy = (call) => {
+      if (call === 2)
+        return new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      // The older copy ends while the newest one still runs.
+      if (call === 4) {
+        release();
+        return new Promise<void>((resolve) => setTimeout(resolve, 5));
+      }
+      return Promise.resolve();
+    };
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts()).toEqual(["working", "more", "done"]);
+    expect(turn.userTexts()).toEqual([]);
+    expect(env.discarded).toContain("copy-2");
+  });
+
+  test("takes a compacted session from a copy that does not overlap", async () => {
+    const env = linked({
+      copies: [[], [prompt("p1", "hi"), endReply("a1", "ok")]],
+      shown: "gone",
+    });
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts()).toEqual(["ok"]);
+    expect(turn.outcome).toEqual({ status: "completed" });
+  });
+
+  test("drops an overlapping copy that lacks what was already shown", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "hi"), reply("a1", "m1", text("working"), "tool_use")],
+        [prompt("p1", "hi"), reply("a1", "m1", text("working"), "tool_use")],
+        [prompt("p1", "hi")],
+        [
+          prompt("p1", "hi"),
+          reply("a1", "m1", text("working"), "tool_use"),
+          endReply("a2", "done"),
+        ],
+      ],
+      shown: null,
+    });
+    let release = () => {};
+    env.duringCopy = (call) =>
+      call === 2
+        ? new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve();
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+    release();
+    await env.untilDiscarded("copy-2");
+
+    expect(turn.texts()).toEqual(["working", "done"]);
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(env.discarded).toContain("copy-3");
+    expect(env.cloudOf("thread-1")?.shown).toBe("a2");
   });
 
   test.each([
@@ -581,6 +728,46 @@ describe("createCloudRuntime idle copies", () => {
     expect(env.discarded).toEqual(["copy-1"]);
   });
 
+  test("drops an idle copy made while a turn ran and ended", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "first"), endReply("a1", "one"), endReply("o1", "bg")],
+        [
+          prompt("p1", "first"),
+          endReply("a1", "one"),
+          endReply("o1", "bg"),
+          prompt("p2", "second"),
+          endReply("a2", "two"),
+        ],
+      ],
+      shown: "a1",
+    });
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+    let release = () => {};
+    env.duringCopy = (call) =>
+      call === 1
+        ? new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve();
+
+    const idle = env.tick();
+    await env.untilCopied(1);
+    const turn = env.turn("second");
+    await env.runtime.run(turn.running);
+    release();
+    await idle;
+
+    expect(turn.texts()).toEqual(["two"]);
+    expect(env.ownStarts).toEqual([]);
+    expect(env.sessionIds.get("thread-1")).toBe("copy-2");
+    expect(env.cloudOf("thread-1")?.shown).toBe("a2");
+    expect(env.discarded).toContain("copy-1");
+  });
+
   test("shows what a copy Claude compacted holds, since all of it came after the app was shown", async () => {
     const env = linked({
       copies: [[prompt("p9", "go on"), endReply("a9", "after")]],
@@ -667,6 +854,8 @@ const setup = ({
     clock: 1_000,
     waits: [] as number[],
     copyMs: 2_500,
+    // Runs while that copy is being made and is waited for before it ends.
+    duringCopy: async (_call: number) => {},
     // Set to make every copy say it may have run a model turn.
     copyStop: null as "ran_model" | "unchecked" | null,
     copyFailure: null as string | null,
@@ -707,6 +896,12 @@ const setup = ({
           return true;
         });
       }),
+    // Settles once that copy has been removed.
+    untilDiscarded: async (copy: string) => {
+      while (!discarded.includes(copy)) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    },
     tick: () => ticks.shift()?.() ?? Promise.resolve(),
     turn: (
       typed: string,
@@ -762,9 +957,11 @@ const setup = ({
     },
     copy: async () => {
       env.copyCalls += 1;
+      const call = env.copyCalls;
       env.clock += env.copyMs;
       // A waiter stays until the count it waits for is reached.
       copyWaiters = copyWaiters.filter((wake) => !wake());
+      await env.duringCopy(call);
       if (env.copyFailure !== null) {
         return Result.err({
           _tag: "CloudCopyFailed",
@@ -772,11 +969,8 @@ const setup = ({
           message: env.copyFailure,
         });
       }
-      const sessionId = `copy-${env.copyCalls}`;
-      contents.set(
-        sessionId,
-        copies[Math.min(env.copyCalls, copies.length) - 1] ?? [],
-      );
+      const sessionId = `copy-${call}`;
+      contents.set(sessionId, copies[Math.min(call, copies.length) - 1] ?? []);
       if (env.copyStop !== null) {
         return Result.err({
           _tag: "CloudCopyFailed",
@@ -794,10 +988,13 @@ const setup = ({
     send: (message) => sent.push(message),
     log: (event) => events.push(event),
     now: () => env.clock,
+    // A wait ends at the time it was due, so waits that run side by side do not add up.
     sleep: (ms, woken) => {
       env.waits.push(ms);
-      env.clock += ms;
-      return env.wait(woken);
+      const due = env.clock + ms;
+      return env.wait(woken).then(() => {
+        env.clock = Math.max(env.clock, due);
+      });
     },
     schedule: (run) => {
       ticks.push(run);
