@@ -1253,6 +1253,18 @@ const projectsListed = (...projects: Record<string, unknown>[]) => ({
 });
 
 describe("harnexus-task review", () => {
+  test("refuses --recover, which only a Claude Code cloud session uses", async () => {
+    const { commit, review } = await reviewFixture();
+    commit("test: candidate");
+
+    const refused = await review(["--recover", "discard"]);
+
+    expect([refused.code, refused.err]).toEqual([
+      1,
+      expect.stringContaining("only in a Claude Code cloud session"),
+    ]);
+  });
+
   test("sends each head once, re-reviews going to the same reviewer", async () => {
     const { harnexus, checkout, git, commit, initial, data, review, listed } =
       await reviewFixture();

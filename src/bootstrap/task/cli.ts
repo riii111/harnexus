@@ -180,6 +180,10 @@ const review = (args: Args, deps: TaskDeps) =>
         },
       );
     yield* refuseInCloud(deps.env, "review");
+    if (args.recover !== undefined)
+      return fail(
+        "--recover applies to review only in a Claude Code cloud session",
+      );
     const git = gitIn(deps.runGit, deps.env);
     let data = yield* Result.await(
       reviewRequest(args.request ?? "", deps.env, git),

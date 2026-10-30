@@ -173,7 +173,7 @@ const fixture = async () => {
 };
 
 describe("harnexus-task review in a Claude Code cloud session", () => {
-  test("reviews the first head with a new reviewer and answers with its result", async () => {
+  test("reviews the first head with a new reviewer and answers with its result, from a checkout outside the app's worktrees", async () => {
     const { checkout, commit, initial, plan, review, args, input } =
       await fixture();
     const head = commit("test: candidate");
@@ -205,6 +205,7 @@ describe("harnexus-task review in a Claude Code cloud session", () => {
       'model_reasoning_effort="medium"',
       "-",
     ]);
+    expect(checkout).not.toContain("worktrees");
     const prompt = await input(1);
     expect(prompt).toContain(`${initial}...${head}`);
     expect(prompt).toContain("workerのチャットID: worker-session");
@@ -275,8 +276,11 @@ describe("harnexus-task review in a Claude Code cloud session", () => {
       1,
       expect.stringContaining("401 Unauthorized"),
     ]);
-    await plan(2, { out: events(REVIEWER, "判定: LGTM") });
-    expect((await review()).out.reviewer).toBe(REVIEWER);
+    await plan(2, { out: events(REVIEWER, "判定: 判定保留") });
+    expect((await review()).out).toMatchObject({
+      reviewer: REVIEWER,
+      verdict: "判定保留",
+    });
     expect((await args(2)).slice(0, 2)).toEqual(["exec", "--json"]);
   });
 
@@ -325,16 +329,5 @@ describe("harnexus-task review in a Claude Code cloud session", () => {
     expect(await calls()).toBe(1);
     await plan(2, { out: events(REVIEWER, "判定: LGTM") });
     expect((await review(["--recover", "discard"])).out.verdict).toBe("LGTM");
-  });
-
-  test("accepts a checkout outside the app's worktrees", async () => {
-    const { checkout, commit, plan, review } = await fixture();
-    commit("test: candidate");
-    await plan(1, { out: events(REVIEWER, "判定: 判定保留") });
-
-    const done = await review();
-
-    expect(done.out.verdict).toBe("判定保留");
-    expect(checkout).not.toContain("worktrees");
   });
 });
