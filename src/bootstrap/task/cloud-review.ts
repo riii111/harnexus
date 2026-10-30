@@ -130,7 +130,10 @@ const locked = (
         if (!jsonEqual(before, await sessionValue(data, key)))
           return fail(`review session must keep the original ${key}`);
       }
-      if (jsonEqual(previous.head ?? null, data.head))
+      // A head the reviewer could not judge is sent again once what it lacked is given, such as a document it could not read.
+      // A state saved before verdicts were kept has none, and counts as judged.
+      const judged = state?.verdict !== "判定保留" && state?.verdict !== null;
+      if (judged && jsonEqual(previous.head ?? null, data.head))
         return fail(
           `head ${asText(data.head)} was already reviewed by ${asText(state?.reviewer)}; commit a fix before asking again`,
         );
@@ -253,11 +256,13 @@ const locked = (
       return fail("codex answered without naming its thread");
     }
     const heads = Array.isArray(state?.heads) ? state.heads : [];
+    const verdict = VERDICT.exec(reply.answer)?.[1] ?? null;
     const saved = await deps.saveJson(
       statePath,
       {
         reviewer: threadId,
         candidate: data,
+        verdict,
         heads: [...heads, data.head],
         updatedAt: new Date().toISOString(),
       },
@@ -271,7 +276,7 @@ const locked = (
     yield* Result.await(unsent());
     return Result.ok<Fields>({
       status: "completed",
-      verdict: VERDICT.exec(reply.answer)?.[1] ?? null,
+      verdict,
       taskId: data.taskId,
       base: data.base,
       head: data.head,

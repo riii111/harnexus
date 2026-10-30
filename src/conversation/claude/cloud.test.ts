@@ -56,6 +56,32 @@ describe("createCloudRuntime /cloud", () => {
     });
   });
 
+  test("links a chat another chat opened with /cloud as its first message", async () => {
+    const env = setup({
+      copies: [[prompt("p1", "hello"), endReply("r1", "hi")]],
+    });
+    const turn = env.turn(`/cloud ${CLOUD_ID}`, {
+      delegatedBy: "create_thread",
+    });
+
+    await env.runtime.run(turn.running);
+
+    expect(env.links.map((link) => link.cloud.sessionId)).toEqual([CLOUD_ID]);
+    expect(env.innerRuns).toEqual([]);
+  });
+
+  test("passes a /cloud another chat sent to an open chat to Claude", async () => {
+    const env = setup({ copies: [] });
+    const turn = env.turn(`/cloud ${CLOUD_ID}`, {
+      delegatedBy: "send_message_to_thread",
+    });
+
+    await env.runtime.run(turn.running);
+
+    expect(env.links).toEqual([]);
+    expect(env.innerRuns).toEqual(["turn-1"]);
+  });
+
   test.each([
     {
       name: "a text that is no session id",
@@ -909,6 +935,7 @@ const setup = ({
         images?: readonly { path: string }[];
         compaction?: boolean;
         startedBy?: "app" | "claude";
+        delegatedBy?: "create_thread" | "send_message_to_thread" | null;
       } = {},
     ) => fakeTurn(`turn-${++turns}`, typed, options),
     runtime: undefined as unknown as TurnRuntime<string>,
@@ -1047,10 +1074,13 @@ const fakeTurn = (
     images = [],
     compaction = false,
     startedBy = "app",
+    delegatedBy = null,
   }: {
     images?: readonly { path: string }[];
     compaction?: boolean;
     startedBy?: "app" | "claude";
+    // A message another chat sent with this tool, wrapped as the app delivers it: a create_thread's as its <prompt>, a send_message_to_thread's as its <input>.
+    delegatedBy?: "create_thread" | "send_message_to_thread" | null;
   },
 ) => {
   let state: TurnState = renderTurnStarted({
@@ -1060,10 +1090,24 @@ const fakeTurn = (
     now: 0,
   }).state;
   const notifications: AppNotification[] = [];
+  const delegated =
+    delegatedBy === null
+      ? null
+      : delegatedBy === "create_thread"
+        ? `<codex_delegation>\n  <source_thread_id>th-codex</source_thread_id>\n  <prompt>${typed}</prompt>\n</codex_delegation>`
+        : `<codex_delegation>\n  <source_thread_id>th-codex</source_thread_id>\n  <input>${typed}</input>\n</codex_delegation>`;
   const input: TurnInput = {
-    items: typed === "" ? [] : [{ type: "text", text: typed }],
-    toolOutput: null,
-    text: typed,
+    items:
+      typed === "" || delegated !== null ? [] : [{ type: "text", text: typed }],
+    toolOutput:
+      delegated === null
+        ? null
+        : {
+            name: delegatedBy ?? "",
+            namespace: "codex_app",
+            output: delegated,
+          },
+    text: delegated ?? typed,
     images: images as TurnInput["images"],
     permissionMode: "default",
     effort: null,

@@ -16,7 +16,7 @@ import { createSerialQueue } from "../../runtime/serial-queue.ts";
 import type { TurnEvent } from "../controller.ts";
 import { type Refusal, refusalMessage } from "../thread-request.ts";
 import type { ThreadValues } from "../thread-values.ts";
-import type { RunningTurn, TurnRuntime } from "../turn-runtime.ts";
+import type { RunningTurn, TurnInput, TurnRuntime } from "../turn-runtime.ts";
 import { typedText } from "./runtime.ts";
 
 // A Cloud thread's turns log their failure tags beside the Claude runtime's, so the log takes any tag a runtime writes.
@@ -150,7 +150,7 @@ export const createCloudRuntime = <Tag extends string>(
   const run = async (turn: Turn) => {
     const command =
       turn.input.startedBy === "app"
-        ? cloudCommandOf(typedText(turn.input))
+        ? cloudCommandOf(commandText(turn.input))
         : null;
     if (command !== null) {
       await link(turn, command);
@@ -729,6 +729,17 @@ const pollMs = (waited: number, failing: boolean) => {
   if (waited < BACK_TO_BACK_FOR_MS) return 0;
   return waited < FAST_POLL_FOR_MS ? FAST_POLL_MS : POLL_MS;
 };
+
+// Besides what the user typed, the first message of a chat another chat opened with create_thread, such as harnexus-task cloud does, can link it; it arrives wrapped in its delegation, as its <prompt>.
+const commandText = (input: TurnInput) => {
+  const typed = typedText(input);
+  if (typed !== null || input.toolOutput?.name !== "create_thread")
+    return typed;
+  return DELEGATED_PROMPT.exec(input.text)?.[1] ?? null;
+};
+
+const DELEGATED_PROMPT =
+  /^\s*<codex_delegation>[\s\S]*?<prompt>([\s\S]*?)<\/prompt>\s*<\/codex_delegation>\s*$/;
 
 const cloudCommandOf = (text: string | null) => {
   const matched = text === null ? null : CLOUD_COMMAND.exec(text.trim());
