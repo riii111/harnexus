@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCommand } from "../../runtime/process.boundary.ts";
@@ -28,6 +28,45 @@ describe("createCloudCheckouts", () => {
       "https://github.com/riii111/harnexus",
     );
     expect(await git(taken.dir, "status", "--porcelain")).toBe("");
+    expect(
+      await git(
+        taken.dir,
+        "config",
+        "--get",
+        "remote.origin.partialclonefilter",
+      ),
+    ).toBe("blob:none");
+  });
+
+  test("hands out a checkout as its last commit left it", async () => {
+    const checkouts = createCloudCheckouts(await rooted(), process.env);
+    const first = (await checkouts.take("riii111/harnexus")).unwrap();
+    await writeFile(join(first.dir, "tracked.md"), "committed");
+    await git(first.dir, "add", "tracked.md");
+    await git(
+      first.dir,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "-qm",
+      "test: branch",
+    );
+    await writeFile(join(first.dir, "tracked.md"), "changed by a hook");
+    await mkdir(join(first.dir, ".claude"));
+    await writeFile(join(first.dir, ".claude", "settings.json"), "{}");
+    first.release();
+
+    const again = (await checkouts.take("riii111/harnexus")).unwrap();
+
+    expect(again.dir).toBe(first.dir);
+    expect(await git(again.dir, "status", "--porcelain", "--ignored")).toBe("");
+    expect(await readFile(join(again.dir, "tracked.md"), "utf8")).toBe(
+      "committed",
+    );
   });
 
   test("gives each copy running at once its own checkout and hands a released one to the next", async () => {

@@ -1,7 +1,7 @@
 import { constants } from "node:os";
 import { dirname, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
-import { cloudCli } from "../infra/claude/cloud.ts";
+import { cloudCli, sweepCloudLogs } from "../infra/claude/cloud.ts";
 import { createCloudCheckouts } from "../infra/claude/cloud-checkouts.ts";
 import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import {
@@ -147,6 +147,7 @@ async function withClaude(relay: {
     return plain;
   }
   const store = await openThreadStore(statePath.value);
+  await sweepCloudLogs(join(dirname(statePath.value), CLOUD_COPY_FOLDER));
   if (store.isErr()) {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
     return plain;

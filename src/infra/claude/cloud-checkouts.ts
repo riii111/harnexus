@@ -37,13 +37,14 @@ export const createCloudCheckouts = (
       used.delete(slot);
     };
     const dir = join(root, ...repository.split("/"), String(slot));
-    if (!prepared.has(dir)) {
-      const made = await prepareCheckout(dir, repository, env);
-      if (made.isErr()) {
-        release();
-        return Result.err(made.error);
-      }
-      prepared.add(dir);
+    const made = prepared.has(dir)
+      ? Result.ok()
+      : await prepareCheckout(dir, repository, env);
+    if (made.isOk()) prepared.add(dir);
+    const clean = made.isOk() ? await cleanCheckout(dir, env) : made;
+    if (clean.isErr()) {
+      release();
+      return Result.err(clean.error);
     }
     return Result.ok({ dir, release });
   };
@@ -67,19 +68,53 @@ const prepareCheckout = async (
     Result.err(new CheckoutFailed({ message }));
   const ready = await prepareDirectory(dir);
   if (ready.isErr()) return failed(ready.error.message);
+  // A branch is fetched without the contents of its history, which the copy never reads.
   for (const args of [
     ["init", "-q"],
     ["config", "remote.origin.url", `https://github.com/${repository}`],
     ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+    ["config", "remote.origin.promisor", "true"],
+    ["config", "remote.origin.partialclonefilter", "blob:none"],
   ]) {
-    const ran = await runCommand("git", ["-C", dir, ...args], env);
+    const ran = await git(dir, args, env);
     if (ran.isErr()) return failed(ran.error.message);
-    if (ran.value.status !== 0) {
-      return failed(
-        ran.value.stderr.trim().split("\n")[0] ||
+  }
+  return Result.ok();
+};
+
+// A checkout holds whatever a branch the session named put there, and teleport refuses one that is not clean, so each copy finds it as its last commit left it; a checkout with no commit has nothing to reset.
+const cleanCheckout = async (
+  dir: string,
+  env: Record<string, string | undefined>,
+): Promise<Result<void, CheckoutFailed>> => {
+  const head = await runCommand(
+    "git",
+    ["-C", dir, "rev-parse", "-q", "--verify", "HEAD"],
+    env,
+  );
+  if (head.isOk() && head.value.status === 0) {
+    const reset = await git(dir, ["reset", "-q", "--hard"], env);
+    if (reset.isErr()) return reset;
+  }
+  return git(dir, ["clean", "-q", "-f", "-d", "-x"], env);
+};
+
+const git = async (
+  dir: string,
+  args: string[],
+  env: Record<string, string | undefined>,
+): Promise<Result<void, CheckoutFailed>> => {
+  const ran = await runCommand("git", ["-C", dir, ...args], env);
+  if (ran.isErr())
+    return Result.err(new CheckoutFailed({ message: ran.error.message }));
+  if (ran.value.status !== 0) {
+    return Result.err(
+      new CheckoutFailed({
+        message:
+          ran.value.stderr.trim().split("\n")[0] ||
           `git ${args[0]} exited with ${ran.value.status}`,
-      );
-    }
+      }),
+    );
   }
   return Result.ok();
 };

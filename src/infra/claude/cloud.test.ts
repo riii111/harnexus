@@ -18,6 +18,7 @@ import {
   parseCloudSessionId,
   sendToCloud,
   stabilizeCopy,
+  sweepCloudLogs,
 } from "./cloud.ts";
 import { createCloudCheckouts } from "./cloud-checkouts.ts";
 import {
@@ -52,6 +53,24 @@ const exited = (stdout: string, status = 0, stderr = ""): ClaudeRun => ({
   stdout,
   stderr,
   ended: "exit",
+});
+
+describe("sweepCloudLogs", () => {
+  test("removes the debug logs a stopped bridge left and keeps the rest", async () => {
+    const root = await mkdtemp(join(tmpdir(), "harnexus-cloud-logs-"));
+    await mkdir(join(root, "logs"));
+    await writeFile(join(root, "logs", "left.log"), "debug");
+    await writeFile(join(root, "logs", "note.txt"), "kept");
+
+    await sweepCloudLogs(root);
+
+    expect(await readdir(join(root, "logs"))).toEqual(["note.txt"]);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("does nothing before any copy made the folder", async () => {
+    await sweepCloudLogs(join(tmpdir(), "harnexus-cloud-logs-missing"));
+  });
 });
 
 describe("parseCloudSessionId", () => {
@@ -244,6 +263,9 @@ describe("copyCloudSession", () => {
           expect.stringMatching(
             new RegExp(`^${copier.cwd}/logs/[0-9a-f-]{36}\\.log$`),
           ),
+          "--setting-sources",
+          "user",
+          "--strict-mcp-config",
         ],
         input: "",
         cwd: copier.cwd,

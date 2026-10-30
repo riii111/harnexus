@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Result, TaggedError } from "better-result";
 import {
+  listDirectoryIfExists,
   prepareDirectory,
   readTextFileIfExists,
   removeFile,
@@ -202,6 +203,10 @@ const teleport = async (
         "json",
         "--debug-file",
         log,
+        // A checkout may hold a branch the Cloud session wrote, so its settings, hooks and MCP servers are never loaded here.
+        "--setting-sources",
+        "user",
+        "--strict-mcp-config",
       ],
       "",
       {
@@ -221,6 +226,16 @@ const teleport = async (
     });
   } finally {
     folder.value.release();
+  }
+};
+
+// A copy whose bridge stopped while it ran leaves its debug log, which holds the session's details, so the logs left over are removed when the bridge starts.
+export const sweepCloudLogs = async (copyDir: string) => {
+  const logDir = join(copyDir, LOG_FOLDER);
+  const names = await listDirectoryIfExists(logDir);
+  if (names.isErr() || names.value === null) return;
+  for (const name of names.value) {
+    if (name.endsWith(".log")) await removeFile(join(logDir, name));
   }
 };
 
