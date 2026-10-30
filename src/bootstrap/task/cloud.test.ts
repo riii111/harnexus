@@ -535,6 +535,44 @@ describe("harnexus-task claude with an unknown result", () => {
     expect((await f.run(["--session", "s"])).out?.pending).toBeNull();
   });
 
+  test("keeps the lost session when the adopting resume is refused by the network", async () => {
+    const f = await fixture();
+    await f.plan(1, "not json", 0);
+    expect((await f.run([...START, f.prompt])).code).toBe(1);
+    const before = (await f.run(["--session", "s"])).out?.pending;
+
+    await f.plan(2, "", 75, "network not allowed");
+    const refused = await f.run([...RESUME, f.prompt, "--recover", "adopt"]);
+    expect(refused.code).toBe(1);
+    expect((await f.run(["--session", "s"])).out?.pending).toEqual(before);
+
+    await f.plan(3, result(before.sessionId, "continued"));
+    const adopted = await f.run([...RESUME, f.prompt, "--recover", "adopt"]);
+    expect(adopted.out).toMatchObject({ sessionId: before.sessionId });
+    expect((await f.rawArgs(3)).slice(-2)).toEqual([
+      "--resume",
+      before.sessionId,
+    ]);
+  });
+
+  test("keeps the lost session when the adopting resume cannot spawn claude", async () => {
+    const f = await fixture();
+    await f.plan(1, "not json", 0);
+    expect((await f.run([...START, f.prompt])).code).toBe(1);
+    const before = (await f.run(["--session", "s"])).out?.pending;
+
+    await writeFile(
+      f.env.HARNEXUS_CLAUDE_CLOUD_BIN,
+      "#!/nonexistent/interpreter\n",
+    );
+    const refused = await f.run([...RESUME, f.prompt, "--recover", "adopt"]);
+    expect(refused.code).toBe(1);
+    expect((await f.run(["--session", "s"])).out?.pending).toEqual(before);
+    expect((await f.run([...START, f.prompt])).err).toContain(
+      "did not report back",
+    );
+  });
+
   test("discard releases the pending turn so a start can run", async () => {
     const f = await fixture();
     await f.plan(1, "not json");

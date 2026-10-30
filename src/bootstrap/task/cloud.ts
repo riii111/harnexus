@@ -170,6 +170,8 @@ const locked = (
     let state = isObject(loaded) ? loaded : null;
     const pendingLoaded = yield* Result.await(load(pendingPath));
     let pending = isObject(pendingLoaded) ? pendingLoaded : null;
+    // The record of an adopted lost turn; a run that sends nothing puts it back.
+    let adopted: Fields | null = null;
 
     if (pending !== null) {
       if (args.recover === undefined)
@@ -199,6 +201,7 @@ const locked = (
         // Keep the recovery record until the next turn has passed validation
         // and its pending record is saved. A bad cwd or unavailable binary
         // must not erase the only durable reference to the lost session.
+        adopted = pending;
         pending = null;
       }
     } else if (args.recover !== undefined) {
@@ -279,6 +282,11 @@ const locked = (
     yield* Result.await(
       deps.saveJson(pendingPath, record, { exclusive: false }),
     );
+    // Nothing was sent: release this run's record, or restore the adopted one.
+    const unsent = async () =>
+      adopted === null
+        ? removeFile(pendingPath).then((r) => r.mapError(ioFailed))
+        : deps.saveJson(pendingPath, adopted, { exclusive: false });
     const ran = await runClaude(bin, argv, prompt, {
       cwd,
       env: deps.env,
@@ -287,10 +295,7 @@ const locked = (
     });
     if (ran.isErr()) {
       // Never started: nothing was sent, so the pending record is released.
-      if (!ran.error.started)
-        yield* Result.await(
-          removeFile(pendingPath).then((r) => r.mapError(ioFailed)),
-        );
+      if (!ran.error.started) yield* Result.await(unsent());
       return fail(
         ran.error.started
           ? `${ran.error.message}; ${recoveryHint(args.session)}`
@@ -303,9 +308,7 @@ const locked = (
         `claude was stopped (${ended === "timeout" ? "timeout" : "output over the limit"}); ${recoveryHint(args.session)}`,
       );
     if (status === NETWORK_EXIT) {
-      yield* Result.await(
-        removeFile(pendingPath).then((r) => r.mapError(ioFailed)),
-      );
+      yield* Result.await(unsent());
       return fail(
         `${detail(stderr)}; nothing was sent, so run it again once the network is allowed`,
       );
