@@ -2,6 +2,7 @@ import { constants } from "node:os";
 import { dirname, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { cloudCli } from "../infra/claude/cloud.ts";
+import { createCloudCheckouts } from "../infra/claude/cloud-checkouts.ts";
 import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import {
   claudeSessionExists,
@@ -53,6 +54,8 @@ import { codexHome } from "./task/request.ts";
 const REPO = join(import.meta.dir, "..", "..");
 
 const CLOUD_COPY_FOLDER = "cloud-copies";
+
+const CLOUD_CHECKOUT_FOLDER = "checkouts";
 
 // Must match bin/harnexus-codex.
 const SERVER_OUTPUT_FD = 3;
@@ -214,6 +217,14 @@ async function withClaude(relay: {
     cloud: {
       cli: cloudCli(process.env),
       copyDir: join(dirname(statePath.value), CLOUD_COPY_FOLDER),
+      checkouts: createCloudCheckouts(
+        join(
+          dirname(statePath.value),
+          CLOUD_COPY_FOLDER,
+          CLOUD_CHECKOUT_FOLDER,
+        ),
+        process.env,
+      ),
     },
     send: (message) => appInjector.inject(`${JSON.stringify(message)}\n`),
     log: (event) => {
