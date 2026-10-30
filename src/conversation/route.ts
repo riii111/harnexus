@@ -75,6 +75,7 @@ export type RouteEvent =
 
 type Turns = {
   isClaudeThread: (threadId: unknown) => boolean;
+  isCloudThread: (threadId: string) => boolean;
   threadOf: (threadId: string) => Thread | undefined;
   adopt: (threadId: string, thread: Thread) => void;
   adoptFork: (
@@ -386,6 +387,11 @@ export const createRouter = ({
       });
     }
     const sourceId = String(params.threadId);
+    // A Cloud thread's conversation runs on claude.ai, and a fork would continue its local copy here instead.
+    if (turns.isCloudThread(sourceId)) {
+      refuse("thread/fork", request, "cloud_unsupported");
+      return null;
+    }
     // Claude's conversation is forked whole, so a fork from an earlier turn would carry the turns after it.
     if (fromTurn) {
       refuse("thread/fork", request, "unsupported_request");

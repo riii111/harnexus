@@ -5,7 +5,7 @@ import { buildHistory } from "../presentation/history.ts";
 import { resumeCursors } from "../presentation/history-page.ts";
 import { isObject } from "../runtime/object.ts";
 import type { createTurnController } from "./controller.ts";
-import type { AppRequest } from "./thread-request.ts";
+import { type AppRequest, refusalMessage } from "./thread-request.ts";
 import type { ThreadValues } from "./thread-values.ts";
 import type { TurnRuntime } from "./turn-runtime.ts";
 
@@ -36,6 +36,11 @@ export const createRevertRequests =
       const sessionId = threads.sessionIdOf(threadId);
       if (thread === undefined || sessionId === null) {
         reject("there is no Claude conversation to rewind");
+        return false;
+      }
+      // The conversation runs on claude.ai, so a rewind here would only cut the local copy.
+      if (threads.cloudOf(threadId) !== null) {
+        reject(refusalMessage("cloud_unsupported"));
         return false;
       }
       const read = await readSession(sessionId);

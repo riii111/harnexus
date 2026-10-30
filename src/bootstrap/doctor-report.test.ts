@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  cloudCheck,
   failed,
   fallbackCheck,
   formatReport,
@@ -19,6 +20,37 @@ describe("parseProcesses", () => {
       { pid: 101, ppid: 1, command: "/usr/bin/codex app-server" },
       { pid: 102, ppid: 101, command: "bun src/bootstrap/main.ts" },
     ]);
+  });
+});
+
+describe("cloudCheck", () => {
+  test("passes a claude command that offers both flags", () => {
+    const check = cloudCheck(
+      "claude",
+      "  --cloud [description|session_id|url]  Create a cloud session\n  --teleport [session]  Resume a teleport session\n",
+      "2.1.314 (Claude Code)\n",
+    );
+
+    expect(check.status).toBe("ok");
+    expect(check.detail).toContain("offers --cloud and --teleport");
+  });
+
+  test.each([
+    {
+      name: "a command that cannot run",
+      help: null,
+      expected: "cannot run claude; set HARNEXUS_CLAUDE_CLI",
+    },
+    {
+      name: "a command without --teleport",
+      help: "  --cloud [description]  Create a cloud session\n  --teleport-legacy\n",
+      expected: "lacks --teleport; update Claude Code",
+    },
+  ])("warns on $name", ({ help, expected }) => {
+    const check = cloudCheck("claude", help, "2.0.0");
+
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain(expected);
   });
 });
 
@@ -186,6 +218,11 @@ describe("logChecks", () => {
         detail:
           "request thread/resume claude_thread_moved 2 (last 2026-10-09T11:03:00.000Z); turn busy 1 (last 2026-10-09T11:02:00.000Z)",
       },
+      {
+        status: "ok",
+        name: "Cloud copies",
+        detail: "0 copied, 0 failed in the last 24h",
+      },
     ]);
   });
 
@@ -205,7 +242,36 @@ describe("logChecks", () => {
       },
       { status: "ok", detail: "listening 0" },
       { status: "ok", detail: "none" },
+      { status: "ok", detail: "0 copied, 0 failed in the last 24h" },
     ]);
+  });
+});
+
+describe("logChecks Cloud copies", () => {
+  test("warns about a chat whose copies stopped and counts the others", () => {
+    const checks = logChecks(
+      [
+        line("2026-10-09T11:00:00.000Z", {
+          event: "claude_cloud",
+          step: "copied",
+          records: 4,
+          ms: 900,
+        }),
+        line("2026-10-09T11:01:00.000Z", {
+          event: "claude_cloud",
+          step: "copy_ran_model",
+        }),
+      ].join("\n"),
+      "/state/bridge.log",
+      Date.parse("2026-10-09T12:00:00.000Z"),
+    );
+
+    expect(checks.at(-1)).toEqual({
+      status: "warn",
+      name: "Cloud copies",
+      detail:
+        "1 stopped in the last 24h (last 2026-10-09T11:01:00.000Z, copy_ran_model); copies of that chat resume after the bridge restarts",
+    });
   });
 });
 

@@ -1,5 +1,9 @@
 import { type InferErr, Result } from "better-result";
 import {
+  type CloudLogEvent,
+  serializeCloudEvent,
+} from "../conversation/claude/cloud.ts";
+import {
   type ClaudeLogEvent,
   isClaudeTurnEvent,
   serializeClaudeTurnEvent,
@@ -47,6 +51,7 @@ type LogEvent =
   | { event: "call_socket_unavailable"; reason: CallSocketFailure }
   | ObservationEvent
   | ClaudeLogEvent
+  | CloudLogEvent
   | RouteEvent;
 
 type CallSocketFailure =
@@ -147,6 +152,8 @@ const serializeLogEvent = (entry: LogEvent) => {
       return { event: entry.event, reason: entry.reason };
     case "claude_models_loaded":
       return { event: entry.event, count: entry.count };
+    case "claude_cloud":
+      return serializeCloudEvent(entry);
     case "claude_turn":
       return isClaudeTurnEvent(entry)
         ? serializeClaudeTurnEvent(entry)

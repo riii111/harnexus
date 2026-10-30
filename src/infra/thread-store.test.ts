@@ -262,6 +262,86 @@ describe("ThreadStore", () => {
   });
 });
 
+describe("ThreadStore Cloud links", () => {
+  test("links an empty thread to a Cloud session and restores it in a new store", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+
+    const linked = await store.linkCloud("thread-1", CLOUD, "copy-1");
+    const reopened = await openStore();
+
+    expect(linked.isOk()).toBe(true);
+    expect(reopened.get("thread-1")).toMatchObject({
+      sessionId: "copy-1",
+      cloud: CLOUD,
+    });
+    expect(reopened.cloudOwner("session_01Cloud")).toBe("thread-1");
+    expect(reopened.cloudThreadIds()).toEqual(["thread-1"]);
+  });
+
+  test("refuses a thread that already holds a conversation", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.setSessionId("thread-1", "session-1");
+
+    const linked = await store.linkCloud("thread-1", CLOUD, "copy-1");
+
+    expect(linked.isErr() && linked.error._tag).toBe("ThreadHasConversation");
+    expect(store.get("thread-1")?.cloud).toBeUndefined();
+  });
+
+  test("gives a Cloud session to only one thread", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+
+    const [first, second] = await Promise.all([
+      store.linkCloud("thread-1", CLOUD, "copy-1"),
+      store.linkCloud("thread-2", CLOUD, "copy-2"),
+    ]);
+
+    expect(first.isOk()).toBe(true);
+    expect(second.isErr() && second.error._tag).toBe("CloudSessionTaken");
+    expect(store.get("thread-2")?.sessionId).toBeNull();
+  });
+
+  test("replaces the copy and how far the app was shown together", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.linkCloud("thread-1", CLOUD, "copy-1");
+
+    await store.setCloudCopy("thread-1", "copy-2", "record-9");
+
+    expect(store.get("thread-1")).toMatchObject({
+      sessionId: "copy-2",
+      cloud: { sessionId: "session_01Cloud", shown: "record-9" },
+    });
+  });
+
+  test("leaves a thread that shows no Cloud session as it is", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+
+    await store.setCloudCopy("thread-1", "copy-2", "record-9");
+
+    expect(store.get("thread-1")?.sessionId).toBeNull();
+  });
+
+  test("rejects a saved link without a Cloud session id", async () => {
+    await writeFile(
+      path,
+      JSON.stringify({
+        version: 1,
+        threads: [{ ...SAVED_RECORD, cloud: { sessionId: "", shown: null } }],
+      }),
+    );
+
+    const opened = await openThreadStore(path);
+
+    expect(opened.isErr() && opened.error._tag).toBe("StateFileCorrupt");
+  });
+});
+
 describe("ThreadStore.runWrite", () => {
   test("runs writes to the same thread one at a time", async () => {
     const store = await openStore();
@@ -619,6 +699,8 @@ const BOTH_UPDATES = {
   sessionId: "session-1",
   model: "claude-opus-5-5",
 };
+
+const CLOUD = { sessionId: "session_01Cloud", shown: null };
 
 const SAVED_RECORD = {
   ...ENTRY,

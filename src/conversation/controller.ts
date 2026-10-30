@@ -900,6 +900,7 @@ export const createTurnController = <Tag extends string>({
     effortRule,
     isClaudeThread: (threadId: unknown) =>
       typeof threadId === "string" && threads.threadOf(threadId) !== undefined,
+    isCloudThread: (threadId: string) => threads.cloudOf(threadId) !== null,
     threadOf: threads.threadOf,
     sessionIdOf: threads.sessionIdOf,
     takePicked: threads.takePicked,

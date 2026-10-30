@@ -61,6 +61,28 @@ describe("Claude conversation rewind", () => {
     });
   });
 
+  test("refuses to rewind a thread that shows a Cloud session", async () => {
+    const { revert, sent, store, closed } = await setup({ cloud: true });
+
+    await revert("thread/revert", {
+      id: 1,
+      params: { threadId: THREAD, beforeTurnId: "harnexus-history-u2" },
+    });
+
+    expect(sent).toEqual([
+      {
+        id: 1,
+        error: {
+          code: -32600,
+          message:
+            "a Cloud thread shows a conversation that runs on claude.ai, so it cannot be rewound, compacted or opened as a side chat here",
+        },
+      },
+    ]);
+    expect(store.get(THREAD)?.rewind).toBeUndefined();
+    expect(closed).toEqual([]);
+  });
+
   test("clears the pending rewind when a different conversation is selected", async () => {
     const { revert, store } = await setup();
     await revert("thread/revert", {
@@ -185,10 +207,12 @@ const setup = async ({
   busy = false,
   failSave = false,
   failSync = false,
+  cloud = false,
 }: {
   busy?: boolean;
   failSave?: boolean;
   failSync?: boolean;
+  cloud?: boolean;
 } = {}) => {
   let fail = false;
   const opened = await openThreadStore(
@@ -225,7 +249,15 @@ const setup = async ({
     model: "claude-sonnet-4-6",
     worktree: directory,
   });
-  await store.setSessionId(THREAD, "se-1");
+  if (cloud) {
+    await store.linkCloud(
+      THREAD,
+      { sessionId: "session_01Cloud", shown: "a3" },
+      "se-1",
+    );
+  } else {
+    await store.setSessionId(THREAD, "se-1");
+  }
   fail = failSave || failSync;
   const threads = createThreadValues(store, () => {});
   const sent: Sent[] = [];

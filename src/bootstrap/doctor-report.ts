@@ -120,8 +120,66 @@ export const logChecks = (text: string, path: string, now: number): Check[] => {
       name: "Refusals",
       detail: refused.length === 0 ? "none" : refused.join("; "),
     },
+    cloudCopyCheck(of("claude_cloud")),
   ];
 };
+
+// A copy that ran a model turn, or did not say, stops copies of its chat until the bridge restarts, which only the log records.
+const cloudCopyCheck = (entries: readonly LogEntry[]): Check => {
+  const count = (step: string) =>
+    entries.filter((entry) => entry.step === step).length;
+  const stopped = entries.filter(
+    (entry) =>
+      entry.step === "copy_ran_model" || entry.step === "copy_unchecked",
+  );
+  const last = stopped.at(-1);
+  if (last !== undefined) {
+    return {
+      status: "warn",
+      name: "Cloud copies",
+      detail: `${stopped.length} stopped in the last 24h (last ${last.time}, ${field(last.step)}); copies of that chat resume after the bridge restarts`,
+    };
+  }
+  return {
+    status: "ok",
+    name: "Cloud copies",
+    detail: `${count("copied")} copied, ${count("copy_failed")} failed in the last 24h`,
+  };
+};
+
+// A Cloud thread sends with claude -p --cloud and copies with claude --teleport, so the claude command must offer both; Cloud threads are optional, so their absence only warns.
+export const cloudCheck = (
+  file: string,
+  help: string | null,
+  version: string | null,
+): Check => {
+  const name = "Claude Cloud sessions";
+  if (help === null) {
+    return {
+      status: "warn",
+      name,
+      detail: `cannot run ${file}; set HARNEXUS_CLAUDE_CLI to the claude command to use Cloud threads`,
+    };
+  }
+  const missing = ["--cloud", "--teleport"].filter(
+    (flag) => !new RegExp(`(^|\\s)${flag}(\\s|$)`, "m").test(help),
+  );
+  const shown = version?.trim().split("\n")[0] ?? "unknown version";
+  if (missing.length > 0) {
+    return {
+      status: "warn",
+      name,
+      detail: `${file} (${shown}) lacks ${missing.join(" and ")}; update Claude Code to use Cloud threads`,
+    };
+  }
+  return {
+    status: "ok",
+    name,
+    detail: `${file} (${shown}) offers --cloud and --teleport; copies without a model turn were checked on Claude Code ${CLOUD_CHECKED_ON}`,
+  };
+};
+
+const CLOUD_CHECKED_ON = "2.1.314";
 
 // A sandbox refuses with EPERM where file modes refuse with EACCES, so EPERM says only that this shell may not look, not what the app can do.
 export const refusedCheck = (

@@ -1542,7 +1542,7 @@ export const createClaudeRuntime = ({
 };
 
 export const isClaudeTurnEvent = (
-  entry: ClaudeLogEvent,
+  entry: ClaudeLogEvent | TurnEvent,
 ): entry is ClaudeTurnEvent => Object.hasOwn(CLAUDE_STEPS, entry.step);
 
 export const serializeClaudeTurnEvent = (entry: ClaudeTurnEvent) => {
@@ -1648,7 +1648,7 @@ const trackTasks = (slot: SessionSlot, message: SDKMessage) => {
 };
 
 // Only what the user typed can be a session command, never another thread's message or a compaction.
-const typedText = (input: RunningTurn<string>["input"]) =>
+export const typedText = (input: RunningTurn<string>["input"]) =>
   input.toolOutput === null && input.items.length > 0 ? input.text : null;
 
 const resumeFrom = (sessionId: string | null) =>

@@ -1,4 +1,5 @@
 import { dirname, join } from "node:path";
+import { claudeCliFile } from "../infra/claude/cloud.ts";
 import { readClaudeLogin } from "../infra/claude/session.ts";
 import { isVerifiedCodex } from "../infra/codex/versions.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
@@ -14,6 +15,7 @@ import { readCommandOutput } from "../runtime/process.boundary.ts";
 import { compatibilityCheck } from "./compatibility-report.ts";
 import {
   type Check,
+  cloudCheck,
   fallbackCheck,
   logChecks,
   processChecks,
@@ -57,6 +59,7 @@ export const doctorChecks = async (
       [sdkCheck(facts.sdk.version)],
       [bunCheck(facts.pinnedBun)],
       loginCheck().then((check) => [check]),
+      claudeCloudCheck(setup).then((check) => [check]),
       stateChecks(setup),
       launcherCheck().then((check) => [check]),
       launchdChecks(setup, facts.launchd),
@@ -74,6 +77,19 @@ export const doctorChecks = async (
       lastCompatibilityCheck(setup).then((check) => [check]),
     ])
   ).flat();
+
+async function claudeCloudCheck(setup: DoctorSetup): Promise<Check> {
+  const file = claudeCliFile(setup.env);
+  const [help, version] = await Promise.all([
+    readCommandOutput(file, ["--help"]),
+    readCommandOutput(file, ["--version"]),
+  ]);
+  return cloudCheck(
+    file,
+    help.isOk() ? help.value : null,
+    version.isOk() ? version.value : null,
+  );
+}
 
 export const codexPathOf = (setup: DoctorSetup) =>
   setup.env.HARNEXUS_CODEX_PATH || join(setup.app, CODEX_IN_APP);

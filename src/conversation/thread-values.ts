@@ -1,6 +1,7 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+import type { Result } from "better-result";
 import { isClaudeEffort } from "../infra/claude/models.ts";
-import type { ThreadStore } from "../infra/thread-store.ts";
+import type { CloudLink, ThreadStore } from "../infra/thread-store.ts";
 import type { Thread } from "./thread-request.ts";
 import type { ErrorTag } from "./turn-runtime.ts";
 
@@ -181,9 +182,15 @@ export const createThreadValues = (
     if (store.get(threadId) !== undefined) saveEffort(threadId, effort);
   };
 
-  const setSessionId = async (threadId: string, sessionId: string | null) => {
+  const setSessionId = (threadId: string, sessionId: string | null) => {
     sessionIds.set(threadId, sessionId);
-    const saved = await store.setSessionId(threadId, sessionId);
+    return logUnsaved(store.setSessionId(threadId, sessionId));
+  };
+
+  const logUnsaved = async <T extends Result<unknown, { _tag: StoreTag }>>(
+    saving: Promise<T>,
+  ) => {
+    const saved = await saving;
     if (saved.isErr()) {
       log({
         event: "claude_turn",
@@ -218,6 +225,32 @@ export const createThreadValues = (
     });
   };
 
+  const cloudOf = (threadId: string): CloudLink | null =>
+    store.get(threadId)?.cloud ?? null;
+
+  // Like a picked conversation, a linked Cloud session applies only once the store holds it, and its first reopen carries the whole history.
+  const linkCloud = async (
+    threadId: string,
+    cloud: CloudLink,
+    copySessionId: string,
+  ) => {
+    const linked = await store.linkCloud(threadId, cloud, copySessionId);
+    if (linked.isErr()) return linked;
+    sessionIds.set(threadId, copySessionId);
+    picked.add(threadId);
+    return linked;
+  };
+
+  // The copy read last is used even if its save fails, since the earlier copy is removed once a new one is read.
+  const setCloudCopy = (
+    threadId: string,
+    copySessionId: string,
+    shown: string | null,
+  ) => {
+    sessionIds.set(threadId, copySessionId);
+    return logUnsaved(store.setCloudCopy(threadId, copySessionId, shown));
+  };
+
   // True once per pick, so only the first reopen after it carries the whole history.
   const takePicked = (threadId: string) => picked.delete(threadId);
 
@@ -241,5 +274,10 @@ export const createThreadValues = (
     changeModel,
     changeEffort,
     setSessionId,
+    cloudOf,
+    linkCloud,
+    setCloudCopy,
+    cloudThreadIds: () => store.cloudThreadIds(),
+    cloudOwner: (cloudSessionId: string) => store.cloudOwner(cloudSessionId),
   };
 };

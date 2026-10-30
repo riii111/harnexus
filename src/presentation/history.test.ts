@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { buildHistory, replayHistory } from "./history.ts";
+import { buildHistory, renderRecords, replayHistory } from "./history.ts";
 import type { ThreadItem, Turn } from "./protocol.ts";
 import { RECOVERY_CONTEXT, RECOVERY_NOTICE } from "./recovery.ts";
 import {
@@ -11,6 +11,42 @@ import {
   toolResult,
   toolUse,
 } from "./testing/session-record.ts";
+import { renderTurnStarted } from "./turn.ts";
+
+describe("renderRecords", () => {
+  test("shows replies and typed prompts but not the /cost a Cloud copy runs", () => {
+    const opened = renderTurnStarted({
+      threadId: "t",
+      turnId: "live",
+      cwd: "/w",
+      now: 0,
+    });
+
+    const rendered = renderRecords(
+      opened.state,
+      [
+        prompt("c1", "<command-name>/cost</command-name>"),
+        prompt("c2", "<local-command-stdout>$0.00</local-command-stdout>"),
+        prompt("p1", "typed on claude.ai"),
+        reply("a1", "m1", text("done"), "end_turn"),
+      ],
+      1,
+    );
+
+    const completed = rendered.notifications.flatMap((notification) =>
+      notification.method === "item/completed"
+        ? [notification.params.item]
+        : [],
+    );
+    expect(completed.map((item) => item.type)).toEqual([
+      "userMessage",
+      "agentMessage",
+    ]);
+    expect(completed[0]).toMatchObject({
+      content: [{ type: "text", text: "typed on claude.ai" }],
+    });
+  });
+});
 
 describe("buildHistory", () => {
   test.each([

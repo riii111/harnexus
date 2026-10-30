@@ -119,6 +119,14 @@ const REFUSAL_MESSAGES = {
   outcome_unknown:
     "the previous Claude turn on this thread stopped before its outcome was known; check what that turn did, such as changed files or messages to other threads, then send a message yourself to continue",
   unsupported_request: "this request is not supported on a Claude thread yet",
+  cloud_images:
+    "a Cloud thread sends text only; describe the image or attach it in the Cloud session on claude.ai",
+  cloud_not_sent:
+    "the message did not reach the Cloud session; check the session on claude.ai, then send it again",
+  cloud_send_unknown:
+    "the message may or may not have reached the Cloud session; check the session on claude.ai before sending it again",
+  cloud_unsupported:
+    "a Cloud thread shows a conversation that runs on claude.ai, so it cannot be rewound, compacted or opened as a side chat here",
   model_mismatch:
     "this thread's first turn asked for another model or effort than the thread that created it expected, or did not say which, so it was not run",
   side_chat_unreadable:

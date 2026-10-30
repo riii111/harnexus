@@ -810,6 +810,30 @@ describe("threads with a Claude model", () => {
     });
   });
 
+  test.each([
+    { name: "a fork", params: {} },
+    { name: "a side chat", params: { ephemeral: true } },
+  ])("refuses $name of a Cloud thread before Claude runs it here", ({
+    params,
+  }) => {
+    const { router, calls, events } = setup(["th-cloud"], {
+      cloudThreads: ["th-cloud"],
+    });
+    const line = encode({
+      id: 9,
+      method: "thread/fork",
+      params: { threadId: "th-cloud", ...params },
+    });
+
+    expect(router.fromApp(line)).toBeNull();
+    expect(calls.map(([name]) => name)).toEqual(["reject"]);
+    expect(events).toContainEqual({
+      event: "claude_request_refused",
+      method: "thread/fork",
+      reason: "cloud_unsupported",
+    });
+  });
+
   test("leaves the fork of a Codex thread as the same bytes", async () => {
     const { router, calls } = setup();
     const line = encode({
@@ -2654,7 +2678,9 @@ const setup = (
     startRefusal = null,
     injected = [],
     mainThread = CODEX_MAIN_TURNS,
+    cloudThreads = [],
   }: {
+    cloudThreads?: string[];
     records?: Record<string, SessionMessage[] | "unreadable">;
     injected?: Injected[];
     mainThread?: object[] | "unreadable";
@@ -2738,6 +2764,7 @@ const setup = (
     turns: {
       isClaudeThread: (threadId) =>
         typeof threadId === "string" && threads.has(threadId),
+      isCloudThread: (threadId) => cloudThreads.includes(threadId),
       threadOf: (threadId) => threads.get(threadId),
       adopt: (threadId, thread) => {
         calls.push(["adopt", threadId, thread]);
