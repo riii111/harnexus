@@ -28,6 +28,7 @@ import {
 } from "./cloud.ts";
 import { detectEnvironment, refuseInCloud } from "./environment.ts";
 import { asText, type Fields, fail, jsonEqual, truthy } from "./format.ts";
+import { type OrchestrateArgs, orchestrate } from "./orchestrate.ts";
 import {
   callerId,
   candidate,
@@ -70,7 +71,14 @@ export type TaskDeps = {
 };
 
 export const TASK_DEPS = {
-  runGit: (argv, env) => runCommand(argv[0] ?? "git", argv.slice(1), env),
+  runGit: (argv, env, options?: Parameters<GitRunner>[2]) =>
+    runCommand(
+      argv[0] ?? "git",
+      argv.slice(1),
+      env,
+      options?.timeoutMs,
+      options?.cwd,
+    ),
   saveJson,
   print: (line) => {
     process.stdout.write(line);
@@ -99,6 +107,13 @@ type Args = {
   cwd?: string;
   permissionMode?: string;
   recover?: string;
+  work?: string;
+  candidateOf?: string;
+  reviewOf?: string;
+  reviewFile?: string;
+  publish?: string;
+  bodyFile?: string;
+  prepare: boolean;
 };
 
 const worktreeTarget = (project: unknown) => ({
@@ -439,6 +454,28 @@ const claude = (args: Args, deps: TaskDeps) => {
   });
 };
 
+const orchestration = (args: Args, deps: TaskDeps) => {
+  const given: OrchestrateArgs = {
+    request: args.request ?? "",
+    prepare: args.prepare,
+  };
+  const optional = {
+    work: args.work,
+    candidate: args.candidateOf,
+    review: args.reviewOf,
+    reviewFile: args.reviewFile,
+    publish: args.publish,
+    bodyFile: args.bodyFile,
+    promptFile: args.promptFile,
+    model: args.model,
+    permissionMode: args.permissionMode,
+    recover: args.recover,
+  };
+  for (const [key, value] of Object.entries(optional))
+    if (value !== undefined) Object.assign(given, { [key]: value });
+  return orchestrate(given, deps);
+};
+
 const COMMANDS = {
   launch,
   review,
@@ -448,6 +485,7 @@ const COMMANDS = {
   watch,
   environment,
   claude,
+  orchestrate: orchestration,
 };
 
 type Command = keyof typeof COMMANDS;
@@ -518,6 +556,20 @@ const OPTIONS: Record<Command, OptionTypes> = {
     "permission-mode": { type: "string" },
     recover: { type: "string" },
   },
+  orchestrate: {
+    request: { type: "string" },
+    prepare: { type: "boolean" },
+    work: { type: "string" },
+    candidate: { type: "string" },
+    review: { type: "string" },
+    "review-file": { type: "string" },
+    publish: { type: "string" },
+    "body-file": { type: "string" },
+    "prompt-file": { type: "string" },
+    model: { type: "string" },
+    "permission-mode": { type: "string" },
+    recover: { type: "string" },
+  },
 };
 
 const USAGE = {
@@ -533,6 +585,8 @@ const USAGE = {
   environment: "environment",
   claude:
     "claude --session NAME [--start | --resume] [--prompt-file FILE] [--model MODEL] [--cwd DIR] [--permission-mode auto|plan] [--recover adopt|discard]",
+  orchestrate:
+    "orchestrate --request PLAN [--prepare | --work ISSUE [--prompt-file FILE] [--model MODEL] [--permission-mode auto|plan] [--recover adopt|discard] | --candidate ISSUE | --review ISSUE --review-file FILE | --publish ISSUE [--body-file FILE]]",
 } satisfies Record<Command, string>;
 
 const usageOf = (commands: readonly Command[]) =>
@@ -577,6 +631,7 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
     start: values.start === true,
     resume: values.resume === true,
     sender: values.sender === true,
+    prepare: values.prepare === true,
     prs: command === "watch" && Array.isArray(values.pr) ? values.pr : [],
   };
   const request = text("request");
@@ -620,6 +675,48 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
       return shown("--prompt-file is required with --start and --resume");
     const cwd = text("cwd");
     if (cwd !== undefined) args.cwd = cwd;
+    const mode = text("permission-mode");
+    if (mode !== undefined) {
+      if (!(PERMISSION_MODES as readonly string[]).includes(mode))
+        return shown(
+          `--permission-mode must be one of ${PERMISSION_MODES.join(", ")}`,
+        );
+      args.permissionMode = mode;
+    }
+  }
+  if (command === "orchestrate") {
+    const actions = {
+      work: text("work"),
+      candidateOf: text("candidate"),
+      reviewOf: text("review"),
+      publish: text("publish"),
+    };
+    const chosen = Object.entries(actions).filter(([, v]) => v !== undefined);
+    if (chosen.length + (args.prepare ? 1 : 0) > 1)
+      return shown(
+        "use only one of --prepare, --work, --candidate, --review and --publish",
+      );
+    Object.assign(args, Object.fromEntries(chosen));
+    const reviewFile = text("review-file");
+    if (args.reviewOf !== undefined && reviewFile === undefined)
+      return shown("--review-file is required with --review");
+    if (reviewFile !== undefined) {
+      if (args.reviewOf === undefined)
+        return shown("--review-file is only for --review");
+      args.reviewFile = reviewFile;
+    }
+    const bodyFile = text("body-file");
+    if (bodyFile !== undefined) {
+      if (args.publish === undefined)
+        return shown("--body-file is only for --publish");
+      args.bodyFile = bodyFile;
+    }
+    const promptFile = text("prompt-file");
+    if (promptFile !== undefined) {
+      if (args.work === undefined)
+        return shown("--prompt-file is only for --work");
+      args.promptFile = promptFile;
+    }
     const mode = text("permission-mode");
     if (mode !== undefined) {
       if (!(PERMISSION_MODES as readonly string[]).includes(mode))

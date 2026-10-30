@@ -161,3 +161,44 @@ harnexus-task claude --session NAME
 
 Verified with the real CLI: a parent Codex session ran `--start` and `--resume` against Claude Code with a login (session `47be678c-e1ef-4049-8521-4a267f4e95c2`, state in `/tmp/harnexus-parent-smoke-state`), and the resume recalled the first turn.
 A run from a Claude session nested inside a task without a login reached only `Not logged in`; that run exercised the error path, not a reply.
+
+### Issue orchestration
+
+`harnexus-task orchestrate` drives several Issues from one plan, each with its own Claude worker, worktree and branch, up to a Draft PR.
+The independent review is done by you or your agent; the command records its result and refuses to publish without it.
+It must run from a thread (`CODEX_THREAD_ID`), which scopes the state.
+
+```sh
+harnexus-task orchestrate --request PLAN.json                                   # state and next step per Issue
+harnexus-task orchestrate --request PLAN.json --prepare
+harnexus-task orchestrate --request PLAN.json --work ISSUE [--prompt-file FILE] [--recover adopt|discard]
+harnexus-task orchestrate --request PLAN.json --candidate ISSUE
+harnexus-task orchestrate --request PLAN.json --review ISSUE --review-file FILE
+harnexus-task orchestrate --request PLAN.json --publish ISSUE [--body-file FILE]
+```
+
+```json
+{
+  "planId": "demo-1",
+  "repository": "/abs/path/to/repo",
+  "baseRef": "main",
+  "issues": [
+    { "id": "api", "instruction": "...", "test": ["bun", "test"], "title": "feat: api", "body": "Why this change." },
+    { "id": "ui", "promptFile": "/abs/ui.md", "dependsOn": ["api"], "test": ["bun", "test"], "title": "feat: ui", "body": "..." }
+  ]
+}
+```
+
+- `instruction` or `promptFile` (one of them) is what the worker is first told; `test` runs without a shell in the Issue's worktree.
+- An Issue with `dependsOn` starts from the approved head of the Issue it builds on, and its PR targets that Issue's branch.
+  With several dependencies, `baseTask` names the one to build on, and it must itself depend on all the others.
+- `--prepare` creates a worktree and the branch `harnexus/<planId>/<id>` for every Issue whose dependencies are approved; running it again reuses them and never overwrites a branch or path that is not its own.
+- `--work` starts the worker with the instruction, then resumes the same worker only with `--prompt-file` (for example the review findings).
+- `--candidate` accepts a clean, committed head only when `test` passes and the head did not change meanwhile.
+- `--review` takes `{"reviewerId", "base", "head", "verdict": "lgtm|changes_requested", "findings": []}`.
+  A review of any head but the current candidate is refused, and every later review must come from the first `reviewerId`.
+- `--publish` needs a `lgtm` on the tested head.
+  It checks GitHub for an existing PR, pushes with a normal push, and creates the PR as a draft with `gh`; it never forces, merges or pushes `baseRef`.
+  When a push or PR result is unknown, run it again: GitHub is checked first, so nothing is created twice.
+- The state is kept under `$XDG_STATE_HOME/taskctl/orchestration/`, per thread, plan and repository.
+  Changing a plan's content needs a new `planId`.

@@ -28,9 +28,11 @@ export const NAME = "harnexus-task";
 
 export type Env = Record<string, string | undefined>;
 
+// A command runs in cwd when given, and is stopped after timeoutMs.
 export type GitRunner = (
   argv: readonly string[],
   env: Env,
+  options?: { cwd?: string; timeoutMs?: number },
 ) => Promise<Result<CommandOutput, CommandFailed>>;
 
 const COMPLETION_TARGETS = ["implementation", "draft_pr", "merge"];
@@ -70,7 +72,7 @@ export const readJson = (path: string) =>
     );
   });
 
-const readRequest = (
+export const readRequest = (
   path: string,
   required: readonly string[],
   optional: readonly string[],

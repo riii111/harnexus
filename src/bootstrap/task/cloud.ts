@@ -97,7 +97,7 @@ const reap = (lock: string, observed: string) =>
   });
 
 // Held from the first check to the saved state, and failing at once instead of waiting.
-const acquire = (lock: string) =>
+export const acquire = (lock: string) =>
   Result.gen(async function* () {
     const token = randomUUID();
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -124,7 +124,7 @@ const acquire = (lock: string) =>
   });
 
 // Removes only the lock this run took, so a lock another run holds now stays.
-const release = async (lock: string, token: string) => {
+export const release = async (lock: string, token: string) => {
   const holder = await heldBy(lock);
   if (holder?.token === token) await removeFile(lock);
 };

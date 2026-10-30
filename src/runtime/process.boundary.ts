@@ -90,6 +90,7 @@ export const runCommand = (
   args: readonly string[],
   env: Record<string, string | undefined>,
   timeoutMs = COMMAND_TIMEOUT_MS,
+  cwd?: string,
 ) =>
   Result.tryPromise({
     try: () =>
@@ -97,7 +98,7 @@ export const runCommand = (
         execFile(
           file,
           [...args],
-          { env, timeout: timeoutMs, maxBuffer: COMMAND_OUTPUT_LIMIT },
+          { env, timeout: timeoutMs, maxBuffer: COMMAND_OUTPUT_LIMIT, cwd },
           (error, stdout, stderr) => {
             if (error === null) resolve({ status: 0, stdout, stderr });
             else if (typeof error.code === "number" && !error.killed)
