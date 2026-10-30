@@ -112,6 +112,7 @@ Start a new Claude chat and send:
 ```
 
 The session id or its `claude.ai/code/...` URL both work.
+An agent in another chat can open such a chat for you with `harnexus-task cloud --link <id or URL> --project <projectId> [--title T]`, which starts a new Claude chat in that project whose first message is `/cloud <id>`, and prints its `threadId`.
 The chat then shows the session's conversation; what you send there goes to the session, and its replies appear as they are copied.
 
 - Messages are sent with `claude -p --cloud <id>`, and the session is copied with `claude --teleport <id> -p /cost`, which answers without a model turn.
@@ -201,7 +202,7 @@ In a Claude Code cloud session (`CLAUDE_CODE_REMOTE=true`), `review --request RE
 - The reviewer prompt is the `reviewer` template with `{reply_to}` set to `Cloud`; elsewhere `{reply_to}` is the `workerAI`.
 - The first head starts `codex exec --json --sandbox read-only -C <checkout>` (by default with `-m gpt-6.1-sol` and `model_reasoning_effort="medium"`); later heads resume the same reviewer with `codex exec resume <id> -c sandbox_mode="read-only"` in the checkout. The prompt goes in on stdin.
 - `verdict` is read from the answer's `判定:` line, and is `null` when the answer has none.
-- A head already reviewed is refused. A run that failed, such as one without a login, records nothing, so the same head can be sent again.
+- A head already reviewed is refused, unless the reviewer could not judge it (`判定保留` or no verdict), so the same head can be sent again once what it lacked is given. A run that failed, such as one without a login, records nothing, so the same head can be sent again.
 - A reviewer whose record is gone, such as after the machine was rebuilt, is forgotten, and the next run starts a new one.
 - A run that ended without a result leaves `pending.json`; check the reviewer, then send the head again with `--recover discard`.
 - A review takes a minute or two, longer than a Bash tool call waits by default, so run it in the background or with a timeout of at least `HARNEXUS_REVIEW_TIMEOUT_MS`; a caller stopped early leaves the run going, and its result unknown.

@@ -284,6 +284,26 @@ describe("harnexus-task review in a Claude Code cloud session", () => {
     expect((await args(3)).slice(0, 3)).toEqual(["exec", "resume", REVIEWER]);
   });
 
+  test("sends a head again that the reviewer could not judge", async () => {
+    const { commit, plan, review, args } = await fixture();
+    const head = commit("test: candidate");
+    await plan(1, {
+      out: events(REVIEWER, "判定: 判定保留\n参照文書を読めない"),
+    });
+    await review();
+    await plan(2, { out: events(REVIEWER, "判定: LGTM") });
+
+    const again = await review();
+
+    expect(again.out).toMatchObject({ head, verdict: "LGTM" });
+    expect((await args(2)).slice(0, 3)).toEqual(["exec", "resume", REVIEWER]);
+    const refused = await review();
+    expect([refused.code, refused.err]).toEqual([
+      1,
+      expect.stringContaining("was already reviewed"),
+    ]);
+  });
+
   test("refuses a head it already reviewed", async () => {
     const { commit, plan, review, calls } = await fixture();
     const head = commit("test: candidate");

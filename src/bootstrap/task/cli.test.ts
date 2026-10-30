@@ -958,6 +958,81 @@ describe("harnexus-task templates", () => {
   });
 });
 
+describe("harnexus-task cloud", () => {
+  const SESSION = "session_01NfjPqrDm5ZNRA1m484J4Kt";
+
+  test("opens a Claude chat in the project whose first message links the Cloud session", async () => {
+    const { invoke, harnexus } = await fixture();
+
+    const linked = await invoke(
+      [
+        "cloud",
+        "--link",
+        `https://claude.ai/code/${SESSION}`,
+        "--project",
+        "project",
+        "--title",
+        "README",
+      ],
+      [{ outcome: "done", threadId: "cloud-chat" }],
+    );
+
+    expect(linked.out).toEqual({
+      threadId: "cloud-chat",
+      cloudSessionId: SESSION,
+    });
+    expect(harnexus.calls).toEqual([
+      {
+        threadId: "caller",
+        tool: "create_thread",
+        arguments: {
+          prompt: `/cloud ${SESSION}`,
+          target: {
+            type: "project",
+            projectId: "project",
+            environment: { type: "local" },
+          },
+          title: "Cloud｜README",
+          model: "claude-sonnet-5-5",
+          thinking: "high",
+        },
+      },
+    ]);
+  });
+
+  test("refuses a link that names no Cloud session, before calling the app", async () => {
+    const { invoke, harnexus } = await fixture();
+
+    const refused = await invoke([
+      "cloud",
+      "--link",
+      "https://example.com/session",
+      "--project",
+      "project",
+    ]);
+
+    expect([refused.code, refused.err]).toEqual([
+      1,
+      expect.stringContaining("Cloud session id"),
+    ]);
+    expect(harnexus.calls).toEqual([]);
+  });
+
+  test("says when the app did not open the chat", async () => {
+    const { invoke } = await fixture();
+
+    const failed = await invoke(
+      ["cloud", "--link", SESSION, "--project", "project"],
+      [{ outcome: "rejected", error: "no such project" }],
+    );
+
+    expect([failed.code, failed.err]).toEqual([
+      1,
+      expect.stringContaining("no such project"),
+    ]);
+  });
+});
+
 describe("harnexus-task name", () => {
   test("appends the PR number to the worker's launch title from the worker thread", async () => {
     const { harnexus, env, invoke, data, launch } = await launchFixture();

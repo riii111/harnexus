@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { Result, TaggedError } from "better-result";
+import { parseCloudSessionId } from "../../infra/claude/cloud.ts";
 import type { CallOutcome } from "../../infra/codex/call-gateway.ts";
 import {
   dryRun,
@@ -47,6 +48,7 @@ import {
   reviewFields,
   reviewRequest,
   sessionValue,
+  singleLine,
   workerFields,
 } from "./request.ts";
 import {
@@ -104,6 +106,8 @@ type Args = {
   cwd?: string;
   permissionMode?: string;
   recover?: string;
+  project?: string;
+  title?: string;
 };
 
 const worktreeTarget = (project: unknown) => ({
@@ -442,6 +446,38 @@ const linkOnly = (deps: TaskDeps, value: string) =>
     });
   });
 
+// A chat that shows a Cloud session is a new Claude chat whose first message is /cloud, which links it as if the user had typed it.
+const cloud = (args: Args, deps: TaskDeps) =>
+  Result.gen(async function* () {
+    yield* refuseInCloud(deps.env, "cloud");
+    const sessionId = parseCloudSessionId(args.link ?? "");
+    if (sessionId === null)
+      return fail(
+        "--link must be a Cloud session id or its claude.ai/code URL",
+      );
+    yield* singleLine(args.project, "--project");
+    const caller = yield* callerId(deps.env);
+    const answer = await callApp(deps.env, caller, "create_thread", {
+      prompt: `/cloud ${sessionId}`,
+      target: {
+        type: "project",
+        projectId: args.project,
+        environment: { type: "local" },
+      },
+      title: `Cloud｜${args.title || sessionId}`,
+      model: args.model || "claude-sonnet-5-5",
+      thinking: args.thinking || "high",
+    });
+    if (answer.outcome !== "done" || !truthy(answer.threadId))
+      return fail(
+        `create_thread ${asText(answer.outcome)}: ${asText(answer.error ?? answer)}`,
+      );
+    return Result.ok<Fields>({
+      threadId: answer.threadId,
+      cloudSessionId: sessionId,
+    });
+  });
+
 const environment = async (_args: Args, deps: TaskDeps) =>
   (await detectEnvironment(deps.env)).map((found): Fields => ({ ...found }));
 
@@ -473,6 +509,7 @@ const COMMANDS = {
   watch,
   environment,
   claude,
+  cloud,
 };
 
 type Command = keyof typeof COMMANDS;
@@ -537,6 +574,13 @@ const OPTIONS: Record<Command, OptionTypes> = {
     link: { type: "string" },
   },
   environment: {},
+  cloud: {
+    link: { type: "string" },
+    project: { type: "string" },
+    title: { type: "string" },
+    model: { type: "string" },
+    thinking: { type: "string" },
+  },
   claude: {
     session: { type: "string" },
     "prompt-file": { type: "string" },
@@ -560,6 +604,8 @@ const USAGE = {
   watch:
     "watch [--dry-run [--pr PR]... | --release PR | --status | --sender | --link PR]",
   environment: "environment",
+  cloud:
+    "cloud --link SESSION_OR_URL --project PROJECT_ID [--title TITLE] [--model MODEL] [--thinking THINKING]",
   claude:
     "claude --session NAME [--start | --resume] [--prompt-file FILE] [--model MODEL] [--cwd DIR] [--permission-mode auto|plan] [--recover adopt|discard]",
 } satisfies Record<Command, string>;
@@ -611,7 +657,9 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
   const request = text("request");
   if (request !== undefined) args.request = request;
   else if (
-    !["state", "name", "watch", "environment", "claude"].includes(command)
+    !["state", "name", "watch", "environment", "claude", "cloud"].includes(
+      command,
+    )
   )
     return shown("--request is required");
   const pr = text("pr");
@@ -621,6 +669,14 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
   if (released !== undefined) args.release = released;
   const link = text("link");
   if (link !== undefined) args.link = link;
+  if (command === "cloud") {
+    if (link === undefined) return shown("--link is required");
+    const project = text("project");
+    if (project === undefined) return shown("--project is required");
+    args.project = project;
+    const title = text("title");
+    if (title !== undefined) args.title = title;
+  }
   if (args.prs.length > 0 && !args.dryRun)
     return shown("--pr is only for --dry-run");
   if (
