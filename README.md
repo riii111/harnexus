@@ -193,12 +193,15 @@ harnexus-task orchestrate --request PLAN.json --publish ISSUE [--body-file FILE]
 - An Issue with `dependsOn` starts from the approved head of the Issue it builds on, and its PR targets that Issue's branch.
   With several dependencies, `baseTask` names the one to build on, and it must itself depend on all the others.
 - `--prepare` creates a worktree and the branch `harnexus/<planId>/<id>` for every Issue whose dependencies are approved; running it again reuses them and never overwrites a branch or path that is not its own.
+- `baseRef` is a branch name; `origin/main` builds on the remote-tracking branch, and the PR targets `main`.
 - `--work` starts the worker with the instruction, then resumes the same worker only with `--prompt-file` (for example the review findings).
+  It drops the Issue's candidate first, so run `--candidate` again after the worker finishes.
 - `--candidate` accepts a clean, committed head only when `test` passes and the head did not change meanwhile.
 - `--review` takes `{"reviewerId", "base", "head", "verdict": "lgtm|changes_requested", "findings": []}`.
   A review of any head but the current candidate is refused, and every later review must come from the first `reviewerId`.
 - `--publish` needs a `lgtm` on the tested head.
-  It checks GitHub for an existing PR, pushes with a normal push, and creates the PR as a draft with `gh`; it never forces, merges or pushes `baseRef`.
+  It checks GitHub for an existing PR (a ready-for-review one stops it), pushes with a normal push that runs the repository's hooks, and creates the PR as a draft with `gh`; it never forces, merges or pushes `baseRef`.
   When a push or PR result is unknown, run it again: GitHub is checked first, so nothing is created twice.
 - The state is kept under `$XDG_STATE_HOME/taskctl/orchestration/`, per thread, plan and repository.
+  Without an absolute `XDG_STATE_HOME` this command uses `/workspace/.cloud-setup/state`, for Cloud tasks that can write only under `/workspace` and `/tmp`.
   Changing a plan's content needs a new `planId`.

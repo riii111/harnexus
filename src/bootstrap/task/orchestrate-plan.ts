@@ -64,7 +64,9 @@ const issueOf = (raw: unknown, index: number) =>
       if (!file.startsWith("/"))
         return fail(`${id}.promptFile must be an absolute path`);
       instruction = yield* Result.await(readText(file));
-    } else instruction = String(raw.instruction);
+    } else if (typeof raw.instruction === "string")
+      instruction = raw.instruction;
+    else return fail(`${id}.instruction must be a string`);
     yield* text(instruction, `${id} instruction`);
     const dependsOn = raw.dependsOn ?? [];
     if (

@@ -90,6 +90,8 @@ type Ctx = {
 type Done = Result<Fields, TaskFailed>;
 
 const HEX40 = /^[0-9a-f]{40}$/;
+const STATE_LOCK_ATTEMPTS = 200;
+const STATE_LOCK_WAIT_MS = 50;
 const TEST_TIMEOUT_MS = 30 * 60_000;
 const NETWORK_TIMEOUT_MS = 2 * 60_000;
 const PR_URL = /https:\/\/\S+\/pull\/[1-9][0-9]*/;
@@ -145,7 +147,17 @@ const locked = (ctx: Ctx, name: string, run: () => Promise<Done>) =>
     const dir = join(ctx.dir, "locks");
     yield* Result.await(io(prepareDirectory(dir)));
     const lock = join(dir, `${name}.json`);
-    const token = yield* Result.await(acquire(lock));
+    // The state lock is held only for a read and a save, so a run waits for it; an Issue's own lock covers long work and fails at once.
+    let taken = await acquire(lock);
+    for (
+      let attempt = 0;
+      name === "state" && taken.isErr() && attempt < STATE_LOCK_ATTEMPTS;
+      attempt++
+    ) {
+      await Bun.sleep(STATE_LOCK_WAIT_MS);
+      taken = await acquire(lock);
+    }
+    const token = yield* taken;
     const done = await run();
     await release(lock, token);
     return done;
@@ -192,11 +204,20 @@ const tidy = async (git: GitOf, issue: IssueState) => {
   return git(issue.worktree, "rev-parse", "HEAD");
 };
 
+// "origin/main" names the remote-tracking ref of the branch main; a bare name prefers the local branch.
+export const baseOf = (baseRef: string) =>
+  baseRef.startsWith("origin/")
+    ? {
+        branch: baseRef.slice("origin/".length),
+        refs: [`refs/remotes/${baseRef}`],
+      }
+    : {
+        branch: baseRef,
+        refs: [`refs/heads/${baseRef}`, `refs/remotes/origin/${baseRef}`],
+      };
+
 const resolveBase = async (git: GitOf, plan: Plan) => {
-  for (const ref of [
-    `refs/heads/${plan.baseRef}`,
-    `refs/remotes/origin/${plan.baseRef}`,
-  ]) {
+  for (const ref of baseOf(plan.baseRef).refs) {
     const found = await git(
       plan.repository,
       "rev-parse",
@@ -413,6 +434,18 @@ const work = (ctx: Ctx, id: string, args: OrchestrateArgs): Promise<Done> =>
           : { permissionMode: args.permissionMode }),
         ...(args.recover === undefined ? {} : { recover: args.recover }),
       };
+      // The worker is about to change the head, so the old candidate and its approval stop counting; --candidate makes a new one.
+      yield* Result.await(
+        locked(ctx, "state", () =>
+          Result.gen(async function* () {
+            const fresh = yield* Result.await(stateOf(ctx));
+            const mine = yield* issueOf(ctx, fresh, id);
+            delete mine.candidate;
+            yield* Result.await(saveState(ctx, fresh));
+            return Result.ok<Fields>({});
+          }),
+        ),
+      );
       const turn = yield* Result.await(
         claudeSession(given, {
           env: ctx.deps.env,
@@ -521,49 +554,52 @@ const reviewOf = (raw: unknown) => {
 };
 
 const review = (ctx: Ctx, id: string, file: string): Promise<Done> =>
-  locked(ctx, "state", () =>
-    Result.gen(async function* () {
-      const given = yield* reviewOf(yield* Result.await(readJson(file)));
-      const state = yield* Result.await(stateOf(ctx));
-      const issue = yield* issueOf(ctx, state, id);
-      const current = issue.candidate;
-      if (current === undefined)
-        return fail(`${id} has no tested candidate to review`);
-      if (given.head !== current.head || given.base !== current.base)
-        return fail(
-          `the review is for ${given.base}..${given.head}, but the candidate of ${id} is ${current.base}..${current.head}; review the current head`,
-        );
-      if (issue.reviewer !== undefined && issue.reviewer !== given.reviewerId)
-        return fail(
-          `${id} is reviewed by ${issue.reviewer}; send the head to that reviewer, not ${given.reviewerId}`,
-        );
-      if ((await workerOf(ctx, id)).sessionId === given.reviewerId)
-        return fail("the reviewer must not be the worker");
-      const same = issue.reviews.find((one) => one.head === given.head);
-      if (same !== undefined) {
-        if (
-          same.reviewerId === given.reviewerId &&
-          same.verdict === given.verdict &&
-          jsonEqual(same.findings, given.findings)
-        )
-          return Result.ok<Fields>({
-            id,
-            verdict: same.verdict,
-            recorded: false,
-          });
-        return fail(
-          `${given.head} of ${id} already has a ${same.verdict} review; a different result needs a new head`,
-        );
-      }
-      issue.reviews.push({
-        ...given,
-        recordedAt: new Date().toISOString(),
-      });
-      issue.reviewer ??= given.reviewerId;
-      yield* Result.await(saveState(ctx, state));
-      return Result.ok<Fields>({ id, verdict: given.verdict, recorded: true });
-    }),
+  locked(ctx, `issue-${id}`, () =>
+    locked(ctx, "state", () => recordReview(ctx, id, file)),
   );
+
+const recordReview = (ctx: Ctx, id: string, file: string): Promise<Done> =>
+  Result.gen(async function* () {
+    const given = yield* reviewOf(yield* Result.await(readJson(file)));
+    const state = yield* Result.await(stateOf(ctx));
+    const issue = yield* issueOf(ctx, state, id);
+    const current = issue.candidate;
+    if (current === undefined)
+      return fail(`${id} has no tested candidate to review`);
+    if (given.head !== current.head || given.base !== current.base)
+      return fail(
+        `the review is for ${given.base}..${given.head}, but the candidate of ${id} is ${current.base}..${current.head}; review the current head`,
+      );
+    if (issue.reviewer !== undefined && issue.reviewer !== given.reviewerId)
+      return fail(
+        `${id} is reviewed by ${issue.reviewer}; send the head to that reviewer, not ${given.reviewerId}`,
+      );
+    if ((await workerOf(ctx, id)).sessionId === given.reviewerId)
+      return fail("the reviewer must not be the worker");
+    const same = issue.reviews.find((one) => one.head === given.head);
+    if (same !== undefined) {
+      if (
+        same.reviewerId === given.reviewerId &&
+        same.verdict === given.verdict &&
+        jsonEqual(same.findings, given.findings)
+      )
+        return Result.ok<Fields>({
+          id,
+          verdict: same.verdict,
+          recorded: false,
+        });
+      return fail(
+        `${given.head} of ${id} already has a ${same.verdict} review; a different result needs a new head`,
+      );
+    }
+    issue.reviews.push({
+      ...given,
+      recordedAt: new Date().toISOString(),
+    });
+    issue.reviewer ??= given.reviewerId;
+    yield* Result.await(saveState(ctx, state));
+    return Result.ok<Fields>({ id, verdict: given.verdict, recorded: true });
+  });
 
 type Pr = {
   url: string;
@@ -633,7 +669,7 @@ const publish = (
       const now = yield* Result.await(tidy(git, issue));
       if (now !== head)
         return fail(`${issue.worktree} is at ${now}, not the approved ${head}`);
-      const base = issue.parent ?? ctx.plan.baseRef;
+      const base = issue.parent ?? baseOf(ctx.plan.baseRef).branch;
       const body =
         bodyFile === undefined
           ? spec.body
@@ -665,6 +701,10 @@ const publish = (
       const matching = (found: Pr[]): Result<Pr | null, TaskFailed> => {
         const [pr] = found;
         if (pr === undefined) return Result.ok(null);
+        if (pr.state === "OPEN" && !pr.isDraft)
+          return fail(
+            `${pr.url} for ${issue.branch} is ready for review, not a draft; it is neither adopted nor converted`,
+          );
         if (
           pr.state !== "OPEN" ||
           pr.headRefOid !== head ||
@@ -680,14 +720,14 @@ const publish = (
       );
       if (existing !== null) return await done(existing);
       const net = { ...ctx.deps.env, GIT_TERMINAL_PROMPT: "0" };
-      const gitNet = (...args: string[]) =>
+      // Only the push runs the repository's hooks, as a developer's own push would.
+      const gitNet = (hooks: boolean, ...args: string[]) =>
         ctx.deps.runGit(
           [
             "git",
             "-c",
             "core.fsmonitor=false",
-            "-c",
-            "core.hooksPath=/dev/null",
+            ...(hooks ? [] : ["-c", "core.hooksPath=/dev/null"]),
             "-C",
             issue.worktree,
             ...args,
@@ -696,6 +736,7 @@ const publish = (
           { timeoutMs: NETWORK_TIMEOUT_MS },
         );
       const listed = await gitNet(
+        false,
         "ls-remote",
         "origin",
         `refs/heads/${issue.branch}`,
@@ -720,6 +761,7 @@ const publish = (
             );
         }
         const pushed = await gitNet(
+          true,
           "push",
           "origin",
           `${head}:refs/heads/${issue.branch}`,
@@ -843,8 +885,18 @@ const view = async (
   };
 };
 
-export const orchestrate = (args: OrchestrateArgs, deps: OrchestrateDeps) =>
+export const CLOUD_STATE_HOME = "/workspace/.cloud-setup/state";
+
+// The Cloud task can write only under /workspace and /tmp, so its state defaults there; an explicit absolute XDG_STATE_HOME wins.
+// Other commands keep their own default, and the worker sessions get this same environment.
+export const orchestrationEnv = (env: Env): Env =>
+  env.XDG_STATE_HOME?.startsWith("/")
+    ? env
+    : { ...env, XDG_STATE_HOME: CLOUD_STATE_HOME };
+
+export const orchestrate = (args: OrchestrateArgs, given: OrchestrateDeps) =>
   Result.gen(async function* () {
+    const deps = { ...given, env: orchestrationEnv(given.env) };
     const thread = yield* callerId(deps.env);
     const plan = yield* Result.await(loadPlan(args.request));
     const key = createHash("sha256")

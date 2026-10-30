@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTask, TASK_DEPS } from "./cli.ts";
+import { CLOUD_STATE_HOME, orchestrationEnv } from "./orchestrate.ts";
 
 const cleanups: (() => Promise<unknown>)[] = [];
 
@@ -166,6 +167,7 @@ const fixture = async () => {
     await writeFile(path, JSON.stringify(review));
     return path;
   };
+  const publish = (id: string) => run(["--publish", id]);
   const read = (name: string) => readFile(join(fake, name), "utf8");
   const text = (name: string, content: string) => {
     const path = join(root, name);
@@ -181,6 +183,7 @@ const fixture = async () => {
     run,
     commitsOn,
     status,
+    publish,
     reviewFile,
     read,
     text,
@@ -199,6 +202,21 @@ const candidateOf = async (f: Fixture, id: string, turn: number) => {
   const { base, head } = done.out.action;
   return { base, head } as { base: string; head: string };
 };
+
+const approve = async (f: Fixture, id: string, reviewerId = "R1") => {
+  const { base, head } = (await f.run(["--candidate", id])).out.action;
+  const file = await f.reviewFile(`${id}-${head}`, {
+    reviewerId,
+    base,
+    head,
+    verdict: "lgtm",
+  });
+  expect((await f.run(["--review", id, "--review-file", file])).code).toBe(0);
+  return head as string;
+};
+
+const independent = (f: Fixture) =>
+  f.writePlan({ issues: [f.issues[0], { ...f.issues[1], dependsOn: [] }] });
 
 describe("harnexus-task orchestrate", () => {
   test("carries two dependent issues from a plan to Draft PRs through the CLI", async () => {
@@ -441,5 +459,133 @@ describe("harnexus-task orchestrate", () => {
     git(f.repo, "branch", "harnexus/demo/api");
     const refused = await f.run(["--prepare"]);
     expect(refused.err).toContain("already exists");
+  });
+
+  test("keeps the state under the Cloud default unless XDG_STATE_HOME is absolute", () => {
+    expect(orchestrationEnv({ HOME: "/h" }).XDG_STATE_HOME).toBe(
+      CLOUD_STATE_HOME,
+    );
+    expect(
+      orchestrationEnv({ XDG_STATE_HOME: "relative" }).XDG_STATE_HOME,
+    ).toBe(CLOUD_STATE_HOME);
+    expect(
+      orchestrationEnv({ XDG_STATE_HOME: "/x/state" }).XDG_STATE_HOME,
+    ).toBe("/x/state");
+  });
+
+  test("builds on the remote-tracking branch for origin/main and targets main", async () => {
+    const f = await fixture();
+    const pushed = git(f.repo, "rev-parse", "main");
+    await writeFile(join(f.repo, "local.txt"), "x");
+    git(f.repo, "add", ".");
+    git(f.repo, "commit", "-qm", "local only");
+    await f.writePlan({ baseRef: "origin/main", issues: [f.issues[0]] });
+    const prepared = await f.run(["--prepare"]);
+    expect(prepared.out.baseSha).toBe(pushed);
+    expect((await f.status("api")).base).toBe(pushed);
+    await candidateOf(f, "api", 1);
+    await approve(f, "api");
+    expect((await f.publish("api")).code).toBe(0);
+    expect(await f.read("gh.log")).toContain("--base main --head");
+  });
+
+  test("rejects a review that arrives while the worker changes the head, and keeps independent issues", async () => {
+    const f = await fixture();
+    await independent(f);
+    await f.run(["--prepare"]);
+    const first = await candidateOf(f, "api", 1);
+    await writeFile(
+      join(f.fake, "do.2"),
+      "sleep 1; echo more >> api.txt && git commit -qam second\n",
+    );
+    const fix = await f.text("fix.md", "Change it");
+    const working = f.run(["--work", "api", "--prompt-file", fix]);
+    await Bun.sleep(400);
+    const late = await f.reviewFile("late", {
+      reviewerId: "R1",
+      ...first,
+      verdict: "lgtm",
+    });
+    expect((await f.run(["--review", "api", "--review-file", late])).code).toBe(
+      1,
+    );
+    expect((await working).code).toBe(0);
+    expect(
+      (await f.run(["--review", "api", "--review-file", late])).err,
+    ).toContain("no tested candidate");
+    const head = await approve(f, "api");
+    expect(head).not.toBe(first.head);
+    expect((await f.publish("api")).code).toBe(0);
+  });
+
+  test("keeps every independent issue's update when they run together", async () => {
+    const f = await fixture();
+    const slow = (issue: (typeof f.issues)[number]) => ({
+      ...issue,
+      dependsOn: [],
+      test: ["sleep", "0.4"],
+    });
+    await f.writePlan({ issues: f.issues.map(slow) });
+    await f.run(["--prepare"]);
+    await f.commitsOn(1, "api");
+    await f.run(["--work", "api"]);
+    await f.commitsOn(2, "ui");
+    await f.run(["--work", "ui"]);
+    const both = await Promise.all([
+      f.run(["--candidate", "api"]),
+      f.run(["--candidate", "ui"]),
+    ]);
+    expect(both.map((one) => one.code)).toEqual([0, 0]);
+    const statuses = (await f.run([])).out.issues.map(
+      (one: { status: string }) => one.status,
+    );
+    expect(statuses).toEqual(["candidate", "candidate"]);
+  });
+
+  test("lets the repository's pre-push hook stop a publish", async () => {
+    const f = await fixture();
+    await independent(f);
+    await f.run(["--prepare"]);
+    await candidateOf(f, "api", 1);
+    await approve(f, "api");
+    const hook = join(f.repo, ".git/hooks/pre-push");
+    await writeFile(hook, "#!/bin/sh\necho blocked >&2\nexit 1\n");
+    await chmod(hook, 0o755);
+    const refused = await f.publish("api");
+    expect(refused.err).toContain("blocked");
+    expect(git(f.remote, "branch", "--list", "harnexus/*")).toBe("");
+    expect(await f.read("gh.creates").catch(() => "none")).toBe("none");
+  });
+
+  test("stops at a ready-for-review pull request instead of adopting it", async () => {
+    const f = await fixture();
+    await independent(f);
+    await f.run(["--prepare"]);
+    await candidateOf(f, "api", 1);
+    const head = await approve(f, "api");
+    await writeFile(
+      join(f.fake, "pr.harnexus_demo_api"),
+      JSON.stringify({
+        url: "https://github.com/o/r/pull/9",
+        state: "OPEN",
+        isDraft: false,
+        baseRefName: "main",
+        headRefOid: head,
+      }),
+    );
+    const refused = await f.publish("api");
+    expect(refused.err).toContain("not a draft");
+    expect(await f.read("gh.creates").catch(() => "none")).toBe("none");
+    expect((await f.status("api")).status).toBe("approved");
+  });
+
+  test.each([
+    { name: "an object", instruction: { text: "x" } },
+    { name: "null", instruction: null },
+    { name: "a number", instruction: 7 },
+  ])("rejects an instruction that is $name", async ({ instruction }) => {
+    const f = await fixture();
+    await f.writePlan({ issues: [{ ...f.issues[0], instruction }] });
+    expect((await f.run([])).err).toContain("instruction must be a string");
   });
 });
