@@ -154,6 +154,11 @@ describe("createCloudRuntime turns", () => {
     expect(env.sends).toEqual([{ cloud: CLOUD_ID, text: "fix the test" }]);
     expect(turn.outcome).toEqual({ status: "completed" });
     expect(turn.texts()).toEqual(["fixed it"]);
+    expect(env.events).toContainEqual({
+      event: "claude_cloud",
+      step: "sent",
+      ms: 0,
+    });
     expect(turn.itemTypes()).toContain("commandExecution");
     expect(env.runtime.recordOf("thread-1", "turn-1")).toBe("p1");
     expect(env.cloudOf("thread-1")).toEqual({
@@ -938,5 +943,13 @@ describe("serializeCloudEvent", () => {
         ...{ session: CLOUD_ID, text: "secret" },
       } as CloudEvent),
     ).toEqual({ event: "claude_cloud", step: "copied", records: 3, ms: 900 });
+    expect(
+      serializeCloudEvent({
+        event: "claude_cloud",
+        step: "sent",
+        ms: 1_200,
+        ...{ session: CLOUD_ID, text: "secret" },
+      } as CloudEvent),
+    ).toEqual({ event: "claude_cloud", step: "sent", ms: 1_200 });
   });
 });
