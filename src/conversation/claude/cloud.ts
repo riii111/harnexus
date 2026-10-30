@@ -472,7 +472,7 @@ export const createCloudRuntime = <Tag extends string>(
     turn.finish({ status: "completed" }, null);
   };
 
-  // One idle copy runs at a time per thread; a turn's copies skip the queue, and an idle copy that ends while a turn runs is dropped.
+  // One idle copy runs at a time per thread; a turn's copies skip the queue, and an idle copy made while a turn ran is dropped.
   const copyOf = (threadId: string, cloudSessionId: string) =>
     copies.run(threadId, () => fetchCopy(threadId, cloudSessionId));
 
@@ -564,8 +564,14 @@ export const createCloudRuntime = <Tag extends string>(
       if (busy.has(threadId) || halted.has(threadId)) continue;
       const cloud = threads.cloudOf(threadId);
       if (cloud === null) continue;
+      const reading = threads.sessionIdOf(threadId);
       const copied = await copyOf(threadId, cloud.sessionId);
-      if (copied.isErr() || busy.has(threadId)) {
+      // A turn that ran while this copy was made saved a newer one, which this copy may be older than.
+      if (
+        copied.isErr() ||
+        busy.has(threadId) ||
+        threads.sessionIdOf(threadId) !== reading
+      ) {
         if (copied.isOk()) await discardCopy(copied.value.copy);
         continue;
       }

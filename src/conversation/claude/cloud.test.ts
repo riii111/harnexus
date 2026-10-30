@@ -642,6 +642,46 @@ describe("createCloudRuntime idle copies", () => {
     expect(env.discarded).toEqual(["copy-1"]);
   });
 
+  test("drops an idle copy made while a turn ran and ended", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "first"), endReply("a1", "one"), endReply("o1", "bg")],
+        [
+          prompt("p1", "first"),
+          endReply("a1", "one"),
+          endReply("o1", "bg"),
+          prompt("p2", "second"),
+          endReply("a2", "two"),
+        ],
+      ],
+      shown: "a1",
+    });
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+    let release = () => {};
+    env.duringCopy = (call) =>
+      call === 1
+        ? new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve();
+
+    const idle = env.tick();
+    await env.untilCopied(1);
+    const turn = env.turn("second");
+    await env.runtime.run(turn.running);
+    release();
+    await idle;
+
+    expect(turn.texts()).toEqual(["two"]);
+    expect(env.ownStarts).toEqual([]);
+    expect(env.sessionIds.get("thread-1")).toBe("copy-2");
+    expect(env.cloudOf("thread-1")?.shown).toBe("a2");
+    expect(env.discarded).toContain("copy-1");
+  });
+
   test("shows what a copy Claude compacted holds, since all of it came after the app was shown", async () => {
     const env = linked({
       copies: [[prompt("p9", "go on"), endReply("a9", "after")]],
