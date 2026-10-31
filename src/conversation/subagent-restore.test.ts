@@ -314,8 +314,10 @@ const setup = (
     threads: {
       threadOf: () => ({ model: "claude-sonnet-5", cwd: "/fixture/work" }),
       sessionIdOf: () => "se-1",
-      takePicked: () => false,
+      rewindOf: () => undefined,
     },
+    liveTurnOf: () => null,
+    recordOf: () => null,
     readSession: async () => Result.ok(parent),
     send: () => {},
     log: () => {},

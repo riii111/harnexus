@@ -36,9 +36,10 @@ describe("Claude conversation rewind", () => {
       at: "a3",
     });
     if (restarted.isErr()) return expect.unreachable("store failed");
-    const threads = createThreadValues(restarted.value, () => {});
+    const threads = createThreadValues(restarted.value, () => {}, NO_EFFORT);
     const history = createHistoryRequests({
       threads,
+      ...QUIET_HISTORY,
       readSession,
       send: () => {},
       log: () => {},
@@ -101,7 +102,8 @@ describe("Claude conversation rewind", () => {
       Promise.withResolvers<Awaited<ReturnType<typeof readSession>>>();
     let reads = 0;
     const history = createHistoryRequests({
-      threads: createThreadValues(store, () => {}),
+      threads: createThreadValues(store, () => {}, NO_EFFORT),
+      ...QUIET_HISTORY,
       readSession: (sessionId) =>
         ++reads === 1 ? first.promise : readSession(sessionId),
       send: () => {},
@@ -199,6 +201,13 @@ describe("Claude conversation rewind", () => {
 
 let directory: string;
 const THREAD = "thread-fixture";
+const NO_EFFORT = () => null;
+const QUIET_HISTORY = {
+  liveTurnOf: () => null,
+  recordOf: () => null,
+  subagentHistory: () => undefined,
+  subagents: { restore: async () => {}, agentRefOf: () => () => undefined },
+};
 const statePath = () => join(directory, "threads.json");
 const messages = conversation();
 const readSession: typeof readClaudeSession = (sessionId) =>
@@ -259,7 +268,7 @@ const setup = async ({
     await store.setSessionId(THREAD, "se-1");
   }
   fail = failSave || failSync;
-  const threads = createThreadValues(store, () => {});
+  const threads = createThreadValues(store, () => {}, NO_EFFORT);
   const sent: Sent[] = [];
   const closed: string[] = [];
   const revert = createRevertRequests({

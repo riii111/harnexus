@@ -82,7 +82,7 @@ export const connectClaudeThreads = ({
       codexHome,
       cronRecord,
     });
-  const threads = createThreadValues(store, log);
+  const threads = createThreadValues(store, log, effortRule);
   const subagents = createSubagents({ send });
   const subagentRestore = createSubagentRestore({
     subagents,
@@ -183,10 +183,11 @@ export const connectClaudeThreads = ({
       ),
     send,
     log,
-    effortRule,
   });
   const history = createHistoryRequests({
-    threads: turns,
+    threads,
+    liveTurnOf: turns.liveTurnOf,
+    recordOf: runtime.recordOf,
     readSession,
     send,
     log,
@@ -198,15 +199,15 @@ export const connectClaudeThreads = ({
   });
   const subagentRequests = createSubagentRequests({
     subagents,
-    threads: turns,
+    threads,
     call: (method, params) =>
       request(method, params, { timeoutMs: SUBAGENT_PARENT_TIMEOUT_MS }),
     history: history.load,
     send,
   });
   const sideChats = createSideChats({
-    sessionIdOf: turns.sessionIdOf,
-    rewindOf: turns.rewindOf,
+    sessionIdOf: threads.sessionIdOf,
+    rewindOf: threads.rewindOf,
     lastRecordOf,
     readSession,
     listTurns: (threadId, page) =>
@@ -221,17 +222,19 @@ export const connectClaudeThreads = ({
         { threadId, items },
         { timeoutMs: INJECT_TIMEOUT_MS },
       ),
-    isClaudeThread: turns.isClaudeThread,
+    isClaudeThread: threads.isClaudeThread,
     claudeBegun: turns.claudeBegun,
     dropFork: turns.dropFork,
-    noteSideChat: turns.noteSideChat,
+    noteSideChat: threads.noteSideChat,
   });
   const router = createRouter({
     turns,
+    threads,
     log,
     delegations,
     history,
     claudeModels,
+    effortRule,
     subagents: subagentRequests,
     revert: createRevertRequests({
       store,

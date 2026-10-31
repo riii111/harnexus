@@ -2724,14 +2724,15 @@ const setup = (
   });
   const history = createHistoryRequests({
     subagentHistory: subagents.historyOf,
+    subagents: { restore: async () => {}, agentRefOf: () => () => undefined },
     threads: {
       threadOf: (threadId) => threads.get(threadId),
       sessionIdOf: (threadId) =>
         threadId in records ? `session-${threadId}` : null,
-      takePicked: (threadId) => picked.delete(threadId),
-      liveTurnOf: (threadId) => live.get(threadId) ?? null,
-      recordOf: (_threadId, turnId) => turnRecords.get(turnId) ?? null,
+      rewindOf: () => undefined,
     },
+    liveTurnOf: (threadId) => live.get(threadId) ?? null,
+    recordOf: (_threadId, turnId) => turnRecords.get(turnId) ?? null,
     readSession: (sessionId) => {
       reads.push(sessionId);
       return readSession(sessionId);
@@ -2762,23 +2763,10 @@ const setup = (
   });
   const router = createRouter({
     turns: {
-      isClaudeThread: (threadId) =>
-        typeof threadId === "string" && threads.has(threadId),
-      isCloudThread: (threadId) => cloudThreads.includes(threadId),
-      threadOf: (threadId) => threads.get(threadId),
-      adopt: (threadId, thread) => {
-        calls.push(["adopt", threadId, thread]);
-        threads.set(threadId, thread);
-      },
       adoptFork: (threadId, thread, sourceId) => {
         calls.push(["adoptFork", threadId, thread, sourceId]);
         threads.set(threadId, thread);
         return forkPinned;
-      },
-      changeModel: (threadId, model) => {
-        calls.push(["changeModel", threadId, model]);
-        const thread = threads.get(threadId);
-        if (thread !== undefined) threads.set(threadId, { ...thread, model });
       },
       startTurn: (request: AppRequest, cwd) => {
         calls.push(["startTurn", request, cwd]);
@@ -2792,9 +2780,29 @@ const setup = (
         calls.push(["answerRequest", response]);
         return response.id === BRIDGE_REQUEST;
       },
+      liveTurnOf: (threadId) => live.get(threadId) ?? null,
+    },
+    threads: {
+      isClaudeThread: (threadId) =>
+        typeof threadId === "string" && threads.has(threadId),
+      cloudOf: (threadId) =>
+        cloudThreads.includes(threadId)
+          ? { sessionId: `cloud-${threadId}`, shown: null }
+          : null,
+      threadOf: (threadId) => threads.get(threadId),
+      adopt: (threadId, thread) => {
+        calls.push(["adopt", threadId, thread]);
+        threads.set(threadId, thread);
+      },
+      changeModel: (threadId, model) => {
+        calls.push(["changeModel", threadId, model]);
+        const thread = threads.get(threadId);
+        if (thread !== undefined) threads.set(threadId, { ...thread, model });
+      },
       selectMode: (threadId, mode) => {
         calls.push(["selectMode", threadId, mode]);
         modes.set(threadId, mode);
+        return mode;
       },
       modeOf: (threadId) => modes.get(threadId),
       selectEffort: (threadId, effort) => {
@@ -2802,9 +2810,9 @@ const setup = (
         efforts.set(threadId, effort as EffortLevel);
       },
       effortOf,
-      effortRule: rule,
-      liveTurnOf: (threadId) => live.get(threadId) ?? null,
+      takePicked: (threadId) => picked.delete(threadId),
     },
+    effortRule: rule,
     log: (event) => events.push(event),
     delegations: delegationWatch ?? {
       observe: (source, threadId, asked) => {

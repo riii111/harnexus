@@ -1,8 +1,8 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import type { Result } from "better-result";
-import { isClaudeEffort } from "../infra/claude/models.ts";
+import { type EffortRule, isClaudeEffort } from "../infra/claude/models.ts";
 import type { CloudLink, ThreadStore } from "../infra/thread-store.ts";
-import type { Thread } from "./thread-request.ts";
+import type { Mode, Thread } from "./thread-request.ts";
 import type { ErrorTag } from "./turn-runtime.ts";
 
 export type ThreadValues = ReturnType<typeof createThreadValues>;
@@ -17,6 +17,7 @@ export type ThreadValueEvent =
   | { event: "claude_turn"; step: "model_changed" }
   | { event: "claude_turn"; step: "session_picked"; thread: string }
   | { event: "claude_turn"; step: "effort_changed"; effort: EffortLevel }
+  | { event: "claude_turn"; step: "effort_unsupported" }
   | {
       event: "claude_turn";
       step: "session_not_saved" | "model_not_saved" | "effort_not_saved";
@@ -39,6 +40,7 @@ export type StoreTag =
 export const createThreadValues = (
   store: ThreadStore,
   log: (event: ThreadValueEvent) => void,
+  effortRule: EffortRule,
 ) => {
   // Threads created with a Claude model are saved to the store only on their first turn, so a thread never used leaves nothing behind.
   const adopted = new Map<string, Thread>();
@@ -51,6 +53,8 @@ export const createThreadValues = (
   const sessionIds = new Map<string, string | null>();
   const picked = new Set<string>();
   const sideChats = new Map<string, SideChatContext>();
+  // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
+  const modes = new Map<string, Mode>();
 
   const threadOf = (threadId: string): Thread | undefined => {
     const record = store.get(threadId);
@@ -68,6 +72,16 @@ export const createThreadValues = (
   const pickedEffortOf = (threadId: string): EffortLevel | null => {
     const effort = efforts.get(threadId) ?? store.get(threadId)?.effort;
     return isClaudeEffort(effort) ? effort : null;
+  };
+
+  const isClaudeThread = (threadId: unknown) =>
+    typeof threadId === "string" && threadOf(threadId) !== undefined;
+
+  const effortOf = (threadId: string) => {
+    const model = threadOf(threadId)?.model;
+    return model === undefined
+      ? null
+      : effortRule(model, pickedEffortOf(threadId));
   };
 
   const sessionIdOf = (threadId: string) =>
@@ -117,6 +131,7 @@ export const createThreadValues = (
   const forgetFork = (threadId: string) => {
     adopted.delete(threadId);
     forkSources.delete(threadId);
+    modes.delete(threadId);
   };
 
   const forkSourceOf = (threadId: string) =>
@@ -180,6 +195,20 @@ export const createThreadValues = (
     efforts.set(threadId, effort);
     log({ event: "claude_turn", step: "effort_changed", effort });
     if (store.get(threadId) !== undefined) saveEffort(threadId, effort);
+  };
+
+  const selectMode = (threadId: string, mode: Mode) => {
+    modes.set(threadId, mode);
+    return mode;
+  };
+
+  // A level only Codex models have, such as minimal or ultra, would leave Claude on some other level, so the thread keeps its own.
+  const selectEffort = (threadId: string, effort: string) => {
+    if (!isClaudeEffort(effort)) {
+      log({ event: "claude_turn", step: "effort_unsupported" });
+      return;
+    }
+    changeEffort(threadId, effort);
   };
 
   const setSessionId = (threadId: string, sessionId: string | null) => {
@@ -256,7 +285,9 @@ export const createThreadValues = (
 
   return {
     threadOf,
+    isClaudeThread,
     pickedEffortOf,
+    effortOf,
     sessionIdOf,
     takePicked,
     rewindOf: (threadId: string) => store.get(threadId)?.rewind,
@@ -273,6 +304,9 @@ export const createThreadValues = (
     markRegistered,
     changeModel,
     changeEffort,
+    selectMode,
+    modeOf: (threadId: string) => modes.get(threadId),
+    selectEffort,
     setSessionId,
     cloudOf,
     linkCloud,
