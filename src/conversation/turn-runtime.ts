@@ -47,6 +47,8 @@ export type TurnRuntime<Tag extends string> = {
   dropSession: (threadId: string, link: TurnLink) => void;
   // Called when a thread forked from another is adopted, and settles once the fork is pinned to where the source stood.
   noteFork: (threadId: string) => Promise<void>;
+  // Called when a fork is handed back to Codex, which ends what noteFork pinned.
+  dropFork: (threadId: string) => void;
   threadBusy: (threadId: string) => void;
   threadIdle: (threadId: string) => void;
   listen: (startOwnTurn: (threadId: string) => boolean) => void;

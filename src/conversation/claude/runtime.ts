@@ -1,32 +1,18 @@
 import type {
-  CanUseTool,
   EffortLevel,
   SDKMessage,
   SDKResultMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import {
-  type InferErr,
-  type InferOk,
-  Result,
-  TaggedError,
-} from "better-result";
+import { type InferErr, Result, TaggedError } from "better-result";
 import type { ImageBlock, ResizeImage } from "../../infra/claude/images.ts";
 import type { EffortRule } from "../../infra/claude/models.ts";
 import type { Prompt } from "../../infra/claude/prompt-queue.ts";
 import type {
   ClaudeSessionSettings,
   claudeSessionExists,
-  startClaudeSession,
 } from "../../infra/claude/session.ts";
-import type { createCodexLink } from "../../infra/codex/codex-link.ts";
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
 import type { ThreadRecord } from "../../infra/thread-store.ts";
-import { promptFor } from "../../presentation/permission.ts";
-import {
-  NO_PLAN,
-  renderPlan,
-  type ThreadPlan,
-} from "../../presentation/plan.ts";
 import type { TokenUsageBreakdown } from "../../presentation/protocol.ts";
 import { RECOVERY_CONTEXT } from "../../presentation/recovery.ts";
 import {
@@ -38,22 +24,14 @@ import {
   RECORD_ADVANCED,
   sessionReplyText,
 } from "../../presentation/session-reply.ts";
+import { breakdown } from "../../presentation/token-usage.ts";
 import {
-  breakdown,
-  NO_USAGE,
-  renderTokenUsage,
-  type ThreadUsage,
-} from "../../presentation/token-usage.ts";
-import {
-  markToolDeclined,
   renderInterimResult,
   renderNotice,
   renderSdkMessage,
-  renderToolRequest,
-  runningToolItem,
-  runsAgent,
   type TurnOutcome,
 } from "../../presentation/turn.ts";
+import { ABORTED, waitForAbort } from "../../runtime/wait-for-abort.ts";
 import type { TurnEvent } from "../controller.ts";
 import type { Subagents } from "../subagents.ts";
 import { type Refusal, refusalMessage } from "../thread-request.ts";
@@ -64,6 +42,8 @@ import type {
   TurnLink,
   TurnRuntime,
 } from "../turn-runtime.ts";
+import { createApprovals } from "./approvals.ts";
+import { createForkPoints } from "./fork-points.ts";
 import { readImages } from "./image-attachments.ts";
 import { createInbox, type Inbox } from "./inbox.ts";
 import {
@@ -72,13 +52,21 @@ import {
   type SessionEvent,
   sessionCommandOf,
 } from "./session-commands.ts";
+import {
+  type ClaudeSession,
+  type CodexLink,
+  createSessionSlots,
+  type SessionSlot,
+  type SessionStart,
+  type SessionStartup,
+  type StreamedMessage,
+  type StreamedNext,
+} from "./session-slots.ts";
 import { readSkills } from "./skill-attachments.ts";
+import { createThreadDisplay } from "./thread-display.ts";
+import { createTurnRecords } from "./turn-records.ts";
 
 type SessionCommandsDeps = Parameters<typeof createSessionCommands>[0];
-
-type SessionStart = Awaited<ReturnType<typeof startClaudeSession>>;
-
-type ClaudeSession = InferOk<SessionStart>;
 
 type StartSession = (
   settings: ClaudeSessionSettings,
@@ -89,24 +77,10 @@ type FindSession = (
   sessionId: string,
 ) => ReturnType<typeof claudeSessionExists>;
 
-type CodexLink = Pick<
-  ReturnType<typeof createCodexLink>,
-  | "server"
-  | "allowedTools"
-  | "hasUnsettledWrite"
-  | "stopWrites"
-  | "acceptWrites"
->;
-
 type RenameThread = (
   threadId: string,
   name: string,
 ) => Promise<Result<unknown, { _tag: ErrorTag<ReturnType<ServerRequest>> }>>;
-
-type StreamedMessage =
-  ClaudeSession["messages"] extends AsyncGenerator<infer R> ? R : never;
-
-type StreamedNext = IteratorResult<StreamedMessage, void>;
 
 type InterruptTag = ErrorTag<ReturnType<ClaudeSession["interrupt"]>>;
 
@@ -127,12 +101,6 @@ type ClaudeFailureTag =
   | "SteerUnconfirmed";
 
 type ImageFailureTag = InferErr<Awaited<ReturnType<typeof readImages>>>["_tag"];
-
-type SessionStartup = {
-  turn: RunningTurn<ClaudeFailureTag>;
-  controller: AbortController;
-  link: CodexLink | null;
-};
 
 type ClaudeTurnEvent =
   | {
@@ -167,19 +135,6 @@ type ClaudeTurnEvent =
 
 export type ClaudeLogEvent = TurnEvent<ClaudeFailureTag> | ClaudeTurnEvent;
 
-// A session is not reused until its interrupt reports whether a send is still queued, which can arrive after the interrupted turn has ended.
-type SessionSlot = {
-  session: ClaudeSession;
-  model: string;
-  pendingInterrupt: Promise<void> | null;
-  link: CodexLink;
-  attachedSkills: Map<string, string>;
-  reader: Inbox<StreamedNext> | null;
-  unclaimed: "own" | "turn" | null;
-  discarding: boolean;
-  backgroundTasks: number;
-};
-
 // steering settles once the last steer accepted has been sent or refused, so a steer still reading its images keeps the ones after it waiting.
 type ClaudeTurn = {
   command: AbortController | null;
@@ -193,15 +148,6 @@ type ClaudeTurn = {
   steers: number;
   steering: Promise<unknown>;
 };
-
-type HeldApprovals = {
-  turn: RunningTurn<ClaudeFailureTag> | null;
-  waiting: number;
-  answered: () => void;
-  ended: AbortController;
-};
-
-type Approval = { held: HeldApprovals | null; signal: AbortSignal };
 
 class BridgeClosing extends TaggedError("BridgeClosing")<{
   message: string;
@@ -275,14 +221,8 @@ export const createClaudeRuntime = ({
 }): TurnRuntime<ClaudeFailureTag> => {
   type Turn = RunningTurn<ClaudeFailureTag>;
 
-  const sessions = new Map<string, SessionSlot>();
-  const turnRecords = new Map<string, Map<string, string>>();
-  const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  const usages = new Map<string, ThreadUsage>();
-  const plans = new Map<string, ThreadPlan>();
   const turns = new WeakMap<Turn, ClaudeTurn>();
   const runningTurns = new Map<string, Turn>();
-  const startingSessions = new Map<string, SessionStartup>();
   const busyThreads = new Set<string>();
   const pausedMessages = new Map<
     string,
@@ -296,62 +236,35 @@ export const createClaudeRuntime = ({
     log,
     now,
   });
+  const turnRecords = createTurnRecords();
+  const display = createThreadDisplay({ send, now });
+  const forkPoints = createForkPoints({ threads, lastRecordOf });
   let closed = false;
   let startOwnTurn = (_threadId: string) => false;
-  const turnWaiters = new Map<string, (() => void)[]>();
-  const heldApprovals = new Map<string, HeldApprovals>();
-
-  const beginSessionStart = (turn: Turn): SessionStartup => {
-    const startup: SessionStartup = {
-      turn,
-      controller: new AbortController(),
-      link: null,
-    };
-    startingSessions.set(turn.threadId, startup);
-    return startup;
-  };
-
-  const clearSessionStart = (threadId: string, startup: SessionStartup) => {
-    if (startingSessions.get(threadId) === startup) {
-      startingSessions.delete(threadId);
-    }
-  };
-
-  const cancelSessionStart = (threadId: string, startup: SessionStartup) => {
-    if (startingSessions.get(threadId) !== startup) return;
-    startingSessions.delete(threadId);
-    startup.controller.abort();
-    startup.link?.stopWrites();
-  };
+  const approvals = createApprovals<ClaudeFailureTag>({
+    permissionMode,
+    now,
+    log,
+    subagents,
+    isClosed: () => closed,
+    runningTurnOf: (threadId) => runningTurns.get(threadId),
+    isBusy: (threadId) => busyThreads.has(threadId),
+    pausedOf: (threadId) => pausedMessages.get(threadId)?.promise,
+    startOwnTurn: (threadId) => startOwnTurn(threadId),
+  });
+  const slots = createSessionSlots<Turn>({
+    threads,
+    idleSessionMs,
+    log,
+    onDropped: (threadId) => {
+      subagents.settle(threadId);
+      approvals.end(threadId);
+    },
+  });
 
   const endCancelledStart = (turn: Turn) => {
     if (closed) turn.fail(bridgeClosingError());
     else turn.finish({ status: "interrupted" }, null);
-  };
-
-  // An idle session without a session id stays, since its next turn could not resume the conversation.
-  // Closing would end the tasks Claude runs in the background, so the close waits until none is left.
-  const scheduleIdleClose = (threadId: string) => {
-    cancelIdleClose(threadId);
-    const timer = setTimeout(() => {
-      idleTimers.delete(threadId);
-      const slot = sessions.get(threadId);
-      if (slot === undefined) return;
-      if (threads.sessionIdOf(threadId) == null) return;
-      if (slot.backgroundTasks > 0) {
-        scheduleIdleClose(threadId);
-        return;
-      }
-      dropSession(threadId, slot);
-      log({ event: "claude_turn", step: "idle_closed" });
-    }, idleSessionMs);
-    timer.unref();
-    idleTimers.set(threadId, timer);
-  };
-
-  const cancelIdleClose = (threadId: string) => {
-    clearTimeout(idleTimers.get(threadId));
-    idleTimers.delete(threadId);
   };
 
   const run = async (turn: Turn) => {
@@ -393,15 +306,15 @@ export const createClaudeRuntime = ({
     // Approvals open their turn only on a thread with no other turn accepted, so a turn of Claude's own starting while they wait for it is that one.
     const held =
       turn.input.startedBy === "claude"
-        ? heldApprovals.get(turn.threadId)
+        ? approvals.awaitingTurn(turn.threadId)
         : undefined;
-    if (held?.turn === null) {
+    if (held !== undefined) {
       claude.holdsApprovals = true;
-      await holdApprovals(turn, held);
+      await approvals.hold(turn, held);
       return;
     }
     runningTurns.set(turn.threadId, turn);
-    if (turn.input.startedBy === "app") showTurn(turn.threadId);
+    if (turn.input.startedBy === "app") approvals.showTurn(turn.threadId);
     if (turn.input.startedBy === "claude") await streamOwn(turn, claude);
     else await stream(turn, claude);
     if (runningTurns.get(turn.threadId) === turn) {
@@ -524,7 +437,7 @@ export const createClaudeRuntime = ({
       return;
     }
     // A session closes itself on its stream's end, and replacing it would drop what Claude said before the end while waiting for this turn; an end alone leaves nothing to show, so the turn runs on a new session.
-    const stopped = sessions.get(threadId);
+    const stopped = slots.slotOf(threadId);
     if (
       stopped?.session.isClosed() &&
       stopped.unclaimed === "turn" &&
@@ -542,7 +455,7 @@ export const createClaudeRuntime = ({
       }
       return;
     }
-    let startup: SessionStartup | null = beginSessionStart(turn);
+    let startup: SessionStartup<Turn> | null = slots.beginStart(turn);
     // A running Claude holds the conversation as it was, so it restarts to resume from the records written elsewhere.
     const result = await waitForAbort(
       commands.advanced(threadId, threads.sessionIdOf(threadId)),
@@ -554,12 +467,12 @@ export const createClaudeRuntime = ({
     }
     const advanced = result;
     if (turn.state().interrupting) {
-      cancelSessionStart(threadId, startup);
+      slots.cancelStart(threadId, startup);
       turn.finish({ status: "interrupted" }, null);
       return;
     }
     if (closed) {
-      cancelSessionStart(threadId, startup);
+      slots.cancelStart(threadId, startup);
       turn.fail(bridgeClosingError());
       return;
     }
@@ -567,17 +480,17 @@ export const createClaudeRuntime = ({
       turn.apply(
         renderNotice(turn.state(), RECORD_ADVANCED, "commentary", now()),
       );
-      const stale = sessions.get(threadId);
-      if (stale !== undefined) dropSession(threadId, stale);
+      const stale = slots.slotOf(threadId);
+      if (stale !== undefined) slots.drop(threadId, stale);
     }
-    const reused = sessions.get(threadId)?.model === model;
+    const reused = slots.slotOf(threadId)?.model === model;
     if (reused) {
-      clearSessionStart(threadId, startup);
+      slots.clearStart(threadId, startup);
       startup = null;
     }
     const sessionAskedAt = now();
     const slot = await sessionFor(record, model, turn, startup);
-    if (startup !== null) clearSessionStart(threadId, startup);
+    if (startup !== null) slots.clearStart(threadId, startup);
     if (slot.isErr()) {
       if (slot.error._tag === "SessionStartCancelled") {
         endCancelledStart(turn);
@@ -593,7 +506,7 @@ export const createClaudeRuntime = ({
       input.permissionMode === "plan" ? "plan" : permissionMode,
     );
     if (mode.isErr()) {
-      dropSession(threadId, slot.value);
+      slots.drop(threadId, slot.value);
       turn.fail(mode.error);
       return;
     }
@@ -602,7 +515,7 @@ export const createClaudeRuntime = ({
     if (effort !== null) {
       const applied = await slot.value.session.setEffort(effort);
       if (applied.isErr()) {
-        dropSession(threadId, slot.value);
+        slots.drop(threadId, slot.value);
         turn.fail(applied.error);
         return;
       }
@@ -654,20 +567,18 @@ export const createClaudeRuntime = ({
       ],
     });
     if (sent.isErr()) {
-      dropSession(turn.threadId, slot);
+      slots.drop(turn.threadId, slot);
       turn.fail(sent.error);
       return false;
     }
-    const records = turnRecords.get(turn.threadId) ?? new Map<string, string>();
-    records.set(turn.turnId, sent.value);
-    turnRecords.set(turn.threadId, records);
+    turnRecords.note(turn.threadId, turn.turnId, sent.value);
     claude.sends.add(sent.value);
     for (const { path, body } of fresh) slot.attachedSkills.set(path, body);
     claude.slot = slot;
     for (const steer of claude.unsentSteers.splice(0)) {
       const steered = sendSteer(claude, slot, steer);
       if (steered.isErr()) {
-        dropSession(turn.threadId, slot);
+        slots.drop(turn.threadId, slot);
         turn.fail(steered.error);
         return false;
       }
@@ -679,7 +590,7 @@ export const createClaudeRuntime = ({
   const streamOwn = async (turn: Turn, claude: ClaudeTurn) => {
     const threadId = turn.threadId;
     await waitForPendingInterrupt(threadId);
-    const slot = sessions.get(threadId);
+    const slot = slots.slotOf(threadId);
     const inbox = slot?.unclaimed === "own" ? slot.reader : null;
     if (slot === undefined || inbox == null) {
       turn.finish(
@@ -695,7 +606,7 @@ export const createClaudeRuntime = ({
     claude.slot = slot;
     turn.useLink(slot.link);
     slot.link.acceptWrites();
-    showTurn(threadId);
+    approvals.showTurn(threadId);
     if (turn.state().interrupting) interrupt(turn, false);
     try {
       await read(turn, claude, slot, inbox, {
@@ -706,58 +617,6 @@ export const createClaudeRuntime = ({
     } finally {
       releaseReader(threadId, slot, inbox);
     }
-  };
-
-  // Claude may ask for a tool before the app has been shown the turn the thread accepted, such as a turn of its own, so the approval waits until a turn is shown or the thread has none left.
-  const turnShown = (threadId: string) =>
-    new Promise<void>((resolve) => {
-      turnWaiters.set(threadId, [
-        ...(turnWaiters.get(threadId) ?? []),
-        resolve,
-      ]);
-    });
-
-  const showTurn = (threadId: string) => {
-    for (const resolve of turnWaiters.get(threadId) ?? []) resolve();
-    turnWaiters.delete(threadId);
-  };
-
-  // Claude sent nothing for this turn, so it reads nothing.
-  const holdApprovals = async (turn: Turn, held: HeldApprovals) => {
-    held.turn = turn;
-    showTurn(turn.threadId);
-    while (held.waiting > 0) {
-      await new Promise<void>((resolve) => {
-        held.answered = resolve;
-      });
-    }
-    if (heldApprovals.get(turn.threadId) === held) {
-      heldApprovals.delete(turn.threadId);
-    }
-    turn.finish(heldOutcome(turn, held), null);
-  };
-
-  // Ending as completed would read as if each approval had been answered.
-  const heldOutcome = (turn: Turn, held: HeldApprovals): TurnOutcome => {
-    if (turn.state().interrupting) return { status: "interrupted" };
-    if (held.ended.signal.aborted) {
-      return { status: "failed", message: APPROVALS_UNANSWERED };
-    }
-    return { status: "completed" };
-  };
-
-  const forkPoints = new Map<string, { at: string | null }>();
-
-  const noteFork = async (threadId: string) => {
-    const source = threads.forkSourceOf(threadId);
-    if (source === null) return;
-    const pinned = threads.forkPinOf(threadId);
-    if (pinned !== null) {
-      forkPoints.set(threadId, { at: pinned });
-      return;
-    }
-    const read = await lastRecordOf(source);
-    if (read.isOk()) forkPoints.set(threadId, { at: read.value });
   };
 
   const read = async (
@@ -791,14 +650,14 @@ export const createClaudeRuntime = ({
             )
           : next.value;
       if (received.isErr()) {
-        dropSession(threadId, slot);
+        slots.drop(threadId, slot);
         turn.fail(received.error);
         return;
       }
       const current = received.value.session_id;
       // A fork that Claude kept in its source's conversation would write into it, so it stops before taking that conversation's id.
       if (current !== undefined && current === forkedFrom) {
-        dropSession(threadId, slot);
+        slots.drop(threadId, slot);
         turn.fail(
           new ForkNotSeparate({
             message:
@@ -815,7 +674,7 @@ export const createClaudeRuntime = ({
           (turn.recovering || turn.record.rewind !== undefined)
         ) {
           turn.markOutcomeUnknown();
-          dropSession(threadId, slot);
+          slots.drop(threadId, slot);
           turn.fail(
             new SessionNotSaved({
               message:
@@ -858,20 +717,7 @@ export const createClaudeRuntime = ({
         });
       }
       // Sent before the message is rendered, so a result's usage reaches the app ahead of turn/completed.
-      const usage = renderTokenUsage(
-        usages.get(threadId) ?? NO_USAGE,
-        message,
-        { threadId, turnId: turn.turnId, model, now: now() },
-      );
-      usages.set(threadId, usage.usage);
-      if (usage.notification !== null) send(usage.notification);
-      const plan = renderPlan(plans.get(threadId) ?? NO_PLAN, message, {
-        threadId,
-        turnId: turn.turnId,
-        now: now(),
-      });
-      plans.set(threadId, plan.plan);
-      if (plan.notification !== null) send(plan.notification);
+      display.show(turn, message);
       // A turn Claude started on its own just as this one sent its prompt reaches it ahead of its reply, and its items stay in this turn.
       if (message.type === "result" && foreign) {
         turn.apply(renderInterimResult(turn.state(), message, now()));
@@ -889,7 +735,7 @@ export const createClaudeRuntime = ({
         turn.apply(renderInterimResult(turn.state(), message, now()));
         if (steers === "queued") continue;
         // The steer may never run, so the user is told to send it again, and the session goes so a late run cannot leak into the next turn.
-        dropSession(threadId, slot);
+        slots.drop(threadId, slot);
         turn.finish(
           { status: "failed", message: STEER_UNCONFIRMED },
           "SteerUnconfirmed",
@@ -910,7 +756,7 @@ export const createClaudeRuntime = ({
         !state.interrupting &&
         claude.pendingSteers.size > 0
       ) {
-        dropSession(threadId, slot);
+        slots.drop(threadId, slot);
       }
     }
   };
@@ -922,13 +768,13 @@ export const createClaudeRuntime = ({
       const paused = pausedMessages.get(threadId);
       if (paused !== undefined) {
         await paused.promise;
-        if (sessions.get(threadId) !== slot) return;
+        if (slots.slotOf(threadId) !== slot) return;
       }
       track(threadId, slot, next);
       const inbox = route(threadId, slot, next);
       // The next message waits until the reader has handled this one, as a turn reading the session itself would.
       // An approval turn never reads, so waiting would freeze agents' threads and hide Claude stopping.
-      if (!heldApprovals.has(threadId)) await inbox?.settled();
+      if (!approvals.isHeld(threadId)) await inbox?.settled();
       if (next.done === true || next.value.isErr()) return;
     }
   };
@@ -942,12 +788,12 @@ export const createClaudeRuntime = ({
       slot.reader.push(next);
       return slot.reader;
     }
-    if (sessions.get(threadId) !== slot) return null;
+    if (slots.slotOf(threadId) !== slot) return null;
     const own = !busyThreads.has(threadId);
     // A turn holding approvals reads nothing, so while one is open or pending only a turn Claude starts waits for the next turn, even with one queued.
-    if (own || heldApprovals.has(threadId)) {
+    if (own || approvals.isHeld(threadId)) {
       if (next.done === true || next.value.isErr()) {
-        dropSession(threadId, slot);
+        slots.drop(threadId, slot);
         return null;
       }
       if (slot.discarding) {
@@ -971,8 +817,8 @@ export const createClaudeRuntime = ({
     if (next.done !== true && next.value.isOk()) {
       trackTasks(slot, next.value.value);
       trackSubagents(threadId, next.value.value);
-    } else if (sessions.get(threadId) === slot) {
-      endHeldApprovals(threadId);
+    } else if (slots.slotOf(threadId) === slot) {
+      approvals.end(threadId);
     }
   };
 
@@ -1039,10 +885,10 @@ export const createClaudeRuntime = ({
   // A turn of Claude's own that could not run was shown as failed, so what it held is not shown again.
   const threadIdle = (threadId: string) => {
     busyThreads.delete(threadId);
-    heldApprovals.delete(threadId);
-    scheduleIdleClose(threadId);
-    showTurn(threadId);
-    const slot = sessions.get(threadId);
+    approvals.forget(threadId);
+    slots.scheduleIdleClose(threadId);
+    approvals.showTurn(threadId);
+    const slot = slots.slotOf(threadId);
     if (slot?.reader == null || slot.unclaimed === null) return;
     const left = slot.reader.drain();
     const waitedFor = slot.unclaimed;
@@ -1062,7 +908,7 @@ export const createClaudeRuntime = ({
 
   const threadBusy = (threadId: string) => {
     busyThreads.add(threadId);
-    cancelIdleClose(threadId);
+    slots.cancelIdleClose(threadId);
   };
 
   const steer = (
@@ -1135,17 +981,17 @@ export const createClaudeRuntime = ({
       return;
     }
     const threadId = turn.threadId;
-    const startup = startingSessions.get(threadId);
+    const startup = slots.startingOf(threadId);
     const stoppingStartup = startup?.turn === turn;
     if (stoppingStartup) {
-      cancelSessionStart(threadId, startup);
+      slots.cancelStart(threadId, startup);
       if (turns.get(turn)?.slot === null) {
-        sessions.get(threadId)?.link.stopWrites();
+        slots.slotOf(threadId)?.link.stopWrites();
         turn.finish({ status: "interrupted" }, null);
         return;
       }
     }
-    const slot = sessions.get(threadId);
+    const slot = slots.slotOf(threadId);
     slot?.link.stopWrites();
     if (slot === undefined || repeated || slot.pendingInterrupt !== null) {
       if (stoppingStartup && slot === undefined) {
@@ -1165,13 +1011,13 @@ export const createClaudeRuntime = ({
       } else if (interrupted.value?.length === 0) {
         return;
       }
-      dropSession(threadId, slot);
+      slots.drop(threadId, slot);
       turn.finish({ status: "interrupted" }, null);
     });
   };
 
   const waitForPendingInterrupt = async (threadId: string) => {
-    await sessions.get(threadId)?.pendingInterrupt;
+    await slots.slotOf(threadId)?.pendingInterrupt;
   };
 
   // model is the one the turn was accepted with, since a change that arrives while the turn waits applies to the next turn.
@@ -1179,7 +1025,7 @@ export const createClaudeRuntime = ({
     record: ThreadRecord,
     model: string,
     turn: Turn,
-    startup: SessionStartup | null,
+    startup: SessionStartup<Turn> | null,
   ): Promise<
     Result<
       SessionSlot,
@@ -1191,16 +1037,16 @@ export const createClaudeRuntime = ({
       | SessionStartCancelled
     >
   > => {
-    const existing = sessions.get(record.threadId);
+    const existing = slots.slotOf(record.threadId);
     // A session that failed while no turn read it closed itself before anything dropped it.
     if (existing?.model === model && !existing.session.isClosed()) {
       return Result.ok(existing);
     }
-    if (existing !== undefined) dropSession(record.threadId, existing);
+    if (existing !== undefined) slots.drop(record.threadId, existing);
     if (closed) return Result.err(bridgeClosingError());
-    const pending = startup ?? beginSessionStart(turn);
+    const pending = startup ?? slots.beginStart(turn);
     const isCurrent = () =>
-      startingSessions.get(record.threadId) === pending &&
+      slots.startingOf(record.threadId) === pending &&
       !pending.controller.signal.aborted;
     const rewind = threads.rewindOf(record.threadId);
     const resume =
@@ -1218,7 +1064,7 @@ export const createClaudeRuntime = ({
         return Result.err(sessionStartCancelled());
       }
       if (!found) {
-        clearSessionStart(record.threadId, pending);
+        slots.clearStart(record.threadId, pending);
         log({ event: "claude_turn", step: "session_missing" });
         const forgotten = await threads.setSessionId(record.threadId, null);
         if (forgotten.isErr() && rewind !== undefined) {
@@ -1241,10 +1087,10 @@ export const createClaudeRuntime = ({
     const forkFrom =
       resume === null ? threads.forkSourceOf(record.threadId) : null;
     const forkPoint =
-      forkFrom === null ? null : forkPoints.get(record.threadId);
+      forkFrom === null ? null : forkPoints.pointOf(record.threadId);
     // Without the point it was made at, a fork would take whatever its source said since.
     if (forkPoint === undefined) {
-      clearSessionStart(record.threadId, pending);
+      slots.clearStart(record.threadId, pending);
       return Result.err(
         new ForkPointUnknown({
           message:
@@ -1283,7 +1129,7 @@ export const createClaudeRuntime = ({
             : resumeFrom(resume)),
         toolServers: { [link.server.name]: link.server.tools },
         allowedTools: link.allowedTools,
-        canUseTool: approveTool(record.threadId),
+        canUseTool: approvals.approveTool(record.threadId),
         ...(instructions !== null && { instructions }),
       },
       pending.controller.signal,
@@ -1306,11 +1152,11 @@ export const createClaudeRuntime = ({
       );
     }
     if (started.isErr()) {
-      clearSessionStart(record.threadId, pending);
+      slots.clearStart(record.threadId, pending);
       link.stopWrites();
       return Result.err(started.error);
     }
-    clearSessionStart(record.threadId, pending);
+    slots.clearStart(record.threadId, pending);
     const slot: SessionSlot = {
       session: started.value,
       model,
@@ -1322,7 +1168,7 @@ export const createClaudeRuntime = ({
       discarding: false,
       backgroundTasks: 0,
     };
-    sessions.set(record.threadId, slot);
+    slots.open(record.threadId, slot);
     void pump(record.threadId, slot);
     return Result.ok(slot);
   };
@@ -1333,167 +1179,9 @@ export const createClaudeRuntime = ({
     return found.isErr() || found.value;
   };
 
-  // The SDK reports no message when a call is refused here, so the refusal is recorded on the turn to show its item as declined.
-  const approveTool =
-    (threadId: string): CanUseTool =>
-    async (toolName, input, options) => {
-      const approval: Approval = { held: null, signal: options.signal };
-      try {
-        return await decideTool(threadId, approval, toolName, input, options);
-      } finally {
-        if (approval.held !== null) leaveHeld(approval.held);
-      }
-    };
-
-  const decideTool = async (
-    threadId: string,
-    approval: Approval,
-    ...[toolName, input, options]: Parameters<CanUseTool>
-  ) => {
-    const turn = await turnToAsk(threadId, approval);
-    if (turn === undefined || turn.state().interrupting) {
-      return declineTool(threadId, turn, options.toolUseID, NO_TURN);
-    }
-    const block = { id: options.toolUseID, name: toolName, input };
-    // A subagent's call shows as its own item while its agent runs in the turn; one from a background agent would outlive the turn, which would close its item as failed, so its prompt carries an id of its own, as does every call a turn holding approvals shows.
-    if (options.agentID === undefined && approval.held?.turn !== turn) {
-      turn.apply(renderToolRequest(turn.state(), block, now()));
-    } else if (runsAgent(turn.state())) {
-      turn.apply(renderToolRequest(turn.state(), block, now(), false));
-    }
-    const item = runningToolItem(turn.state(), options.toolUseID);
-    const prompt = promptFor(
-      {
-        toolName,
-        input,
-        item,
-        title: options.title,
-        reason: options.decisionReason,
-        defaultToNo: options.defaultToNo === true,
-        suggestions: options.suggestions ?? [],
-        suppressAlwaysAllow: options.suppressAlwaysAllowRule === true,
-      },
-      {
-        threadId,
-        turnId: turn.turnId,
-        itemId: item?.id ?? `${turn.turnId}-${options.toolUseID}`,
-        now: now(),
-        implementationMode: permissionMode,
-      },
-    );
-    const answer = await turn.ask(
-      prompt.method,
-      prompt.params,
-      approval.signal,
-    );
-    const decision = prompt.decide(answer);
-    return decision.behavior === "deny"
-      ? declineTool(threadId, turn, options.toolUseID, decision.message)
-      : decision;
-  };
-
-  // An approval whose holding turn could not be shown is declined rather than held again, so a thread whose turns cannot run does not keep opening them.
-  // A turn the user stopped before the approval was shown cannot show it, while one asked as the user stops a turn showing it is declined with that turn.
-  const turnToAsk = async (threadId: string, approval: Approval) => {
-    let waited = false;
-    while (!closed && !approval.signal.aborted) {
-      const paused = pausedMessages.get(threadId);
-      if (paused !== undefined) {
-        const resumed = await waitForAbort(paused.promise, approval.signal);
-        if (resumed === ABORTED) return undefined;
-        continue;
-      }
-      const turn = openTurn(threadId);
-      const held = heldApprovals.get(threadId);
-      if (held !== undefined && (held.turn === null || held.turn === turn)) {
-        joinHeld(approval, held);
-      }
-      const stoppedAhead =
-        waited &&
-        turn?.state().interrupting === true &&
-        approval.held?.turn !== turn;
-      if (turn !== undefined && !stoppedAhead) return turn;
-      if (held === undefined && !busyThreads.has(threadId)) {
-        if (approval.held !== null || !openHeld(threadId, approval)) {
-          return undefined;
-        }
-      }
-      const shown = await waitForAbort(turnShown(threadId), approval.signal);
-      if (shown === ABORTED) return undefined;
-      waited = true;
-    }
-    return undefined;
-  };
-
-  const openHeld = (threadId: string, approval: Approval) => {
-    const held: HeldApprovals = {
-      turn: null,
-      waiting: 0,
-      answered: () => {},
-      ended: new AbortController(),
-    };
-    heldApprovals.set(threadId, held);
-    joinHeld(approval, held);
-    if (startOwnTurn(threadId)) {
-      log({ event: "claude_turn", step: "approval_turn" });
-      return true;
-    }
-    heldApprovals.delete(threadId);
-    approval.held = null;
-    return false;
-  };
-
-  const joinHeld = (approval: Approval, held: HeldApprovals) => {
-    if (approval.held !== null) return;
-    held.waiting += 1;
-    approval.held = held;
-    approval.signal = AbortSignal.any([approval.signal, held.ended.signal]);
-  };
-
-  const leaveHeld = (held: HeldApprovals) => {
-    held.waiting -= 1;
-    if (held.waiting === 0) held.answered();
-  };
-
-  // What the app answers can no longer reach a Claude that is gone.
-  const endHeldApprovals = (threadId: string) => {
-    heldApprovals.get(threadId)?.ended.abort();
-  };
-
-  const openTurn = (threadId: string) => {
-    const turn =
-      runningTurns.get(threadId) ?? heldApprovals.get(threadId)?.turn;
-    return turn?.isOpen() ? turn : undefined;
-  };
-
-  const declineTool = (
-    threadId: string,
-    turn: Turn | undefined,
-    toolUseId: string,
-    message: string,
-  ) => {
-    subagents.decline(threadId, toolUseId);
-    if (turn !== undefined) {
-      turn.apply({
-        state: markToolDeclined(turn.state(), toolUseId),
-        notifications: [],
-      });
-    }
-    return { behavior: "deny" as const, message };
-  };
-
-  const dropSession = (threadId: string, slot: SessionSlot) => {
-    if (sessions.get(threadId) === slot) {
-      sessions.delete(threadId);
-      subagents.settle(threadId);
-      endHeldApprovals(threadId);
-    }
-    slot.session.close();
-  };
-
   const dropSessionOf = (threadId: string, link: TurnLink) => {
-    const slot = sessions.get(threadId);
-    if (slot?.link === link) dropSession(threadId, slot);
+    const slot = slots.slotOf(threadId);
+    if (slot?.link === link) slots.drop(threadId, slot);
   };
 
   // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
@@ -1501,12 +1189,8 @@ export const createClaudeRuntime = ({
     closed = true;
     for (const paused of pausedMessages.values()) paused.resolve();
     pausedMessages.clear();
-    for (const threadId of [...idleTimers.keys()]) cancelIdleClose(threadId);
-    for (const threadId of [...turnWaiters.keys()]) showTurn(threadId);
-    for (const [threadId, startup] of [...startingSessions]) {
-      cancelSessionStart(threadId, startup);
-    }
-    for (const [threadId, slot] of sessions) dropSession(threadId, slot);
+    approvals.showAllTurns();
+    slots.closeAll();
   };
 
   return {
@@ -1520,18 +1204,14 @@ export const createClaudeRuntime = ({
         paused.resolve();
       };
     },
-    closeSession: (threadId) => {
-      cancelIdleClose(threadId);
-      const slot = sessions.get(threadId);
-      if (slot !== undefined) dropSession(threadId, slot);
-    },
-    recordOf: (threadId, turnId) =>
-      turnRecords.get(threadId)?.get(turnId) ?? null,
+    closeSession: slots.close,
+    recordOf: turnRecords.recordOf,
     run,
     steer,
     interrupt,
     dropSession: dropSessionOf,
-    noteFork,
+    noteFork: forkPoints.note,
+    dropFork: forkPoints.forget,
     threadBusy,
     threadIdle,
     listen: (start) => {
@@ -1654,31 +1334,6 @@ export const typedText = (input: RunningTurn<string>["input"]) =>
 const resumeFrom = (sessionId: string | null) =>
   sessionId === null ? {} : { resume: sessionId };
 
-const ABORTED = Symbol("aborted");
-
-const waitForAbort = <T>(pending: Promise<T>, signal: AbortSignal) =>
-  new Promise<T | typeof ABORTED>((resolve, reject) => {
-    if (signal.aborted) {
-      resolve(ABORTED);
-      return;
-    }
-    const abort = () => {
-      signal.removeEventListener("abort", abort);
-      resolve(ABORTED);
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    pending.then(
-      (value) => {
-        signal.removeEventListener("abort", abort);
-        resolve(value);
-      },
-      (cause: unknown) => {
-        signal.removeEventListener("abort", abort);
-        reject(cause);
-      },
-    );
-  });
-
 const bridgeClosingError = () =>
   new BridgeClosing({ message: refusalMessage("bridge_closing") });
 
@@ -1721,11 +1376,6 @@ const agentOutcome = (status: string, summary: string): TurnOutcome => {
 const AGENT_FAILED = "The agent failed";
 
 const IDLE_SESSION_MS = 10 * 60_000;
-
-const NO_TURN = "no Claude turn is running to ask the app for approval";
-
-const APPROVALS_UNANSWERED =
-  "Claude's session ended before the approval was answered";
 
 // The SDK documents user_message_uuids as holding at most this many entries.
 const TAKEN_UUIDS_LIMIT = 64;
