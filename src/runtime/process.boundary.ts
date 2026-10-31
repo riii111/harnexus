@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { type ExecFileException, execFile, spawn } from "node:child_process";
 import { createReadStream, createWriteStream, writeSync } from "node:fs";
 import { Result, TaggedError } from "better-result";
 import { isObject } from "./object.ts";
@@ -61,15 +61,11 @@ export const readCommandOutput = (
   timeoutMs = COMMAND_TIMEOUT_MS,
 ) =>
   Result.tryPromise({
-    try: () =>
-      new Promise<string>((resolve, reject) => {
-        execFile(
-          file,
-          [...args],
-          { timeout: timeoutMs, maxBuffer: COMMAND_OUTPUT_LIMIT },
-          (error, stdout) => (error === null ? resolve(stdout) : reject(error)),
-        );
-      }),
+    try: async () => {
+      const { error, stdout } = await captureCommand(file, args, { timeoutMs });
+      if (error !== null) throw error;
+      return stdout;
+    },
     catch: (cause) =>
       new CommandFailed({
         command: file,
@@ -92,20 +88,16 @@ export const runCommand = (
   timeoutMs = COMMAND_TIMEOUT_MS,
 ) =>
   Result.tryPromise({
-    try: () =>
-      new Promise<CommandOutput>((resolve, reject) => {
-        execFile(
-          file,
-          [...args],
-          { env, timeout: timeoutMs, maxBuffer: COMMAND_OUTPUT_LIMIT },
-          (error, stdout, stderr) => {
-            if (error === null) resolve({ status: 0, stdout, stderr });
-            else if (typeof error.code === "number" && !error.killed)
-              resolve({ status: error.code, stdout, stderr });
-            else reject(error);
-          },
-        );
-      }),
+    try: async (): Promise<CommandOutput> => {
+      const { error, stdout, stderr } = await captureCommand(file, args, {
+        env,
+        timeoutMs,
+      });
+      if (error === null) return { status: 0, stdout, stderr };
+      if (typeof error.code === "number" && !error.killed)
+        return { status: error.code, stdout, stderr };
+      throw error;
+    },
     catch: (cause) =>
       new CommandFailed({
         command: file,
@@ -138,6 +130,29 @@ export const startDetachedCommand = (file: string, args: readonly string[]) =>
         cause,
         message: `cannot start ${file}`,
       }),
+  });
+
+// The one place a command's end is awaited: a failed command is returned as the error, so each caller decides what an exit status, a kill or a missing file means.
+export const captureCommand = (
+  file: string,
+  args: readonly string[],
+  options: { env?: Record<string, string | undefined>; timeoutMs: number },
+) =>
+  new Promise<{
+    error: ExecFileException | null;
+    stdout: string;
+    stderr: string;
+  }>((resolve) => {
+    execFile(
+      file,
+      [...args],
+      {
+        env: options.env,
+        timeout: options.timeoutMs,
+        maxBuffer: COMMAND_OUTPUT_LIMIT,
+      },
+      (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+    );
   });
 
 const COMMAND_TIMEOUT_MS = 10_000;

@@ -19,8 +19,8 @@ import {
   type WatchState,
 } from "../prwatch/store.ts";
 import { runCycle } from "../prwatch/watcher.ts";
+import type { Fields } from "../runtime/object.ts";
 import { watchPaths } from "./cli.ts";
-import type { Fields } from "./format.ts";
 import { codexWorkers } from "./watch-worker.ts";
 
 const PR = "https://github.com/org/pay/pull/7";

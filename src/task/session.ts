@@ -9,16 +9,9 @@ import {
   realPathOrSelf,
 } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
-import { isObject } from "../runtime/object.ts";
+import { type Fields, isObject } from "../runtime/object.ts";
 import { requestLine } from "../runtime/socket.boundary.ts";
-import {
-  asText,
-  type Fields,
-  fail,
-  jsonEqual,
-  type TaskFailed,
-  truthy,
-} from "./format.ts";
+import { asText, fail, jsonEqual, type TaskFailed, truthy } from "./format.ts";
 import {
   load,
   readRecords,

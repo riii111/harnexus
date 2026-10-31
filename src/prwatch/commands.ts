@@ -1,9 +1,10 @@
 import { Result } from "better-result";
 import { holdProcessLock, prepareDirectory } from "../runtime/fs.boundary.ts";
+import type { Fields } from "../runtime/object.ts";
 import { classify, type Verdict } from "./classify.ts";
 import { loadConfig, type WatchConfig } from "./config.ts";
 import { nextEvents } from "./events.ts";
-import { type Fields, fail, ioFailed, type WatchFailed } from "./failure.ts";
+import { fail, ioFailed, type WatchFailed } from "./failure.ts";
 import type { GitHub, PrDetail, PrRef } from "./github.ts";
 import { messageOf } from "./message.ts";
 import {

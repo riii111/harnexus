@@ -1,4 +1,4 @@
-import type { Fields } from "./failure.ts";
+import type { Fields } from "../runtime/object.ts";
 
 // What the watch needs from whoever works on a PR; harnexus-task supplies Codex worker chats.
 export type Workers = {

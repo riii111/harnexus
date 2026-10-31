@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Result } from "better-result";
 import { printAnswer, UUID } from "../infra/claude/print.ts";
-import { processAlive, runClaude } from "../infra/claude/run.boundary.ts";
 import {
   checkAccess,
   isDirectory,
@@ -10,8 +9,9 @@ import {
   removeFile,
   writeFileExclusive,
 } from "../runtime/fs.boundary.ts";
-import { isObject } from "../runtime/object.ts";
-import { asText, detail, type Fields, fail, isBlank } from "./format.ts";
+import { type Fields, isObject } from "../runtime/object.ts";
+import { processAlive, runProcess } from "../runtime/run.boundary.ts";
+import { asText, detail, fail, isBlank } from "./format.ts";
 import {
   load,
   type Recovery,
@@ -266,7 +266,7 @@ const locked = (
       adopted === null
         ? io(removeFile(pendingPath))
         : deps.saveJson(pendingPath, adopted, { exclusive: false });
-    const ran = await runClaude(bin, argv, prompt, {
+    const ran = await runProcess(bin, argv, prompt, {
       cwd,
       env: deps.env,
       timeoutMs,

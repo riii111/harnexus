@@ -10,9 +10,10 @@ import {
 } from "../../runtime/fs.boundary.ts";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
+import { type ProcessRun, runProcess } from "../../runtime/run.boundary.ts";
+import { bundledClaude } from "./bundled-claude.boundary.ts";
 import type { CloudCheckouts } from "./cloud-checkouts.ts";
 import { printAnswer, UUID } from "./print.ts";
-import { bundledClaude, type ClaudeRun, runClaude } from "./run.boundary.ts";
 import { claudeConfigDir, findSessionFile } from "./transcripts.ts";
 
 // A Cloud session is named by claude.ai as session_… or cse_…, and its page URL ends in that id.
@@ -26,12 +27,12 @@ export const parseCloudSessionId = (text: string): string | null => {
   return CLOUD_URL.exec(trimmed)?.[1] ?? null;
 };
 
-export type RunClaude = typeof runClaude;
+export type RunProcess = typeof runProcess;
 
 export type CloudCli = {
   file: string;
   env: Record<string, string | undefined>;
-  run: RunClaude;
+  run: RunProcess;
 };
 
 // The SDK's own claude is used by default, since it already holds the sign-in the bridge runs with; a claude installed elsewhere may stop to ask macOS for keychain access when the app starts it. HARNEXUS_CLAUDE_CLI names another one.
@@ -45,7 +46,7 @@ export const cloudCli = (
 ): CloudCli => ({
   file: claudeCliFile(env),
   env,
-  run: runClaude,
+  run: runProcess,
 });
 
 // sent: the session queued the message; rejected: it never reached the session; unknown: it may have, so it is not sent again.
@@ -80,7 +81,7 @@ export const sendToCloud = async (
   return sendOutcome(ran.value);
 };
 
-const sendOutcome = (run: ClaudeRun): CloudSend => {
+const sendOutcome = (run: ProcessRun): CloudSend => {
   if (run.ended !== "exit") {
     return { kind: "unknown", message: `claude --cloud ended by ${run.ended}` };
   }
@@ -177,7 +178,7 @@ const teleport = async (
   { cwd, checkouts }: { cwd: string; checkouts: CloudCheckouts },
 ): Promise<
   Result<
-    { run: ClaudeRun; refusal: string | null; copiedAt: number },
+    { run: ProcessRun; refusal: string | null; copiedAt: number },
     { message: string }
   >
 > => {
