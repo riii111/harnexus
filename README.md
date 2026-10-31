@@ -59,7 +59,7 @@ To follow a [Claude Code cloud session](https://code.claude.com/docs/en/claude-c
 /cloud https://claude.ai/code/session_01AbC...
 ```
 
-The chat's name gets a ☁️ mark. The conversation appears in the chat, and messages you send go to the Cloud session.
+The conversation appears in the chat, and messages you send go to the Cloud session.
 Worker sessions it creates also open as chats in the same project.
 Updates may take a few minutes to appear when you are not sending messages.
 
