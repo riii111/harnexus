@@ -3,7 +3,11 @@ import { dirname, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { cloudCli, sweepCloudLogs } from "../infra/claude/cloud.ts";
 import { createCloudCheckouts } from "../infra/claude/cloud-checkouts.ts";
-import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
+import {
+  createModelCatalog,
+  type EffortSettings,
+  effortRule,
+} from "../infra/claude/models.ts";
 import {
   claudeSessionExists,
   loadClaudeModels,
@@ -173,13 +177,18 @@ async function withClaude(relay: {
     catalog.replace(loaded.value);
     logger.log({ event: "claude_models_loaded", count: loaded.value.length });
   });
-  const settings = await loadEffortSettings();
-  if (settings.isErr()) {
-    logger.log({
-      event: "effort_settings_unavailable",
-      reason: settings.error._tag,
-    });
-  }
+  // Read the same way, so the app's connection does not wait for it; a thread started before it is read takes the model default level.
+  let effortSettings: EffortSettings = {};
+  void loadEffortSettings().then((loaded) => {
+    if (loaded.isErr()) {
+      logger.log({
+        event: "effort_settings_unavailable",
+        reason: loaded.error._tag,
+      });
+      return;
+    }
+    effortSettings = loaded.value;
+  });
   // The router consumes a Claude thread's requests and writes its own notifications, so the observer reads what the app sends before the router and everything the app is given, as the fixtures record a session.
   const appInjector = createLineInjector(process.stdout, (bytes) =>
     relay.observer.chunk("server_to_app", bytes),
@@ -207,10 +216,8 @@ async function withClaude(relay: {
     readSession: (sessionId) => readClaudeSession(sessionId),
     readSubagents: (sessionId) => readClaudeSubagents(sessionId),
     // Unreadable settings leave threads with none picked on the model default, which is still the level the app shows.
-    effortRule: effortRule(
-      settings.isOk() ? settings.value : {},
-      catalog.effortsOf,
-    ),
+    effortRule: (model, picked) =>
+      effortRule(effortSettings, catalog.effortsOf)(model, picked),
     claudeModels: catalog.models,
     codexHome: codexHome(process.env),
     cronRecord: openCronRecord(cronRecordPath(statePath.value)),

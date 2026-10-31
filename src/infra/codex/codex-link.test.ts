@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { type InferErr, Result } from "better-result";
@@ -1160,7 +1161,7 @@ const connect = async ({
   });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
-  await link.server.instance.connect(serverTransport);
+  await createSdkMcpServer(link.server).instance.connect(serverTransport);
   const client = new Client({ name: "test", version: "0" });
   await client.connect(clientTransport);
   return { client, link, requests, modelLists };

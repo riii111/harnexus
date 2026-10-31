@@ -3,10 +3,11 @@ import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 import { createSerialQueue } from "../../runtime/serial-queue.ts";
 import {
-  answeredThreadId,
+  type CreateOutcome,
+  concludeCreate,
   type DelegationWatch,
   FIRST_TURN_WAIT_MS,
-  type FirstTurn,
+  firstTurnRefusal,
   type TurnSettings,
 } from "./delegations.ts";
 import type { ServerRequest, ServerRequestError } from "./server-requests.ts";
@@ -40,13 +41,7 @@ type ToolAnswer = { content: unknown; isError?: boolean | undefined };
 
 type Link = {
   call: (name: string, args: unknown) => Promise<ToolAnswer>;
-  createChecked: (args: unknown) => Promise<{
-    result: ToolAnswer;
-    firstTurn: FirstTurn | null;
-    threadId: string | null;
-    unknown: boolean;
-    busy: boolean;
-  }>;
+  createChecked: (args: unknown) => Promise<CreateOutcome & { busy: boolean }>;
 };
 
 // Claude threads go through their codex_link, so a child they create is recorded and reachable from the Claude chat as if Claude had created it.
@@ -148,33 +143,22 @@ export const createCallGateway = ({
     if (created === null) return BUSY;
     const answered = await callApp(threadId, "create_thread", args);
     if (answered.isOk()) {
-      const result = answered.value;
-      const failed = isObject(result) && result.isError === true;
-      const named = answeredThreadId(result);
-      if (named !== null) created.claim(named);
-      // The app may answer with an error because the first turn was refused, so a turn already seen is still reported.
-      const firstTurn = await created.wait(failed ? 0 : firstTurnWaitMs);
-      const exists = named !== null || !failed;
-      if (!exists) created.cancel();
-      return createdAnswer({
-        result,
-        firstTurn,
-        threadId: firstTurn?.threadId ?? named,
-        unknown: firstTurn === null && exists,
-      });
+      return createdAnswer(
+        await concludeCreate(created, {
+          answer: { result: answered.value },
+          waitMs: firstTurnWaitMs,
+        }),
+      );
     }
-    const firstTurn = await created.wait(0);
-    if (firstTurn !== null) {
-      return createdAnswer({
-        result: null,
-        firstTurn,
-        threadId: firstTurn.threadId,
-        unknown: false,
-      });
-    }
-    // A lost answer may still have made the thread, so its check stays armed.
-    if (answered.error._tag !== "ServerRequestUnanswered") created.cancel();
-    return failedCall(answered.error);
+    const lost = await concludeCreate(created, {
+      answer: null,
+      waitMs: 0,
+      // A lost answer may still have made the thread.
+      mayExist: answered.error._tag === "ServerRequestUnanswered",
+    });
+    return lost.firstTurn === null
+      ? failedCall(answered.error)
+      : createdAnswer(lost);
   };
 
   const callApp = async (
@@ -238,25 +222,21 @@ const createdAnswer = ({
   firstTurn,
   threadId,
   unknown,
-}: {
-  result: unknown;
-  firstTurn: FirstTurn | null;
-  threadId: string | null;
-  unknown: boolean;
-}): GatewayAnswer => {
-  if (firstTurn?.refused === true) {
+}: CreateOutcome): GatewayAnswer => {
+  const refusal = firstTurnRefusal(firstTurn);
+  if (refusal?.kind === "settings") {
     return {
       outcome: "model_mismatch",
-      threadId: firstTurn.threadId,
-      expected: firstTurn.expected,
-      actual: firstTurn.actual,
+      threadId: refusal.threadId,
+      expected: refusal.expected,
+      actual: refusal.actual,
     };
   }
-  if (firstTurn !== null && firstTurn.refusal !== null) {
+  if (refusal?.kind === "bridge") {
     return {
       outcome: "first_turn_refused",
-      threadId: firstTurn.threadId,
-      reason: firstTurn.refusal,
+      threadId: refusal.threadId,
+      reason: refusal.reason,
     };
   }
   if (unknown) {

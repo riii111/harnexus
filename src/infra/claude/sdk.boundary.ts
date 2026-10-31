@@ -1,5 +1,7 @@
 import type {
+  createSdkMcpServer,
   EffortLevel,
+  McpSdkServerConfigWithInstance,
   Options,
   PermissionMode,
   Query,
@@ -43,10 +45,24 @@ export type GetSubagentMessages = (
   agentId: string,
 ) => Promise<SessionMessage[]>;
 
+type CreateSdkMcpServer = typeof createSdkMcpServer;
+
+// Tools the SDK serves in this process, by the name of the server they are served under.
+export type ToolServers = Record<
+  string,
+  NonNullable<Parameters<CreateSdkMcpServer>[0]["tools"]>
+>;
+
 export type ClaudeSdk = {
   query: RunQuery;
   resolveSettings: ResolveSettings;
+  createSdkMcpServer: CreateSdkMcpServer;
 };
+
+class ClaudeSdkUnavailable extends TaggedError("ClaudeSdkUnavailable")<{
+  cause: unknown;
+  message: string;
+}> {}
 
 class ClaudeSettingsUnavailable extends TaggedError(
   "ClaudeSettingsUnavailable",
@@ -100,6 +116,35 @@ export class ClaudeRecordUnreadable extends TaggedError(
 }> {}
 
 export type { ClaudeStreamFailed };
+
+// The SDK takes about 50 ms to load, so it is imported when Claude is first needed rather than when the bridge starts, which would hold back the app's connection.
+export const loadClaudeSdk = () =>
+  Result.tryPromise({
+    try: () => import("@anthropic-ai/claude-agent-sdk"),
+    catch: (cause) =>
+      new ClaudeSdkUnavailable({
+        cause,
+        message: "cannot load the Claude Agent SDK",
+      }),
+  });
+
+export const openToolServers = (
+  create: CreateSdkMcpServer,
+  servers: ToolServers,
+) =>
+  Result.try({
+    try: () =>
+      Object.fromEntries(
+        Object.entries(servers).map(
+          ([name, tools]): [string, McpSdkServerConfigWithInstance] => [
+            name,
+            create({ name, tools }),
+          ],
+        ),
+      ),
+    catch: (cause) =>
+      new ClaudeStartFailed({ cause, message: "cannot start Claude" }),
+  });
 
 // resolveSettings merges the same files as the CLI without starting it, but skips an admin policyHelper.
 export const readSettings = (

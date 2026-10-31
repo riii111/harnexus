@@ -1281,7 +1281,7 @@ export const createClaudeRuntime = ({
           : forkFound && forkFrom !== null && forkAt !== null
             ? { resume: forkFrom, forkSession: true, resumeAt: forkAt }
             : resumeFrom(resume)),
-        mcpServers: { [link.server.name]: link.server },
+        toolServers: { [link.server.name]: link.server.tools },
         allowedTools: link.allowedTools,
         canUseTool: approveTool(record.threadId),
         ...(instructions !== null && { instructions }),
