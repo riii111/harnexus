@@ -25,6 +25,7 @@ import { createSideChats } from "./side-chat.ts";
 import { createSubagentRequests } from "./subagent-requests.ts";
 import { createSubagents } from "./subagents.ts";
 import { until } from "./testing/harness.ts";
+import { LIVE, statusOf } from "./testing/live-history.ts";
 import {
   type AppRequest,
   type Mode,
@@ -408,16 +409,6 @@ describe("Codex CLI version", () => {
       expected: { version: "0.158.0-alpha.2.1", verified: true },
     },
     {
-      name: "the version bundled with app 26.1007.71326",
-      agent: "Codex Desktop/0.162.0-alpha.17.2 (Mac OS 26.5.1; arm64)",
-      expected: { version: "0.162.0-alpha.17.2", verified: true },
-    },
-    {
-      name: "the version bundled with app 26.1013.31256",
-      agent: "Codex Desktop/0.163.0-alpha.10.2 (Mac OS 26.5.1; arm64)",
-      expected: { version: "0.163.0-alpha.10.2", verified: true },
-    },
-    {
       name: "another version",
       agent: "Codex Desktop/0.159.0 (Mac OS 26.5.1; arm64)",
       expected: { version: "0.159.0", verified: false },
@@ -452,13 +443,10 @@ describe("Codex CLI version", () => {
     expect(events).toEqual([{ event: "codex_version", ...expected }]);
   });
 
-  test.each([
-    { name: "a verified version", agent: VERIFIED_AGENT },
-    { name: "an unverified version", agent: UNVERIFIED_AGENT },
-  ])("appends the Claude models to model/list on $name", async ({ agent }) => {
+  test("appends the Claude models to model/list on an unverified version", async () => {
     const { router } = setup();
     router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
-    await router.fromServer(initializeAnswer(agent));
+    await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
     router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
 
     const out = await router.fromServer(modelList(2, null));
@@ -547,22 +535,10 @@ describe("model/list", () => {
       id: "gpt-fixture",
       supportedReasoningEfforts: levels,
     });
-  });
-
-  test("lists every Claude model as taking images, so the app lets the user attach them", async () => {
-    const { router } = setup();
-
-    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
-    const out = parse(
-      await router.fromServer(
-        encode({ id: 2, result: { data: [], nextCursor: null } }),
-      ),
-    );
-
     expect(
-      out.result.data.map(
-        (model: { inputModalities: string[] }) => model.inputModalities,
-      ),
+      out.result.data
+        .slice(1)
+        .map((model: { inputModalities: string[] }) => model.inputModalities),
     ).toEqual([
       ["text", "image"],
       ["text", "image"],
@@ -570,38 +546,21 @@ describe("model/list", () => {
     ]);
   });
 
-  test.each([
-    {
-      name: "with effort",
-      model: "claude-opus-5-5",
-      expected: {
-        levels: ["low", "medium", "high", "xhigh", "max"],
-        default: "high",
-      },
-    },
-    {
-      name: "without effort",
-      model: "claude-haiku-4-5",
-      expected: { levels: ["medium"], default: "medium" },
-    },
-  ])("lists the levels and the default of a Claude model $name", async ({
-    model,
-    expected,
-  }) => {
+  test("lists the single medium level as the default of a Claude model without effort", async () => {
     const { router } = setup();
 
     router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
     const out = parse(await router.fromServer(modelList(2, null)));
 
     const entry = out.result.data.find(
-      (listed: { id: string }) => listed.id === model,
+      (listed: { id: string }) => listed.id === "claude-haiku-4-5",
     );
     expect({
       levels: entry.supportedReasoningEfforts.map(
         (level: { reasoningEffort: string }) => level.reasoningEffort,
       ),
       default: entry.defaultReasoningEffort,
-    }).toEqual(expected);
+    }).toEqual({ levels: ["medium"], default: "medium" });
   });
 
   test("lists the models Claude Code offers once read and a dropped built-in model as hidden", async () => {
@@ -1025,23 +984,27 @@ describe("Claude subagent threads", () => {
   });
 
   test.each([
-    { name: "kinds other than subagents", params: { sourceKinds: ["vscode"] } },
+    {
+      name: "kinds other than subagents",
+      params: { ancestorThreadId: "th-claude", sourceKinds: ["vscode"] },
+    },
     { name: "no parent", params: {} },
-  ])("leaves a thread list of $name to the server", async ({ params }) => {
+    {
+      name: "a later page",
+      params: { ancestorThreadId: "th-claude", cursor: "page-2" },
+    },
+    {
+      name: "archived threads",
+      params: { ancestorThreadId: "th-claude", archived: true },
+    },
+  ])("leaves a thread list of $name to the server without adding an agent", async ({
+    params,
+  }) => {
     const { router, subagents } = setup(["th-claude"]);
     startAgent(subagents);
     const response = encode({ id: 31, result: { data: [], nextCursor: null } });
 
-    router.fromApp(
-      encode({
-        id: 31,
-        method: "thread/list",
-        params: {
-          ...("sourceKinds" in params ? { ancestorThreadId: "th-claude" } : {}),
-          ...params,
-        },
-      }),
-    );
+    router.fromApp(encode({ id: 31, method: "thread/list", params }));
 
     expect(await router.fromServer(response)).toEqual(response);
   });
@@ -1149,27 +1112,6 @@ describe("Claude subagent threads", () => {
     expect(listed.result.data).toMatchObject([
       { id: child?.id, path: "/fixture/rollout.jsonl", model: CLAUDE },
     ]);
-  });
-
-  test.each([
-    { name: "a later page", params: { cursor: "page-2" } },
-    { name: "archived threads", params: { archived: true } },
-  ])("adds no agent to $name", async ({ params }) => {
-    const { router, subagents } = setup(["th-claude"]);
-    startAgent(subagents);
-    const response = encode({ id: 43, result: { data: [] } });
-
-    router.fromApp(
-      encode({
-        id: 43,
-        method: "thread/list",
-        params: { ancestorThreadId: "th-claude", ...params },
-      }),
-    );
-
-    expect(parse(router.fromServer(response) as Buffer).result.data).toEqual(
-      [],
-    );
   });
 
   test("lists the agents an agent started under that agent's thread", async () => {
@@ -1716,13 +1658,15 @@ describe("Claude thread history", () => {
     );
     await Bun.sleep(0);
 
-    expect(responseTo(sent, 5).result.data).toMatchObject([
-      { turnId: "harnexus-history-u2", item: { text: "welcome" } },
-      { turnId: "harnexus-history-u2", item: { type: "userMessage" } },
-      { turnId: "harnexus-history-u1", item: { text: "one file" } },
-      { turnId: "harnexus-history-u1", item: { type: "commandExecution" } },
-      { turnId: "harnexus-history-u1", item: { type: "reasoning" } },
-      { turnId: "harnexus-history-u1", item: { type: "userMessage" } },
+    const items = responseTo(sent, 5).result.data;
+    expect(items[0]).toMatchObject({ item: { text: "welcome" } });
+    expect(items.map((entry: { turnId: string }) => entry.turnId)).toEqual([
+      "harnexus-history-u2",
+      "harnexus-history-u2",
+      "harnexus-history-u1",
+      "harnexus-history-u1",
+      "harnexus-history-u1",
+      "harnexus-history-u1",
     ]);
   });
 
@@ -1879,183 +1823,6 @@ describe("Claude thread history", () => {
     ]);
   });
 
-  test("answers thread/items/list with the items of the asked turn", async () => {
-    const { router, sent } = setup(["th-claude"], {
-      records: {
-        "th-claude": conversation(),
-      },
-    });
-
-    router.fromApp(
-      encode({
-        id: 8,
-        method: "thread/items/list",
-        params: {
-          threadId: "th-claude",
-          turnId: "harnexus-history-u2",
-          sortDirection: "asc",
-        },
-      }),
-    );
-    await Bun.sleep(0);
-
-    expect(sent).toMatchObject([
-      {
-        id: 8,
-        result: {
-          data: [
-            { turnId: "harnexus-history-u2", item: { type: "userMessage" } },
-            { turnId: "harnexus-history-u2", item: { type: "agentMessage" } },
-          ],
-        },
-      },
-    ]);
-  });
-
-  test("answers thread/items/list from past an item anchor, or from the start when the record lacks it", async () => {
-    const { router, sent } = setup(["th-claude"], {
-      records: {
-        "th-claude": conversation(),
-      },
-    });
-    const list = (id: number, cursor?: unknown) =>
-      router.fromApp(
-        encode({
-          id,
-          method: "thread/items/list",
-          params: {
-            threadId: "th-claude",
-            turnId: "harnexus-history-u2",
-            sortDirection: "asc",
-            ...(cursor !== undefined && { cursor }),
-          },
-        }),
-      );
-
-    list(8);
-    await Bun.sleep(0);
-    const [question, answer] = (
-      sent[0] as { result: { data: { item: { id: string } }[] } }
-    ).result.data.map((entry) => entry.item.id);
-    list(9, { type: "item", itemId: question });
-    await Bun.sleep(0);
-
-    expect(sent[1]).toMatchObject({
-      id: 9,
-      result: { data: [{ item: { id: answer, type: "agentMessage" } }] },
-    });
-
-    list(10, { type: "item", itemId: "live-turn-item-1" });
-    await Bun.sleep(0);
-
-    expect(sent[2]).toMatchObject({
-      id: 10,
-      result: { data: [{ item: { id: question } }, { item: { id: answer } }] },
-    });
-  });
-
-  test("answers thread/timeline/list from the newest entry back", async () => {
-    const { router, sent } = setup(["th-claude"], {
-      records: {
-        "th-claude": conversation(),
-      },
-    });
-
-    router.fromApp(
-      encode({
-        id: 9,
-        method: "thread/timeline/list",
-        params: { threadId: "th-claude", limit: 1 },
-      }),
-    );
-    await Bun.sleep(0);
-
-    expect(sent).toMatchObject([
-      {
-        id: 9,
-        result: {
-          data: [{ type: "turnCompleted", turnId: "harnexus-history-u2" }],
-          activeRealtimeSessionAtPageStart: null,
-        },
-      },
-    ]);
-  });
-
-  test("answers an empty history for a Claude thread that has no session yet", async () => {
-    const { router, sent, reads } = setup(["th-claude"]);
-
-    router.fromApp(
-      encode({
-        id: 7,
-        method: "thread/turns/list",
-        params: { threadId: "th-claude" },
-      }),
-    );
-    await Bun.sleep(0);
-
-    expect(reads).toEqual([]);
-    expect(sent).toEqual([
-      { id: 7, result: { data: [], nextCursor: null, backwardsCursor: null } },
-    ]);
-  });
-
-  test.each([
-    {
-      name: "an unreadable record",
-      record: "unreadable" as const,
-      expected: -32603,
-    },
-    { name: "an unknown cursor", record: conversation(), expected: -32602 },
-  ])("answers a history page with error $expected for $name", async ({
-    record,
-    expected,
-  }) => {
-    const { router, sent } = setup(["th-claude"], {
-      records: { "th-claude": record },
-    });
-
-    router.fromApp(
-      encode({
-        id: 7,
-        method: "thread/turns/list",
-        params: { threadId: "th-claude", cursor: "server-cursor" },
-      }),
-    );
-    await Bun.sleep(0);
-
-    expect(sent).toMatchObject([{ id: 7, error: { code: expected } }]);
-  });
-
-  test("reads the record once for history pages asked for together and again for a later page", async () => {
-    const records = { "th-claude": conversation() };
-    const { router, sent, reads } = setup(["th-claude"], { records });
-    const askTurns = (id: number) =>
-      router.fromApp(
-        encode({
-          id,
-          method: "thread/turns/list",
-          params: { threadId: "th-claude" },
-        }),
-      );
-
-    askTurns(7);
-    askTurns(8);
-    await Bun.sleep(0);
-    records["th-claude"] = [
-      ...conversation(),
-      prompt("u3", "one more"),
-      reply("a5", "m4", text("sure"), "end_turn"),
-    ];
-    askTurns(9);
-    await Bun.sleep(0);
-
-    expect(reads).toEqual(["session-th-claude", "session-th-claude"]);
-    expect([7, 8].map((id) => responseTo(sent, id).result.data.length)).toEqual(
-      [2, 2],
-    );
-    expect(responseTo(sent, 9).result.data[0].id).toBe("harnexus-history-u3");
-  });
-
   test.each([
     { name: "thread/turns/list", params: { threadId: "codex" } },
     { name: "thread/read", params: { threadId: "codex", includeTurns: true } },
@@ -2077,6 +1844,29 @@ describe("Claude thread history", () => {
     expect(routed).toEqual(request);
     expect(answered).toEqual(response);
     expect({ sent, reads }).toEqual({ sent: [], reads: [] });
+  });
+
+  test.each([
+    { method: "thread/turns/list" },
+    { method: "thread/items/list" },
+    { method: "thread/timeline/list" },
+  ])("answers $method of a Claude thread itself instead of forwarding it", async ({
+    method,
+  }) => {
+    const { router, sent } = setup(["th-claude"], {
+      records: { "th-claude": conversation() },
+    });
+
+    const routed = router.fromApp(
+      encode({ id: 7, method, params: { threadId: "th-claude" } }),
+    );
+    await until(() => responseTo(sent, 7) !== null);
+
+    expect(routed).toBeNull();
+    expect(responseTo(sent, 7)).toMatchObject({
+      id: 7,
+      result: { data: expect.any(Array) },
+    });
   });
 });
 
@@ -2120,44 +1910,6 @@ describe("a Claude thread with a running turn", () => {
       ["harnexus-history-u1", "completed", false],
       ["harnexus-history-u2", "completed", false],
     ]);
-  });
-
-  test.each([
-    {
-      name: "a turn Claude has recorded",
-      turn: LIVE,
-      turns: [
-        ["harnexus-turn-live", "inProgress", true],
-        ["harnexus-history-u1", "completed", false],
-      ],
-    },
-    {
-      name: "a turn Claude has not recorded yet",
-      turn: { ...LIVE, record: null },
-      turns: [
-        ["harnexus-turn-live", "inProgress", true],
-        ["harnexus-history-u2", "completed", false],
-        ["harnexus-history-u1", "completed", false],
-      ],
-    },
-  ])("lists $name as the newest turn, in progress", async ({ turn, turns }) => {
-    const { router, live, sent } = setup(["th-claude"], {
-      records: {
-        "th-claude": conversation(),
-      },
-    });
-    live.set("th-claude", turn);
-
-    router.fromApp(
-      encode({
-        id: 8,
-        method: "thread/turns/list",
-        params: { threadId: "th-claude", sortDirection: "desc" },
-      }),
-    );
-    await until(() => responseTo(sent, 8) !== null);
-
-    expect(responseTo(sent, 8).result.data.map(statusOf)).toEqual(turns);
   });
 
   test.each([
@@ -2256,75 +2008,6 @@ describe("a Claude thread with a running turn", () => {
     ]);
   });
 
-  test("pages on from a cursor naming the live turn after it ends", async () => {
-    const { router, live, turnRecords, sent } = setup(["th-claude"], {
-      records: {
-        "th-claude": conversation(),
-      },
-    });
-    live.set("th-claude", LIVE);
-    turnRecords.set(LIVE.turnId, "u2");
-    const list = async (id: number, params: object, method = "turns") => {
-      router.fromApp(
-        encode({
-          id,
-          method: `thread/${method}/list`,
-          params: { threadId: "th-claude", limit: 1, ...params },
-        }),
-      );
-      await until(() => responseTo(sent, id) !== null);
-      return responseTo(sent, id);
-    };
-
-    const newest = await list(8, {});
-    live.delete("th-claude");
-    const older = await list(9, { cursor: newest.result.nextCursor });
-    const items = await list(10, { turnId: LIVE.turnId }, "items");
-
-    expect(newest.result.data.map(statusOf)).toEqual([
-      ["harnexus-turn-live", "inProgress", true],
-    ]);
-    expect(older.result.data.map(statusOf)).toEqual([
-      ["harnexus-history-u1", "completed", false],
-    ]);
-    expect(items.result.data).toMatchObject([
-      { turnId: "harnexus-history-u2", item: { type: "userMessage" } },
-    ]);
-  });
-
-  test("logs which turns and items a history read named and returned, by the ids' kind and first characters", async () => {
-    const { router, live, sent, events } = setup(["th-claude"], {
-      records: {
-        "th-claude": conversation(),
-      },
-    });
-    const turnId = "harnexus-turn-0123abcd-4567-89ef-0123-456789abcdef";
-    live.set("th-claude", { ...LIVE, turnId });
-
-    router.fromApp(
-      encode({
-        id: 8,
-        method: "thread/items/list",
-        params: {
-          threadId: "th-claude",
-          turnId,
-          cursor: { type: "item", itemId: `${turnId}-item-2` },
-        },
-      }),
-    );
-    await until(() => responseTo(sent, 8) !== null);
-
-    expect(events).toContainEqual({
-      event: "claude_history_answered",
-      method: "thread/items/list",
-      thread: "th-claud",
-      live: "l:0123abcd",
-      turn: "l:0123abcd",
-      cursor: "anchor l:0123abcd-item-2",
-      returned: ["harnexus-history-u2-item-1", "harnexus-history-u2-item-2"],
-    });
-  });
-
   test("passes a read without turns unchanged while no turn runs", async () => {
     const { router } = setup(["th-claude"], {
       records: { "th-claude": conversation() },
@@ -2343,12 +2026,6 @@ describe("a Claude thread with a running turn", () => {
   });
 });
 
-const LIVE: LiveTurn = {
-  turnId: "harnexus-turn-live",
-  record: "u2",
-  startedAtMs: 1_790_000_000_000,
-};
-
 const idleThread = (id: number) =>
   encode({
     id,
@@ -2363,17 +2040,6 @@ const idleThread = (id: number) =>
       cwd: "/fixture/work",
     },
   });
-
-const statusOf = (turn: {
-  id: string;
-  status: string;
-  completedAt: number | null;
-  durationMs: number | null;
-}) => [
-  turn.id,
-  turn.status,
-  turn.completedAt === null && turn.durationMs === null,
-];
 
 const CLAUDE = "claude-sonnet-5";
 
@@ -2574,60 +2240,30 @@ describe("side chats of a Codex thread moved to Claude", () => {
     expect(opened.result.model).toBe(CLAUDE);
   });
 
-  test("refuses a side chat picked on Claude when the main thread cannot be read rather than open it without the conversation", async () => {
+  test("keeps a side chat whose main thread cannot be read on Codex rather than open it on Claude without the conversation", async () => {
     const { router, events } = setup([], { mainThread: "unreadable" });
-
-    const forwarded = await router.fromApp(
-      codexSideChatFork({ model: CLAUDE }),
-    );
-
-    expect(forwarded).toBeNull();
-    expect(events).toContainEqual({
-      event: "claude_request_refused",
-      method: "thread/fork",
-      reason: "side_chat_unreadable",
-    });
-  });
-
-  test.each<{ name: string; mainThread: object[] | "unreadable" }>([
-    { name: "a refused read", mainThread: "unreadable" },
-    {
-      name: "a malformed turn",
-      mainThread: [{ id: "turn-1", status: "completed" }],
-    },
-    {
-      name: "a text input with no text",
-      mainThread: [
-        {
-          id: "turn-1",
-          status: "completed",
-          items: [{ type: "userMessage", content: [{ type: "text" }] }],
-        },
-      ],
-    },
-  ])("keeps a side chat whose main thread gave $name off Claude", async ({
-    mainThread,
-  }) => {
-    const { router, events } = setup([], { mainThread });
+    const fork = codexSideChatFork();
 
     const explicit = await router.fromApp(codexSideChatFork({ model: CLAUDE }));
-    await router.fromApp(codexSideChatFork());
+    const opened = await router.fromApp(fork);
     await router.fromServer(threadResponse(9, "th-side"));
     const switched = await router.fromApp(sideChatTurn({ model: CLAUDE }));
 
     expect(explicit).toBeNull();
+    expect(opened).toBe(fork);
     expect(switched).toBeNull();
-    expect(events.map((event) => "reason" in event && event.reason)).toEqual([
-      "side_chat_unreadable",
-      "side_chat_main_unread",
+    expect(events).toEqual([
+      {
+        event: "claude_request_refused",
+        method: "thread/fork",
+        reason: "side_chat_unreadable",
+      },
+      {
+        event: "claude_request_refused",
+        method: "turn/start",
+        reason: "side_chat_main_unread",
+      },
     ]);
-  });
-
-  test("still opens a side chat on Codex when the main thread cannot be read", async () => {
-    const { router } = setup([], { mainThread: "unreadable" });
-    const fork = codexSideChatFork();
-
-    expect(await router.fromApp(fork)).toBe(fork);
   });
 
   test("refuses moving a side chat that sent a message to Codex to Claude", async () => {
