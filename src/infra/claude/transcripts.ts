@@ -90,7 +90,7 @@ export const findSessionFile = (sessionId: string, configDir: string) =>
       const files = yield* listing;
       if (files?.includes(fileName)) {
         const path = join(projectsDir, projects[index] ?? "", fileName);
-        sessionFiles.set(sessionFileKey(sessionId, configDir), path);
+        rememberSessionFile(sessionFileKey(sessionId, configDir), path);
         return Result.ok<string | null>(path);
       }
     }
@@ -108,10 +108,22 @@ const cachedSessionFile = async (sessionId: string, configDir: string) => {
   return null;
 };
 
+// A deleted Cloud copy is never looked up again, so the oldest entries are dropped to keep the resident process from growing.
+const rememberSessionFile = (key: string, path: string) => {
+  sessionFiles.delete(key);
+  sessionFiles.set(key, path);
+  for (const oldest of sessionFiles.keys()) {
+    if (sessionFiles.size <= SESSION_FILE_LIMIT) break;
+    sessionFiles.delete(oldest);
+  }
+};
+
 const sessionFileKey = (sessionId: string, configDir: string) =>
   `${configDir}\0${sessionId}`;
 
 const sessionFiles = new Map<string, string>();
+
+const SESSION_FILE_LIMIT = 256;
 
 export const claudeConfigDir = (env: NodeJS.ProcessEnv) =>
   env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
