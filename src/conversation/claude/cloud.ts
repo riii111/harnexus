@@ -868,16 +868,22 @@ const cloudChatName = (
   const first = records
     .map((record) => turnOpeningTextOf(record)?.replace(/\s+/g, " ").trim())
     .find((text) => text !== undefined && text !== "");
+  // Cut by what reads as one character, so an emoji is never split.
+  const characters =
+    first === undefined
+      ? []
+      : [...GRAPHEMES.segment(first)].map((part) => part.segment);
   const name =
     first === undefined
       ? sessionId
-      : first.length > NAME_LENGTH
-        ? `${first.slice(0, NAME_LENGTH - 1)}…`
+      : characters.length > NAME_LENGTH
+        ? `${characters.slice(0, NAME_LENGTH - 1).join("")}…`
         : first;
   return `${CLOUD_MARK} ${name}`;
 };
 
 const NAME_LENGTH = 60;
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 const UNSENT_OUTCOMES = new Set(["not_sent", "no_project", "no_parent"]);
 

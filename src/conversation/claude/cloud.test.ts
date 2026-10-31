@@ -256,12 +256,20 @@ describe("createCloudRuntime /cloud", () => {
       expected: `☁️ ${"x".repeat(59)}…`,
     },
     {
+      name: "an emoji sits where a long first prompt is cut",
+      copy: [
+        prompt("p1", `${"x".repeat(58)}👨‍👩‍👧${"y".repeat(20)}`),
+        endReply("r1", "hi"),
+      ],
+      expected: `☁️ ${"x".repeat(58)}👨‍👩‍👧…`,
+    },
+    {
       name: "a session with no prompt yet is named by its id",
       copy: [],
       expected: `☁️ ${CLOUD_ID}`,
     },
   ])("names a marked chat when $name", async ({ copy, expected }) => {
-    const env = setup({ copies: [copy] });
+    const env = setup({ copies: [[...copy]] });
 
     await env.runtime.run(env.turn(`/cloud ${CLOUD_ID}`).running);
     await settle();
