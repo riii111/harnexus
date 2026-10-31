@@ -465,9 +465,9 @@ describe("ThreadStore.runWrite", () => {
 
     expect(result.isErr() && result.error._tag).toBe("RunStateNotSaved");
     expect(resolved.isErr() && resolved.error._tag).toBe("RunStateNotSaved");
-    expect(again.isErr() && again.error._tag).toBe("WriteOutcomeUnknown");
+    expect(again.isErr() && again.error._tag).toBe("PreviousWriteUnsettled");
     expect(afterRestart.isErr() && afterRestart.error._tag).toBe(
-      "WriteOutcomeUnknown",
+      "PreviousWriteUnsettled",
     );
     expect(runs).toBe(1);
   });
@@ -520,7 +520,9 @@ describe("ThreadStore.runWrite", () => {
       neverUnknown,
     );
 
-    expect(retried.isErr() && retried.error._tag).toBe("WriteOutcomeUnknown");
+    expect(retried.isErr() && retried.error._tag).toBe(
+      "PreviousWriteUnsettled",
+    );
     expect(called).toBe(false);
     expect((await openStore()).get("thread-1")?.runState).toBe(
       "outcomeUnknown",

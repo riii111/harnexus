@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
-import type { CloudSend } from "../../infra/claude/cloud.ts";
+import {
+  CloudCopyFailed,
+  CloudSendRejected,
+  CloudSendUnknown,
+} from "../../infra/claude/cloud.ts";
 import type { CloudLink, ThreadRecord } from "../../infra/thread-store.ts";
 import type { AppNotification } from "../../presentation/protocol.ts";
 import {
@@ -30,6 +34,8 @@ import {
 const CLOUD_ID = "session_01NfjPqrX1AK5RmKyV182VYD";
 
 type CloudEvent = Parameters<typeof serializeCloudEvent>[0];
+
+type SendAnswer = Result<void, CloudSendRejected | CloudSendUnknown>;
 
 describe("createCloudRuntime child sessions", () => {
   const CHILD = "session_01NfjPqs5GNSgknfAaJ3mdYA";
@@ -425,13 +431,13 @@ describe("createCloudRuntime turns", () => {
   test.each([
     {
       name: "a refused send fails the turn",
-      answer: { kind: "rejected", message: "archived" } satisfies CloudSend,
+      answer: Result.err(new CloudSendRejected({ message: "archived" })),
       tag: "CloudSendRejected",
       unknown: false,
     },
     {
       name: "a send that may have landed marks the outcome unknown",
-      answer: { kind: "unknown", message: "timeout" } satisfies CloudSend,
+      answer: Result.err(new CloudSendUnknown({ message: "timeout" })),
       tag: "CloudSendUnknown",
       unknown: true,
     },
@@ -552,7 +558,9 @@ describe("createCloudRuntime turns", () => {
     env.wait = () => steered.promise;
     const running = env.runtime.run(turn.running);
     await env.untilSent(1);
-    env.sendQueue.push({ kind: "unknown", message: "timeout" });
+    env.sendQueue.push(
+      Result.err(new CloudSendUnknown({ message: "timeout" })),
+    );
 
     const refusal = await env.runtime.steer(turn.running, {
       text: "second",
@@ -577,7 +585,9 @@ describe("createCloudRuntime turns", () => {
     env.wait = () => steered.promise;
     const running = env.runtime.run(turn.running);
     await env.untilSent(1);
-    env.sendQueue.push({ kind: "rejected", message: "archived" });
+    env.sendQueue.push(
+      Result.err(new CloudSendRejected({ message: "archived" })),
+    );
 
     const refusal = await env.runtime.steer(turn.running, {
       text: "second",
@@ -1068,9 +1078,9 @@ const setup = ({
     linkFails: false,
     // Runs while a copy is being saved.
     duringSave: () => {},
-    sendAnswer: { kind: "sent" } as CloudSend,
+    sendAnswer: Result.ok() as SendAnswer,
     // Answers for the next sends in order, before sendAnswer.
-    sendQueue: [] as CloudSend[],
+    sendQueue: [] as SendAnswer[],
     // Runs when a send starts and is waited for before it answers.
     duringSend: async (_text: string) => {},
     cloudOf: (threadId: string) => clouds.get(threadId) ?? null,
@@ -1153,7 +1163,9 @@ const setup = ({
     },
     sendToCloud: async (cloud, sentText) => {
       const answer = env.sendQueue.shift() ?? env.sendAnswer;
-      if (answer.kind !== "rejected") sends.push({ cloud, text: sentText });
+      const rejected =
+        answer.isErr() && answer.error._tag === "CloudSendRejected";
+      if (!rejected) sends.push({ cloud, text: sentText });
       await env.duringSend(sentText);
       // Woken after the answer is handled, so a caller waiting for the send sees what the runtime did with it.
       setTimeout(() => {
@@ -1169,20 +1181,19 @@ const setup = ({
       copyWaiters = copyWaiters.filter((wake) => !wake());
       await env.duringCopy(call);
       if (env.copyFailure !== null) {
-        return Result.err({
-          _tag: "CloudCopyFailed",
-          stopped: null,
-          message: env.copyFailure,
-        });
+        return Result.err(
+          new CloudCopyFailed({ stopped: null, message: env.copyFailure }),
+        );
       }
       const sessionId = `copy-${call}`;
       contents.set(sessionId, copies[Math.min(call, copies.length) - 1] ?? []);
       if (env.copyStop !== null) {
-        return Result.err({
-          _tag: "CloudCopyFailed",
-          stopped: env.copyStop,
-          message: "may have run a model turn",
-        });
+        return Result.err(
+          new CloudCopyFailed({
+            stopped: env.copyStop,
+            message: "may have run a model turn",
+          }),
+        );
       }
       return Result.ok(sessionId);
     },

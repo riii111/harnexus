@@ -1,3 +1,4 @@
+import { matchError, Result, TaggedError } from "better-result";
 import { z } from "zod";
 import { isObject } from "../../runtime/object.ts";
 import { isClaudeModel } from "../claude/models.ts";
@@ -17,6 +18,15 @@ import {
 } from "./link-calls.ts";
 import { defineTool, failure, type ToolResult } from "./link-results.ts";
 import type { ServerRequest } from "./server-requests.ts";
+
+class ModelListUnreadable extends TaggedError("ModelListUnreadable")<{
+  cause: { message: string };
+  message: string;
+}> {}
+
+class NoDefaultModel extends TaggedError("NoDefaultModel")<{
+  message: string;
+}> {}
 
 type CreateArgs = Record<string, unknown> & {
   model?: string | undefined;
@@ -63,14 +73,14 @@ export const createThreadTool = ({
   ): Promise<CreateAttempt> => {
     const queuedIn = calls.currentGeneration();
     const model = await childModel(args.model);
-    if ("refusal" in model) return notCreated(failure(model.refusal));
+    if (model.isErr()) return notCreated(failure(modelRefusal(model.error)));
     if (calls.wasStopped(queuedIn)) {
       return notCreated(notSentAfterStop("create_thread"));
     }
     const watch: CreateWatch = { created: null, outcome: null, busy: false };
     const result = await calls.write(
       "create_thread",
-      { ...args, model: model.model },
+      { ...args, model: model.value },
       [],
       {
         queuedIn,
@@ -80,7 +90,7 @@ export const createThreadTool = ({
             checked
               ? {
                   expected: {
-                    model: model.model,
+                    model: model.value,
                     effort: args.thinking ?? null,
                   },
                 }
@@ -166,8 +176,8 @@ export const createThreadTool = ({
   // Keep the default Codex model for existing review callers; a Claude worker is selected explicitly.
   const childModel = async (
     requested: string | undefined,
-  ): Promise<{ model: string } | { refusal: string }> => {
-    if (requested !== undefined) return { model: requested };
+  ): Promise<Result<string, ModelListUnreadable | NoDefaultModel>> => {
+    if (requested !== undefined) return Result.ok(requested);
     let cursor: string | null = null;
     for (let page = 0; page < MAX_MODEL_PAGES; page += 1) {
       const listed = await request(
@@ -176,19 +186,21 @@ export const createThreadTool = ({
         { timeoutMs: CALL_TIMEOUT_MS },
       );
       if (listed.isErr()) {
-        return {
-          refusal: `Cannot read the Codex models to choose the child thread's model (${listed.error.message}); nothing was created.`,
-        };
+        return Result.err(
+          new ModelListUnreadable({
+            cause: listed.error,
+            message: "cannot read the Codex models",
+          }),
+        );
       }
       const models = readModelPage(listed.value);
-      if (models.defaultModel !== null) return { model: models.defaultModel };
+      if (models.defaultModel !== null) return Result.ok(models.defaultModel);
       if (models.nextCursor === null) break;
       cursor = models.nextCursor;
     }
-    return {
-      refusal:
-        "The Codex app lists no default model; give create_thread a Codex model. Nothing was created.",
-    };
+    return Result.err(
+      new NoDefaultModel({ message: "the Codex app lists no default model" }),
+    );
   };
 
   const definition = defineTool(
@@ -229,6 +241,14 @@ const notCreated = (result: ToolResult, busy = false): CreateAttempt => ({
   unknown: false,
   busy,
 });
+
+const modelRefusal = (error: ModelListUnreadable | NoDefaultModel) =>
+  matchError(error, {
+    ModelListUnreadable: ({ cause }) =>
+      `Cannot read the Codex models to choose the child thread's model (${cause.message}); nothing was created.`,
+    NoDefaultModel: () =>
+      "The Codex app lists no default model; give create_thread a Codex model. Nothing was created.",
+  });
 
 // The server's own model/list, which never includes the Claude models the bridge adds for the app.
 const readModelPage = (value: unknown) => {

@@ -168,8 +168,8 @@ export const createTurnController = <Tag extends string>({
       threads.threadOf(threadId),
       fallbackCwd,
     );
-    if ("refusal" in checked) {
-      return refuse(id, checked.refusal);
+    if (checked.isErr()) {
+      return refuse(id, checked.error.refusal);
     }
     const delegated = delegatedMessage(params);
     const input = messageInput(params.input, delegated);
@@ -184,7 +184,7 @@ export const createTurnController = <Tag extends string>({
       return refuse(id, "duplicate_message");
     }
     if (messageId !== null) acceptMessage(threadId, messageId);
-    threads.changeModel(threadId, checked.thread.model);
+    threads.changeModel(threadId, checked.value.model);
     const effort = requestedEffort(params);
     if (effort !== undefined) threads.selectEffort(threadId, effort);
     const turn = {
@@ -202,7 +202,7 @@ export const createTurnController = <Tag extends string>({
       messageId === null &&
       (steerableTurn(threadId) !== null || steeringMessages.has(threadId))
     ) {
-      steerMessage(id, threadId, checked.thread, turn);
+      steerMessage(id, threadId, checked.value, turn);
       return null;
     }
     const allowRecovery =
@@ -213,7 +213,7 @@ export const createTurnController = <Tag extends string>({
       acceptTurn(
         id,
         threadId,
-        checked.thread,
+        checked.value,
         turn,
         messageId,
         false,
@@ -230,8 +230,8 @@ export const createTurnController = <Tag extends string>({
       return;
     }
     const checked = checkThread(params, threads.threadOf(threadId), undefined);
-    if ("refusal" in checked) {
-      refuse(id, checked.refusal);
+    if (checked.isErr()) {
+      refuse(id, checked.error.refusal);
       return;
     }
     if (closed) {
@@ -256,7 +256,7 @@ export const createTurnController = <Tag extends string>({
       startedBy: "app" as const,
     };
     afterSteers(threadId, () =>
-      acceptTurn(id, threadId, checked.thread, turn, null, true),
+      acceptTurn(id, threadId, checked.value, turn, null, true),
     );
   };
 
@@ -564,7 +564,7 @@ export const createTurnController = <Tag extends string>({
     }
     if (!responded) {
       forgetMessage(threadId, messageId);
-      if (ran.error._tag === "WriteOutcomeUnknown") {
+      if (ran.error._tag === "PreviousWriteUnsettled") {
         refuseTurn(request, queued, "outcome_unknown", ran.error);
         return;
       }

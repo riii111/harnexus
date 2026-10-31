@@ -327,12 +327,12 @@ export const createRouter = ({
         : pinDirectory(request.params, known);
     if (threadId !== undefined && known !== undefined) {
       const checked = checkThread(params, known, undefined);
-      if ("refusal" in checked) {
-        refuse("thread/resume", request, checked.refusal);
+      if (checked.isErr()) {
+        refuse("thread/resume", request, checked.error.refusal);
         return null;
       }
-      if (checked.thread.model !== known.model) {
-        threads.changeModel(threadId, checked.thread.model);
+      if (checked.value.model !== known.model) {
+        threads.changeModel(threadId, checked.value.model);
       }
     }
     const created = method === "thread/start" && isClaudeModel(params.model);
@@ -393,8 +393,8 @@ export const createRouter = ({
       codex || source === undefined ? params : pinDirectory(params, source);
     if (!codex) {
       const checked = checkThread(forked, source, undefined);
-      if ("refusal" in checked) {
-        refuse("thread/fork", request, checked.refusal);
+      if (checked.isErr()) {
+        refuse("thread/fork", request, checked.error.refusal);
         return null;
       }
     }
@@ -480,13 +480,13 @@ export const createRouter = ({
       return line;
     }
     const checked = checkThread(params, known, cwdOf(params));
-    if ("refusal" in checked) {
-      refuse("thread/settings/update", request, checked.refusal);
+    if (checked.isErr()) {
+      refuse("thread/settings/update", request, checked.error.refusal);
       return null;
     }
-    if (known === undefined) threads.adopt(threadId, checked.thread);
-    else if (checked.thread.model !== known.model) {
-      threads.changeModel(threadId, checked.thread.model);
+    if (known === undefined) threads.adopt(threadId, checked.value);
+    else if (checked.value.model !== known.model) {
+      threads.changeModel(threadId, checked.value.model);
     }
     const mode = requestedMode(params);
     if (mode !== undefined) threads.selectMode(threadId, mode);
@@ -637,8 +637,6 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
     case "claude_history_unreadable":
     case "claude_subagents_unreadable":
       return { event: entry.event, error: entry.error };
-    case "claude_subagents_unrestored":
-      return { event: entry.event };
   }
 };
 

@@ -105,16 +105,19 @@ export const loadUnverifiedCodexPolicy = (
 
 const CALL_SOCKET_ENV = "HARNEXUS_CALL_SOCKET";
 
-// Open beside the thread store unless "off", since harnexus-task sends through it; "off" closes it, as the socket lets any process of the user create and message threads in the app.
-export const loadCallSocketPath = (
+type CallSocketSetting =
+  | { kind: "off" }
+  | { kind: "default" }
+  | { kind: "path"; path: string };
+
+const callSocketSetting = (
   env: Record<string, string | undefined>,
-  statePath: string,
-) => {
+): Result<CallSocketSetting, CallSocketPathNotAbsolute> => {
   const value = env[CALL_SOCKET_ENV];
-  if (value === "off") return Result.ok(null);
   if (value === undefined || value === "" || value === "on") {
-    return Result.ok(defaultCallSocketPath(statePath));
+    return Result.ok({ kind: "default" });
   }
+  if (value === "off") return Result.ok({ kind: "off" });
   if (!isAbsolute(value)) {
     return Result.err(
       new CallSocketPathNotAbsolute({
@@ -123,19 +126,32 @@ export const loadCallSocketPath = (
       }),
     );
   }
-  return Result.ok(value);
+  return Result.ok({ kind: "path", path: value });
 };
 
-// A caller finds the socket at an absolute HARNEXUS_CALL_SOCKET, or where the bridge places it by default.
+// Open beside the thread store unless "off", since harnexus-task sends through it; "off" closes it, as the socket lets any process of the user create and message threads in the app.
+export const loadCallSocketPath = (
+  env: Record<string, string | undefined>,
+  statePath: string,
+) =>
+  callSocketSetting(env).map((setting) => {
+    if (setting.kind === "off") return null;
+    return setting.kind === "path"
+      ? setting.path
+      : defaultCallSocketPath(statePath);
+  });
+
+// A caller finds the socket at an absolute HARNEXUS_CALL_SOCKET, or where the bridge places it by default; a value the bridge refuses is refused here too.
 export const loadCallerSocketPath = (
   env: Record<string, string | undefined>,
   home: () => string = homedir,
-) => {
-  const configured = env[CALL_SOCKET_ENV];
-  if (configured?.startsWith("/")) return Result.ok(configured);
-  const state = loadStatePath(env, home);
-  return state.isOk() ? Result.ok(defaultCallSocketPath(state.value)) : state;
-};
+) =>
+  Result.gen(function* () {
+    const setting = yield* callSocketSetting(env);
+    if (setting.kind === "path") return Result.ok(setting.path);
+    const state = yield* loadStatePath(env, home);
+    return Result.ok(defaultCallSocketPath(state));
+  });
 
 const defaultCallSocketPath = (statePath: string) =>
   join(dirname(statePath), "call.sock");

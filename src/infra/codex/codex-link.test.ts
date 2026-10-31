@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
@@ -185,6 +185,35 @@ describe("createCodexLink tools", () => {
 
     expect(modelLists).toEqual([{}, { cursor: "page-2" }]);
     expect(requests[0]?.params.arguments.model).toBe("gpt-later");
+  });
+
+  test.each([
+    {
+      name: "a model list the app cannot answer",
+      models: () => Result.err(unanswered()),
+      expected: "Cannot read the Codex models",
+    },
+    {
+      name: "a model list with no default Codex model",
+      models: () =>
+        Result.ok({
+          data: [{ model: "claude-sonnet-5", isDefault: true }],
+          nextCursor: null,
+        }),
+      expected: "lists no default model",
+    },
+  ])("creates nothing and says why for $name", async ({ models, expected }) => {
+    const { client, requests } = await connect({ models });
+
+    const created = await client.callTool({
+      name: "create_thread",
+      arguments: { prompt: "review", target: TARGET },
+    });
+
+    expect(created.isError).toBe(true);
+    expect(text(created)).toContain(expected);
+    expect(text(created)).toContain("othing was created");
+    expect(requests).toEqual([]);
   });
 
   test("allows reading and waiting on its own thread but not messaging it", async () => {
@@ -678,6 +707,31 @@ describe("createCodexLink automation_update", () => {
 
     expect(created.isError).toBeFalsy();
     expect(text(created)).toContain("Do not create it again");
+    expect(cronRecord.ids()).toEqual([]);
+  });
+
+  test("tells a created cron whose automations cannot be listed afterwards that the listing failed, and records nothing", async () => {
+    const home = await mkdtemp(join(tmpdir(), "harnexus-automations-"));
+    await mkdir(join(home, "automations"));
+    const cronRecord = createMemoryCronRecord();
+    const { client } = await connect({
+      codexHome: home,
+      cronRecord,
+      answer: async () => {
+        await chmod(join(home, "automations"), 0o000);
+        return Result.ok(textAnswer("created"));
+      },
+    });
+
+    const created = await client.callTool({
+      name: "automation_update",
+      arguments: { mode: "create", kind: "cron", ...CRON },
+    });
+    await chmod(join(home, "automations"), 0o700);
+    await rm(home, { recursive: true, force: true });
+
+    expect(text(created)).toContain("the automations could not be listed");
+    expect(text(created)).not.toContain("told apart");
     expect(cronRecord.ids()).toEqual([]);
   });
 

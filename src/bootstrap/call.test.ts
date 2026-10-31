@@ -39,6 +39,23 @@ describe("harnexus call", () => {
     expect(stdout).toBe(`${MISMATCH}\n`);
     expect(exitCode).toBe(6);
   });
+
+  test("names the refused socket setting on stderr and exits with 5", async () => {
+    const call = Bun.spawn([process.execPath, CALL], {
+      env: { ...process.env, HARNEXUS_CALL_SOCKET: "call.sock" },
+      stdin: new Blob([REQUEST]),
+      stderr: "pipe",
+    });
+    const [stderr, exitCode] = await Promise.all([
+      new Response(call.stderr).text(),
+      call.exited,
+    ]);
+
+    expect(stderr).toBe(
+      "harnexus call: HARNEXUS_CALL_SOCKET must be on, off or an absolute path\n",
+    );
+    expect(exitCode).toBe(5);
+  });
 });
 
 const CALL = join(import.meta.dir, "call.ts");

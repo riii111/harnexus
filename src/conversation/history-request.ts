@@ -29,7 +29,6 @@ export type HistoryEvent =
       event: "claude_history_unreadable";
       error: InferErr<Awaited<ReturnType<ReadSession>>>["_tag"];
     }
-  | { event: "claude_subagents_unrestored" }
   | {
       event: "claude_history_answered";
       method: HistoryMethod;
@@ -87,34 +86,33 @@ export const createHistoryRequests = ({
       return Promise.resolve(Result.ok([]));
     }
     const rewind = threads.rewindOf(threadId);
-    const loaded = readSession(sessionId).then(async (original) => {
-      if (keyOf(threadId) !== key) return load(threadId);
-      const read = original.andThen((messages) => {
-        if (rewind === undefined) return Result.ok(messages);
-        if (rewind.at === null) return Result.ok([]);
-        return recordUntil(messages, rewind.at);
+    const loaded: Promise<Loaded> = readSession(sessionId)
+      .then(async (original) => {
+        if (keyOf(threadId) !== key) return load(threadId);
+        const read = original.andThen((messages) => {
+          if (rewind === undefined) return Result.ok(messages);
+          if (rewind.at === null) return Result.ok([]);
+          return recordUntil(messages, rewind.at);
+        });
+        if (read.isOk()) {
+          await subagents.restore(threadId, sessionId, thread.cwd, read.value);
+        }
+        if (keyOf(threadId) !== key) return load(threadId);
+        return read
+          .tapError((error) =>
+            log({ event: "claude_history_unreadable", error: error._tag }),
+          )
+          .map((messages) =>
+            buildHistory(
+              messages,
+              { threadId, cwd: thread.cwd },
+              subagents.agentRefOf(threadId),
+            ),
+          );
+      })
+      .finally(() => {
+        if (reading.get(threadId)?.loaded === loaded) reading.delete(threadId);
       });
-      // The app's stream waits on this history, so a fault while reading back the thread's agents leaves them out rather than failing it; the next read tries again.
-      if (read.isOk()) {
-        const restored = await Result.tryPromise(() =>
-          subagents.restore(threadId, sessionId, thread.cwd, read.value),
-        );
-        if (restored.isErr()) log({ event: "claude_subagents_unrestored" });
-      }
-      if (keyOf(threadId) !== key) return load(threadId);
-      if (reading.get(threadId)?.loaded === loaded) reading.delete(threadId);
-      return read
-        .tapError((error) =>
-          log({ event: "claude_history_unreadable", error: error._tag }),
-        )
-        .map((messages) =>
-          buildHistory(
-            messages,
-            { threadId, cwd: thread.cwd },
-            subagents.agentRefOf(threadId),
-          ),
-        );
-    });
     reading.set(threadId, { key, loaded });
     return loaded;
   };

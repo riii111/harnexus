@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { Result, TaggedError } from "better-result";
 import { isClaudeModel } from "../infra/claude/models.ts";
 import { isObject } from "../runtime/object.ts";
 
@@ -10,6 +11,14 @@ export type AppRequest = {
 };
 
 export type Refusal = keyof typeof REFUSAL_MESSAGES;
+
+class ThreadRefused extends TaggedError("ThreadRefused")<{
+  refusal: Extract<
+    Refusal,
+    "codex_model" | "directory_change" | "directory_unknown"
+  >;
+  message: string;
+}> {}
 
 export type Mode = "plan" | "default";
 
@@ -36,20 +45,25 @@ export const checkThread = (
   params: Record<string, unknown>,
   known: Thread | undefined,
   fallbackCwd: string | undefined,
-): { thread: Thread } | { refusal: Refusal } => {
+): Result<Thread, ThreadRefused> => {
   const model = requestedModel(params) ?? known?.model;
-  if (!isClaudeModel(model)) return { refusal: "codex_model" };
+  if (!isClaudeModel(model)) return refused("codex_model");
   if (known !== undefined) {
     return typeof params.cwd === "string" &&
       !isSameDirectory(params.cwd, known.cwd)
-      ? { refusal: "directory_change" }
-      : { thread: { model, cwd: known.cwd } };
+      ? refused("directory_change")
+      : Result.ok({ model, cwd: known.cwd });
   }
   const cwd = typeof params.cwd === "string" ? params.cwd : fallbackCwd;
   return cwd === undefined
-    ? { refusal: "directory_unknown" }
-    : { thread: { model, cwd } };
+    ? refused("directory_unknown")
+    : Result.ok({ model, cwd });
 };
+
+const refused = (refusal: ThreadRefused["refusal"]) =>
+  Result.err(
+    new ThreadRefused({ refusal, message: REFUSAL_MESSAGES[refusal] }),
+  );
 
 // The app reopens a thread in the first folder of the project it is assigned to, which can differ from where Claude runs (App 26.1013), so a reopen keeps Claude's directory instead of refusing the thread.
 export const pinDirectory = (

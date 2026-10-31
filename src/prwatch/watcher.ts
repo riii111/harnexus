@@ -71,7 +71,7 @@ const openEntry = (deps: WatchDeps, config: WatchConfig, link: PrLink) =>
       deps.log({
         event: "state_unreadable",
         pr: link.url,
-        error: loaded.error.message,
+        error: loaded.error._tag,
       });
       return Result.ok(null);
     }
@@ -178,7 +178,7 @@ const pollAccount = async (
     config.reviewBots,
   );
   if (summaries.isErr()) {
-    deps.log({ event: "poll_failed", account, error: summaries.error.message });
+    deps.log({ event: "poll_failed", account, error: summaries.error._tag });
     return;
   }
 
@@ -229,7 +229,7 @@ const applySummary = async (
   const detail = await deps.github.detail(account, link, config.reviewBots);
   // The summary is left as it was, so the next cycle reads the detail again.
   if (detail.isErr()) {
-    deps.log({ event: "detail_failed", pr, error: detail.error.message });
+    deps.log({ event: "detail_failed", pr, error: detail.error._tag });
     return;
   }
 
@@ -375,7 +375,7 @@ const send = async (
   };
   const marked = await saveWatchState(deps.paths.state, link, sending);
   if (marked.isErr()) {
-    deps.log({ event: "state_unwritable", pr, error: marked.error.message });
+    deps.log({ event: "state_unwritable", pr, error: marked.error._tag });
     return;
   }
   // Compared against the mark, so whatever the outcome the state is written again.

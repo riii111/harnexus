@@ -51,6 +51,7 @@ import { reportCompatibilityFailure } from "./compatibility.boundary.ts";
 import { createBridgeLogger } from "./logging.ts";
 import { REPO } from "./repo.ts";
 import {
+  exitOnUnhandledRejection,
   serverFromEnv,
   signalWithLog,
   stopLingeringServer,
@@ -125,6 +126,10 @@ for (const signal of BRIDGE_SIGNALS) {
     process.exit(128 + constants.signals[signal]);
   });
 }
+process.on(
+  "unhandledRejection",
+  exitOnUnhandledRejection({ log: logger.log, closeAll: claude.closeAll }),
+);
 await relayStreams({ ...claude.streams, stopServer });
 claude.endObservation();
 logger.log({ event: "server_closed" });

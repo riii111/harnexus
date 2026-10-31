@@ -148,7 +148,7 @@ describe("sendToCloud", () => {
       "/tmp/w",
     );
 
-    expect(sent).toEqual({ kind: "sent" });
+    expect(sent.isOk()).toBe(true);
     expect(calls).toEqual([
       {
         file: "/usr/local/bin/claude",
@@ -205,7 +205,10 @@ describe("sendToCloud", () => {
       "/",
     );
 
-    expect(sent).toEqual({ kind: "rejected", message });
+    expect(sent.isErr() && [sent.error._tag, sent.error.message]).toEqual([
+      "CloudSendRejected",
+      message,
+    ]);
   });
 
   test.each([
@@ -233,7 +236,7 @@ describe("sendToCloud", () => {
       "/",
     );
 
-    expect(sent.kind).toBe("unknown");
+    expect(sent.isErr() && sent.error._tag).toBe("CloudSendUnknown");
   });
 });
 

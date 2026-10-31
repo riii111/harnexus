@@ -181,4 +181,13 @@ describe("loadCallerSocketPath", () => {
 
     expect(path.isOk() && path.value).toBe(expected);
   });
+
+  test("rejects a relative path as the bridge does", () => {
+    const path = loadCallerSocketPath(
+      { HARNEXUS_CALL_SOCKET: "h.sock" },
+      () => "/home/u",
+    );
+
+    expect(path.isErr() && path.error._tag).toBe("CallSocketPathNotAbsolute");
+  });
 });

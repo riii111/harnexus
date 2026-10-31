@@ -3,9 +3,40 @@ import { type Signal, signalProcess } from "../runtime/process.boundary.ts";
 
 const SERVER_PID_ENV = "HARNEXUS_SERVER_PID";
 
+export type BridgeFailedEvent = {
+  event: "bridge_failed";
+  reason: "UnhandledRejection";
+};
+
 export type ServerSignalEvent =
   | { event: "server_signaled"; signal: Signal }
   | { event: "server_signal_failed"; signal: Signal; code: string | null };
+
+// A rejection nothing awaits is a fault in the bridge, which Bun ends with status 1 and a stack on stderr only; this also records it in the log and closes the Claude processes, as a signal does.
+export const exitOnUnhandledRejection =
+  ({
+    log,
+    closeAll,
+    report = (reason) => process.stderr.write(`${stackOf(reason)}\n`),
+    exit = process.exit,
+  }: {
+    log: (event: BridgeFailedEvent) => void;
+    closeAll: () => void;
+    report?: (reason: unknown) => void;
+    exit?: (code: number) => void;
+  }) =>
+  (reason: unknown) => {
+    log({ event: "bridge_failed", reason: "UnhandledRejection" });
+    report(reason);
+    try {
+      closeAll();
+    } finally {
+      exit(1);
+    }
+  };
+
+const stackOf = (reason: unknown) =>
+  reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
 
 // The server is alive only while it is still this process's parent; without a pid from the launcher nothing is ever signaled, so a reparented bridge cannot mistake launchd or a reused pid for the server.
 export const serverFromEnv = (

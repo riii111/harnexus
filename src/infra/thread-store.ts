@@ -77,7 +77,7 @@ class SessionTaken extends TaggedError("SessionTaken")<{
   message: string;
 }> {}
 
-class WriteOutcomeUnknown extends TaggedError("WriteOutcomeUnknown")<{
+class PreviousWriteUnsettled extends TaggedError("PreviousWriteUnsettled")<{
   threadId: string;
   message: string;
 }> {}
@@ -373,7 +373,7 @@ const createThreadStore = (
           record.runState === "outcomeUnknown" && continueUnknown();
         if (record.runState !== "idle" && !recovered) {
           return Result.err(
-            new WriteOutcomeUnknown({
+            new PreviousWriteUnsettled({
               threadId,
               message: `the previous write on thread ${threadId} has an unknown outcome`,
             }),

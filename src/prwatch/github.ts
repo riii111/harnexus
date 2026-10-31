@@ -10,7 +10,12 @@ import type {
   CommandOutput,
 } from "../runtime/process.boundary.ts";
 import type { ItemKind } from "./config.ts";
-import { fail, type WatchFailed } from "./failure.ts";
+import {
+  GithubAuthFailed,
+  GithubRejected,
+  GithubUnreachable,
+  type WatchFailure,
+} from "./failure.ts";
 import { botOf, type ReviewBot } from "./reviewers.ts";
 
 // The review bots are passed on every read, since the config is read again each cycle.
@@ -19,16 +24,16 @@ export type GitHub = {
     account: string,
     refs: readonly PrRef[],
     bots: readonly ReviewBot[],
-  ) => Promise<Result<(PrSummary | null)[], WatchFailed>>;
+  ) => Promise<Result<(PrSummary | null)[], WatchFailure>>;
   detail: (
     account: string,
     ref: PrRef,
     bots: readonly ReviewBot[],
-  ) => Promise<Result<PrDetail, WatchFailed>>;
+  ) => Promise<Result<PrDetail, WatchFailure>>;
   openPulls: (
     account: string,
     repo: string,
-  ) => Promise<Result<PrRef[], WatchFailed>>;
+  ) => Promise<Result<PrRef[], WatchFailure>>;
 };
 
 type Env = Record<string, string | undefined>;
@@ -92,6 +97,9 @@ type Post = (
 
 // The token is kept in memory for a few minutes only, so a token the owner rotates is picked up and it never reaches the state or the log.
 // Reading it starts gh, which on macOS starts the keychain tool too, so it is not read for every request.
+const rejected = (message: string) =>
+  Result.err(new GithubRejected({ message }));
+
 export const createGitHub = (
   runCommand: RunCommand,
   env: Env,
@@ -108,11 +116,22 @@ export const createGitHub = (
       ["gh", "auth", "token", "--hostname", "github.com", "--user", account],
       env,
     );
-    if (ran.isErr()) return fail(`gh auth token: ${ran.error.message}`);
+    if (ran.isErr()) {
+      return Result.err(
+        new GithubAuthFailed({
+          cause: ran.error,
+          message: `gh auth token: ${ran.error.message}`,
+        }),
+      );
+    }
 
     const value = ran.value.stdout.trim();
     if (ran.value.status !== 0 || value === "")
-      return fail(`gh has no token for account ${account}`);
+      return Result.err(
+        new GithubAuthFailed({
+          message: `gh has no token for account ${account}`,
+        }),
+      );
     tokens.set(account, { value, at: now() });
     return Result.ok(value);
   };
@@ -125,7 +144,14 @@ export const createGitHub = (
     Result.gen(async function* () {
       const secret = yield* Result.await(token(account));
       const answer = await post(secret, text, variables);
-      if (answer.isErr()) return fail(answer.error.message);
+      if (answer.isErr()) {
+        return Result.err(
+          new GithubUnreachable({
+            cause: answer.error,
+            message: answer.error.message,
+          }),
+        );
+      }
 
       const { status } = answer.value;
       // A rejected token is read again on the next request.
@@ -133,11 +159,11 @@ export const createGitHub = (
       const parsed = parseJson(answer.value.text);
       const body = parsed.isOk() ? parsed.value : null;
       if (!isObject(body))
-        return fail(`GitHub answered ${status} without JSON`);
+        return rejected(`GitHub answered ${status} without JSON`);
       if (Array.isArray(body.errors) && body.errors.length > 0)
-        return fail(`GitHub answered ${status}: ${errorsOf(body.errors)}`);
+        return rejected(`GitHub answered ${status}: ${errorsOf(body.errors)}`);
       if (status !== 200 || !isObject(body.data))
-        return fail(`GitHub answered ${status}`);
+        return rejected(`GitHub answered ${status}`);
       return Result.ok(body.data);
     });
 
@@ -196,7 +222,7 @@ export const createGitHub = (
       let info = pageInfoOf(first);
       for (let read = 1; info.next !== null; read += 1) {
         if (read >= MAX_PAGES)
-          return fail(
+          return rejected(
             `${ref.repo}#${ref.number} has more than ${MAX_PAGES} pages of ${page}`,
           );
 
@@ -244,7 +270,9 @@ export const createGitHub = (
 
         const pull = pullOf(data.repository);
         if (pull === null)
-          return fail(`${ref.repo}#${ref.number} is not visible to ${account}`);
+          return rejected(
+            `${ref.repo}#${ref.number} is not visible to ${account}`,
+          );
         return Result.ok(
           detailOf(yield* Result.await(readAllPages(account, ref, pull)), bots),
         );

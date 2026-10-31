@@ -12,7 +12,12 @@ import { parseJson } from "../runtime/json.boundary.ts";
 import { type Fields, isObject } from "../runtime/object.ts";
 import type { Finding } from "./classify.ts";
 import type { WatchEvent } from "./events.ts";
-import { ioFailed, WatchFailed } from "./failure.ts";
+import {
+  StateUnreadable,
+  type StateUnwritable,
+  stateUnreadable,
+  stateUnwritable,
+} from "./failure.ts";
 import type { PrRef, PrSummary } from "./github.ts";
 
 // Every path below is under the root the caller gives, so the watch never decides where its records live.
@@ -44,7 +49,7 @@ export const recordLink = (root: string, link: PrLink) =>
 export const loadLink = async (
   root: string,
   ref: PrRef,
-): Promise<Result<PrLink | null, WatchFailed>> =>
+): Promise<Result<PrLink | null, StateUnreadable>> =>
   (await loadJson(linkPath(root, ref))).map(linkOf);
 
 // Whether a PR's watch still runs for its chat, for a caller deciding whether another chat may take it.
@@ -67,7 +72,9 @@ const linkPath = (root: string, ref: PrRef) =>
 export const listLinks = (root: string, skip: ReadonlySet<string> = EMPTY) =>
   Result.gen(async function* () {
     const names = yield* Result.await(
-      listDirectoryIfExists(root).then((listed) => listed.mapError(ioFailed)),
+      listDirectoryIfExists(root).then((listed) =>
+        listed.mapError(stateUnreadable),
+      ),
     );
     const links: PrLink[] = [];
     for (const key of (names ?? []).sort()) {
@@ -224,7 +231,8 @@ export const saveWatchState = (
   root: string,
   ref: PrRef,
   state: WatchState,
-): Promise<Result<void, WatchFailed>> => saveJson(statePath(root, ref), state);
+): Promise<Result<void, StateUnwritable>> =>
+  saveJson(statePath(root, ref), state);
 
 export const lockPath = (root: string) => join(root, "watch.lock");
 
@@ -257,11 +265,12 @@ export const keyOf = (ref: PrRef) =>
 const loadJson = (path: string) =>
   Result.gen(async function* () {
     const text = yield* Result.await(
-      readTextFileIfExists(path).then((read) => read.mapError(ioFailed)),
+      readTextFileIfExists(path).then((read) => read.mapError(stateUnreadable)),
     );
     if (text === null) return Result.ok(null);
     return parseJson(text).mapError(
-      () => new WatchFailed({ message: `${path} is not valid JSON` }),
+      (cause) =>
+        new StateUnreadable({ cause, message: `${path} is not valid JSON` }),
     );
   });
 
@@ -269,11 +278,13 @@ const loadJson = (path: string) =>
 const saveJson = (path: string, data: unknown) =>
   Result.gen(async function* () {
     yield* Result.await(
-      prepareDirectory(dirname(path)).then((made) => made.mapError(ioFailed)),
+      prepareDirectory(dirname(path)).then((made) =>
+        made.mapError(stateUnwritable),
+      ),
     );
     yield* Result.await(
       writeFileAtomic(path, JSON.stringify(data, null, 1)).then((written) =>
-        written.mapError(ioFailed),
+        written.mapError(stateUnwritable),
       ),
     );
     return Result.ok();

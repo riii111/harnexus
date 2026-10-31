@@ -31,6 +31,7 @@ import type { Signal } from "../runtime/process.boundary.ts";
 import type { serveLines } from "../runtime/socket.boundary.ts";
 import type { BridgeIdentity } from "./bridge-identity.ts";
 import {
+  type BridgeFailedEvent,
   type ServerSignalEvent,
   serializeServerSignalEvent,
 } from "./supervise.ts";
@@ -42,6 +43,7 @@ type LogEvent =
   | { event: "log_file_unavailable"; reason: LogFileFailure }
   | { event: "server_closed" }
   | ServerSignalEvent
+  | BridgeFailedEvent
   | { event: "claude_unavailable"; reason: ClaudeUnavailable }
   | { event: "effort_settings_unavailable"; reason: EffortSettingsFailure }
   | { event: "claude_models_unavailable"; reason: ModelsFailure }
@@ -138,6 +140,7 @@ const serializeLogEvent = (entry: LogEvent) => {
     case "call_socket_listening":
       return { event: entry.event };
     case "bridge_startup_failed":
+    case "bridge_failed":
     case "log_file_unavailable":
       return { event: entry.event, reason: entry.reason };
     case "bridge_signaled":
@@ -165,7 +168,6 @@ const serializeLogEvent = (entry: LogEvent) => {
     case "claude_history_served":
     case "claude_history_answered":
     case "claude_history_unreadable":
-    case "claude_subagents_unrestored":
     case "claude_subagents_unreadable":
       return serializeRouteEvent(entry);
     case "rpc_message":
