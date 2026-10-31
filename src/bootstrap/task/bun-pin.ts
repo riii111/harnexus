@@ -1,4 +1,4 @@
-// A compiled harnexus-task carries the Bun that built it, so a Bun other than the pinned one is stopped at the build rather than when a chat calls it.
+// Why the running Bun may not build harnexus-task, or null when it is the pinned one.
 export const unpinnedBun = (pinned: string | null, running: string) =>
   pinned === running
     ? null

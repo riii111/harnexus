@@ -37,7 +37,7 @@ import { openCloudChild } from "./cloud-children.ts";
 
 type Runtime = Parameters<typeof createClaudeRuntime>[0];
 
-// The router, the turn controller and each session's thread tools share one store and one watch for created threads, so a child is traced to its parent whichever of them sees it first.
+// Connects the router, the turn controller and each session's thread tools for Claude threads.
 export const connectClaudeThreads = ({
   store,
   request,
@@ -74,6 +74,7 @@ export const connectClaudeThreads = ({
   send: (message: object) => void;
   log: (event: ClaudeLogEvent | RouteEvent | CloudLogEvent) => void;
 }) => {
+  // One store and one watch for created threads are shared, so a child is traced to its parent whichever part sees it first.
   const delegations = createDelegationWatch();
   const openLink = (callerThreadId: string) =>
     createCodexLink({
@@ -148,11 +149,11 @@ export const connectClaudeThreads = ({
             Result.err(new CloudSendRejected({ message: CLOUD_OFF })),
           )
         : sendToCloud(cloud.cli, cloudSessionId, text, cwd),
-    // The folder is made on first use, so a bridge that never links a Cloud session leaves nothing behind.
     copy: (cloudSessionId) =>
       cloud === undefined
         ? Promise.resolve(Result.err(new CloudOff({ message: CLOUD_OFF })))
-        : copyCloudSession(cloud.cli, cloudSessionId, {
+        : // The folder is made on first use, so a bridge that never links a Cloud session leaves nothing behind.
+          copyCloudSession(cloud.cli, cloudSessionId, {
             cwd: cloud.copyDir,
             checkouts: cloud.checkouts,
           }),

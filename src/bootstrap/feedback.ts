@@ -159,6 +159,7 @@ const facts: FeedbackFacts = {
     pinnedBun: setupFacts.pinnedBun,
   },
   app: {
+    // The app's main process keeps the Codex CLI and environment it started with until it quits.
     startedAtMs: appStartedAt(processes, setup.app, now),
     installedCodex,
     runningCodex: [
@@ -194,7 +195,7 @@ function optionText(value: unknown) {
   return typeof value === "string" ? value : undefined;
 }
 
-// The app runs with what open-app registered with launchd, and a variable launchd lacks takes its default there rather than this shell's value.
+// The setup the app runs with, which is what open-app registered with launchd.
 function appSetup(read: Awaited<ReturnType<typeof readLaunchd>>): {
   setup: DoctorSetup;
   launchd: "registered" | "none" | "unreadable";
@@ -205,6 +206,7 @@ function appSetup(read: Awaited<ReturnType<typeof readLaunchd>>): {
   if (Object.keys(env).length === 0) return { setup: shell, launchd: "none" };
   const codex = env.HARNEXUS_CODEX_PATH;
   const suffix = `/${CODEX_IN_APP}`;
+  // A variable launchd lacks takes its default in the app rather than this shell's value.
   return {
     setup: {
       env,
@@ -237,10 +239,10 @@ async function dependencyStates(
   );
 }
 
-// On macOS /usr/bin/git without the developer tools opens an install dialog, so it runs only once xcode-select finds them; optional locks are off so a report never takes the index lock.
 async function gitChanges(): Promise<GitChanges | null> {
   const git = Bun.which("git");
   if (git === null) return null;
+  // On macOS /usr/bin/git without the developer tools opens an install dialog, so it runs only once xcode-select finds them.
   if (process.platform === "darwin" && git === "/usr/bin/git") {
     const tools = await runCommand(
       "/usr/bin/xcode-select",
@@ -252,13 +254,14 @@ async function gitChanges(): Promise<GitChanges | null> {
   const status = await runCommand(
     git,
     ["-C", REPO, "status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+    // Optional locks are off so a report never takes the index lock.
     { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
   );
   if (status.isErr() || status.value.status !== 0) return null;
   return classifyChanges(status.value.stdout);
 }
 
-// A bridge loads its code, the SDK and the launcher once at start, so a change to any of them after that leaves it on older code.
+// When the code, the SDK or the launcher a bridge loads at start last changed.
 async function newestCodeChange() {
   const times: (number | null)[] = [];
   const listed = await listFilesDeepIfExists(join(REPO, "src"));
@@ -284,8 +287,7 @@ async function newestCodeChange() {
   return maxOf(times);
 }
 
-// The current file and the one moved aside at a bridge start are read from the end back until a line older than the window, within a cap, so a long log never loads whole.
-// A bridge writes what it runs only when it starts, so reading goes on back to the start line of each bridge running or writing in the window.
+// The log lines a report covers, read from the end back until a line older than the window, within a cap rather than whole.
 async function readAppLog(runningPids: ReadonlySet<number>) {
   const statePath = loadStatePath(setup.env);
   const path = statePath.andThen((state) => loadLogPath(setup.env, state));
@@ -311,6 +313,7 @@ async function readAppLog(runningPids: ReadonlySet<number>) {
         .filter((pid) => pid !== null),
     ]),
   ].filter((pid) => !started.has(pid));
+  // A bridge writes what it runs only when it starts, so reading goes on back to the start line of each bridge running or writing in the window.
   if (missing.length > 0 && !read.reachedStart) {
     const further = await readLogFiles(
       logPath,
@@ -384,7 +387,6 @@ function unreadLog(facts: LogFacts) {
   return { starts: [] as LoggedStart[], facts };
 }
 
-// Text read from inside the file starts at its first line break, so the first line kept is whole; the last line may still be cut by a writer, which parseLog leaves out.
 async function readBack(
   path: string,
   enough: (text: string) => boolean,
@@ -417,6 +419,7 @@ async function readBack(
 }
 
 function wholeLines(text: string, start: number) {
+  // Text read from inside the file starts at its first line break, so the first line kept is whole; the last line may still be cut by a writer, which parseLog leaves out.
   return start === 0 ? text : text.slice(text.indexOf("\n") + 1);
 }
 
@@ -427,7 +430,7 @@ function firstTime(text: string) {
   return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
 }
 
-// A path set by hand can sit anywhere, so outside the home folder and the usual install places it prints by role.
+// The paths a report prints by role.
 function knownPaths(appSetup: DoctorSetup) {
   const home = homedir();
   const state = loadStatePath(appSetup.env);
@@ -439,6 +442,7 @@ function knownPaths(appSetup: DoctorSetup) {
     { path: appSetup.env.CODEX_CLI_PATH, name: "<launcher>" },
   ].filter(
     (entry): entry is { path: string; name: string } =>
+      // A path set by hand can sit anywhere, so outside the home folder and the usual install places it prints by role.
       entry.path !== undefined &&
       !entry.path.startsWith(`${home}/`) &&
       !entry.path.startsWith(`${appSetup.app}/`) &&

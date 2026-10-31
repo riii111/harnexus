@@ -7,7 +7,7 @@ import { projectsIn } from "../task/session.ts";
 
 type Call = (line: string) => Promise<string>;
 
-// A chat for a session a linked Cloud session started is opened in the parent chat's project, as if the parent had created it, with /cloud as its first message; the answer is the app's outcome, or why nothing was sent.
+// Opens a chat for a session a linked Cloud session started, in the parent chat's project with /cloud as its first message, as if the parent had created it.
 export const openCloudChild = async (
   call: Call,
   parentThreadId: string,
@@ -39,7 +39,7 @@ const answerOf = async (
   return parsed.isOk() && isObject(parsed.value) ? parsed.value : {};
 };
 
-// The project whose folder holds the parent chat's folder, the deepest when several do; a chat in a worktree of its own sits outside every project, so it takes the one project of the same folder name.
+// The project whose folder holds the parent chat's folder, the deepest when several do.
 export const projectOf = async (result: unknown, folder: string) => {
   const real = await realPathOrSelf(folder);
   const projects: { projectId: string; path: string }[] = [];
@@ -58,6 +58,7 @@ export const projectOf = async (result: unknown, folder: string) => {
     .filter(({ path }) => real === path || real.startsWith(`${path}/`))
     .sort((a, b) => b.path.length - a.path.length);
   if (holding[0] !== undefined) return holding[0].projectId;
+  // A chat in a worktree of its own sits outside every project, so it takes the one project of the same folder name.
   const named = projects.filter(
     ({ path }) => basename(path) === basename(real),
   );

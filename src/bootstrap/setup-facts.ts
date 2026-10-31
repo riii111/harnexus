@@ -65,8 +65,8 @@ const pinnedBunOf = (manifest: Record<string, unknown>) => {
     : null;
 };
 
-// The CLI prints its name before the version, as in "codex-cli 0.163.0-alpha.10.2".
 const codexVersionOf = (output: string) =>
+  // The CLI prints its name before the version, as in "codex-cli 0.163.0-alpha.10.2".
   versionOf(/(\d+\.\d+\.\d+\S*)/.exec(output)?.[1]);
 
 const readManifest = async (repo: string) => {

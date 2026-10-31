@@ -47,7 +47,6 @@ export const REGISTERED_ENV_NAMES = [
   "HARNEXUS_CALL_SOCKET",
 ] as const;
 
-// The environment reaches the app only when it starts, so a running app keeps the setup it was opened with.
 export const isAppRunning = (
   processes: readonly ProcessEntry[],
   app: string,

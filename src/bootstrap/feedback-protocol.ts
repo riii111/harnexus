@@ -14,9 +14,10 @@ export type RecordedShape = {
 
 type FixtureRecord = { direction: Direction; message: unknown };
 
-// The shapes harnexus was tested on are those of the recorded app-server sessions under test/fixtures, read through the bridge's own observer so both sides are shaped alike.
+// The shapes harnexus was tested on: those of the recorded app-server sessions under test/fixtures.
 export const fixtureShapes = (records: readonly FixtureRecord[]) => {
   const shapes: RecordedShape[] = [];
+  // Read through the bridge's own observer so both sides are shaped alike.
   const observer = createObserver(
     (event: ObservationEvent) => {
       if (event.event === "rpc_shape") {
@@ -52,10 +53,7 @@ type VariantChange = {
   missing: readonly { path: ShapePath; lackedBy: number }[];
 };
 
-// A method carries variants told apart by the type of the object it carries, such as each item type of item/started, so each variant is compared with the fixtures' shapes of the same variant.
-// Only a method the fixtures hold can be compared, so one they lack is listed by name rather than flagged, as is a variant they lack.
-// A field the fixtures hold only empty or null is told apart from a new one, since a recorded session may just not have filled it.
-// A field every fixture shape of the variant has is missing from each recorded shape that has nothing at its place, counted shape by shape so a complete message cannot hide an incomplete one.
+// Compares the shapes the bridges recorded with the fixtures' shapes, variant by variant.
 export const diffShapes = (
   observed: readonly RecordedShape[],
   baseline: readonly RecordedShape[],
@@ -69,10 +67,12 @@ export const diffShapes = (
   const changedVariants = new Set<string>();
   for (const [group, variants] of seen) {
     const tested = known.get(group);
+    // Only a method the fixtures hold can be compared, so one they lack is listed by name rather than flagged, as is a variant they lack.
     if (tested === undefined) {
       uncovered.push(group);
       continue;
     }
+    // A method carries variants told apart by the type of the object it carries, such as each item type of item/started, so each variant is compared with the fixtures' shapes of the same variant.
     for (const [variant, shapes] of variants) {
       const fixtures = tested.get(variant);
       const name = `${group} ${variant === "" ? "(no type)" : variant}`;
@@ -86,8 +86,10 @@ export const diffShapes = (
       const extra = [...observedPaths].filter(
         (path) => !fixturePaths.has(path),
       );
+      // A field the fixtures hold only empty or null is told apart from a new one, since a recorded session may just not have filled it.
       const filled = extra.filter((path) => heldEmpty(path, fixturePaths));
       const added = extra.filter((path) => !heldEmpty(path, fixturePaths));
+      // A field every fixture shape of the variant has is counted missing shape by shape, so a complete message cannot hide an incomplete one.
       const required = [...intersection(fixtures)];
       const missing = required
         .map((path) => ({
@@ -121,7 +123,7 @@ export const diffShapes = (
   };
 };
 
-// Every line counts against the budget, so a log with many shapes cannot push a report past what an issue takes.
+// The protocol section of a report, within the budget.
 export const formatProtocol = (
   diff: ProtocolDiff | null,
   budget: number,
@@ -164,6 +166,7 @@ export const formatProtocol = (
   let used = 0;
   let left = 0;
   const add = (line: string) => {
+    // Every line counts against the budget, so a log with many shapes cannot push a report past what an issue takes.
     if (used + line.length + 1 > budget) {
       left += 1;
       return;
@@ -192,8 +195,8 @@ const MAX_LISTED = 20;
 const groupOf = ({ direction, kind, method }: RecordedShape) =>
   `${direction} ${kind} ${method ?? "unknown"}`;
 
-// Only the type of the object a method carries tells its variants apart; type words deeper in, such as each command action's, are compared as fields.
 const variantOf = ({ paths }: RecordedShape) =>
+  // Only the type of the object a method carries tells its variants apart; type words deeper in, such as each command action's, are compared as fields.
   paths.find((path) => VARIANT_TYPES.some((at) => path.startsWith(at))) ?? "";
 
 const VARIANT_TYPES = [
@@ -234,14 +237,14 @@ const pathPrefixes = (path: ShapePath) =>
     .split(/(?=\.|\[\])/)
     .map((_, index, parts) => parts.slice(0, index + 1).join(""));
 
-// A shape with anything at the field's place, such as the same field with another type, does not lack it.
 const lacks = (shape: RecordedShape, path: ShapePath) => {
   const place = placeOf(path);
+  // A shape with anything at the field's place, such as the same field with another type, does not lack it.
   return !shape.paths.some((own) => pathPrefixes(own).includes(place));
 };
 
-// A path below a container the fixtures hold only as empty or null, or the same field with another type, fills what the fixtures left unfilled.
 const heldEmpty = (path: ShapePath, fixturePaths: ReadonlySet<ShapePath>) =>
+  // A path below a container the fixtures hold only as empty or null, or the same field with another type, fills what the fixtures left unfilled.
   pathPrefixes(path).some((prefix) =>
     EMPTY_LEAVES.some((leaf) => fixturePaths.has(`${prefix}${leaf}`)),
   );

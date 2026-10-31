@@ -9,7 +9,7 @@ export type Check = {
 
 export type ProcessEntry = { pid: number; ppid: number; command: string };
 
-// Lines are what ps prints for "pid=,ppid=,command=", one process each.
+// Reads what ps prints for "pid=,ppid=,command=", one process a line.
 export const parseProcesses = (output: string): ProcessEntry[] =>
   output.split("\n").flatMap((line) => {
     const matched = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
@@ -24,12 +24,12 @@ export const parseProcesses = (output: string): ProcessEntry[] =>
         ];
   });
 
-// A bridge whose app-server is gone is left under launchd (ppid 1), and so is a Claude process whose bridge is gone; only pids are shown, since a command line can carry a prompt.
-// Only processes run from this checkout count, so another project's server or another tool's Claude is never offered for kill.
+// The bridges and Claude processes left behind, offered for kill.
 export const processChecks = (
   processes: readonly ProcessEntry[],
   repo: string,
 ): Check[] => {
+  // Only processes run from this checkout count, so another project's server or another tool's Claude is never offered for kill.
   const bridge = `${repo}/src/bootstrap/main.ts`;
   const claude = `${repo}/node_modules/@anthropic-ai/claude-agent-sdk-`;
   const bridges = processes.filter(({ command }) => runs(command, bridge));
@@ -37,9 +37,11 @@ export const processChecks = (
   const claudes = processes.filter(
     ({ command }) => command.includes(claude) && CLAUDE_BINARY.test(command),
   );
+  // A bridge whose app-server is gone is left under launchd (ppid 1), and so is a Claude process whose bridge is gone.
   const leftBridges = bridges.filter(({ ppid }) => ppid === LAUNCHD);
   const leftClaudes = claudes.filter(({ ppid }) => ppid === LAUNCHD);
   const owned = claudes.filter(({ ppid }) => bridgePids.has(ppid));
+  // Only pids are shown, since a command line can carry a prompt.
   return [
     {
       status: leftBridges.length === 0 ? "ok" : "warn",
@@ -60,7 +62,7 @@ export const processChecks = (
   ];
 };
 
-// Only event names, methods, reasons and versions are read, so a pasted report carries no more than the log's own fields allow.
+// The checks read from the last day of the bridge log.
 export const logChecks = (text: string, path: string, now: number): Check[] => {
   const recent = text.split("\n").flatMap((line): LogEntry[] => {
     const parsed = parseJson(line);
@@ -70,6 +72,7 @@ export const logChecks = (text: string, path: string, now: number): Check[] => {
       ? [{ ...parsed.value, time }]
       : [];
   });
+  // Only event names, methods, reasons and versions are read, so a pasted report carries no more than the log's own fields allow.
   const of = (event: string) => recent.filter((entry) => entry.event === event);
   const version = of("codex_version").at(-1);
   const unavailable = tally(
@@ -124,7 +127,7 @@ export const logChecks = (text: string, path: string, now: number): Check[] => {
   ];
 };
 
-// A copy that ran a model turn, or did not say, stops copies of its chat until the bridge restarts, which only the log records.
+// Reports the Cloud copies that stopped copies of their chat until the bridge restarts, which only the log records.
 const cloudCopyCheck = (entries: readonly LogEntry[]): Check => {
   const count = (step: string) =>
     entries.filter((entry) => entry.step === step).length;
@@ -147,13 +150,13 @@ const cloudCopyCheck = (entries: readonly LogEntry[]): Check => {
   };
 };
 
-// A Cloud thread sends with claude -p --cloud and copies with claude --teleport, so the claude command must offer both; Cloud threads are optional, so their absence only warns.
 export const cloudCheck = (
   file: string,
   help: string | null,
   version: string | null,
 ): Check => {
   const name = "Claude Cloud sessions";
+  // Cloud threads are optional, so their absence only warns.
   if (help === null) {
     return {
       status: "warn",
@@ -161,6 +164,7 @@ export const cloudCheck = (
       detail: `cannot run ${file}; set HARNEXUS_CLAUDE_CLI to the claude command to use Cloud threads`,
     };
   }
+  // A Cloud thread sends with claude -p --cloud and copies with claude --teleport, so the claude command must offer both.
   const missing = ["--cloud", "--teleport"].filter(
     (flag) => !new RegExp(`(^|\\s)${flag}(\\s|$)`, "m").test(help),
   );
@@ -181,13 +185,13 @@ export const cloudCheck = (
 
 const CLOUD_CHECKED_ON = "2.1.314";
 
-// A sandbox refuses with EPERM where file modes refuse with EACCES, so EPERM says only that this shell may not look, not what the app can do.
 export const refusedCheck = (
   name: string,
   detail: string,
   cause: unknown,
 ): Check => {
   const code = isObject(cause) ? cause.code : undefined;
+  // A sandbox refuses with EPERM where file modes refuse with EACCES, so EPERM says only that this shell may not look, not what the app can do.
   if (code === "EPERM")
     return {
       status: "warn",
@@ -252,8 +256,8 @@ export const failed = (checks: readonly Check[]) =>
 const pids = (entries: readonly ProcessEntry[]) =>
   entries.map(({ pid }) => pid).join(" ");
 
-// The path must be a whole word of the command, so a checkout nested under another path does not match.
 const runs = (command: string, path: string) =>
+  // The path must be a whole word of the command, so a checkout nested under another path does not match.
   ` ${command} `.includes(` ${path} `);
 
 // The SDK starts the Claude Code binary it ships in its platform package.

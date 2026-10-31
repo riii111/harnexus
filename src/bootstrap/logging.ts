@@ -81,8 +81,7 @@ type ModelsFailure = InferErr<
   Awaited<ReturnType<typeof loadClaudeModels>>
 >["_tag"];
 
-// The app may discard the server's stderr, so a copy goes to a file unless HARNEXUS_LOG_PATH is off.
-// The default file leaves out each relayed message, which would fill it within one long turn; a path set by hand keeps them.
+// The bridge's logger, writing to stderr and to the log file.
 export const createBridgeLogger = (env: NodeJS.ProcessEnv) => {
   const file = loadStatePath(env)
     .andThen((statePath) => loadLogPath(env, statePath))
@@ -94,11 +93,13 @@ export const createBridgeLogger = (env: NodeJS.ProcessEnv) => {
             explicit: log.explicit,
           })),
     );
+  // The app may discard the server's stderr, so a copy goes to a file unless HARNEXUS_LOG_PATH is off.
   const toStderr = createLogger((line) => process.stderr.write(line), withPid);
   const toFile =
     file.isOk() && file.value !== null
       ? createLogger(file.value.append, withPid)
       : null;
+  // The default file leaves out each relayed message, which would fill it within one long turn; a path set by hand keeps them.
   const keepsMessages = file.isOk() && file.value?.explicit === true;
   const logger = {
     log: (entry: LogEvent) => {
@@ -112,8 +113,8 @@ export const createBridgeLogger = (env: NodeJS.ProcessEnv) => {
   return logger;
 };
 
-// Bridges of every app-server connection append to one file, so the pid tells their lines apart.
 const withPid = (entry: LogEvent) => ({
+  // Bridges of every app-server connection append to one file, so the pid tells their lines apart.
   pid: process.pid,
   ...serializeLogEvent(entry),
 });
