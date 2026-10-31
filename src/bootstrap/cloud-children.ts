@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { CLOUD_MARK } from "../conversation/claude/cloud.ts";
 import type { CloudChild } from "../conversation/claude/cloud-children.ts";
 import { realPathOrSelf } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
@@ -21,7 +22,7 @@ export const openCloudChild = async (
   const created = await answerOf(call, parentThreadId, "create_thread", {
     prompt: `/cloud ${child.sessionId}`,
     target: { type: "project", projectId, environment: { type: "local" } },
-    title: `Cloud｜${child.title ?? child.sessionId}`,
+    title: `${CLOUD_MARK} ${child.title ?? child.sessionId}`,
     model: CLOUD_CHAT_MODEL,
   });
   return typeof created.outcome === "string" ? created.outcome : "unknown";

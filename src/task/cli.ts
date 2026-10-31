@@ -478,7 +478,7 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
         projectId: args.project,
         environment: { type: "local" },
       },
-      title: `Cloud｜${args.title || sessionId}`,
+      title: `☁️ ${args.title || sessionId}`,
       model: args.model || "claude-sonnet-5-5",
       thinking: args.thinking || "high",
     });

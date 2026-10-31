@@ -736,7 +736,7 @@ describe("harnexus-task cloud", () => {
             projectId: "project",
             environment: { type: "local" },
           },
-          title: "Cloud｜README",
+          title: "☁️ README",
           model: "claude-sonnet-5-5",
           thinking: "high",
         },

@@ -114,6 +114,12 @@ export const connectClaudeThreads = ({
       Date.now(),
     );
   };
+  const renameThread = (threadId: string, name: string) =>
+    request(
+      "thread/name/set",
+      { threadId, name },
+      { timeoutMs: RENAME_TIMEOUT_MS },
+    );
   const claude = createClaudeRuntime({
     threads,
     permissionMode,
@@ -122,12 +128,7 @@ export const connectClaudeThreads = ({
     listConversations,
     lastRecordOf,
     readHistory,
-    renameThread: (threadId, name) =>
-      request(
-        "thread/name/set",
-        { threadId, name },
-        { timeoutMs: RENAME_TIMEOUT_MS },
-      ),
+    renameThread,
     openLink: (callerThreadId) => openLink(callerThreadId),
     send,
     log,
@@ -162,6 +163,7 @@ export const connectClaudeThreads = ({
     replayHistory: readHistory,
     send,
     log,
+    renameThread,
     openChild: (parentThreadId, child) => {
       const parent = store.get(parentThreadId);
       return parent === undefined
