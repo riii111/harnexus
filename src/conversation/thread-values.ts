@@ -36,7 +36,7 @@ export type StoreTag =
   | "WriteNotStarted"
   | "RunStateNotSaved";
 
-// The model, effort and session id a thread runs with are set here before the store saves them and win over what it holds, so a failed save still applies while the bridge runs; a null session id is one Claude lost.
+// The model, effort and session id a thread runs with are set here before the store saves them and win over what it holds, so a failed save still applies while the bridge runs.
 export const createThreadValues = (
   store: ThreadStore,
   log: (event: ThreadValueEvent) => void,
@@ -50,6 +50,7 @@ export const createThreadValues = (
   >();
   const models = new Map<string, string>();
   const efforts = new Map<string, EffortLevel>();
+  // A null session id is one Claude lost.
   const sessionIds = new Map<string, string | null>();
   const picked = new Set<string>();
   const sideChats = new Map<string, SideChatContext>();
@@ -281,7 +282,7 @@ export const createThreadValues = (
   };
 
   // True once per pick, so only the first reopen after it carries the whole history.
-  const takePicked = (threadId: string) => picked.delete(threadId);
+  const consumePick = (threadId: string) => picked.delete(threadId);
 
   return {
     threadOf,
@@ -289,7 +290,7 @@ export const createThreadValues = (
     pickedEffortOf,
     effortOf,
     sessionIdOf,
-    takePicked,
+    consumePick,
     rewindOf: (threadId: string) => store.get(threadId)?.rewind,
     adopt,
     adoptFork,

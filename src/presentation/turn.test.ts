@@ -861,7 +861,7 @@ const runCompaction = (messages: object[]) => {
     turnId: "tu-1",
     cwd: "/fixture/work",
     now: NOW,
-    compaction: true,
+    compactionRequested: true,
   });
   const all = [...notifications];
   for (const message of messages) {

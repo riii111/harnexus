@@ -21,7 +21,7 @@ import {
 import { RECOVERY_CONTEXT, RECOVERY_NOTICE } from "./recovery.ts";
 import {
   AGENT_TOOLS,
-  closeTurn,
+  closeTurnUnchecked,
   type Rendered,
   renderNotice,
   renderSdkMessage,
@@ -85,8 +85,7 @@ export const mainRecords = (messages: readonly SessionMessage[]) =>
       (message.type === "user" || message.type === "assistant"),
   );
 
-// The text of a record that opens a turn, or null for tool results, a stop and a local command such as the /cost a Cloud copy runs.
-export const promptTextOf = (message: SessionMessage) => {
+export const turnOpeningTextOf = (message: SessionMessage) => {
   if (message.type !== "user") return null;
   const prompt = promptOf(message.message);
   return prompt !== null && opensTurn(prompt) ? prompt.text : null;
@@ -95,7 +94,6 @@ export const promptTextOf = (message: SessionMessage) => {
 const opensTurn = (prompt: Prompt) =>
   !INTERRUPTED.test(prompt.text) && !LOCAL_COMMAND.test(prompt.text);
 
-// Claude ends a turn with a reply that asks for no tool.
 export const endsTurn = (message: SessionMessage) =>
   message.type === "assistant" &&
   isObject(message.message) &&
@@ -436,7 +434,7 @@ const feed = (
 
 // A record says nothing of how its last turn ended unless an interrupt was written, so the rest close as completed.
 const close = (replay: Replay): HistoryTurn => {
-  const closed = closeTurn(
+  const closed = closeTurnUnchecked(
     replay.state,
     { status: replay.interrupted ? "interrupted" : "completed" },
     replay.lastAt ?? 0,
@@ -458,7 +456,6 @@ const collect = (replay: Replay, rendered: Rendered): Replay => {
   return { ...replay, state: rendered.state };
 };
 
-// Shared with a subagent's thread, whose turns the bridge keeps as they run.
 export const noteItems = (
   items: Map<string, HistoryItem>,
   notifications: readonly AppNotification[],
@@ -591,12 +588,12 @@ const assistantOf = (
   session_id: message.session_id,
 });
 
-// promptOf has already found tool results in this content.
 const toolResultsOf = (
   message: SessionMessage,
   body: unknown,
 ): SDKUserMessage => ({
   type: "user",
+  // A user record without a prompt carries tool results.
   message: body as SDKUserMessage["message"],
   parent_tool_use_id: null,
   session_id: message.session_id,
