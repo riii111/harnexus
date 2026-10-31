@@ -17,6 +17,12 @@ import type {
   UserInput,
 } from "./protocol.ts";
 import {
+  inProgressTurn,
+  itemCompletedAt,
+  itemStartedAt,
+  toSeconds,
+} from "./protocol-values.ts";
+import {
   abandonToolItem,
   completeToolItem,
   declineToolItem,
@@ -61,17 +67,7 @@ export const renderTurnStarted = (params: {
     compactionError: null,
     compacted: false,
   });
-  const turn: Turn = {
-    id: params.turnId,
-    rootTurnId: params.turnId,
-    items: [],
-    itemsView: "full",
-    status: "inProgress",
-    error: null,
-    startedAt: toSeconds(params.now),
-    completedAt: null,
-    durationMs: null,
-  };
+  const turn = inProgressTurn(params.turnId, params.now, "full");
   notify(draft, params.now, {
     method: "thread/status/changed",
     params: {
@@ -87,17 +83,8 @@ export const renderTurnStarted = (params: {
 };
 
 // A turn/start that joins the running turn is answered with that turn, without its items, as Codex answers one it steers.
-export const steeredTurn = (state: TurnState): Turn => ({
-  id: state.turnId,
-  rootTurnId: state.turnId,
-  items: [],
-  itemsView: "notLoaded",
-  status: "inProgress",
-  error: null,
-  startedAt: toSeconds(state.startedAtMs),
-  completedAt: null,
-  durationMs: null,
-});
+export const steeredTurn = (state: TurnState): Turn =>
+  inProgressTurn(state.turnId, state.startedAtMs, "notLoaded");
 
 export const renderToolOutput = (
   state: TurnState,
@@ -612,13 +599,10 @@ const finish = (draft: Draft, outcome: TurnOutcome, now: number) => {
     params: { threadId: draft.threadId, status: { type: "idle" } },
   });
   const turn: Turn = {
-    id: draft.turnId,
-    rootTurnId: draft.turnId,
+    ...inProgressTurn(draft.turnId, draft.startedAtMs, "summary"),
     items: completed && draft.finalMessage !== null ? [draft.finalMessage] : [],
-    itemsView: "summary",
     status: outcome.status,
     error,
-    startedAt: toSeconds(draft.startedAtMs),
     completedAt: toSeconds(now),
     durationMs: now - draft.startedAtMs,
   };
@@ -635,27 +619,13 @@ const completeMessage = (draft: Draft, item: AgentMessageItem, now: number) => {
   itemCompleted(draft, item, now);
 };
 
-const itemStarted = (draft: Draft, item: ThreadItem, now: number) =>
-  notify(draft, now, {
-    method: "item/started",
-    params: {
-      item,
-      threadId: draft.threadId,
-      turnId: draft.turnId,
-      startedAtMs: now,
-    },
-  });
+const itemStarted = (draft: Draft, item: ThreadItem, now: number) => {
+  draft.notifications.push(itemStartedAt(item, draft, now));
+};
 
-const itemCompleted = (draft: Draft, item: ThreadItem, now: number) =>
-  notify(draft, now, {
-    method: "item/completed",
-    params: {
-      item,
-      threadId: draft.threadId,
-      turnId: draft.turnId,
-      completedAtMs: now,
-    },
-  });
+const itemCompleted = (draft: Draft, item: ThreadItem, now: number) => {
+  draft.notifications.push(itemCompletedAt(item, draft, now));
+};
 
 const notify = (
   draft: Draft,
@@ -712,8 +682,6 @@ const seal = ({ notifications, ...state }: Draft): Rendered => ({
   state,
   notifications,
 });
-
-const toSeconds = (ms: number) => Math.floor(ms / 1000);
 
 const CONTINUING_STOP_REASONS = new Set(["tool_use", "pause_turn"]);
 

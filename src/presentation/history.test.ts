@@ -46,6 +46,50 @@ describe("renderRecords", () => {
       content: [{ type: "text", text: "typed on claude.ai" }],
     });
   });
+
+  test.each([
+    {
+      name: "with the typed text",
+      content: [
+        IMAGE_BLOCK,
+        { type: "text", text: "what is wrong here" } as const,
+      ],
+      expected: [
+        { type: "text", text: "what is wrong here", text_elements: [] },
+        { type: "image", url: "data:image/png;base64,iVBORw0KGgo=" },
+      ],
+    },
+    {
+      name: "alone",
+      content: [IMAGE_BLOCK],
+      expected: [{ type: "image", url: "data:image/png;base64,iVBORw0KGgo=" }],
+    },
+  ])("shows an image typed elsewhere $name as a reopened history shows it", ({
+    content,
+    expected,
+  }) => {
+    const opened = renderTurnStarted({
+      threadId: "t",
+      turnId: "live",
+      cwd: "/w",
+      now: 0,
+    });
+
+    const rendered = renderRecords(
+      opened.state,
+      [{ ...prompt("u1", ""), message: { role: "user", content } }],
+      1,
+    );
+
+    const shown = rendered.notifications.flatMap((notification) =>
+      notification.method === "item/completed" &&
+      notification.params.item.type === "userMessage"
+        ? [notification.params.item]
+        : [],
+    );
+    expect(shown).toHaveLength(1);
+    expect(shown[0]).toMatchObject({ content: expected });
+  });
 });
 
 describe("buildHistory", () => {
