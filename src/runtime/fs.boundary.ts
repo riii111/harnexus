@@ -93,7 +93,6 @@ export const openLogSink = (path: string, rotateAbove = LOG_ROTATE_BYTES) =>
       new LogFileOpenFailed({ path, cause, message: `cannot open ${path}` }),
   });
 
-// A missing file is not an error, so a first start can begin from an empty state.
 export const readTextFileIfExists = (path: string) =>
   Result.tryPromise({
     try: async () => {
@@ -108,10 +107,10 @@ export const readTextFileIfExists = (path: string) =>
       new FileReadFailed({ path, cause, message: `cannot read ${path}` }),
   });
 
-// A FIFO or device would keep the read waiting forever, so only a regular file is read.
 export const readRegularTextFile = (path: string) =>
   Result.tryPromise({
     try: async () => {
+      // A FIFO or device would keep the read waiting forever, so only a regular file is read.
       if (!(await stat(path)).isFile()) {
         throw new Error(`${path} is not a regular file`);
       }
@@ -121,8 +120,7 @@ export const readRegularTextFile = (path: string) =>
       new FileReadFailed({ path, cause, message: `cannot read ${path}` }),
   });
 
-// A file larger than limit is null rather than read whole.
-export const readRegularFileBytes = (path: string, limit: number) =>
+export const readRegularFileBytesWithin = (path: string, limit: number) =>
   Result.tryPromise({
     try: async () => {
       const found = await stat(path);
@@ -237,15 +235,14 @@ const writeTemporary = async (path: string, content: string) => {
   return temporary;
 };
 
-// False for a path that cannot be inspected, as for one that does not exist.
 export const isFile = async (path: string) =>
   (await stat(path).catch(() => null))?.isFile() ?? false;
 
-// Null for a path that cannot be inspected; the device and inode tell a file swapped in at the path from one changed in place.
 export const fileIdentity = async (path: string) => {
   const found = await stat(path).catch(() => null);
   return found?.isFile()
     ? {
+        // The device and inode tell a file swapped in at the path from one changed in place.
         dev: found.dev,
         ino: found.ino,
         size: found.size,

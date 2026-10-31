@@ -15,6 +15,7 @@ export type ModelCatalog = ReturnType<typeof createModelCatalog>;
 
 export type EffortRule = (
   model: string,
+  // The level of any Claude model that the thread kept, even while its current model cannot run it.
   picked: EffortLevel | null,
 ) => EffortLevel | null;
 
@@ -27,7 +28,6 @@ export type EffortSettings = Pick<
 export const isClaudeModel = (model: unknown): model is string =>
   typeof model === "string" && model.startsWith(CLAUDE_PREFIX);
 
-// A level of some Claude model, which a thread keeps even while its current model cannot run it.
 export const isClaudeEffort = (effort: unknown): effort is EffortLevel =>
   (EFFORT_ORDER as readonly unknown[]).includes(effort);
 

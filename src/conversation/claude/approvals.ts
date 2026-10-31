@@ -67,7 +67,6 @@ export const createApprovals = <Tag extends string>({
     for (const threadId of [...turnWaiters.keys()]) showTurn(threadId);
   };
 
-  // Claude sent nothing for this turn, so it reads nothing.
   const hold = async (turn: Turn, held: HeldApprovals<Tag>) => {
     held.turn = turn;
     showTurn(turn.threadId);
@@ -82,9 +81,9 @@ export const createApprovals = <Tag extends string>({
     turn.finish(heldOutcome(turn, held), null);
   };
 
-  // Ending as completed would read as if each approval had been answered.
   const heldOutcome = (turn: Turn, held: HeldApprovals<Tag>): TurnOutcome => {
     if (turn.state().interrupting) return { status: "interrupted" };
+    // Ending as completed would read as if each approval had been answered.
     if (held.ended.signal.aborted) {
       return { status: "failed", message: APPROVALS_UNANSWERED };
     }

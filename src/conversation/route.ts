@@ -84,7 +84,7 @@ type RouterThreads = Pick<
   | "modeOf"
   | "selectEffort"
   | "effortOf"
-  | "takePicked"
+  | "consumePick"
 >;
 
 type RouterDeps = {

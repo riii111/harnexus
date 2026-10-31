@@ -48,8 +48,10 @@ import type {
 } from "./turn-runtime.ts";
 
 // Only steps, turn statuses, models, effort levels, token counts, durations, refusal reasons and error tags are logged, never thread ids or text.
-// Tag is the failure tags a runtime declares, so only a tag written in code can reach the log as a turn's error.
-export type TurnEvent<Tag extends string = string> =
+export type TurnEvent<
+  // The failure tags a runtime declares, so only a tag written in code can reach the log as a turn's error.
+  Tag extends string = string,
+> =
   | ThreadValueEvent
   | {
       event: "claude_turn";
@@ -666,7 +668,7 @@ export const createTurnController = <Tag extends string>({
       turnId: request.turnId,
       cwd: record.worktree,
       now: now(),
-      compaction: request.compaction,
+      compactionRequested: request.compaction,
     });
     const active = activeTurn(
       request,

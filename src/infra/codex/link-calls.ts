@@ -4,7 +4,6 @@ import { createSerialQueue } from "../../runtime/serial-queue.ts";
 import { failure, type ToolResult } from "./link-results.ts";
 import type { ServerRequest } from "./server-requests.ts";
 
-// The subset of the thread store the link reads; the real store satisfies it structurally.
 export type LinkStore = {
   get: (threadId: string) => object | undefined;
 };
@@ -127,6 +126,7 @@ export const createAppToolCalls = ({
     if (store.get(callerThreadId) === undefined) {
       return "This conversation is not registered as a Claude thread, so it cannot use the Codex app threads.";
     }
+    // Any other thread the app itself lets the caller reach is a valid target, since parallel threads read, wait on and message one another.
     return allowSelf || !targets.includes(callerThreadId)
       ? null
       : "This thread cannot send a message to itself; it can only read or wait on itself.";

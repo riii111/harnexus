@@ -16,7 +16,6 @@ import type { ServerRequest } from "./server-requests.ts";
 
 const CODEX_LINK_SERVER = "codex_link";
 
-// The caller is the Claude thread the bridge started this server for, never a value the model supplies; any thread the app itself lets the caller reach is a valid target, since parallel threads read, wait on and message one another.
 export const createCodexLink = ({
   callerThreadId,
   store,
@@ -26,6 +25,7 @@ export const createCodexLink = ({
   cronRecord,
   ...waits
 }: {
+  // The Claude thread the bridge started this server for, never a value the model supplies.
   callerThreadId: string;
   store: LinkStore;
   request: ServerRequest;

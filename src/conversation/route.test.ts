@@ -2810,7 +2810,7 @@ const setup = (
         efforts.set(threadId, effort as EffortLevel);
       },
       effortOf,
-      takePicked: (threadId) => picked.delete(threadId),
+      consumePick: (threadId) => picked.delete(threadId),
     },
     effortRule: rule,
     log: (event) => events.push(event),

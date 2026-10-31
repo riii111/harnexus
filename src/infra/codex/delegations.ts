@@ -50,11 +50,11 @@ export const createDelegationWatch = ({
   const starting = new Map<string, (refusal: string | null) => void>();
 
   // A thread nobody waits for is ignored; the answer is whether the turn may run.
-  // bridgeRuns leaves the waiter to started, since the bridge can still refuse a Claude turn that passed the check.
   const observe = (
     sourceThreadId: string,
     threadId: string,
     actual: TurnSettings = NOT_GIVEN,
+    // The waiter stays open for the bridge's verdict, since the bridge can still refuse a Claude turn that passed the check.
     bridgeRuns = false,
   ) => {
     if (refusedThreads.has(threadId)) return false;
@@ -71,17 +71,16 @@ export const createDelegationWatch = ({
   };
 
   // The router calls it in the same tick as observe, so an entry never outlives the turn it was set for.
-  // A refused turn joins refusedThreads, so the app resending it never runs a worker its creator was told never ran.
   const started = (threadId: string, refusal: string | null) => {
     const waiting = starting.get(threadId);
     if (waiting === undefined) return;
+    // So the app resending a refused turn never runs a worker its creator was told never ran.
     if (refusal !== null) refusedThreads.add(threadId);
     waiting(refusal);
     starting.delete(threadId);
   };
 
   // Registered before create_thread is sent, since the new thread's turn/start can arrive before the tool answer; null while the caller has an unconfirmed create.
-  // A timed-out wait leaves the check armed, so a late first turn on the wrong model is still refused until armedMs passes or cancel is called.
   const expect = (
     sourceThreadId: string,
     { expected = NOT_GIVEN }: { expected?: TurnSettings } = {},
@@ -92,6 +91,7 @@ export const createDelegationWatch = ({
       resolve = done;
     });
     let settled = false;
+    // A timed-out wait leaves the check armed, so a late first turn on the wrong model is still refused until this timer or a cancel disarms it.
     const disarm = setTimeout(() => cancel(), armedMs);
     disarm.unref();
     const waiter: Waiter = {
