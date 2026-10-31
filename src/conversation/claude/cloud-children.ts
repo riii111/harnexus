@@ -8,7 +8,7 @@ export type CloudChild = { sessionId: string; title: string | null };
 const CREATE_SESSION = /(?:^|__)create_session$/;
 const SESSION_ID = /^(?:session|cse)_[A-Za-z0-9]{8,64}$/;
 
-// The sessions a Cloud session started whose result is at or after from, in the order its records hold them, each once; a call may sit in an earlier record than its result.
+// The sessions a Cloud session started whose result is at or after from, in the order its records hold them, each once.
 export const childSessionsIn = (
   records: readonly SessionMessage[],
   from = 0,
@@ -17,6 +17,7 @@ export const childSessionsIn = (
   const children = new Map<string, CloudChild>();
   for (const [index, record] of records.entries()) {
     for (const block of contentOf(record)) {
+      // A call may sit in an earlier record than its result, so calls are gathered from every record.
       if (
         block.type === "tool_use" &&
         typeof block.id === "string" &&
@@ -48,7 +49,6 @@ const contentOf = (record: SessionMessage): Record<string, unknown>[] => {
   return Array.isArray(content) ? content.filter(isObject) : [];
 };
 
-// create_session answers {"ccr":{"id":"session_…","title":…}}, as text.
 const createdIn = (content: unknown): CloudChild | null => {
   const texts =
     typeof content === "string"
@@ -59,6 +59,7 @@ const createdIn = (content: unknown): CloudChild | null => {
           )
         : [];
   for (const text of texts) {
+    // create_session answers {"ccr":{"id":"session_…","title":…}}, as text.
     const parsed = parseJson(text);
     const ccr =
       parsed.isOk() && isObject(parsed.value) ? parsed.value.ccr : null;

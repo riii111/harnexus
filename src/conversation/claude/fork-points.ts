@@ -25,7 +25,6 @@ export const createForkPoints = ({
   return {
     note,
     pointOf: (threadId: string) => points.get(threadId),
-    // A fork handed back to Codex never starts a session again, so its point is dead.
     forget: (threadId: string) => points.delete(threadId),
   };
 };

@@ -22,8 +22,8 @@ class ThreadRefused extends TaggedError("ThreadRefused")<{
 
 export type Mode = "plan" | "default";
 
-// The app spreads its last collaboration mode into requests while model carries the new choice (App 26.924), so model is read first and the mode only fills in when model is absent.
 export const requestedModel = (params: Record<string, unknown>) => {
+  // The app spreads its last collaboration mode into requests while model carries the new choice (App 26.924), so model is read first.
   if (typeof params.model === "string") return params.model;
   const settings = collaborationMode(params)?.settings;
   return isObject(settings) && typeof settings.model === "string"
@@ -31,8 +31,8 @@ export const requestedModel = (params: Record<string, unknown>) => {
     : undefined;
 };
 
-// Read in the same order as the model, since the spread mode may carry the effort of an earlier choice.
 export const requestedEffort = (params: Record<string, unknown>) => {
+  // The spread mode may carry the effort of an earlier choice, so effort is read first, as the model is.
   if (typeof params.effort === "string") return params.effort;
   const settings = collaborationMode(params)?.settings;
   return isObject(settings) && typeof settings.reasoning_effort === "string"
@@ -40,7 +40,6 @@ export const requestedEffort = (params: Record<string, unknown>) => {
     : undefined;
 };
 
-// A thread may move to another Claude model, but Claude keeps running where the thread started, so a new directory is refused.
 export const checkThread = (
   params: Record<string, unknown>,
   known: Thread | undefined,
@@ -49,6 +48,7 @@ export const checkThread = (
   const model = requestedModel(params) ?? known?.model;
   if (!isClaudeModel(model)) return refused("codex_model");
   if (known !== undefined) {
+    // A thread may move to another Claude model, but Claude keeps running where the thread started, so a new directory is refused.
     return typeof params.cwd === "string" &&
       !isSameDirectory(params.cwd, known.cwd)
       ? refused("directory_change")
@@ -65,20 +65,20 @@ const refused = (refusal: ThreadRefused["refusal"]) =>
     new ThreadRefused({ refusal, message: REFUSAL_MESSAGES[refusal] }),
   );
 
-// The app reopens a thread in the first folder of the project it is assigned to, which can differ from where Claude runs (App 26.1013), so a reopen keeps Claude's directory instead of refusing the thread.
 export const pinDirectory = (
   params: Record<string, unknown>,
   thread: Thread,
 ): Record<string, unknown> =>
+  // The app reopens a thread in the first folder of its project, which can differ from where Claude runs (App 26.1013), so a reopen keeps Claude's directory instead of refusing the thread.
   typeof params.cwd === "string" && !isSameDirectory(params.cwd, thread.cwd)
     ? { ...params, cwd: thread.cwd }
     : params;
 
-// A turn checked before another turn saved the thread would otherwise run in the directory that turn saved; a different model is a model change, which the turn applies itself.
 export const savedThreadChange = (
   requested: Thread,
   saved: Thread,
 ): Refusal | null =>
+  // A turn checked before another turn saved the thread would otherwise run in the directory that turn saved; a different model is a model change, which the turn applies itself.
   isSameDirectory(requested.cwd, saved.cwd) ? null : "directory_change";
 
 export const refusalMessage = (refusal: Refusal) => REFUSAL_MESSAGES[refusal];
@@ -91,8 +91,9 @@ export const requestedMode = (
   return mode === "plan" ? "plan" : "default";
 };
 
-// Spelling differences such as a trailing slash do not change the directory; symlinks are not resolved, since that needs the file system.
-const isSameDirectory = (a: string, b: string) => resolve(a) === resolve(b);
+const isSameDirectory = (a: string, b: string) =>
+  // Spelling differences such as a trailing slash do not change the directory; symlinks are not resolved, since that needs the file system.
+  resolve(a) === resolve(b);
 
 const collaborationMode = (params: Record<string, unknown>) =>
   isObject(params.collaborationMode) ? params.collaborationMode : undefined;

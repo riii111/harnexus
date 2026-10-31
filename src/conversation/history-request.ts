@@ -45,8 +45,7 @@ type ReadSession = (sessionId: string) => ReturnType<typeof readClaudeSession>;
 
 type Loaded = Result<HistoryTurn[], InferErr<Awaited<ReturnType<ReadSession>>>>;
 
-// The server never sees a Claude turn, so a Claude thread's history comes from Claude's own record and is rebuilt on each request rather than stored by the bridge.
-// A subagent's thread has no record the app can name, so its history comes from what the bridge kept of it; a Claude thread's agents are read back before its history is built, so the history shows where each started.
+// Answers the app's history requests for Claude threads and their subagents, which the server never sees.
 export const createHistoryRequests = ({
   threads,
   liveTurnOf,
@@ -75,6 +74,7 @@ export const createHistoryRequests = ({
     ]);
 
   const load = (threadId: string): Promise<Loaded> => {
+    // A subagent's thread has no record the app can name, so its history comes from what the bridge kept of it.
     const kept = subagentHistory(threadId);
     if (kept !== undefined) return Promise.resolve(Result.ok(kept));
     const key = keyOf(threadId);
@@ -86,6 +86,7 @@ export const createHistoryRequests = ({
       return Promise.resolve(Result.ok([]));
     }
     const rewind = threads.rewindOf(threadId);
+    // Rebuilt from Claude's own record on each request rather than stored by the bridge.
     const loaded: Promise<Loaded> = readSession(sessionId)
       .then(async (original) => {
         if (keyOf(threadId) !== key) return load(threadId);
@@ -94,6 +95,7 @@ export const createHistoryRequests = ({
           if (rewind.at === null) return Result.ok([]);
           return recordUntil(messages, rewind.at);
         });
+        // The agents are read back first, so the history shows where each started.
         if (read.isOk()) {
           await subagents.restore(threadId, sessionId, thread.cwd, read.value);
         }
@@ -183,12 +185,12 @@ type SubagentsOfThread = {
   agentRefOf: (threadId: string) => (toolUseId: string) => AgentRef | undefined;
 };
 
-// A record missing the message it was cut at is no longer the conversation that was kept.
 export const recordUntil = (
   messages: readonly SessionMessage[],
   uuid: string,
 ): Result<SessionMessage[], ClaudeRecordUnreadable> => {
   const index = messages.findIndex((message) => message.uuid === uuid);
+  // A record missing the message it was cut at is no longer the conversation that was kept.
   return index < 0
     ? Result.err(
         new ClaudeRecordUnreadable({
@@ -202,8 +204,7 @@ export const recordUntil = (
 export const isHistoryMethod = (method: string): method is HistoryMethod =>
   (HISTORY_METHODS as readonly string[]).includes(method);
 
-// The app pages back from the cursors whenever the thread's history is paginated and shows nothing when they are null, and asks for the initial page or the full turns otherwise.
-// A thread reopened after a conversation was picked in it holds none of that conversation, so it gets the full turns even when the app excludes them.
+// A thread/resume answer with the history in the form the app asked for: the full turns, the initial page, and the cursors it pages back from.
 export const withResumeHistory = (
   result: Record<string, unknown>,
   history: readonly HistoryTurn[],
@@ -214,6 +215,7 @@ export const withResumeHistory = (
     ? params.initialTurnsPage
     : null;
   return {
+    // A thread reopened after a conversation was picked in it holds none of that conversation, so it gets the full turns even when the app excludes them.
     ...(params.excludeTurns === true && !picked
       ? result
       : withTurns(result, history)),
@@ -243,11 +245,11 @@ export const withTurns = (
       }
     : result;
 
-// The server never runs a Claude turn, so it reports a Claude thread idle even while the bridge runs one.
 export const withLiveStatus = (
   result: Record<string, unknown>,
   live: boolean,
 ) =>
+  // The server never runs a Claude turn, so it reports a Claude thread idle even while the bridge runs one.
   live && isObject(result.thread)
     ? { ...result, thread: { ...result.thread, status: ACTIVE } }
     : result;
@@ -321,8 +323,8 @@ const RECORD_UNREADABLE =
   "Harnexus cannot read this thread's Claude conversation record.";
 const UNKNOWN_CURSOR = "The cursor does not name a page of this Claude thread.";
 
-// Only the ids' kind and first characters are logged, enough to tell a live turn from a recorded one and match them up.
 export const shortId = (id: string) =>
+  // Only the ids' kind and first characters are logged, enough to tell a live turn from a recorded one and match them up.
   id.replace(
     /harnexus-(history|turn)-([0-9a-f]{8})(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/g,
     (_, kind: string, head: string) =>

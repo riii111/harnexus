@@ -124,7 +124,7 @@ type AppCall = {
 
 type AppHandler = (call: AppCall) => Buffer | null | Promise<Buffer | null>;
 
-// Lines that are not Claude requests pass as the same bytes; server requests and app responses share ids with the other direction, so only lines with a method are read as app requests and only lines without one as server responses.
+// Routes each app request to Claude or the server, and rewrites the server's answers to the requests it routed.
 export const createRouter = ({
   turns,
   threads,
@@ -200,8 +200,8 @@ export const createRouter = ({
     return null;
   };
 
-  // The first turn/start of a thread made by create_thread is the only place its real id meets the thread that asked for it.
   const noteDelegation = (params: Record<string, unknown>, claude: boolean) => {
+    // The first turn/start of a thread made by create_thread is the only place its real id meets the thread that asked for it.
     const source = delegationSource(params);
     if (source === null || typeof params.threadId !== "string") return true;
     return delegations.observe(
@@ -215,12 +215,12 @@ export const createRouter = ({
     );
   };
 
-  // A Claude first turn the bridge refused never ran, so its creator must not be told it started.
   const noteStarted = (
     params: Record<string, unknown>,
     refusal: Refusal | null,
   ) => {
     if (typeof params.threadId === "string") {
+      // A refused first turn never ran, so its creator is told the refusal rather than a start.
       delegations.started(params.threadId, refusal);
     }
   };
@@ -312,7 +312,6 @@ export const createRouter = ({
     return line;
   };
 
-  // The server creates the thread on its default model, so a Claude model never reaches it; a resumed Claude thread stays where it started, and the server is told that directory.
   const routeThreadOpen = (call: AppCall) => {
     const { method, message, request } = call;
     const threadId =
@@ -321,6 +320,7 @@ export const createRouter = ({
         : undefined;
     const known =
       threadId === undefined ? undefined : threads.threadOf(threadId);
+    // A resumed Claude thread stays where it started, and the server is told that directory.
     const params =
       known === undefined
         ? request.params
@@ -349,11 +349,11 @@ export const createRouter = ({
         ? call.line
         : encode({ ...message, params });
     }
+    // The server creates the thread on its default model, so a Claude model never reaches it.
     return encodeWithoutParams(message, params, ["model"]);
   };
 
-  // The server copies its own record of the thread, which holds none of the Claude conversation, so the fork learns of it here.
-  // A side chat opened on a Codex model stays on Codex, and is told where the Claude conversation stood, which it is handed with its first message.
+  // Forks a thread, or opens a side chat from it.
   const routeFork = (call: AppCall) => {
     const { line, message, request } = call;
     const { params } = request;
@@ -386,6 +386,7 @@ export const createRouter = ({
       return null;
     }
     const source = threads.threadOf(sourceId);
+    // A side chat opened on a Codex model stays on Codex, and is handed where the Claude conversation stood with its first message.
     const codex =
       sideChat && requested !== undefined && !isClaudeModel(requested);
     // Claude's conversation stays where the source runs, so a Claude fork opens there whatever directory the app sends.
@@ -399,6 +400,7 @@ export const createRouter = ({
       }
     }
     const open = (opened: Opened | null) => {
+      // The server copies its own record of the thread, which holds none of the Claude conversation, so the fork learns of it here.
       awaitResponse(
         call,
         openingThread(forked, {
@@ -425,7 +427,7 @@ export const createRouter = ({
     });
   };
 
-  // The server keeps no turns of an ephemeral fork, so the main thread is read while the fork is asked for; a side chat opened on Claude is refused rather than started without it, and the server never sees the Claude model.
+  // Opens a side chat from a Codex main thread.
   const routeCodexSideChat = (
     call: AppCall,
     {
@@ -441,7 +443,9 @@ export const createRouter = ({
     const { line, message, request } = call;
     const { params } = request;
     const claude = isClaudeModel(requested);
+    // The server keeps no turns of an ephemeral fork, so the main thread is read while the fork is asked for.
     return sideChats.referenceOf(parentId).then((reference) => {
+      // A side chat opened on Claude is refused rather than started without the main conversation.
       if (reference.isErr() && claude) {
         refuse("thread/fork", request, "side_chat_unreadable");
         return null;
@@ -460,11 +464,11 @@ export const createRouter = ({
         }),
       );
       if (!claude) return line;
+      // The server never sees the Claude model.
       return encodeWithoutParams(message, params, ["model"]);
     });
   };
 
-  // Settings that do not reach Claude, such as the approval policy, still go to the server; only what Claude would have to follow is checked.
   const routeSettingsUpdate = ({ line, message, request }: AppCall) => {
     const { params } = request;
     const threadId = params.threadId;
@@ -479,6 +483,7 @@ export const createRouter = ({
     if (known === undefined && !isClaudeModel(requestedModel(params))) {
       return line;
     }
+    // Only what Claude would have to follow is checked; settings that do not reach Claude, such as the approval policy, still go to the server.
     const checked = checkThread(params, known, cwdOf(params));
     if (checked.isErr()) {
       refuse("thread/settings/update", request, checked.error.refusal);
@@ -575,14 +580,15 @@ export const createRouter = ({
     ]),
   ]);
 
-  // The substring check only skips parsing; the method decides, since a response can carry the same text in its thread history.
   const fromServer = (line: Buffer): Buffer | Promise<Buffer> => {
+    // The substring check only skips parsing; the method decides, since a response can carry the same text in its thread history.
     if (pending.size === 0 && !line.includes(SETTINGS_UPDATED)) return line;
     const message = parseMessage(line);
     if (message === null) return line;
     if (message.method === SETTINGS_UPDATED) {
       return responses.rewriteSettingsUpdated(message) ?? line;
     }
+    // Server requests share ids with the app's, so only a line without a method is read as a response.
     if (message.method !== undefined) return line;
     const id = message.id;
     if (typeof id !== "string" && typeof id !== "number") return line;

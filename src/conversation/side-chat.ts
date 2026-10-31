@@ -63,8 +63,7 @@ type Deps = {
   noteSideChat: (threadId: string, context: SideChatContext) => void;
 };
 
-// A side chat picks its model before its first message, whichever agent runs the main thread, and keeps it after; the agent it moves to is handed the main conversation up to the fork, and the app's instructions for the side chat reach Claude too.
-// Nothing here is saved: a side chat is ephemeral, and the server, which the bridge runs, drops it on a restart.
+// Each side chat's model until its first message, and the main conversation up to the fork handed to the agent it moves to.
 export const createSideChats = ({
   sessionIdOf,
   rewindOf,
@@ -77,11 +76,12 @@ export const createSideChats = ({
   dropFork,
   noteSideChat,
 }: Deps) => {
+  // Nothing here is saved, since the server drops an ephemeral side chat on a restart.
   const sideChats = new Map<string, SideChat>();
 
-  // A rewound conversation stands where it was rewound to until its next turn, though its record still holds the turns after.
   const pointOf = async (sourceId: string, source: Thread) => {
     const rewind = rewindOf(sourceId);
+    // A rewound conversation stands where it was rewound to until its next turn, though its record still holds the turns after.
     if (rewind !== undefined) {
       return Result.ok<ForkPoint>(
         rewind.at === null
@@ -105,7 +105,7 @@ export const createSideChats = ({
     );
   };
 
-  // Read as the app reads a main thread for a cloud side chat: its newest turns, and its oldest one when there are more, with no further pages. The newest page sets what is handed over, so a turn added after it is left out; an oldest page with no turn though more were said to exist fails the read rather than hand over a mix.
+  // The main thread's reference, read as the app reads one for a cloud side chat: its newest turns, and its oldest one when there are more.
   const referenceOf = (parentId: string) =>
     Result.gen(async function* () {
       const newest = yield* Result.await(readPage(parentId, NEWEST));
@@ -117,6 +117,7 @@ export const createSideChats = ({
       }
       const oldest = yield* Result.await(readPage(parentId, OLDEST));
       const first = oldest.turns[0];
+      // An oldest page with no turn though more were said to exist fails the read rather than hand over a mix.
       if (first === undefined) {
         return Result.err(
           new MainThreadUnreadable({
@@ -172,7 +173,7 @@ export const createSideChats = ({
     });
   };
 
-  // Null leaves the turn to the usual routing, which runs it on the model it names.
+  // What a side chat's turn waits on before it runs: a refusal, the hand-over of the main conversation, or nothing.
   const beforeTurn = (
     threadId: string,
     requested: string | undefined,
@@ -194,7 +195,6 @@ export const createSideChats = ({
     return null;
   };
 
-  // A model picked before the first message only marks the choice, so picking the other agent again leaves the side chat as it was.
   const beforeSettings = (
     threadId: string,
     requested: string | undefined,
@@ -208,6 +208,7 @@ export const createSideChats = ({
     if (movesAway(sideChat.parent, claude) && "unread" in sideChat.parent) {
       return "side_chat_main_unread";
     }
+    // A model picked before the first message only marks the choice, so picking the other agent again leaves the side chat as it was.
     sideChat.choice = requested;
     if (claude || !isClaudeThread(threadId)) return null;
     // A Codex main thread's side chat taken up by Claude before its first message goes back to the server's thread.
@@ -218,7 +219,7 @@ export const createSideChats = ({
   const isStopped = (threadId: string) =>
     sideChats.get(threadId)?.stopped === true;
 
-  // The server reports the Codex model a Claude side chat was switched to before its first message.
+  // Whether a Claude side chat was switched to a Codex model before its first message, which the server's answers then report.
   const showsCodex = (threadId: string) => {
     const choice = current(threadId)?.choice;
     return choice !== undefined && !isClaudeModel(choice);
@@ -232,11 +233,10 @@ export const createSideChats = ({
     return undefined;
   };
 
-  // A turn naming no model runs where the side chat runs now.
   const runsOnClaude = (threadId: string, model: string | undefined) =>
+    // A turn naming no model runs where the side chat runs now.
     model === undefined ? isClaudeThread(threadId) : isClaudeModel(model);
 
-  // Everything stays as it was until the conversation is handed over, so a failure that wrote nothing can be sent again; one whose outcome is unknown may have written it, so the side chat takes no more messages rather than risk a second copy or none.
   const handOver = async (
     threadId: string,
     sideChat: SideChat,
@@ -247,6 +247,7 @@ export const createSideChats = ({
     if (brief.value !== null) {
       const injected = await inject(threadId, [brief.value]);
       if (injected.isErr()) {
+        // A failure that wrote nothing leaves the side chat as it was, so the message can be sent again; one whose outcome is unknown may have written the brief, so the side chat takes no more messages rather than risk a second copy or none.
         if (injected.error._tag !== "ServerRequestUnanswered") {
           return "side_chat_not_briefed" as const;
         }

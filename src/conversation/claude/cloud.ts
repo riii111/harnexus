@@ -64,7 +64,7 @@ class CloudCopyUnreadable extends TaggedError("CloudCopyUnreadable")<{
 
 type CopyFailure = CloudCopyFailure | CloudCopyStopped | CloudCopyUnreadable;
 
-// Whether the chat must not be copied again, since the copy may have run a model turn or did not say how many it ran.
+// What stops further copies of the chat after a failed copy, if anything.
 const stoppedBy = (error: CopyFailure) =>
   matchError(error, {
     CloudCopyFailed: ({ stopped }) => stopped,
@@ -174,6 +174,7 @@ export const createCloudRuntime = <Tag extends string>(
     string,
     { threadId: string; child: CloudChild }
   >();
+  // One idle copy runs at a time per thread; a turn's copies skip the queue, and an idle copy made while a turn ran is dropped.
   const copies = createSerialQueue();
   let startOwnTurn = (_threadId: string) => false;
   let cancelTick: (() => void) | null = null;
@@ -227,7 +228,7 @@ export const createCloudRuntime = <Tag extends string>(
     );
   };
 
-  // Answered by the bridge like /resume, and allowed only in a thread that has no conversation yet.
+  // Links the thread to a Cloud session, answered by the bridge like /resume.
   const link = async (turn: Turn, argument: string) => {
     const { threadId } = turn;
     const refuse = (text: string) => {
@@ -330,7 +331,7 @@ export const createCloudRuntime = <Tag extends string>(
     }
   };
 
-  // The outcome is logged alike for a turn's first message and a steer; an unknown one leaves the thread to check before going on.
+  // Sends a turn's first message or a steer to the Cloud session and logs how it went.
   const sendMessage = async (turn: Turn, cloud: CloudLink, text: string) => {
     const startedAt = now();
     const sent = await sendToCloud(cloud.sessionId, text, turn.record.worktree);
@@ -482,7 +483,7 @@ export const createCloudRuntime = <Tag extends string>(
     }
   };
 
-  // Records already shown are skipped by the last one shown; a prompt this turn sent is shown by the app already, so only replies and prompts typed elsewhere are rendered.
+  // The records of a copy past what the turn showed, and whether its reply ended.
   const advance = (follow: Follow, all: readonly SessionMessage[]) => {
     const from = indexAfter(all, follow.after);
     if (follow.record === null) {
@@ -507,6 +508,7 @@ export const createCloudRuntime = <Tag extends string>(
       const message = all[index];
       if (message === undefined) continue;
       const next = follow.texts[follow.matched];
+      // A prompt this turn sent is shown by the app already, so only replies and prompts typed elsewhere are rendered.
       if (next !== undefined && samePrompt(message, next)) {
         follow.matched += 1;
         lastPrompt = index;
@@ -547,7 +549,6 @@ export const createCloudRuntime = <Tag extends string>(
     turn.finish({ status: "completed" }, null);
   };
 
-  // One idle copy runs at a time per thread; a turn's copies skip the queue, and an idle copy made while a turn ran is dropped.
   const copyOf = (threadId: string, cloudSessionId: string) =>
     copies.run(threadId, () => fetchCopy(threadId, cloudSessionId));
 
@@ -604,17 +605,19 @@ export const createCloudRuntime = <Tag extends string>(
     return Result.ok({ copy: copied.value, records: all });
   };
 
-  // A session a linked one started after the app was last shown gets a chat of its own, once; one started before was the user's to link, and one already linked has its chat.
+  // Opens a chat, once, for each session a linked one started after the app was last shown.
   const noticeChildren = (threadId: string, all: readonly SessionMessage[]) => {
     // A copy made while a chat is being linked, or one whose link failed, opens nothing.
     const cloud = threads.cloudOf(threadId);
     if (openChild === undefined || cloud === null) return;
+    // A session started before the app was last shown was the user's to link.
     const after = indexAfter(all, cloud.shown);
     const unsent = [...unsentChildren.values()]
       .filter((entry) => entry.threadId === threadId)
       .map((entry) => entry.child);
     for (const child of [...unsent, ...childSessionsIn(all, after)]) {
       if (openedChildren.has(child.sessionId)) continue;
+      // A session already linked has its chat.
       if (threads.cloudOwner(child.sessionId) !== undefined) {
         unsentChildren.delete(child.sessionId);
         continue;
@@ -635,13 +638,11 @@ export const createCloudRuntime = <Tag extends string>(
     }
   };
 
-  // A copy started for a turn that has ended is removed once it is written.
   const discardStarted = async (started: Started) => {
     const copied = await started.copied;
     if (copied.isOk()) await discardCopy(copied.value.copy);
   };
 
-  // The thread reads the newest copy from now on, so the one it read before is removed once that is saved.
   const keepCopy = async (
     threadId: string,
     copySessionId: string,
@@ -655,7 +656,7 @@ export const createCloudRuntime = <Tag extends string>(
     }
   };
 
-  // A thread with no turn running is copied now and then; what it shows past where the app was shown opens a turn of Claude's own.
+  // Copies each linked thread with no turn running, and opens a turn of Claude's own for what it shows past where the app was shown.
   const tick = async () => {
     for (const threadId of threads.cloudThreadIds()) {
       if (closed) return;
@@ -746,9 +747,9 @@ export const createCloudRuntime = <Tag extends string>(
       inner.recordOf(threadId, turnId),
     run,
     steer,
-    // Stopping only ends the wait; the Cloud session keeps working, which only claude.ai can stop.
     interrupt: (turn, repeated) => {
       if (threads.cloudOf(turn.threadId) !== null) {
+        // Stopping only ends the wait; the Cloud session keeps working, which only claude.ai can stop.
         stopFollowing(turn.threadId);
         return;
       }
@@ -757,11 +758,12 @@ export const createCloudRuntime = <Tag extends string>(
     dropSession: (threadId, link) => inner.dropSession(threadId, link),
     noteFork: (threadId) => inner.noteFork(threadId),
     dropFork: (threadId) => inner.dropFork(threadId),
-    // The copies of a linked thread go on while the store holds it, so halted stays; a child chat not yet opened is dropped only with a deleted parent.
     forgetThread: (threadId, ended) => {
       const { busy, follow, pendingOwn } = stateOf(threadId);
       if (busy || follow !== null || pendingOwn !== null) return;
+      // The copies of a linked thread go on while the store holds it, so only the turn records go and halted stays.
       turnRecords.forget(threadId);
+      // A child chat not yet opened is dropped only with a deleted parent.
       if (ended === "deleted") {
         for (const [sessionId, entry] of unsentChildren) {
           if (entry.threadId === threadId) unsentChildren.delete(sessionId);
@@ -809,19 +811,20 @@ const newFollow = (text: string, after: string | null): Follow => {
   };
 };
 
-// A short reply comes within the first seconds, so copies overlap then (see waitForReply); after that they come less often, since every copy starts claude and rewrites the whole session.
-// A failing copy may end at once, so it is not tried again without a wait.
 const pollMs = (waited: number, failing: boolean) => {
+  // A failing copy may end at once, so it is not tried again without a wait.
   if (failing) return FAST_POLL_MS;
+  // A short reply comes within the first seconds, so copies overlap then (see waitForReply); after that they come less often, since every copy starts claude and rewrites the whole session.
   if (waited < BACK_TO_BACK_FOR_MS) return 0;
   return waited < FAST_POLL_FOR_MS ? FAST_POLL_MS : POLL_MS;
 };
 
-// Besides what the user typed, the first message of a chat another chat opened with create_thread, such as harnexus-task cloud does, can link it; it arrives wrapped in its delegation, as its <prompt>.
+// The text of a message that may be a session command.
 const commandText = (input: TurnInput) => {
   const typed = sessionCommandTextOf(input);
   if (typed !== null || input.toolOutput?.name !== "create_thread")
     return typed;
+  // The first message of a chat another chat opened with create_thread, as harnexus-task cloud does, can link it too; it arrives wrapped in its delegation, as its <prompt>.
   return DELEGATED_PROMPT.exec(input.text)?.[1] ?? null;
 };
 
@@ -837,8 +840,9 @@ const CLOUD_COMMAND = /^\/cloud(?:\s+(\S+))?\s*$/;
 
 const UNSENT_OUTCOMES = new Set(["not_sent", "no_project", "no_parent"]);
 
-// A message whose send failed is no longer waited for; one not yet matched is taken from the end, so the order of the others stays.
+// Stops waiting for a message whose send failed.
 const forget = (follow: Follow, text: string) => {
+  // One not yet matched is taken from the end, so the order of the others stays.
   const at = follow.texts.lastIndexOf(text);
   if (at >= follow.matched) follow.texts.splice(at, 1);
 };
@@ -853,9 +857,9 @@ const keyOfLast = (all: readonly SessionMessage[]) => keyOf(all.at(-1));
 const indexOf = (all: readonly SessionMessage[], key: string | null) =>
   key === null ? -1 : all.findIndex((message) => message.uuid === key);
 
-// Where the records after uuid start; a record no longer in the copy, such as one Claude compacted away, leaves nothing to skip.
 const indexAfter = (all: readonly SessionMessage[], uuid: string | null) => {
   const at = indexOf(all, uuid);
+  // A record no longer in the copy, such as one Claude compacted away, leaves nothing to skip.
   return at === -1 ? 0 : at + 1;
 };
 

@@ -34,7 +34,7 @@ export type StoreTag =
   | "WriteNotStarted"
   | "RunStateNotSaved";
 
-// The model, effort and session id a thread runs with are set here before the store saves them and win over what it holds, so a failed save still applies while the bridge runs.
+// The values each Claude thread runs with, layered over what the store saved.
 export const createThreadValues = (
   store: ThreadStore,
   log: (event: ThreadValueEvent) => void,
@@ -46,11 +46,14 @@ export const createThreadValues = (
     string,
     { sessionId: string; at: string | null }
   >();
+  // Set before the store saves them and read ahead of it, so a failed save still applies while the bridge runs.
   const models = new Map<string, string>();
   const efforts = new Map<string, EffortLevel>();
   // A null session id is one Claude lost.
   const sessionIds = new Map<string, string | null>();
+  // Only the first reopen after a conversation is picked or a Cloud session linked carries the whole history.
   const picked = new Set<string>();
+  // A side chat is ephemeral, so what the app gave it is kept only while the bridge runs.
   const sideChats = new Map<string, SideChatContext>();
   // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
   const modes = new Map<string, Mode>();
@@ -67,9 +70,9 @@ export const createThreadValues = (
       : { ...thread, model };
   };
 
-  // A saved level that is no Claude level, such as one written by hand, leaves Claude on the user's settings.
   const pickedEffortOf = (threadId: string): EffortLevel | null => {
     const effort = efforts.get(threadId) ?? store.get(threadId)?.effort;
+    // A saved level that is no Claude level, such as one written by hand, leaves Claude on the user's settings.
     return isClaudeEffort(effort) ? effort : null;
   };
 
@@ -92,12 +95,12 @@ export const createThreadValues = (
     if (store.get(threadId) === undefined) adopted.set(threadId, thread);
   };
 
-  // A source with no conversation yet, or one rewound to its start, leaves the fork to start one of its own; a rewound source's record still runs past where it stands, so the fork is pinned there.
   const adoptFork = (threadId: string, thread: Thread, sourceId: string) => {
     if (store.get(threadId) !== undefined) return;
     adopted.set(threadId, thread);
     const rewind = store.get(sourceId)?.rewind;
     if (rewind !== undefined) {
+      // A rewound source's record still runs past where it stands, so the fork is pinned there; one rewound to its start leaves the fork to start its own conversation.
       if (rewind.at !== null) {
         forkSources.set(threadId, {
           sessionId: rewind.sessionId,
@@ -112,7 +115,6 @@ export const createThreadValues = (
     }
   };
 
-  // A side chat is ephemeral, so what the app gave it is kept only while the bridge runs.
   const noteSideChat = (threadId: string, context: SideChatContext) => {
     sideChats.set(threadId, context);
   };
@@ -120,23 +122,21 @@ export const createThreadValues = (
   const instructionsOf = (threadId: string) =>
     sideChats.get(threadId)?.instructions ?? null;
 
-  // Claude keeps the reference in its record once it holds a conversation, so it goes with every prompt until then, including one sent again after a turn that failed before Claude took it.
   const referenceOf = (threadId: string) =>
+    // Claude keeps the reference in its record once it holds a conversation, so it goes with every prompt until then.
     sessionIdOf(threadId) === null
       ? (sideChats.get(threadId)?.reference ?? null)
       : null;
 
-  // Only a fork Claude never ran is forgotten, so nothing was saved of it.
   const forgetFork = (threadId: string) => {
     adopted.delete(threadId);
     forkSources.delete(threadId);
     modes.delete(threadId);
   };
 
-  // An archived thread can return, so only an override the store already holds goes; a model, effort or session id the store lacks still applies, and what the app picked or gave the thread stays.
-  // A deleted thread cannot return, so nothing of it is kept.
   const forgetThread = (threadId: string, ended: ThreadEnd) => {
     const record = store.get(threadId);
+    // A deleted thread cannot return, so nothing of it is kept.
     if (ended === "deleted") {
       for (const held of [models, efforts, sessionIds, sideChats, modes]) {
         held.delete(threadId);
@@ -145,6 +145,7 @@ export const createThreadValues = (
       forgetFork(threadId);
       return;
     }
+    // An archived thread can return, so only an override the store already holds goes, and what the app picked or gave the thread stays.
     if (record === undefined) return;
     if (models.get(threadId) === record.model) models.delete(threadId);
     if (efforts.get(threadId) === record.effort) efforts.delete(threadId);
@@ -161,21 +162,20 @@ export const createThreadValues = (
       ? (forkSources.get(threadId)?.sessionId ?? null)
       : null;
 
-  // Null when the fork takes its source's record as it ends when the fork is made.
   const forkPinOf = (threadId: string) => forkSources.get(threadId)?.at ?? null;
 
-  // An id set here but not saved wins over the store's, as in sessionIdOf.
   const isBound = (sessionId: string) => {
     for (const id of sessionIds.values()) if (id === sessionId) return true;
     const owner = store.sessionOwner(sessionId);
+    // An id set here but not saved wins over the store's.
     return owner !== undefined && !sessionIds.has(owner);
   };
 
-  // Unlike an id Claude reports, a picked conversation applies only once the store holds it, so a restart never drops it unannounced; a save whose sync failed already holds it.
   const bindSession = async (threadId: string, sessionId: string) => {
     if (isBound(sessionId))
       return { bound: false, error: "SessionTaken" as const };
     const saved = await store.bindSession(threadId, sessionId);
+    // A picked conversation applies only once the store holds it, so a restart never drops it unannounced; a save whose sync failed already holds it.
     const bound = store.get(threadId)?.sessionId === sessionId;
     if (bound) {
       sessionIds.set(threadId, sessionId);
@@ -189,9 +189,9 @@ export const createThreadValues = (
     return { bound, error: saved.isErr() ? saved.error._tag : null };
   };
 
-  // A model or effort picked while the thread was being registered is saved now, since the registration carried the earlier one.
   const markRegistered = (threadId: string) => {
     adopted.delete(threadId);
+    // The registration carried the model and effort from before, so one picked meanwhile is saved now.
     const picked = models.get(threadId);
     if (picked !== undefined && picked !== store.get(threadId)?.model) {
       saveModel(threadId, picked);
@@ -211,11 +211,11 @@ export const createThreadValues = (
     if (store.get(threadId) !== undefined) saveModel(threadId, model);
   };
 
-  // A Codex thread switched to Claude by a turn/start is not known yet, and that turn registers it with this effort.
   const changeEffort = (threadId: string, effort: EffortLevel) => {
     if (pickedEffortOf(threadId) === effort) return;
     efforts.set(threadId, effort);
     log({ event: "claude_turn", step: "effort_changed", effort });
+    // A thread not yet registered, such as a Codex thread a turn/start switches to Claude, saves this effort when that turn registers it.
     if (store.get(threadId) !== undefined) saveEffort(threadId, effort);
   };
 
@@ -224,8 +224,8 @@ export const createThreadValues = (
     return mode;
   };
 
-  // A level only Codex models have, such as minimal or ultra, would leave Claude on some other level, so the thread keeps its own.
   const selectEffort = (threadId: string, effort: string) => {
+    // A level only Codex models have, such as minimal or ultra, would leave Claude on some other level, so the thread keeps its own.
     if (!isClaudeEffort(effort)) {
       log({ event: "claude_turn", step: "effort_unsupported" });
       return;
@@ -263,25 +263,25 @@ export const createThreadValues = (
   const cloudOf = (threadId: string): CloudLink | null =>
     store.get(threadId)?.cloud ?? null;
 
-  // Like a picked conversation, a linked Cloud session applies only once the store holds it, and its first reopen carries the whole history.
   const linkCloud = async (
     threadId: string,
     cloud: CloudLink,
     copySessionId: string,
   ) => {
     const linked = await store.linkCloud(threadId, cloud, copySessionId);
+    // Like a picked conversation, a linked Cloud session applies only once the store holds it.
     if (linked.isErr()) return linked;
     sessionIds.set(threadId, copySessionId);
     picked.add(threadId);
     return linked;
   };
 
-  // The copy read last is used even if its save fails, since the earlier copy is removed once a new one is read.
   const setCloudCopy = (
     threadId: string,
     copySessionId: string,
     shown: string | null,
   ) => {
+    // The earlier copy is removed once a new one is read, so the new one is used even if its save fails.
     sessionIds.set(threadId, copySessionId);
     return logUnsaved(
       "session_not_saved",
@@ -289,7 +289,6 @@ export const createThreadValues = (
     );
   };
 
-  // True once per pick, so only the first reopen after it carries the whole history.
   const consumePick = (threadId: string) => picked.delete(threadId);
 
   return {

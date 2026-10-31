@@ -49,7 +49,6 @@ export const createApprovals = <Tag extends string>({
   const heldApprovals = new Map<string, HeldApprovals<Tag>>();
   const turnWaiters = new Map<string, (() => void)[]>();
 
-  // Claude may ask for a tool before the app has been shown the turn the thread accepted, such as a turn of its own, so the approval waits until a turn is shown or the thread has none left.
   const turnShown = (threadId: string) =>
     new Promise<void>((resolve) => {
       turnWaiters.set(threadId, [
@@ -149,8 +148,6 @@ export const createApprovals = <Tag extends string>({
       : decision;
   };
 
-  // An approval whose holding turn could not be shown is declined rather than held again, so a thread whose turns cannot run does not keep opening them.
-  // A turn the user stopped before the approval was shown cannot show it, while one asked as the user stops a turn showing it is declined with that turn.
   const turnToAsk = async (threadId: string, approval: Approval<Tag>) => {
     let waited = false;
     while (!isClosed() && !approval.signal.aborted) {
@@ -165,16 +162,19 @@ export const createApprovals = <Tag extends string>({
       if (held !== undefined && (held.turn === null || held.turn === turn)) {
         joinHeld(approval, held);
       }
+      // A turn the user stopped before the approval was shown cannot show it, while one asked as the user stops a turn showing it is declined with that turn.
       const stoppedAhead =
         waited &&
         turn?.state().interrupting === true &&
         approval.held?.turn !== turn;
       if (turn !== undefined && !stoppedAhead) return turn;
       if (held === undefined && !isBusy(threadId)) {
+        // An approval whose holding turn could not be shown is declined rather than held again, so a thread whose turns cannot run does not keep opening them.
         if (approval.held !== null || !openHeld(threadId, approval)) {
           return undefined;
         }
       }
+      // Claude may ask for a tool before the app has been shown the turn the thread accepted, such as a turn of its own, so the approval waits until a turn is shown or the thread has none left.
       const shown = await waitForAbort(turnShown(threadId), approval.signal);
       if (shown === ABORTED) return undefined;
       waited = true;
@@ -246,8 +246,8 @@ export const createApprovals = <Tag extends string>({
     forget: (threadId: string) => {
       heldApprovals.delete(threadId);
     },
-    // What the app answers can no longer reach a Claude that is gone.
     end: (threadId: string) => {
+      // What the app answers can no longer reach a Claude that is gone.
       heldApprovals.get(threadId)?.ended.abort();
     },
   };
