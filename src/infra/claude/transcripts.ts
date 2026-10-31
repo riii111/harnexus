@@ -74,19 +74,44 @@ export const readLastRecordUuid = (
 
 export const findSessionFile = (sessionId: string, configDir: string) =>
   Result.gen(async function* () {
+    const cached = await cachedSessionFile(sessionId, configDir);
+    if (cached !== null) return Result.ok<string | null>(cached);
     const projectsDir = join(configDir, "projects");
-    const projects = yield* Result.await(listDirectoryIfExists(projectsDir));
+    const projects =
+      (yield* Result.await(listDirectoryIfExists(projectsDir))) ?? [];
     const fileName = `${sessionId}.jsonl`;
-    for (const project of projects ?? []) {
-      const files = yield* Result.await(
+    // Every folder is listed at once but read in folder order, so the first folder holding the record wins as it does when listed one at a time.
+    const listings = await Promise.all(
+      projects.map((project) =>
         listDirectoryIfExists(join(projectsDir, project)),
-      );
+      ),
+    );
+    for (const [index, listing] of listings.entries()) {
+      const files = yield* listing;
       if (files?.includes(fileName)) {
-        return Result.ok<string | null>(join(projectsDir, project, fileName));
+        const path = join(projectsDir, projects[index] ?? "", fileName);
+        sessionFiles.set(sessionFileKey(sessionId, configDir), path);
+        return Result.ok<string | null>(path);
       }
     }
     return Result.ok<string | null>(null);
   });
+
+// A cached path is trusted only while its file still exists, because Cloud copies are deleted and Claude can move a record.
+const cachedSessionFile = async (sessionId: string, configDir: string) => {
+  const key = sessionFileKey(sessionId, configDir);
+  const path = sessionFiles.get(key);
+  if (path === undefined) return null;
+  const file = await statFileIfExists(path);
+  if (file.isOk() && file.value !== null) return path;
+  sessionFiles.delete(key);
+  return null;
+};
+
+const sessionFileKey = (sessionId: string, configDir: string) =>
+  `${configDir}\0${sessionId}`;
+
+const sessionFiles = new Map<string, string>();
 
 export const claudeConfigDir = (env: NodeJS.ProcessEnv) =>
   env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
