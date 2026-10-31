@@ -5,9 +5,7 @@ import type { CallOutcome } from "../infra/codex/call-gateway.ts";
 import { refusalOf, type TurnSettings } from "../infra/codex/delegations.ts";
 import { loadCallerSocketPath } from "../runtime/config.ts";
 import {
-  entryExists,
   isDirectory,
-  isSymlink,
   listDirectoryIfExists,
   prepareDirectory,
   readTextFileIfExists,
@@ -34,7 +32,6 @@ import {
   homeOf,
   ioFailed,
   NAME,
-  readJson,
 } from "./request.ts";
 
 const CALL_TIMEOUT_MS = 15 * 60_000;
@@ -213,18 +210,13 @@ const openSession = (
   confirmed: Confirmed,
   summarize: Summarize,
   deps: SessionDeps,
-  legacy?: () => Promise<Result<Fields | null, TaskFailed>>,
 ) =>
   Result.gen(async function* () {
     const statePath = join(directory, "state.json");
     const pendingPath = join(directory, "pending.json");
     const historyPath = join(directory, "history.json");
     const loaded = yield* Result.await(load(statePath));
-    const state = truthy(loaded)
-      ? yield* asRecord(loaded, statePath)
-      : legacy === undefined
-        ? null
-        : yield* Result.await(legacy());
+    const state = truthy(loaded) ? yield* asRecord(loaded, statePath) : null;
     const pendingLoaded = yield* Result.await(load(pendingPath));
     let pending = yield* asRecord(pendingLoaded, pendingPath);
     const save = deps.saveJson;
@@ -474,27 +466,7 @@ export const reviewSession = (data: Fields, deps: SessionDeps) =>
       };
     },
     deps,
-    () => legacyReviewState(String(data.checkout)),
   );
-
-const legacyReviewState = (checkout: string) =>
-  Result.gen(async function* () {
-    const path = join(checkout, ".reviewctl/state.json");
-    if (!(await entryExists(path))) return Result.ok(null);
-    if ((await isSymlink(path)) || (await realPathOrSelf(path)) !== path)
-      return fail(`refusing symlinked legacy state ${path}`);
-    const state = yield* Result.await(readJson(path));
-    if (!isObject(state)) return fail(`${path} does not hold a JSON object`);
-    if (state.pending_create === true || !truthy(state.reviewer))
-      return fail(
-        `legacy reviewctl creation is pending in ${path}; check the App, ` +
-          "and remove it only if no reviewer was created",
-      );
-    return Result.ok<Fields | null>({
-      reviewer: state.reviewer,
-      candidate: state.candidate ?? null,
-    });
-  });
 
 export const listState = (env: Env) =>
   Result.gen(async function* () {

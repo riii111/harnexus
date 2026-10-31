@@ -1713,63 +1713,6 @@ describe("harnexus-task review", () => {
     expect(refused.code).toBe(1);
     expect(refused.err).toContain("CODEX_THREAD_ID");
   });
-
-  test("resumes a confirmed reviewctl state and refuses a pending one", async () => {
-    const { harnexus, checkout, commit, initial, review } =
-      await reviewFixture();
-    const legacy = {
-      identifier: "example",
-      worker: "Codex",
-      workerId: "worker",
-      projectId: "project",
-      checkout,
-      base: initial,
-      head: initial,
-    };
-    const state = join(checkout, ".reviewctl/state.json");
-    await mkdir(dirname(state));
-    await writeFile(
-      state,
-      JSON.stringify({
-        reviewer: null,
-        pending_create: true,
-        candidate: legacy,
-      }),
-    );
-
-    const pending = await review();
-    await writeFile(
-      state,
-      JSON.stringify({ reviewer: "r0", candidate: legacy }),
-    );
-    commit("test: fix");
-    const resumed = await review([], [{ outcome: "done" }]);
-
-    expect(pending.code).toBe(1);
-    expect(pending.err).toContain("legacy reviewctl creation is pending");
-    expect([resumed.code, resumed.err]).toEqual([0, ""]);
-    expect(harnexus.calls.at(-1)?.arguments.threadId).toBe("r0");
-    expect(JSON.parse(await readFile(state, "utf8")).reviewer).toBe("r0");
-  });
-
-  test.each([
-    {
-      name: "an existing file",
-      content: '{"reviewer": "r0", "candidate": {}}',
-    },
-    { name: "nothing", content: null },
-  ])("refuses a reviewctl state symlinked to $name", async ({ content }) => {
-    const { root, checkout, review } = await reviewFixture();
-    const target = join(root, "elsewhere.json");
-    if (content !== null) await writeFile(target, content);
-    await mkdir(join(checkout, ".reviewctl"));
-    await symlink(target, join(checkout, ".reviewctl/state.json"));
-
-    const refused = await review();
-
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain("symlinked");
-  });
 });
 
 type Placement = Awaited<ReturnType<typeof reviewFixture>>;

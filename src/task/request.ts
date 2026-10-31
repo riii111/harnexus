@@ -338,20 +338,8 @@ export const candidate = (
     return Result.ok(data);
   });
 
-// reviewctl's field names, so a session it recorded is still checked field by field.
-const OLD_NAMES: Record<string, string> = {
-  taskId: "identifier",
-  workerAI: "worker",
-  workerChatId: "workerId",
-};
-
 export const sessionValue = async (data: Fields, key: string) => {
-  const old = OLD_NAMES[key];
-  const value = Object.hasOwn(data, key)
-    ? data[key]
-    : old === undefined
-      ? null
-      : data[old];
+  const value = data[key];
   return key === "checkout" && truthy(value)
     ? realPathOrSelf(String(value))
     : (value ?? null);
