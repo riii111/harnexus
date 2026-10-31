@@ -49,7 +49,7 @@ const targets = (template: string) =>
       : [{ raw: match[1] ?? "", start: span[0], end: span[1] }];
   });
 
-// The link and image targets of a template, as Markdown reads them, so examples in code or comments and text that a block such as a heading splits are left alone.
+// The link and image targets of a template, as Markdown reads them.
 const links = (template: string) => {
   const candidates = targets(template);
   // Each whole target is swapped for a bare marker, so a target with spaces or brackets still counts here and is refused by the caller rather than slipping through.
@@ -71,6 +71,7 @@ const links = (template: string) => {
     seen.add(destination);
     return children;
   };
+  // Markdown decides what is a link, so examples in code or comments and text that a block such as a heading splits are left alone.
   Bun.markdown.render(
     marked,
     {

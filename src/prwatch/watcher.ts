@@ -304,7 +304,7 @@ const hasWork = (state: WatchState) =>
   state.followUp.length > 0 ||
   state.delivered !== null;
 
-// Whether a new message may go out, which waits while the answer to the last one is still to come so it never interrupts it.
+// Whether a new message may go out.
 const checkAnswer = (
   deps: WatchDeps,
   state: WatchState,
@@ -313,6 +313,7 @@ const checkAnswer = (
   now: Date,
 ) => {
   const delivered = state.delivered;
+  // A message waits while the answer to the last one is still to come, so it never interrupts it.
   if (delivered === null) return true;
 
   if (turn === null) {

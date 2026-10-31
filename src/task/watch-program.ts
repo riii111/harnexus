@@ -1,7 +1,7 @@
 import { fileIdentity } from "../runtime/fs.boundary.ts";
 import { jsonEqual } from "./format.ts";
 
-// A check of whether a newer harnexus-task was installed over the running one, which the watch exits on so launchd's KeepAlive starts the new one.
+// A check of whether a newer harnexus-task was installed over the running one.
 export const programWatch = async (path: string, compiled: boolean) => {
   // Null when the watch cannot tell, so the caller can say so once rather than run stale code without a word.
   if (!compiled) return null;

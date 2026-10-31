@@ -339,11 +339,12 @@ const summaryFields = (bots: readonly ReviewBot[]) => {
 // A head gets one check suite per app that checks it, far fewer than this.
 const MAX_SUITES = 50;
 
-// One aliased query for every PR of an account, so GitHub counts it as a single point.
+// One aliased query for every PR of an account.
 const summaryQuery = (refs: readonly PrRef[], bots: readonly ReviewBot[]) => {
   const fields = summaryFields(bots);
   const variables: Record<string, unknown> = {};
   const declared: string[] = [];
+  // GitHub counts one aliased query as a single point, however many PRs it reads.
   const pulls = refs.map((ref, index) => {
     const [owner, name] = ref.repo.split("/");
     Object.assign(variables, {

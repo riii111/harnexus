@@ -93,9 +93,6 @@ const SHORT_LINES = 2;
 // A comment above a short function mostly says what its name could, or a reason that applies to one line of it; the reason belongs on that line.
 // The functions below were written before this check; move the comment to the line it explains, or into a name, and delete the entry. An entry that no longer matches fails the test.
 const EXISTING: string[] = [
-  "bootstrap/doctor-report.ts#runs",
-  "bootstrap/feedback-protocol.ts#variantOf",
-  "bootstrap/setup-facts.ts#codexVersionOf",
   "presentation/turn.ts#steeredTurn",
   "prwatch/store.ts#botKey",
   "prwatch/store.ts#recordSender",

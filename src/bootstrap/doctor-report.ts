@@ -72,8 +72,8 @@ export const logChecks = (text: string, path: string, now: number): Check[] => {
       ? [{ ...parsed.value, time }]
       : [];
   });
-  // Only event names, methods, reasons and versions are read, so a pasted report carries no more than the log's own fields allow.
   const of = (event: string) => recent.filter((entry) => entry.event === event);
+  // Only event names, methods, reasons and versions are read, so a pasted report carries no more than the log's own fields allow.
   const version = of("codex_version").at(-1);
   const unavailable = tally(
     of("call_socket_unavailable").map((entry) => field(entry.reason)),
