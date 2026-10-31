@@ -41,6 +41,7 @@ import type {
   ErrorTag,
   MessageInput,
   RunningTurn,
+  ThreadEnd,
   ToolOutput,
   TurnInput,
   TurnLink,
@@ -77,7 +78,13 @@ export type TurnEvent<Tag extends string = string> =
       step: "thread_not_materialized";
       error: ErrorTag<ReturnType<ServerRequest>>;
     }
-  | { event: "claude_turn"; step: "run_state_not_saved"; error: StoreTag };
+  | { event: "claude_turn"; step: "run_state_not_saved"; error: StoreTag }
+  | {
+      event: "claude_turn";
+      step: "thread_released";
+      ended: ThreadEnd;
+      kept: boolean;
+    };
 
 type MaterializeThread = (
   threadId: string,
@@ -897,6 +904,19 @@ export const createTurnController = <Tag extends string>({
       threads.forgetFork(threadId);
       runtime.dropFork(threadId);
     },
+    // The server answered that it archived or deleted the thread; one with a turn or an app request in progress keeps its state, since that work still uses it.
+    releaseThread: (threadId: string, ended: ThreadEnd) => {
+      const kept =
+        turnsInFlight.has(threadId) ||
+        activeTurns.has(threadId) ||
+        changingConversations.has(threadId) ||
+        steeringMessages.has(threadId);
+      if (!kept) {
+        runtime.forgetThread(threadId, ended);
+        threads.forgetThread(threadId, ended);
+      }
+      log({ event: "claude_turn", step: "thread_released", ended, kept });
+    },
   };
 };
 
@@ -934,6 +954,13 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
     case "effort_not_saved":
     case "run_state_not_saved":
       return { event: entry.event, step: entry.step, error: entry.error };
+    case "thread_released":
+      return {
+        event: entry.event,
+        step: entry.step,
+        ended: entry.ended,
+        kept: entry.kept,
+      };
   }
 };
 

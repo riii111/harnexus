@@ -596,6 +596,61 @@ describe("keeping the thread on the server's disk", () => {
   });
 });
 
+describe("releaseThread", () => {
+  test("forgets the record a finished turn named but keeps the session once the thread is archived", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, events, runtime } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+    expect(runtime.recordOf(THREAD, "turn-1")).not.toBeNull();
+
+    turns.releaseThread(THREAD, "archived");
+
+    expect(runtime.recordOf(THREAD, "turn-1")).toBeNull();
+    expect(claude.closes()).toBe(0);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "thread_released",
+      ended: "archived",
+      kept: false,
+    });
+  });
+
+  test("forgets the record and closes the session once the thread is deleted", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, runtime } = await harness([claude]);
+    await completeTurn(turns, sent, claude, 10);
+
+    turns.releaseThread(THREAD, "deleted");
+
+    expect(runtime.recordOf(THREAD, "turn-1")).toBeNull();
+    expect(claude.closes()).toBe(1);
+  });
+
+  test.each([
+    { name: "archived", ended: "archived" as const },
+    { name: "deleted", ended: "deleted" as const },
+  ])("keeps the record and the session of a $name thread while its turn runs", async ({
+    ended,
+  }) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, events, runtime } = await harness([claude]);
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    await firstPrompt(claude.prompt());
+
+    turns.releaseThread(THREAD, ended);
+
+    expect(runtime.recordOf(THREAD, "turn-1")).not.toBeNull();
+    expect(claude.closes()).toBe(0);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "thread_released",
+      ended,
+      kept: true,
+    });
+  });
+});
+
 describe("turn/interrupt", () => {
   test("replies before the turn completes as interrupted", async () => {
     const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });

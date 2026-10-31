@@ -43,6 +43,7 @@ import {
   type Thread,
 } from "./thread-request.ts";
 import type { ThreadValues } from "./thread-values.ts";
+import type { ThreadEnd } from "./turn-runtime.ts";
 
 type SubagentsReadTag = InferErr<
   Awaited<ReturnType<typeof readClaudeSubagents>>
@@ -71,6 +72,7 @@ type Turns = {
   reject: (request: AppRequest, message: string) => void;
   answerRequest: (response: Record<string, unknown>) => boolean;
   liveTurnOf: (threadId: string) => LiveTurn | null;
+  releaseThread: (threadId: string, ended: ThreadEnd) => void;
 };
 
 type RouterThreads = Pick<
@@ -285,6 +287,16 @@ export const createRouter = ({
     turns.steerTurn(request);
     return null;
   };
+
+  // Only a success answer from the server, which holds the thread's record, lets the bridge let go of it; an error leaves everything as it was.
+  const routeThreadEnd =
+    (ended: ThreadEnd): AppHandler =>
+    (call) =>
+      awaitResponse(call, {
+        kind: "threadEnd",
+        threadId: String(call.request.params.threadId),
+        ended,
+      });
 
   const routeThreadRead = ({ line, request }: AppCall) => {
     const { id, params } = request;
@@ -517,6 +529,8 @@ export const createRouter = ({
     ["thread/start", routeThreadOpen],
     ["thread/resume", routeThreadOpen],
     ["thread/fork", routeFork],
+    ["thread/archive", forClaudeThread(routeThreadEnd("archived"))],
+    ["thread/delete", forClaudeThread(routeThreadEnd("deleted"))],
     ["thread/list", routeThreadList],
     ["turn/start", routeTurnStart],
     ["turn/steer", routeTurnSteer],

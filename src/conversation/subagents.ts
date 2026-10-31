@@ -237,6 +237,21 @@ export const createSubagents = ({
     }
   };
 
+  // The agents of a thread the server archived or deleted are read back from Claude's records if it returns, as after a restart; one still running keeps them all.
+  const forget = (threadId: string) => {
+    const agents = sessionAgents(threadId);
+    if (agents.some((child) => child.active)) return;
+    const threads = new Set([threadId, ...agents.map((child) => child.id)]);
+    for (const child of agents) {
+      children.delete(child.id);
+      running.delete(child.id);
+      histories.delete(child.id);
+    }
+    for (const [call, run] of runs) {
+      if (threads.has(run.threadId)) runs.delete(call);
+    }
+  };
+
   const sessionAgents = (threadId: string) =>
     [...children.values()].filter((child) => child.rootThreadId === threadId);
 
@@ -337,6 +352,7 @@ export const createSubagents = ({
     decline,
     complete,
     settle,
+    forget,
     childrenOf,
     descendantsOf,
     historyOf,

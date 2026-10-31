@@ -1359,6 +1359,69 @@ describe("app responses", () => {
   });
 });
 
+describe("thread/archive and thread/delete of a Claude thread", () => {
+  const request = (method: string, threadId: string) =>
+    encode({ id: 7, method, params: { threadId } });
+
+  test.each([
+    { name: "archive", method: "thread/archive", ended: "archived" },
+    { name: "delete", method: "thread/delete", ended: "deleted" },
+  ])("passes the $name request as the same bytes and releases the thread once the server answers with success", async ({
+    method,
+    ended,
+  }) => {
+    const { router, calls } = setup(["th-claude"]);
+    const line = request(method, "th-claude");
+    const answer = encode({ id: 7, result: {} });
+
+    const forwarded = router.fromApp(line);
+    expect(calls).toEqual([]);
+    const out = await router.fromServer(answer);
+
+    expect(forwarded).toBe(line);
+    expect(out).toBe(answer);
+    expect(calls).toEqual([["releaseThread", "th-claude", ended]]);
+  });
+
+  test.each([
+    { name: "archive", method: "thread/archive" },
+    { name: "delete", method: "thread/delete" },
+  ])("keeps the thread when the server refuses the $name", async ({
+    method,
+  }) => {
+    const { router, calls } = setup(["th-claude"]);
+    router.fromApp(request(method, "th-claude"));
+    const refusal = encode({
+      id: 7,
+      error: {
+        code: -32600,
+        message: "no rollout found for thread id th-claude",
+      },
+    });
+
+    const out = await router.fromServer(refusal);
+
+    expect(out).toBe(refusal);
+    expect(calls).toEqual([]);
+  });
+
+  test.each([
+    { name: "archive", method: "thread/archive" },
+    { name: "delete", method: "thread/delete" },
+  ])("leaves the $name of a thread that is not Claude's to the server alone", async ({
+    method,
+  }) => {
+    const { router, calls } = setup(["th-claude"]);
+    const line = request(method, "th-codex");
+
+    const forwarded = router.fromApp(line);
+    await router.fromServer(encode({ id: 7, result: {} }));
+
+    expect(forwarded).toBe(line);
+    expect(calls).toEqual([]);
+  });
+});
+
 describe("thread/settings/update", () => {
   // The app sends its previous collaboration mode along with the model just picked, as observed with App 26.924.
   test("keeps the thread's model picked again over a stale collaboration mode", () => {
@@ -2781,6 +2844,9 @@ const setup = (
         return response.id === BRIDGE_REQUEST;
       },
       liveTurnOf: (threadId) => live.get(threadId) ?? null,
+      releaseThread: (threadId, ended) => {
+        calls.push(["releaseThread", threadId, ended]);
+      },
     },
     threads: {
       isClaudeThread: (threadId) =>

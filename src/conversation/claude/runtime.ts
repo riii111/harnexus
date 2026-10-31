@@ -39,6 +39,7 @@ import type { ThreadValues } from "../thread-values.ts";
 import type {
   ErrorTag,
   RunningTurn,
+  ThreadEnd,
   TurnLink,
   TurnRuntime,
 } from "../turn-runtime.ts";
@@ -215,7 +216,7 @@ export const createClaudeRuntime = ({
   effortRule: EffortRule;
   subagents: Pick<
     Subagents,
-    "start" | "message" | "decline" | "complete" | "settle"
+    "start" | "message" | "decline" | "complete" | "settle" | "forget"
   >;
   resizeImage: ResizeImage;
 }): TurnRuntime<ClaudeFailureTag> => {
@@ -1184,6 +1185,25 @@ export const createClaudeRuntime = ({
     if (slot?.link === link) slots.drop(threadId, slot);
   };
 
+  // A thread with a turn, an approval, a session on its way or a paused stream keeps everything, since the server answered before that work ended.
+  // An archived thread can come back, so its session and fork point stay for the turns that follow; a deleted one cannot.
+  const forgetThread = (threadId: string, ended: ThreadEnd) => {
+    if (
+      busyThreads.has(threadId) ||
+      pausedMessages.has(threadId) ||
+      approvals.isHeld(threadId) ||
+      slots.startingOf(threadId) !== undefined
+    ) {
+      return;
+    }
+    turnRecords.forget(threadId);
+    display.forget(threadId);
+    subagents.forget(threadId);
+    if (ended === "archived") return;
+    forkPoints.forget(threadId);
+    slots.close(threadId);
+  };
+
   // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
   const closeAll = () => {
     closed = true;
@@ -1212,6 +1232,7 @@ export const createClaudeRuntime = ({
     dropSession: dropSessionOf,
     noteFork: forkPoints.note,
     dropFork: forkPoints.forget,
+    forgetThread,
     threadBusy,
     threadIdle,
     listen: (start) => {
