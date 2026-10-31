@@ -20,7 +20,8 @@ import {
   type TaskDeps,
   watchPaths,
 } from "./cli.ts";
-import { callApp, type SaveJson, saveJson } from "./session.ts";
+import { type SaveJson, saveJson } from "./records.ts";
+import { callApp } from "./session.ts";
 
 const SKILLS = join(import.meta.dir, "../../test/fixtures/task-skills");
 const README = join(import.meta.dir, "../../README.md");
@@ -1337,6 +1338,18 @@ describe("harnexus-task review", () => {
     expect([refused.code, refused.err]).toEqual([
       1,
       expect.stringContaining("only in a Claude Code cloud session"),
+    ]);
+  });
+
+  test("rejects --recover adopt as a usage error, since a review is only discarded", async () => {
+    const { commit, review } = await reviewFixture();
+    commit("test: candidate");
+
+    const refused = await review(["--recover", "adopt"]);
+
+    expect([refused.code, refused.err]).toEqual([
+      2,
+      expect.stringContaining("--recover must be one of discard"),
     ]);
   });
 

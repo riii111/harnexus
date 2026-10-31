@@ -50,7 +50,7 @@ export const configHome = (env: Env) =>
     "harnexus",
   );
 
-export const ioFailed = (error: { message: string; cause?: unknown }) => {
+const ioFailed = (error: { message: string; cause?: unknown }) => {
   const { cause } = error;
   const code =
     isObject(cause) && typeof cause.code === "string" ? cause.code : null;
@@ -59,8 +59,11 @@ export const ioFailed = (error: { message: string; cause?: unknown }) => {
   });
 };
 
-export const readText = (path: string) =>
-  readRegularTextFile(path).then((read) => read.mapError(ioFailed));
+export const io = async <T>(
+  pending: Promise<Result<T, { message: string; cause?: unknown }>>,
+): Promise<Result<T, TaskFailed>> => (await pending).mapError(ioFailed);
+
+export const readText = (path: string) => io(readRegularTextFile(path));
 
 export const readJson = (path: string) =>
   Result.gen(async function* () {
