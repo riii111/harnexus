@@ -8,13 +8,14 @@ export type CloudChild = { sessionId: string; title: string | null };
 const CREATE_SESSION = /(?:^|__)create_session$/;
 const SESSION_ID = /^(?:session|cse)_[A-Za-z0-9]{8,64}$/;
 
-// The sessions a Cloud session started, in the order its records hold them, each once.
+// The sessions a Cloud session started whose result is at or after from, in the order its records hold them, each once; a call may sit in an earlier record than its result.
 export const childSessionsIn = (
   records: readonly SessionMessage[],
+  from = 0,
 ): CloudChild[] => {
   const calls = new Set<string>();
   const children = new Map<string, CloudChild>();
-  for (const record of records) {
+  for (const [index, record] of records.entries()) {
     for (const block of contentOf(record)) {
       if (
         block.type === "tool_use" &&
@@ -26,6 +27,7 @@ export const childSessionsIn = (
       }
       if (
         block.type === "tool_result" &&
+        index >= from &&
         typeof block.tool_use_id === "string" &&
         calls.has(block.tool_use_id) &&
         block.is_error !== true

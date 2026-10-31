@@ -40,6 +40,16 @@ describe("childSessionsIn", () => {
     expect(childSessionsIn(records)).toEqual([]);
   });
 
+  test("takes a result after from whose call came before it", () => {
+    const records = [
+      reply("a1", "m1", toolUse("t1", CREATE, {}), "tool_use"),
+      toolResult("r1", "t1", created(CHILD)),
+    ];
+
+    expect(childSessionsIn(records, 1)).toHaveLength(1);
+    expect(childSessionsIn(records, 2)).toEqual([]);
+  });
+
   test("names each session once", () => {
     const records = [
       reply("a1", "m1", toolUse("t1", CREATE, {}), "tool_use"),

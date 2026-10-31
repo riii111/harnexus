@@ -561,7 +561,7 @@ export const createCloudRuntime = <Tag extends string>(
     const cloud = threads.cloudOf(threadId);
     if (openChild === undefined || cloud === null) return;
     const after = indexAfter(all, cloud.shown);
-    for (const child of childSessionsIn(all.slice(after))) {
+    for (const child of childSessionsIn(all, after)) {
       if (openedChildren.has(child.sessionId)) continue;
       if (threads.cloudOwner(child.sessionId) !== undefined) continue;
       openedChildren.add(child.sessionId);
