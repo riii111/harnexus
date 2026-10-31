@@ -61,7 +61,7 @@ To follow a [Claude Code cloud session](https://code.claude.com/docs/en/claude-c
 
 The conversation appears in the chat, and messages you send go to the Cloud session.
 Worker sessions it creates also open as chats in the same project.
-An agent in the app can also start a new Cloud session for a request and open its chat, with `harnexus-task cloud --prompt-file <file> --project <projectId>`; this needs `claude` signed in on this Mac and the project folder trusted by it.
+You can also ask an agent in the app to do a task in the Cloud; it starts the session and opens its chat. This needs `claude` signed in on this Mac.
 Updates may take a few minutes to appear when you are not sending messages.
 
 Cloud chats support text only. Rewind, compact, and side chats are unavailable.
