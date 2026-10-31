@@ -149,6 +149,10 @@ export const createCloudRuntime = <Tag extends string>(
   const halted = new Set<string>();
   const pendingOwn = new Map<string, Copied>();
   const openedChildren = new Set<string>();
+  const unsentChildren = new Map<
+    string,
+    { threadId: string; child: CloudChild }
+  >();
   const copies = createSerialQueue();
   let startOwnTurn = (_threadId: string) => false;
   let cancelTick: (() => void) | null = null;
@@ -561,15 +565,26 @@ export const createCloudRuntime = <Tag extends string>(
     const cloud = threads.cloudOf(threadId);
     if (openChild === undefined || cloud === null) return;
     const after = indexAfter(all, cloud.shown);
-    for (const child of childSessionsIn(all, after)) {
+    const unsent = [...unsentChildren.values()]
+      .filter((entry) => entry.threadId === threadId)
+      .map((entry) => entry.child);
+    for (const child of [...unsent, ...childSessionsIn(all, after)]) {
       if (openedChildren.has(child.sessionId)) continue;
-      if (threads.cloudOwner(child.sessionId) !== undefined) continue;
+      if (threads.cloudOwner(child.sessionId) !== undefined) {
+        unsentChildren.delete(child.sessionId);
+        continue;
+      }
       openedChildren.add(child.sessionId);
-      // A chat the app did not open is tried again by a later copy.
       void openChild(threadId, child)
         .catch(() => "threw")
         .then((outcome) => {
-          if (outcome !== "done") openedChildren.delete(child.sessionId);
+          // Only a chat known not to be created is tried again, from here and not from the shown position, which a turn moves past it; any other answer may have made the chat.
+          if (UNSENT_OUTCOMES.has(outcome)) {
+            openedChildren.delete(child.sessionId);
+            unsentChildren.set(child.sessionId, { threadId, child });
+          } else {
+            unsentChildren.delete(child.sessionId);
+          }
           log({ event: "claude_cloud", step: "child", outcome });
         });
     }
@@ -775,6 +790,8 @@ const cloudCommandOf = (text: string | null) => {
 };
 
 const CLOUD_COMMAND = /^\/cloud(?:\s+(\S+))?\s*$/;
+
+const UNSENT_OUTCOMES = new Set(["not_sent", "no_project", "no_parent"]);
 
 // A message whose send failed is no longer waited for; one not yet matched is taken from the end, so the order of the others stays.
 const forget = (follow: Follow, text: string) => {

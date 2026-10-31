@@ -120,6 +120,48 @@ describe("createCloudRuntime child sessions", () => {
     ]);
   });
 
+  test.each([
+    { name: "not sent", outcome: "not_sent", tries: 2 },
+    { name: "without a project", outcome: "no_project", tries: 2 },
+    { name: "of unknown result", outcome: "unknown", tries: 1 },
+  ])("tries a chat the app answered $name again only when none may exist, after a turn moved the shown position past it", async ({
+    outcome,
+    tries,
+  }) => {
+    const env = linked({
+      copies: [
+        [
+          prompt("p0", "earlier"),
+          endReply("r0", "ok"),
+          prompt("p1", "start a worker"),
+          reply(
+            "a1",
+            "m1",
+            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+            "tool_use",
+          ),
+          toolResult("u1", "t1", started(CHILD)),
+          endReply("a2", "started"),
+        ],
+      ],
+      shown: "r0",
+    });
+    env.childOutcomes.push(outcome);
+    env.runtime.listen(() => true);
+
+    await env.runtime.run(env.turn("start a worker").running);
+    await settle();
+    expect(env.cloudOf("thread-1")?.shown).toBe("a2");
+    await env.tick();
+    await settle();
+    await env.tick();
+    await settle();
+
+    expect(env.children.map((opened) => opened.child.sessionId)).toEqual(
+      Array(tries).fill(CHILD),
+    );
+  });
+
   test("leaves a session started before the app was shown to the user", async () => {
     const env = linked({
       copies: [
@@ -944,6 +986,8 @@ describe("createCloudRuntime idle copies", () => {
     expect(env.copyCalls).toBe(0);
   });
 });
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const endReply = (uuid: string, value: string) =>
   reply(uuid, `m-${uuid}`, text(value), "end_turn");
