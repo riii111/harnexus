@@ -29,4 +29,15 @@ describe("createTurnRecords", () => {
     expect(records.recordOf("thread-1", "turn-1")).toBe("uuid-1");
     expect(records.recordOf("thread-2", "turn-1")).toBe("uuid-2");
   });
+
+  test("forgets the turns of one thread and keeps another's", () => {
+    const records = createTurnRecords();
+    records.note("thread-1", "turn-1", "uuid-1");
+    records.note("thread-2", "turn-1", "uuid-2");
+
+    records.forget("thread-1");
+
+    expect(records.recordOf("thread-1", "turn-1")).toBeNull();
+    expect(records.recordOf("thread-2", "turn-1")).toBe("uuid-2");
+  });
 });

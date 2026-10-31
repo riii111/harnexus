@@ -28,6 +28,33 @@ describe("subagents", () => {
     expect(two?.id).not.toBe(one?.id);
   });
 
+  test("forgets the finished agents of a thread but not those of another", () => {
+    const subagents = createSubagents({ send: () => {} });
+    subagents.start(agent("th-1", "toolu-1"));
+    subagents.start(agent("th-2", "toolu-2"));
+    subagents.complete("th-1", "task-toolu-1", DONE);
+    const [child] = subagents.childrenOf("th-1");
+
+    subagents.forget("th-1");
+
+    expect(subagents.childrenOf("th-1")).toEqual([]);
+    expect(subagents.historyOf(child?.id ?? "")).toBeUndefined();
+    expect(subagents.childrenOf("th-2")).toHaveLength(1);
+  });
+
+  test("keeps every agent of a thread while one of them still runs", () => {
+    const subagents = createSubagents({ send: () => {} });
+    subagents.start(agent("th-1", "toolu-1"));
+    subagents.start(agent("th-1", "toolu-2"));
+    subagents.complete("th-1", "task-toolu-1", DONE);
+    const [child] = subagents.childrenOf("th-1");
+
+    subagents.forget("th-1");
+
+    expect(subagents.childrenOf("th-1")).toHaveLength(2);
+    expect(subagents.historyOf(child?.id ?? "")).toBeDefined();
+  });
+
   test("names each agent's path as Codex writes one, numbered within its parent", () => {
     const subagents = createSubagents({ send: () => {} });
 

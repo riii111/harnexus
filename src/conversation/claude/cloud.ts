@@ -742,6 +742,18 @@ export const createCloudRuntime = <Tag extends string>(
     dropSession: (threadId, link) => inner.dropSession(threadId, link),
     noteFork: (threadId) => inner.noteFork(threadId),
     dropFork: (threadId) => inner.dropFork(threadId),
+    // The copies of a linked thread go on while the store holds it, so halted stays; a child chat not yet opened is dropped only with a deleted parent.
+    forgetThread: (threadId, ended) => {
+      const { busy, follow, pendingOwn } = stateOf(threadId);
+      if (busy || follow !== null || pendingOwn !== null) return;
+      turnRecords.forget(threadId);
+      if (ended === "deleted") {
+        for (const [sessionId, entry] of unsentChildren) {
+          if (entry.threadId === threadId) unsentChildren.delete(sessionId);
+        }
+      }
+      inner.forgetThread(threadId, ended);
+    },
     threadBusy: (threadId) => {
       keep(threadId, { busy: true });
       inner.threadBusy(threadId);

@@ -43,5 +43,10 @@ export const createThreadDisplay = ({
     if (plan.notification !== null) send(plan.notification);
   };
 
-  return { show };
+  const forget = (threadId: string) => {
+    usages.delete(threadId);
+    plans.delete(threadId);
+  };
+
+  return { show, forget };
 };
