@@ -10,7 +10,7 @@ import {
   type ThreadUsage,
 } from "../../presentation/token-usage.ts";
 
-// What the app shows of a thread beyond its turns builds up across turns, so it lives per thread rather than per session.
+// The token usage and plan the app shows for each thread beyond its turns.
 export const createThreadDisplay = ({
   send,
   now,
@@ -18,6 +18,7 @@ export const createThreadDisplay = ({
   send: (message: object) => void;
   now: () => number;
 }) => {
+  // What the app shows builds up across turns, so it is kept per thread rather than per session.
   const usages = new Map<string, ThreadUsage>();
   const plans = new Map<string, ThreadPlan>();
 

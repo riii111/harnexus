@@ -47,11 +47,11 @@ export const DEFAULT_APP = "/Applications/ChatGPT.app";
 export const CODEX_IN_APP =
   "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 
-// Independent checks run at once, since asking Claude Code about the login alone can take many seconds; the order of the report stays fixed.
 export const doctorChecks = async (
   setup: DoctorSetup,
   facts: SetupFacts,
 ): Promise<Check[]> =>
+  // Independent checks run at once, since asking Claude Code about the login alone can take many seconds; the order of the report stays fixed.
   (
     await Promise.all([
       appCheck(setup).then((check) => [check]),
@@ -116,7 +116,6 @@ async function appCheck(setup: DoctorSetup): Promise<Check> {
       };
 }
 
-// The app bundles the Codex CLI the launcher hands over to, so its version is what the bridge's rewrites meet.
 function codexCheck(setup: DoctorSetup, codex: SetupFacts["codex"]): Check {
   if (codex === null) {
     return {
@@ -125,6 +124,7 @@ function codexCheck(setup: DoctorSetup, codex: SetupFacts["codex"]): Check {
       detail: `cannot run ${codexPathOf(setup)}`,
     };
   }
+  // The app bundles the Codex CLI the launcher hands over to, so its version is what the bridge's rewrites meet.
   return isVerifiedCodex(codex.version)
     ? { status: "ok", name: "Codex CLI", detail: `${codex.version}` }
     : {
@@ -210,8 +210,8 @@ async function launcherCheck(): Promise<Check> {
     : { status: "fail", name: "Launcher", detail: runnable.error.message };
 }
 
-// The bridge finds its log as the app's environment sets it, which matches this shell's when the app was opened with bun run open-app.
 async function logSummaryChecks(setup: DoctorSetup): Promise<Check[]> {
+  // The bridge finds its log as the app's environment sets it, which matches this shell's when the app was opened with bun run open-app.
   const path = loadStatePath(setup.env).andThen((statePath) =>
     loadLogPath(setup.env, statePath),
   );
@@ -242,10 +242,10 @@ async function logSummaryChecks(setup: DoctorSetup): Promise<Check[]> {
   return logChecks(text, logPath, Date.now());
 }
 
-// A bridge running long, or a log set by hand that keeps every relayed message, can grow well past the rotation limit, so only its end is read; a line cut at the start is skipped as unparsable.
 async function readLogTail(path: string) {
   const found = await statFileIfExists(path);
   if (found.isErr() || found.value === null) return null;
+  // A bridge running long, or a log set by hand that keeps every relayed message, can grow well past the rotation limit, so only its end is read; a line cut at the start is skipped as unparsable.
   const start = Math.max(0, found.value.size - LOG_TAIL_BYTES);
   const read = await readFileSlice(path, start, found.value.size - start);
   return read.isOk() ? read.value : null;

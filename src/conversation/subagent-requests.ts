@@ -26,8 +26,7 @@ type ChildHistory = (
   threadId: string,
 ) => Promise<Result<HistoryTurn[], unknown>>;
 
-// The server knows nothing of a Claude subagent's thread, so the bridge answers every request that names one, building it from the thread of the Claude session running it, as the server reports it.
-// The app opens the parent before it shows the agents under it, so the answer that opened the parent is kept and the agents' threads are made from it without asking the server again.
+// Answers the app's requests for a Claude subagent's thread, which the server knows nothing of, from the thread of the Claude session running it.
 export const createSubagentRequests = ({
   subagents,
   threads,
@@ -41,6 +40,7 @@ export const createSubagentRequests = ({
   history: ChildHistory;
   send: (message: object) => void;
 }) => {
+  // The app opens the parent before it shows the agents under it, so the agents' threads are made from the answer that opened it without asking the server again.
   const opened = new Map<string, Record<string, unknown>>();
 
   const remember = (answer: Record<string, unknown>) => {
@@ -76,10 +76,10 @@ export const createSubagentRequests = ({
     return answer === undefined ? null : threadOfAnswer(answer);
   };
 
-  // Resuming the parent with no settings of the app's leaves it as it runs.
   const parentResumeOf = async (parentThreadId: string) => {
     const known = opened.get(parentThreadId);
     if (known !== undefined) return known;
+    // Resuming the parent with no settings of the app's leaves it as it runs.
     const resumed = await call("thread/resume", {
       threadId: parentThreadId,
       excludeTurns: true,
@@ -116,8 +116,8 @@ export const createSubagentRequests = ({
     send({ id: request.id, result: withTurns(result, turns.value) });
   };
 
-  // The agent runs with its parent's settings, so the answer that opened the parent carries them, and the settings the app sends with the agent's resume change nothing.
   const answerResume = async (child: SubagentThread, request: AppRequest) => {
+    // The agent runs with its parent's settings, so the parent's answer carries them, and the settings the app sends with the agent's resume change nothing.
     const resumed = await parentResumeOf(child.rootThreadId);
     const parentThread = resumed === null ? null : threadOfAnswer(resumed);
     if (resumed === null || parentThread === null) return unreadable(request);
@@ -136,14 +136,14 @@ export const createSubagentRequests = ({
     });
   };
 
-  // A list of threads under a Claude thread gains the agents its Claude started, which the server never saw; they all go on its first page, which holds the newest.
-  // The list holds back every later server line until it is answered, so it never waits on the server; a parent not opened yet lends only what the bridge knows of it.
+  // Adds the agents a Claude thread's Claude started, which the server never saw, to a list of threads under it.
   const withChildren = (
     result: Record<string, unknown>,
     params: Record<string, unknown>,
   ) => {
     const parentThreadId = listedParentOf(params);
     if (parentThreadId === null || !listsSubagents(params)) return result;
+    // The agents all go on the first page, which holds the newest.
     if (params.cursor != null || params.archived === true) return result;
     const children =
       typeof params.ancestorThreadId === "string"
@@ -151,6 +151,7 @@ export const createSubagentRequests = ({
         : subagents.childrenOf(parentThreadId);
     if (children.length === 0 || !Array.isArray(result.data)) return result;
     const rootThreadId = children[0]?.rootThreadId ?? parentThreadId;
+    // The list holds back every later server line until it is answered, so a parent not opened yet lends only what the bridge knows of it rather than waiting on the server.
     const parentThread = openedThreadOf(rootThreadId) ?? {
       id: rootThreadId,
       cwd: threads.threadOf(rootThreadId)?.cwd ?? null,
@@ -190,7 +191,6 @@ export const createSubagentRequests = ({
 
 export type SubagentRequests = ReturnType<typeof createSubagentRequests>;
 
-// The app lists an agent's threads by the thread they descend from, or by their direct parent.
 const listedParentOf = (params: Record<string, unknown>) => {
   if (typeof params.ancestorThreadId === "string")
     return params.ancestorThreadId;
@@ -198,8 +198,8 @@ const listedParentOf = (params: Record<string, unknown>) => {
   return null;
 };
 
-// No kinds named lists every kind.
 const listsSubagents = (params: Record<string, unknown>) =>
+  // No kinds named lists every kind.
   !Array.isArray(params.sourceKinds) ||
   params.sourceKinds.length === 0 ||
   params.sourceKinds.includes(SUBAGENT_SOURCE_KIND);

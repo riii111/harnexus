@@ -24,7 +24,6 @@ export const NO_USAGE: ThreadUsage = {
   windowModel: null,
 };
 
-// A request's final usage arrives in its message_delta, since the assistant message carries the output counted so far; a result sums the requests of its turn.
 export const renderTokenUsage = (
   usage: ThreadUsage,
   message: SDKMessage,
@@ -57,6 +56,7 @@ const nextUsage = (
   message: SDKMessage,
   model: string,
 ): ThreadUsage | null => {
+  // A request's final usage arrives in its message_delta, since the assistant message carries the output counted so far.
   if (
     message.type === "stream_event" &&
     message.parent_tool_use_id === null &&
@@ -64,6 +64,7 @@ const nextUsage = (
   ) {
     return { ...usage, last: breakdown(message.event.usage) };
   }
+  // A result sums the requests of its turn.
   if (message.type === "result") {
     return {
       ...usage,
@@ -77,10 +78,10 @@ const nextUsage = (
   return null;
 };
 
-// Claude counts cached input apart from input_tokens, while the app's input includes it, and thinking is part of the output in both.
 export const breakdown = (usage: ApiUsage): TokenUsageBreakdown => {
   const cachedInputTokens = usage.cache_read_input_tokens ?? 0;
   const cacheWriteInputTokens = usage.cache_creation_input_tokens ?? 0;
+  // Claude counts cached input apart from input_tokens, while the app's input includes it.
   const inputTokens =
     (usage.input_tokens ?? 0) + cachedInputTokens + cacheWriteInputTokens;
   const outputTokens = usage.output_tokens ?? 0;
@@ -90,15 +91,16 @@ export const breakdown = (usage: ApiUsage): TokenUsageBreakdown => {
     cachedInputTokens,
     cacheWriteInputTokens,
     outputTokens,
+    // Thinking is part of the output in both.
     reasoningOutputTokens: usage.output_tokens_details?.thinking_tokens ?? 0,
   };
 };
 
-// modelUsage also lists models a subagent ran on, so the thread's own model is looked up first under the id without its context suffix.
 const contextWindowOf = (
   modelUsage: Record<string, ModelUsage>,
   model: string,
 ) => {
+  // modelUsage also lists models a subagent ran on, so the thread's own model is looked up first under the id without its context suffix.
   const own =
     modelUsage[model] ?? modelUsage[model.replace(CONTEXT_SUFFIX, "")];
   if (own !== undefined) {

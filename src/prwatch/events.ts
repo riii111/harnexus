@@ -18,7 +18,6 @@ export type WatchEvent =
   | { type: "conflict"; head: string }
   | { type: "ci_failed"; head: string; check: FailedCheck };
 
-// The first read of a PR takes what is already on it as seen, so starting the watch never sends what the owner has handled.
 export const nextEvents = (
   detail: PrDetail,
   state: WatchState,
@@ -26,13 +25,14 @@ export const nextEvents = (
   owner: string,
   config: WatchConfig,
 ) =>
+  // The first read of a PR takes what is already on it as seen, so starting the watch never sends what the owner has handled.
   state.summary === null
     ? { events: [] as WatchEvent[], ...baselineOf(detail, config.reviewBots) }
     : eventsOf(detail, state, linkedAt, owner, config);
 
-// Every comment is taken, findings or not, so one whose verdict changes later is still not new.
 const baselineOf = (detail: PrDetail, bots: readonly ReviewBot[]) => ({
   seen: [
+    // Every comment is taken, findings or not, so one whose verdict changes later is still not new.
     ...detail.comments.map((comment) => comment.id),
     ...bots.flatMap((bot) => botBaseline(detail, bot)),
     ...detail.failedRequired.map((check) => checkKey(detail.head, check.name)),
@@ -40,15 +40,15 @@ const baselineOf = (detail: PrDetail, bots: readonly ReviewBot[]) => ({
   conflictHead: detail.mergeable === "CONFLICTING" ? detail.head : null,
 });
 
-// Events are told apart from what was already queued or sent by their keys, so a later read never repeats one.
-// The owner's own account is fixed per repository, so its comments are known without another request.
 const eventsOf = (
   detail: PrDetail,
   state: WatchState,
   linkedAt: string,
+  // The owner's own account is fixed per repository, so its comments are known without another request.
   owner: string,
   config: WatchConfig,
 ) => {
+  // Events are told apart from what was already queued or sent by their keys, so a later read never repeats one.
   const seen = new Set(state.seen);
   const after = Date.parse(linkedAt);
   const fresh = (time: string) => Date.parse(time) >= after;
@@ -162,11 +162,12 @@ const botBaseline = (detail: PrDetail, bot: ReviewBot) => [
   ...(reviewCompleted(detail, bot) ? [reviewKey(bot, detail.head)] : []),
 ];
 
-// The id leads, so the keys CodeRabbit's reviews were recorded under before bots were configurable still match.
-const reviewKey = (bot: ReviewBot, head: string) => `${bot.id}:${head}`;
+const reviewKey = (bot: ReviewBot, head: string) =>
+  // The id leads, so the keys CodeRabbit's reviews were recorded under before bots were configurable still match.
+  `${bot.id}:${head}`;
 
-// Told once per head while the PR conflicts, so a base that keeps moving does not repeat it.
 const conflictOf = (detail: PrDetail, notified: string | null) => {
+  // Told once per head while the PR conflicts, so a base that keeps moving does not repeat it.
   if (detail.mergeable === "CONFLICTING" && notified !== detail.head)
     return {
       events: [{ type: "conflict", head: detail.head } satisfies WatchEvent],

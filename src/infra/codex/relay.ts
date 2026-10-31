@@ -8,7 +8,6 @@ export type RelayObserver = {
   end: (direction: Direction) => void;
 };
 
-// The server is not a child here, so the relay ends on its output EOF instead of its exit.
 export const relayStreams = ({
   appInput,
   appOutput,
@@ -28,13 +27,13 @@ export const relayStreams = ({
     const timers: ReturnType<typeof setTimeout>[] = [];
     let settled = false;
     let stopping = false;
-    // A server that ignores EOF on stdin would otherwise keep running after the app has gone.
     const stopServer = () => {
       if (!serverInput.writableEnded && !serverInput.destroyed) {
         serverInput.end();
       }
       if (stopping) return;
       stopping = true;
+      // A server that ignores EOF on stdin would otherwise keep running after the app has gone.
       timers.push(
         setTimeout(() => {
           signalServer("SIGTERM");
@@ -67,13 +66,13 @@ export const relayStreams = ({
       onEnd: stopServer,
       onWriteError: stopServer,
     });
+    // The server is not a child here, so the relay ends on its output EOF instead of its exit.
     pump(serverOutput, appOutput, "server_to_app", observer, {
       onEnd: finish,
       onWriteError: stopServer,
     });
   });
 
-// Failures come from the write callback because Bun's process.stdout does not emit "error" on EPIPE; after one, the source is drained and dropped so it is never left paused.
 const pump = (
   from: Readable,
   to: Writable,
@@ -85,6 +84,7 @@ const pump = (
   from.on("data", (chunk: Uint8Array) => {
     observer?.chunk(direction, chunk);
     if (broken) return;
+    // Failures come from the write callback because Bun's process.stdout does not emit "error" on EPIPE; after one, the source is drained and dropped so it is never left paused.
     const accepted = to.write(chunk, (error) => {
       if (!error || broken) return;
       broken = true;

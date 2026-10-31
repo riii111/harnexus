@@ -29,7 +29,7 @@ const GUESS_NOTE =
   `${CLOUD_HINT_ENV} is an observed variable of Codex Cloud tasks, not a documented guarantee; ` +
   `set ${EXECUTION_ENV}=cloud|local to decide explicitly`;
 
-// Reads the variables only, so a caller that must not touch the app can still tell Cloud apart.
+// The environment the variables declare, read without touching the app.
 export const declaredEnvironment = (
   env: Env,
 ): Result<Detected | null, TaskFailed> => {
@@ -68,13 +68,13 @@ const hostOf = (env: Env) => {
   return env[CLAUDE_CLOUD_ENV] === "true" ? "claude" : null;
 };
 
-// Local is only claimed once the harnexus call socket answers a connection; a missing variable proves nothing.
 export const detectEnvironment = async (
   env: Env,
 ): Promise<Result<Detected, TaskFailed>> => {
   const declared = declaredEnvironment(env);
   if (declared.isErr() || declared.value !== null)
     return declared.map((value) => value as Detected);
+  // Local is only claimed once the harnexus call socket answers a connection; a missing variable proves nothing.
   const path = loadCallerSocketPath(env, () => homeOf(env));
   if (path.isOk()) {
     const answer = await requestLine(path.value, "", PROBE_TIMEOUT_MS);
@@ -101,7 +101,7 @@ const CLAUDE_CLOUD_ALTERNATIVE =
   "In a Claude Code cloud session, start a worker as a new cloud session with create_session, " +
   "and follow its PR with subscribe_pr_activity from that session";
 
-// A command that needs the Codex App fails with the Cloud reason instead of a missing-socket hint.
+// Refuses in Cloud a command that needs the Codex App, with the Cloud reason instead of a missing-socket hint.
 export const refuseInCloud = (
   env: Env,
   command: string,

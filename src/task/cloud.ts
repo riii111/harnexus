@@ -70,9 +70,10 @@ const heldBy = async (path: string) => {
 const dead = (holder: Fields | null) =>
   typeof holder?.pid === "number" && !processAlive(holder.pid);
 
-// Taking over a dead holder goes through a second exclusive file, so of several runs only one removes the lock, and only the one it saw.
+// Takes the lock over from a dead holder.
 const reap = (lock: string, observed: string) =>
   Result.gen(async function* () {
+    // A second exclusive file guards the takeover, so of several runs only one removes the lock, and only the one it saw.
     const guard = `${lock}.reap`;
     const made = yield* Result.await(
       io(writeFileExclusive(guard, JSON.stringify({ pid: process.pid }))),
@@ -89,7 +90,7 @@ const reap = (lock: string, observed: string) =>
     return Result.ok(same);
   });
 
-// Held from the first check to the saved state, and failing at once instead of waiting.
+// Takes the run's lock, failing at once instead of waiting.
 export const acquire = (lock: string, holder = "claude run") =>
   Result.gen(async function* () {
     const token = randomUUID();
@@ -118,9 +119,9 @@ export const acquire = (lock: string, holder = "claude run") =>
     return fail(`cannot take ${lock}`);
   });
 
-// Removes only the lock this run took, so a lock another run holds now stays.
 export const release = async (lock: string, token: string) => {
   const holder = await heldBy(lock);
+  // Only the lock this run took goes, so a lock another run holds now stays.
   if (holder?.token === token) await removeFile(lock);
 };
 

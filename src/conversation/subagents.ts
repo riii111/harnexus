@@ -24,8 +24,7 @@ import {
 } from "../presentation/subagent.ts";
 import type { TurnOutcome } from "../presentation/turn.ts";
 
-// A child's id is made from the Claude thread running it and the agent's task, so the same agent, resumed or seen again, always gets the same thread.
-// Each child keeps the turns it ran, so the app can read its thread while the bridge runs.
+// The subagents Claude runs in each thread, shown in the app as child threads.
 export const createSubagents = ({
   send,
   now = Date.now,
@@ -35,6 +34,7 @@ export const createSubagents = ({
 }) => {
   const children = new Map<string, SubagentThread>();
   const running = new Map<string, SubagentTurn>();
+  // Each child keeps the turns it ran, so the app can read its thread while the bridge runs.
   const histories = new Map<string, HistoryTurn[]>();
   const runs = new Map<string, Run>();
 
@@ -59,6 +59,7 @@ export const createSubagents = ({
     prompt: string | null;
     depth: number;
   }) => {
+    // Made from the Claude thread and the agent's task, so the same agent, resumed or seen again, always gets the same thread.
     const id = childThreadId(threadId, taskId);
     const at = now();
     const known = children.get(id);
@@ -142,13 +143,13 @@ export const createSubagents = ({
     }
   };
 
-  // The app sums only a turn's own file changes, so an agent's edit is also shown in the turn that made its call, and passed up through the caller's own run.
   const delegateEdit = (call: string, edit: FileChangeItem, at: number) => {
     const run = runs.get(call);
     if (run === undefined || run.edits.some((known) => known.id === edit.id)) {
       return;
     }
     runs.set(call, { ...run, edits: [...run.edits, edit] });
+    // The app sums only a turn's own file changes, so an agent's edit is also shown in the turn that made its call.
     if (run.turnId !== null) {
       const notifications = renderDelegatedEdit(
         edit,
@@ -161,8 +162,8 @@ export const createSubagents = ({
     if (run.parentCall !== null) delegateEdit(run.parentCall, edit, at);
   };
 
-  // The prompt asking about an agent's call does not say which agent made it, and only the agent that did holds the call.
   const decline = (threadId: string, toolUseId: string) => {
+    // The prompt does not say which agent made the call, and only the agent that did holds it, so every agent is told.
     for (const child of sessionAgents(threadId)) {
       const turn = running.get(child.id);
       if (turn !== undefined) {
@@ -190,12 +191,12 @@ export const createSubagents = ({
     sendActivity(done, "completed", at);
   };
 
-  // An agent's activity under another agent goes to that agent's newest turn, running or ended; the app pages a timeline back by position, so an item added to an earlier turn would move entries a cursor it already holds has passed.
   const sendActivity = (
     child: SubagentThread,
     kind: "started" | "completed",
     at: number,
   ) => {
+    // The app pages a timeline back by position, so an activity goes to the parent agent's newest turn, running or ended, rather than an earlier one a cursor has passed.
     const turnId =
       running.get(child.parentThreadId)?.turn.id ??
       histories.get(child.parentThreadId)?.at(-1)?.turn.id ??
@@ -227,8 +228,8 @@ export const createSubagents = ({
     kept.items = [...items.values()];
   };
 
-  // A session that closes stops the agents running in it, the deepest first so each closes before the thread it is listed under.
   const settle = (threadId: string) => {
+    // The deepest close first, so each agent closes before the thread it is listed under.
     const active = sessionAgents(threadId)
       .filter((child) => child.active)
       .sort((a, b) => b.depth - a.depth);
@@ -237,9 +238,9 @@ export const createSubagents = ({
     }
   };
 
-  // The agents of a thread the server archived or deleted are read back from Claude's records if it returns, as after a restart; one still running keeps them all.
   const forget = (threadId: string) => {
     const agents = sessionAgents(threadId);
+    // A thread that returns reads its agents back from Claude's records, as after a restart, so they go unless one still runs.
     if (agents.some((child) => child.active)) return;
     const threads = new Set([threadId, ...agents.map((child) => child.id)]);
     for (const child of agents) {
@@ -264,8 +265,7 @@ export const createSubagents = ({
       ...descendantsOf(child.id),
     ]);
 
-  // Agents read back from Claude's records after a restart join as ended, keeping any the bridge already knows; one whose path an agent already holds takes the next free one, and the agents under it follow.
-  // A parent comes before the agents it started, so each agent is placed under its parent's path as the parent ended up.
+  // Adds agents read back from Claude's records after a restart as ended ones.
   const restore = (
     agents: readonly {
       thread: SubagentThread;
@@ -286,10 +286,12 @@ export const createSubagents = ({
       }
       const parent = children.get(thread.parentThreadId);
       const siblings = childrenOf(thread.parentThreadId);
+      // A parent comes before the agents it started, so each agent is placed under its parent's path as the parent ended up.
       const placed =
         parent === undefined
           ? thread.path
           : `${parent.path}${thread.path.slice(thread.path.lastIndexOf("/"))}`;
+      // A path an agent already holds is replaced with the next free one, and the agents under it follow.
       const taken = siblings.some((sibling) => sibling.path === placed);
       children.set(thread.id, {
         ...thread,
@@ -317,7 +319,6 @@ export const createSubagents = ({
           };
     };
 
-  // An agent's activity names the path its agent holds now, which a read-back agent may have changed for one a live agent held.
   const historyOf = (threadId: string): HistoryTurn[] | undefined => {
     if (!children.has(threadId)) return undefined;
     const turn = running.get(threadId);
@@ -332,6 +333,7 @@ export const createSubagents = ({
               ...kept,
               item: {
                 ...kept.item,
+                // A read-back agent may have changed its path for one a live agent held.
                 agentPath:
                   children.get(kept.item.agentThreadId)?.path ??
                   kept.item.agentPath,
@@ -374,11 +376,11 @@ type Run = {
   edits: FileChangeItem[];
 };
 
-// Shaped as a UUID, as the app's own thread ids are.
 export const childThreadId = (parentThreadId: string, taskId: string) => {
   const hex = createHash("sha256")
     .update(`${parentThreadId}\n${taskId}`)
     .digest("hex");
+  // Shaped as a UUID, as the app's own thread ids are.
   return [
     hex.slice(0, 8),
     hex.slice(8, 12),
@@ -388,7 +390,6 @@ export const childThreadId = (parentThreadId: string, taskId: string) => {
   ].join("-");
 };
 
-// Numbered by place among the parent's agents, as Codex numbers them.
 export const freePath = (
   parentPath: string | null,
   agentType: string | null,
@@ -396,6 +397,7 @@ export const freePath = (
 ) => {
   const used = new Set(siblings.map((sibling) => sibling.path));
   const base = `${parentPath ?? ROOT_PATH}/${agentName(agentType)}`;
+  // Numbered by place among the parent's agents, as Codex numbers them.
   let number = siblings.length + 1;
   while (used.has(`${base}_${number}`)) number += 1;
   return `${base}_${number}`;
@@ -406,8 +408,8 @@ export const agentNickname = (
   agentType: string | null,
 ) => description ?? agentType ?? DEFAULT_NAME;
 
-// The app reads an agent path as Codex writes it, whose names hold only lowercase letters, digits and underscores.
 const agentName = (agentType: string | null) => {
+  // The app reads an agent path as Codex writes it, whose names hold only lowercase letters, digits and underscores.
   const name = (agentType ?? DEFAULT_NAME)
     .toLowerCase()
     .replace(/[^a-z0-9_]+/g, "_")

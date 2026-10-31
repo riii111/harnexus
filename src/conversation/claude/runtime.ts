@@ -367,10 +367,10 @@ export const createClaudeRuntime = ({
     if (reply.kind !== "selected") return;
     // Not awaited, since the thread's next message waits for this turn and the name only changes what the app shows.
     if (reply.name !== null) void nameThread(turn.threadId, reply.name);
+    // Sent after the command's own turn ends, so the earlier turns follow it rather than interleave with it.
     await showPicked(turn);
   };
 
-  // The questions belong to no item of the turn, so each one carries an id of its own.
   const askPick = async (
     turn: Turn,
     page: PickerPage,
@@ -380,6 +380,7 @@ export const createClaudeRuntime = ({
     const target = () => ({
       threadId: turn.threadId,
       turnId: turn.turnId,
+      // The questions belong to no item of the turn, so each one carries an id of its own.
       itemId: nextItemId(),
     });
     const listed = pickerPrompt(target(), page, now());
@@ -405,7 +406,6 @@ export const createClaudeRuntime = ({
     }
   };
 
-  // Sent after the command's own turn ends, so the earlier turns follow it rather than interleave with it.
   const showPicked = async (turn: Turn) => {
     const sessionId = threads.sessionIdOf(turn.threadId);
     if (sessionId === null) return;
@@ -537,6 +537,7 @@ export const createClaudeRuntime = ({
     if (fresh.length < skills.skills.length) {
       log({ event: "claude_turn", step: "skill_link_only" });
     }
+    // The turn reads the session before its prompt goes, so the reply cannot be taken for a turn of Claude's own.
     const inbox = claimReader(slot.value);
     try {
       if (sendPrompt(turn, claude, slot.value, images.value, fresh)) {
@@ -551,7 +552,6 @@ export const createClaudeRuntime = ({
     }
   };
 
-  // The prompt goes only once the turn reads the session, so its reply cannot be taken for a turn of Claude's own.
   const sendPrompt = (
     turn: Turn,
     claude: ClaudeTurn,
@@ -589,12 +589,12 @@ export const createClaudeRuntime = ({
     return true;
   };
 
-  // A turn the app started takes Claude's waiting messages first if it came ahead of this one, which then has nothing to show.
   const streamOwn = async (turn: Turn, claude: ClaudeTurn) => {
     const threadId = turn.threadId;
     await waitForPendingInterrupt(threadId);
     const slot = slots.slotOf(threadId);
     const inbox = slot?.unclaimed === "own" ? slot.reader : null;
+    // A turn the app started ahead of this one took Claude's waiting messages, so this one has nothing to show.
     if (slot === undefined || inbox == null) {
       turn.finish(
         turn.state().interrupting
@@ -764,8 +764,9 @@ export const createClaudeRuntime = ({
     }
   };
 
-  // One loop reads each session for its whole life, so what Claude does while no turn reads, such as starting a turn of its own when a background task reports back, is seen as it happens.
+  // Reads and routes a session's messages for the session's whole life.
   const pump = async (threadId: string, slot: SessionSlot) => {
+    // Read even while no turn reads, so Claude starting a turn of its own when a background task reports back is seen as it happens.
     while (true) {
       const next = await slot.session.messages.next();
       const paused = pausedMessages.get(threadId);
@@ -814,13 +815,13 @@ export const createClaudeRuntime = ({
     return inbox;
   };
 
-  // Tracked as each message arrives rather than as it is routed, since what waited for a turn that took none of it is routed again.
-  // A Claude that stopped acts on no answer, so the approvals held for it end even while what it said waits for a later turn.
   const track = (threadId: string, slot: SessionSlot, next: StreamedNext) => {
     if (next.done !== true && next.value.isOk()) {
+      // Tracked as each message arrives rather than as it is routed, since what waited for a turn that took none of it is routed again.
       trackTasks(slot, next.value.value);
       trackSubagents(threadId, next.value.value);
     } else if (slots.slotOf(threadId) === slot) {
+      // A Claude that stopped acts on no answer, so the approvals held for it end even while what it said waits for a later turn.
       approvals.end(threadId);
     }
   };
@@ -885,7 +886,6 @@ export const createClaudeRuntime = ({
     for (const next of inbox.drain()) route(threadId, slot, next);
   };
 
-  // A turn of Claude's own that could not run was shown as failed, so what it held is not shown again.
   const threadIdle = (threadId: string) => {
     busyThreads.delete(threadId);
     approvals.forget(threadId);
@@ -897,6 +897,7 @@ export const createClaudeRuntime = ({
     const waitedFor = slot.unclaimed;
     slot.reader = null;
     slot.unclaimed = null;
+    // A turn of Claude's own that could not run was shown as failed, so what it held is not shown again.
     if (waitedFor === "own") {
       slot.discarding = !left.some(
         (next) =>
@@ -946,13 +947,13 @@ export const createClaudeRuntime = ({
     return steered;
   };
 
-  // A steer whose images were read after its turn ended or was stopped has nothing to join.
   const sendOrQueueSteer = (
     turn: Turn,
     claude: ClaudeTurn,
     prompt: Prompt,
   ): Refusal | null => {
     const state = turn.state();
+    // A steer whose images were read after its turn ended or was stopped has nothing to join.
     if (turns.get(turn) !== claude || state.finished || state.interrupting) {
       return "steer_not_sent";
     }
@@ -974,11 +975,11 @@ export const createClaudeRuntime = ({
     return sent;
   };
 
-  // A turn holding approvals has nothing of Claude's to stop, and an interrupt could close the session its agents run in; the stop closed its prompts, so it ends once each is declined.
-  // A command's turn has nothing of Claude's to stop either; the stop closed its open question, and the abort keeps it from asking another.
   const interrupt = (turn: Turn, repeated: boolean) => {
     const claude = turns.get(turn);
+    // A turn holding approvals has nothing of Claude's to stop, and an interrupt could close the session its agents run in; the stop closed its prompts, so it ends once each is declined.
     if (claude?.holdsApprovals === true) return;
+    // A command's turn has nothing of Claude's to stop either; the stop closed its open question, and the abort keeps it from asking another.
     if (claude?.command != null) {
       claude.command.abort();
       return;
@@ -1023,9 +1024,9 @@ export const createClaudeRuntime = ({
     await slots.slotOf(threadId)?.pendingInterrupt;
   };
 
-  // model is the one the turn was accepted with, since a change that arrives while the turn waits applies to the next turn.
   const sessionFor = async (
     record: ThreadRecord,
+    // The one the turn was accepted with, since a change that arrives while the turn waits applies to the next turn.
     model: string,
     turn: Turn,
     startup: SessionStartup<Turn> | null,
@@ -1176,9 +1177,9 @@ export const createClaudeRuntime = ({
     return Result.ok(slot);
   };
 
-  // A record that cannot be looked up is left for Claude to resume, which reports its own failure.
   const sessionFound = async (sessionId: string) => {
     const found = await findSession(sessionId);
+    // A record that cannot be looked up is left for Claude to resume, which reports its own failure.
     return found.isErr() || found.value;
   };
 
@@ -1187,9 +1188,8 @@ export const createClaudeRuntime = ({
     if (slot?.link === link) slots.drop(threadId, slot);
   };
 
-  // A thread with a turn, an approval, a session on its way or a paused stream keeps everything, since the server answered before that work ended.
-  // An archived thread can come back to the same session, which still uses its plan, usage, agents and fork point, so only the turn records go; a deleted one cannot.
   const forgetThread = (threadId: string, ended: ThreadEnd) => {
+    // The server answered before the thread's work ended, so a thread with a turn, an approval, a session on its way or a paused stream keeps everything.
     if (
       busyThreads.has(threadId) ||
       pausedMessages.has(threadId) ||
@@ -1199,6 +1199,7 @@ export const createClaudeRuntime = ({
       return;
     }
     turnRecords.forget(threadId);
+    // An archived thread can come back to the same session, which still uses its plan, usage, agents and fork point.
     if (ended === "archived") return;
     display.forget(threadId);
     subagents.forget(threadId);
@@ -1206,12 +1207,12 @@ export const createClaudeRuntime = ({
     slots.close(threadId);
   };
 
-  // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
   const closeAll = () => {
     closed = true;
     for (const paused of pausedMessages.values()) paused.resolve();
     pausedMessages.clear();
     approvals.showAllTurns();
+    // Closing ends each active turn's message stream, so no Claude process outlives the bridge.
     slots.closeAll();
   };
 
@@ -1233,6 +1234,7 @@ export const createClaudeRuntime = ({
     interrupt,
     dropSession: dropSessionOf,
     noteFork: forkPoints.note,
+    // A fork handed back to Codex never starts a session again, so its point is dead.
     dropFork: forkPoints.forget,
     forgetThread,
     threadBusy,
@@ -1294,9 +1296,7 @@ export const serializeClaudeTurnEvent = (entry: ClaudeTurnEvent) => {
   }
 };
 
-// A list under its cap names every send the turn took, so a steer it leaves out runs as a later turn, even one that reached Claude after this result was written; a queued send the CLI counts promises that turn too.
-// A capped list or the single last uuid of an older CLI may leave out a steer already taken, so with nothing counted as queued whether the steer runs is unknown.
-// A failed result ends the turn, since the steer's run would otherwise hide its error.
+// Whether the steers a result left pending run as a later turn, or may not run at all.
 const steersAfter = (
   pendingSteers: Set<string>,
   interrupting: boolean,
@@ -1305,17 +1305,19 @@ const steersAfter = (
   const listed = result.user_message_uuids;
   for (const uuid of takenUuids(result)) pendingSteers.delete(uuid);
   if (interrupting) return "none";
+  // A failed result ends the turn, since the steer's run would otherwise hide its error.
   if (result.subtype !== "success" || result.is_error) return "none";
   if (pendingSteers.size === 0) return "none";
+  // A list under its cap names every send the turn took, so a steer it leaves out runs later; a capped list or an older CLI's single uuid may leave out one already taken, so without a queued count whether it runs is unknown.
   const complete = listed !== undefined && listed.length < TAKEN_UUIDS_LIMIT;
   return complete || (result.queued_turn_count ?? 0) > 0 ? "queued" : "unknown";
 };
 
-// Claude also runs turns of its own, such as when a background task it started reports back, and one that ran while nothing read the session reaches the next turn ahead of that turn's reply.
-// A result naming sends answers the turn only if one is the turn's; one naming none is Claude's own only when it says where its prompt came from, since a crashed worker's result or an older CLI's names nothing either.
+// Whether a result answers the turn, rather than a turn Claude ran on its own while nothing read the session.
 const answersTurn = (result: SDKResultMessage, sends: Set<string>) => {
   const taken = takenUuids(result);
   if (taken.length > 0) return taken.some((uuid) => sends.has(uuid));
+  // A result naming no sends is Claude's own only when it says where its prompt came from, since a crashed worker's result or an older CLI's names nothing either.
   return result.origin === undefined || result.origin.kind === "human";
 };
 
@@ -1326,11 +1328,11 @@ const takenUuids = (result: SDKResultMessage) =>
 const saidSomething = (next: StreamedNext) =>
   next.done !== true && next.value.isOk();
 
-// Claude starts every turn with its init message, then streams its reply; a subagent's messages or a background task's report alone start none.
 const startsTurn = (message: SDKMessage) => {
   switch (message.type) {
     case "system":
       return message.subtype === "init";
+    // A subagent's messages or a background task's report alone start no turn.
     case "stream_event":
     case "assistant":
       return message.parent_tool_use_id === null;
@@ -1383,13 +1385,13 @@ const CLAUDE_STEPS: Record<ClaudeTurnEvent["step"], true> = {
 
 const COMPACT_PROMPT = "/compact";
 
-// A stopped or killed agent ended because someone stopped it, as an interrupted turn does.
 const agentOutcome = (status: string, summary: string): TurnOutcome => {
   switch (status) {
     case "completed":
       return { status: "completed" };
     case "failed":
       return { status: "failed", message: summary || AGENT_FAILED };
+    // A stopped or killed agent ended because someone stopped it, as an interrupted turn does.
     default:
       return { status: "interrupted" };
   }

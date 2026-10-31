@@ -138,7 +138,7 @@ pipes.value.serverInput.destroy();
 await stopLingeringServer({ isRunning: server.isRunning, ...stopServer });
 process.exit(0);
 
-// Without its thread store the bridge offers no Claude model and relays everything, so Codex threads keep working.
+// The relay with Claude threads, or the plain relay when Claude cannot run.
 async function withClaude(relay: {
   serverInput: Writable;
   serverOutput: Readable;
@@ -156,6 +156,7 @@ async function withClaude(relay: {
   }
   const store = await openThreadStore(statePath.value);
   await sweepCloudLogs(join(dirname(statePath.value), CLOUD_COPY_FOLDER));
+  // Without its thread store the bridge offers no Claude model and relays everything, so Codex threads keep working.
   if (store.isErr()) {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
     return plain;
@@ -219,8 +220,8 @@ async function withClaude(relay: {
     lastRecordOf: (sessionId) => readLastRecordUuid(sessionId),
     readSession: (sessionId) => readClaudeSession(sessionId),
     readSubagents: (sessionId) => readClaudeSubagents(sessionId),
-    // Unreadable settings leave threads with none picked on the model default, which is still the level the app shows.
     effortRule: (model, picked) =>
+      // Unreadable settings leave threads with none picked on the model default, which is still the level the app shows.
       effortRule(effortSettings, catalog.effortsOf)(model, picked),
     claudeModels: catalog.models,
     codexHome: codexHome(process.env),
@@ -268,7 +269,6 @@ async function withClaude(relay: {
   };
 }
 
-// A failure only leaves the socket closed; the app and its Claude threads work as before.
 async function openCallSocket(handle: (line: string) => Promise<string>) {
   const path = loadStatePath(process.env).andThen((statePath) =>
     loadCallSocketPath(process.env, statePath),
@@ -282,6 +282,7 @@ async function openCallSocket(handle: (line: string) => Promise<string>) {
     onInUse: () =>
       logger.log({ event: "call_socket_unavailable", reason: "SocketInUse" }),
   });
+  // A failure only leaves the socket closed; the app and its Claude threads work as before.
   if (served.isErr()) {
     logger.log({
       event: "call_socket_unavailable",

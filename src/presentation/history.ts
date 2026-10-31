@@ -40,9 +40,7 @@ export type HistoryItem = {
   completedAtMs: number | null;
 };
 
-// The record is replayed through the live turn renderer, so a reopened thread shows the same items the turn showed while it ran, except the tools a subagent called, which Claude records apart from the conversation.
-// Each prompt opens a turn, so a steer taken mid-turn appears as a turn of its own, and a record keeps no bridge turn ids, so turn ids are made from the prompt's record uuid.
-// An agent the conversation started or resumed shows where each of its calls was made, as the activity and edits a live turn gave it; agentThreadOf names the agent's thread for a call, if the bridge knows it.
+// Rebuilds a thread's turns from Claude's record through the live turn renderer, as the turns showed while they ran.
 export const buildHistory = (
   messages: readonly SessionMessage[],
   thread: { threadId: string; cwd: string },
@@ -51,6 +49,7 @@ export const buildHistory = (
   const turns: HistoryTurn[] = [];
   let replay: Replay | null = null;
   for (const message of messages) {
+    // Claude records the tools a subagent called apart from the conversation.
     if (message.parent_tool_use_id !== null || isMetaMessage(message)) continue;
     const at = timeOf(message);
     const body = message.message;
@@ -63,12 +62,14 @@ export const buildHistory = (
       } else if (INTERRUPTED.test(prompt.text)) {
         if (replay !== null) replay = interrupt(replay);
       } else if (!LOCAL_COMMAND.test(prompt.text)) {
+        // Each prompt opens a turn, so a steer taken mid-turn appears as a turn of its own.
         if (replay !== null) turns.push(close(replay));
         replay = start(thread, message.uuid, prompt, at);
       }
     } else if (message.type === "assistant" && isAssistantBody(body)) {
       replay ??= start(thread, message.uuid, null, at);
       replay = feed(replay, assistantOf(message, body), at);
+      // An agent the conversation started or resumed shows where each of its calls was made, as the activity and edits a live turn gave it.
       replay = noteAgents(replay, body, agentThreadOf, at);
     }
   }
@@ -76,8 +77,8 @@ export const buildHistory = (
   return turns;
 };
 
-// A record of the main conversation the app can show; a subagent's records and hidden ones such as a compact summary are left out, as history leaves them out.
 export const mainRecords = (messages: readonly SessionMessage[]) =>
+  // A subagent's records and hidden ones such as a compact summary are left out, as history leaves them out.
   messages.filter(
     (message) =>
       message.parent_tool_use_id === null &&
@@ -99,7 +100,7 @@ export const endsTurn = (message: SessionMessage) =>
   isObject(message.message) &&
   message.message.stop_reason === "end_turn";
 
-// A turn that shows records as they are copied, such as a Cloud thread's, renders the main records it is given as the live turn renders Claude's messages; a prompt typed elsewhere is shown as the user's message.
+// Renders records as they are copied, such as a Cloud thread's, as the live turn renders Claude's messages.
 export const renderRecords = (
   state: TurnState,
   messages: readonly SessionMessage[],
@@ -119,6 +120,7 @@ export const renderRecords = (
       if (prompt === null) {
         add(renderSdkMessage(current, toolResultsOf(message, body), at));
       } else if (opensTurn(prompt)) {
+        // A prompt typed elsewhere is shown as the user's message.
         add(renderUserInput(current, inputOf(prompt), null, at));
       }
     } else if (isAssistantBody(body)) {
@@ -134,12 +136,12 @@ export type LiveTurn = {
   startedAtMs: number;
 };
 
-// A record says nothing of a turn still running, so the turns from its prompt on, steers included, are shown as one turn in progress under the id the live notifications carry.
 export const withLiveTurn = (
   history: readonly HistoryTurn[],
   live: LiveTurn | null,
 ): HistoryTurn[] => {
   if (live === null) return [...history];
+  // A record says nothing of a turn still running, so the turns from its prompt on, steers included, are shown as one turn in progress under the id the live notifications carry.
   const opened =
     live.record === null
       ? -1
@@ -178,7 +180,7 @@ export const withLiveTurn = (
   ];
 };
 
-// A thread the app already holds never asks for history it was given while open, so a picked conversation is streamed in as finished turns; the ids match what a later read rebuilds.
+// The notifications that stream history into a thread the app already holds as finished turns, with the ids a later read rebuilds.
 export const replayHistory = (
   history: readonly HistoryTurn[],
   threadId: string,
@@ -223,13 +225,13 @@ export const replayHistory = (
     ];
   });
 
-// A subagent's record is its own conversation, whose messages name the call that started the agent as their parent.
 export const buildSubagentHistory = (
   messages: readonly SessionMessage[],
   thread: { threadId: string; cwd: string },
   agentThreadOf: (toolUseId: string) => AgentRef | undefined,
 ): HistoryTurn[] =>
   buildHistory(
+    // A subagent's record is its own conversation, whose messages name the call that started the agent as their parent.
     messages.map((message) => ({ ...message, parent_tool_use_id: null })),
     thread,
     agentThreadOf,
@@ -242,11 +244,14 @@ export type AgentRef = {
   edits: readonly FileChangeItem[];
 };
 
-// Agents that resume each other can pass one edit to several turns of a thread, and the app pages items by id.
 export const delegatedEditIn = (
   edit: FileChangeItem,
   turnId: string,
-): FileChangeItem => ({ ...edit, id: `${edit.id}-in-${turnId}` });
+): FileChangeItem => ({
+  ...edit,
+  // Agents that resume each other can pass one edit to several turns of a thread, and the app pages items by id.
+  id: `${edit.id}-in-${turnId}`,
+});
 
 const noteAgents = (
   replay: Replay,
@@ -292,8 +297,7 @@ export type AgentResume = {
   at: number | null;
 };
 
-// The calls in a record that resumed an agent: a SendMessage call addresses its recipient as to, or as recipient in the older shape Claude still takes, and only Claude's answer tells a resume from a message queued for an agent still running.
-// Claude answers a resume with JSON naming the agent as resumedAgentId, or, when the agent's report comes back in the answer or the agent answers to another agent, with a message that it is resuming or resumed the agent.
+// The calls in a record that resumed an agent.
 export const findAgentResumes = (
   messages: readonly SessionMessage[],
 ): AgentResume[] => {
@@ -325,6 +329,7 @@ export const findAgentResumes = (
       }
     }
   }
+  // Only Claude's answer tells a resume from a message queued for an agent still running.
   return calls.flatMap((call) => {
     const answer = answers.get(call.toolUseId);
     if (!isObject(answer)) return [];
@@ -342,19 +347,21 @@ export const findAgentResumes = (
 
 const recipientOf = (input: unknown) => {
   if (!isObject(input)) return null;
+  // recipient is the older shape Claude still takes.
   const to = typeof input.to === "string" ? input.to : input.recipient;
   return typeof to === "string" && to !== "" ? to : null;
 };
 
-// Claude's answer opens with one line of JSON, which a report handed back with it follows.
 const resumeAnswer = (content: unknown) => {
   const first = Array.isArray(content)
     ? content.find((block) => isObject(block) && block.type === "text")
     : { text: content };
   const text =
     isObject(first) && typeof first.text === "string" ? first.text : "";
+  // Claude's answer opens with one line of JSON, which a report handed back with it follows.
   const answer = parseLine(text.split("\n", 1)[0] ?? "");
   if (!isObject(answer) || answer.success !== true) return null;
+  // The answer names the agent as resumedAgentId, or, when the agent's report comes back in it or the agent answers to another agent, says it is resuming or resumed the agent.
   return typeof answer.resumedAgentId === "string" ||
     (typeof answer.message === "string" && RESUMED.test(answer.message))
     ? answer
@@ -389,6 +396,7 @@ const start = (
 ): Replay => {
   const opened = renderTurnStarted({
     threadId: thread.threadId,
+    // A record keeps no bridge turn ids, so turn ids are made from the prompt's record uuid.
     turnId: `${HISTORY_TURN_PREFIX}${uuid}`,
     cwd: thread.cwd,
     now: at ?? 0,
@@ -432,10 +440,10 @@ const feed = (
   );
 };
 
-// A record says nothing of how its last turn ended unless an interrupt was written, so the rest close as completed.
 const close = (replay: Replay): HistoryTurn => {
   const closed = closeTurnUnchecked(
     replay.state,
+    // A record says nothing of how its last turn ended unless an interrupt was written, so the rest close as completed.
     { status: replay.interrupted ? "interrupted" : "completed" },
     replay.lastAt ?? 0,
   );
@@ -463,12 +471,11 @@ export const noteItems = (
   for (const notification of notifications) noteItem(items, notification);
 };
 
-// A completion replaces the item it closes, since the renderer may complete one item twice to correct a denial.
-// The app can read a running turn while its text streams, so a started item takes in the text sent so far; its completion then replaces it with the whole text.
 export const noteItem = (
   items: Map<string, HistoryItem>,
   notification: AppNotification,
 ) => {
+  // A completion replaces the item it closes, since the renderer may complete one item twice to correct a denial.
   if (notification.method === "item/started") {
     items.set(notification.params.item.id, {
       turnId: notification.params.turnId,
@@ -485,6 +492,7 @@ export const noteItem = (
       completedAtMs,
     });
   } else if (notification.method === "item/agentMessage/delta") {
+    // The app can read a running turn while its text streams, so a started item takes in the text sent so far.
     const { itemId, delta } = notification.params;
     updateOpenItem(items, itemId, (item) =>
       item.type === "agentMessage"
@@ -514,16 +522,15 @@ const updateOpenItem = (
 
 type Prompt = { text: string; images: UserInput[]; recovering?: boolean };
 
-// An image sent alone has no text to show beside it.
 const inputOf = (prompt: Prompt): UserInput[] => [
+  // An image sent alone has no text to show beside it.
   ...(prompt.text === "" && prompt.images.length > 0
     ? []
     : [{ type: "text", text: prompt.text, text_elements: [] }]),
   ...prompt.images,
 ];
 
-// A user record carrying tool results continues the turn; any other user record is a prompt, whose first text block is what was typed and whose later ones are files the bridge attached.
-// The file an attached image came from may be gone, so the image is shown from the copy Claude recorded.
+// The prompt a user record holds, or null for one carrying tool results, which continues the turn.
 const promptOf = (body: unknown): Prompt | null => {
   if (!isObject(body)) return null;
   const { content } = body;
@@ -534,6 +541,7 @@ const promptOf = (body: unknown): Prompt | null => {
   ) {
     return null;
   }
+  // The first text block is what was typed; later ones are files the bridge attached.
   const typed = content.find(
     (block) =>
       isObject(block) &&
@@ -548,6 +556,7 @@ const promptOf = (body: unknown): Prompt | null => {
         block.type === "text" &&
         block.text === RECOVERY_CONTEXT,
     ),
+    // The file an attached image came from may be gone, so the image is shown from the copy Claude recorded.
     images: content.flatMap((block) => {
       const url = imageUrlOf(block);
       return url === null ? [] : [{ type: "image", url }];
@@ -571,10 +580,10 @@ const imageUrlOf = (block: unknown) => {
     : null;
 };
 
-// The SDK types a record's message as unknown, so only a message with the fields the renderer reads is replayed.
 const isAssistantBody = (
   body: unknown,
 ): body is SDKAssistantMessage["message"] =>
+  // The SDK types a record's message as unknown, so only a message with the fields the renderer reads is replayed.
   isObject(body) && typeof body.id === "string" && Array.isArray(body.content);
 
 const assistantOf = (
@@ -599,8 +608,8 @@ const toolResultsOf = (
   session_id: message.session_id,
 });
 
-// The SDK returns these fields without typing them; a compact summary and other hidden records carry is_meta.
 const isMetaMessage = (message: SessionMessage) =>
+  // The SDK returns these fields without typing them; a compact summary and other hidden records carry is_meta.
   (message as { is_meta?: unknown }).is_meta === true;
 
 export const startOfRecord = (messages: readonly SessionMessage[]) => {

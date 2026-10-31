@@ -9,7 +9,7 @@ export type Prompt = {
   attachments?: readonly string[];
 };
 
-// The SDK reads this stream for the whole session; a message pushed mid-turn joins the running turn at a tool boundary or queues a new turn, and its uuid is how an interrupt reports it as still queued.
+// The prompt stream the SDK reads for the whole session.
 export const createPromptQueue = () => {
   const queued: SDKUserMessage[] = [];
   let ended = false;
@@ -40,6 +40,7 @@ export const createPromptQueue = () => {
       const message = userMessage(prompt);
       queued.push(message);
       notify();
+      // A message pushed mid-turn joins the running turn at a tool boundary or queues a new turn, and its uuid is how an interrupt reports it as still queued.
       return message.uuid;
     },
     end: () => {
@@ -49,13 +50,13 @@ export const createPromptQueue = () => {
   };
 };
 
-// Images come first, as Claude reads a question best after the image it asks about; the typed text is the first text block and attachments follow it, so the record keeps the typed text apart from what the bridge added.
-// Claude refuses an empty text block, so a message of images alone carries no text.
 const userMessage = ({ text, images = [], attachments = [] }: Prompt) =>
   ({
     type: "user",
     message: {
       role: "user",
+      // Images come first, as Claude reads a question best after the image it asks about; the typed text is the first text block and attachments follow it, so the record keeps the typed text apart from what the bridge added.
+      // Claude refuses an empty text block, so a message of images alone carries no text.
       content:
         images.length === 0 && attachments.length === 0
           ? text

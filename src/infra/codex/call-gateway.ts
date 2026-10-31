@@ -44,7 +44,7 @@ type Link = {
   createChecked: (args: unknown) => Promise<CreateOutcome & { busy: boolean }>;
 };
 
-// Claude threads go through their codex_link, so a child they create is recorded and reachable from the Claude chat as if Claude had created it.
+// Serves the call socket's thread tools to harnexus-task, sending a Claude thread's calls through its codex_link.
 export const createCallGateway = ({
   isClaudeThread,
   openLink,
@@ -167,6 +167,7 @@ export const createCallGateway = ({
     args: Record<string, unknown>,
   ) => {
     const called = await callTool(threadId, tool, args);
+    // A rejected call never ran, so it can be sent again once the caller is loaded.
     if (called.isOk() || !isUnloaded(called.error, threadId)) return called;
 
     // The app server forgets an idle Codex thread and then rejects it as a caller; loading it again starts no turn.
@@ -211,12 +212,10 @@ const failedCall = (error: ServerRequestError): GatewayAnswer => {
   }
 };
 
-// A rejected call never ran, so it can be sent again once the caller is loaded.
 const isUnloaded = (error: ServerRequestError, threadId: string) =>
   error._tag === "ServerRequestRejected" &&
   error.message.includes(`thread not found: ${threadId}`);
 
-// A thread known to exist is never answered as an error, since the caller would then create another.
 const createdAnswer = ({
   result,
   firstTurn,
@@ -224,6 +223,7 @@ const createdAnswer = ({
   unknown,
 }: CreateOutcome): GatewayAnswer => {
   const refusal = firstTurnRefusal(firstTurn);
+  // A thread known to exist is never answered as an error, since the caller would then create another.
   if (refusal?.kind === "settings") {
     return {
       outcome: "model_mismatch",

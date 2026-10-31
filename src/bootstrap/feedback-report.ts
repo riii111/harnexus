@@ -9,7 +9,6 @@ class TimeArgumentInvalid extends TaggedError("TimeArgumentInvalid")<{
   message: string;
 }> {}
 
-// A duration counts back from now, so a user can cover a problem without converting its time to UTC; an ISO time without an offset is local.
 export const parseTimeArgument = (
   name: "--since" | "--until",
   arg: string | undefined,
@@ -17,12 +16,14 @@ export const parseTimeArgument = (
   fallbackMs: number,
 ) => {
   if (arg === undefined) return Result.ok(fallbackMs);
+  // A duration counts back from now, so a user can cover a problem without converting its time to UTC.
   const duration = /^(\d+)([mhd])$/.exec(arg);
   if (duration !== null) {
     const ms =
       Number(duration[1]) * UNIT_MS[duration[2] as keyof typeof UNIT_MS];
     if (ms <= MAX_WINDOW_MS) return Result.ok(now - ms);
   } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(arg)) {
+    // An ISO time without an offset is local.
     const time = Date.parse(arg);
     if (!Number.isNaN(time) && time <= now && now - time <= MAX_WINDOW_MS)
       return Result.ok(time);
@@ -46,7 +47,7 @@ export type TimedProcess = {
   command: string;
 };
 
-// Lines are what ps prints for "pid=,ppid=,etime=,command=", one process each.
+// Reads what ps prints for "pid=,ppid=,etime=,command=", one process a line.
 export const parseTimedProcesses = (output: string): TimedProcess[] =>
   output.split("\n").flatMap((line) => {
     const matched = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line);
@@ -62,8 +63,8 @@ export const parseTimedProcesses = (output: string): TimedProcess[] =>
         ];
   });
 
-// ps prints a process's elapsed time as [[dd-]hh:]mm:ss whatever the locale, unlike its start time.
 const parseElapsed = (etime: string) => {
+  // ps prints a process's elapsed time as [[dd-]hh:]mm:ss whatever the locale, unlike its start time.
   const matched = /^(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)$/.exec(etime);
   if (matched === null) return null;
   const [days = 0, hours = 0, minutes = 0, seconds = 0] = matched
@@ -74,8 +75,7 @@ const parseElapsed = (etime: string) => {
 
 type RunningBridge = { pid: number; startedAtMs: number | null };
 
-// Only pids and start times are kept, since a command line can carry a prompt.
-// Another checkout's bridge runs main.ts with --launcher too, so it is counted, which tells a report run from the wrong checkout.
+// The bridges running from this checkout, and how many run from another.
 export const findBridges = (
   processes: readonly TimedProcess[],
   repo: string,
@@ -86,18 +86,20 @@ export const findBridges = (
     ANY_BRIDGE.test(` ${command} `),
   );
   const mine = bridges.filter(({ command }) => ` ${command} `.includes(own));
+  // Only pids and start times are kept, since a command line can carry a prompt.
   return {
     mine: mine.map(({ pid, elapsedMs }) => ({
       pid,
       startedAtMs: elapsedMs === null ? null : now - elapsedMs,
     })),
+    // Another checkout's bridge runs main.ts with --launcher too, so it is counted, which tells a report run from the wrong checkout.
     others: bridges.length - mine.length,
   };
 };
 
 const ANY_BRIDGE = /\/src\/bootstrap\/main\.ts --launcher\s/;
 
-// The app's main process keeps the Codex CLI and environment it started with until it quits.
+// When the app's main process started.
 export const appStartedAt = (
   processes: readonly TimedProcess[],
   app: string,
@@ -117,7 +119,6 @@ export type GitChanges = {
   untracked: number;
 };
 
-// git status --porcelain=v1 -z names each change once, with a rename or copy followed by its source path.
 export const classifyChanges = (porcelain: string): GitChanges => {
   const code: string[] = [];
   let otherTracked = 0;
@@ -128,6 +129,7 @@ export const classifyChanges = (porcelain: string): GitChanges => {
     if (entry.length < 4) continue;
     const state = entry.slice(0, 2);
     const path = entry.slice(3);
+    // git status --porcelain=v1 -z follows a rename or copy with its source path.
     if (state.includes("R") || state.includes("C")) index += 1;
     if (state === "??") untracked += 1;
     else if (isCode(path)) code.push(path);
@@ -136,8 +138,8 @@ export const classifyChanges = (porcelain: string): GitChanges => {
   return { code: code.slice(0, MAX_LISTED_CHANGES), otherTracked, untracked };
 };
 
-// Only harnexus's own code is named; any other path is the user's and only counted.
 const isCode = (path: string) =>
+  // Only harnexus's own code is named; any other path is the user's and only counted.
   CODE_FILES.has(path) ||
   CODE_DIRECTORIES.some((directory) => path.startsWith(directory));
 
@@ -304,16 +306,15 @@ const dependenciesCheck = (
       };
 };
 
-// A bridge keeps the code it loaded, so one started before a pull, an edit or bun install runs older code than this checkout, as does one whose start line names another commit or SDK.
 const bridgeChecks = (facts: FeedbackFacts): Check[] => {
   const { mine, others } = facts.bridges;
   const started = new Map(
     facts.loggedStarts.map((start) => [start.pid, start]),
   );
-  // The commit and SDK a bridge logged at start are compared first; file times also catch an edit or install not committed, and HEAD's move stands in for the commit of a bridge that logged none.
   const isStale = ({ pid, startedAtMs }: RunningBridge) => {
     const logged = started.get(pid);
     const current = facts.head?.commit ?? null;
+    // The commit and SDK a bridge logged at start are compared first.
     if (
       logged !== undefined &&
       ((logged.commit !== null &&
@@ -322,6 +323,7 @@ const bridgeChecks = (facts: FeedbackFacts): Check[] => {
         logged.sdk !== facts.current.sdk)
     )
       return true;
+    // File times also catch an edit or install not committed, and HEAD's move stands in for the commit of a bridge that logged none.
     const changed = [
       facts.codeChangedAtMs,
       logged === undefined ? (facts.head?.movedAtMs ?? null) : null,
@@ -331,6 +333,7 @@ const bridgeChecks = (facts: FeedbackFacts): Check[] => {
       changed.some((time) => time !== null && startedAtMs < time)
     );
   };
+  // A bridge keeps the code it loaded, so one started before a pull, an edit or bun install runs older code than this checkout.
   const stale = mine.filter(isStale);
   const listed = mine.map(({ pid, startedAtMs }) => {
     const commit = started.get(pid)?.commit;
@@ -472,7 +475,7 @@ const logSection = ({ log, sinceMs }: FeedbackFacts): string[] => {
   ];
 };
 
-// Each known path prints as its role, and the folder right below /Users, /home or /Volumes of any other path prints as its kind; folders below those stay as they are.
+// Prints each known path as its role, and the folder right below /Users, /home or /Volumes of any other path as its kind; folders below those stay as they are.
 export const redactPaths = (
   text: string,
   known: readonly { path: string; name: string }[],

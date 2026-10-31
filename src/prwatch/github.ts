@@ -98,8 +98,6 @@ type Post = (
 const rejected = (message: string) =>
   Result.err(new GithubRejected({ message }));
 
-// The token is kept in memory for a few minutes only, so a token the owner rotates is picked up and it never reaches the state or the log.
-// Reading it starts gh, which on macOS starts the keychain tool too, so it is not read for every request.
 export const createGitHub = (
   runCommand: RunCommand,
   env: Env,
@@ -109,6 +107,7 @@ export const createGitHub = (
   const tokens = new Map<string, { value: string; at: number }>();
   const token = async (account: string) => {
     const kept = tokens.get(account);
+    // Reading the token starts gh, which on macOS starts the keychain tool too, so it is not read for every request.
     if (kept !== undefined && now() - kept.at < TOKEN_TTL_MS)
       return Result.ok(kept.value);
 
@@ -132,6 +131,7 @@ export const createGitHub = (
           message: `gh has no token for account ${account}`,
         }),
       );
+    // Kept in memory for a few minutes only, so a token the owner rotates is picked up and it never reaches the state or the log.
     tokens.set(account, { value, at: now() });
     return Result.ok(value);
   };
@@ -309,9 +309,8 @@ const errorsOf = (errors: unknown[]) =>
 
 const TOKEN_TTL_MS = 10 * 60_000;
 
-// Each bot's progress is read under an alias by its place in the list; JSON's string escapes are valid GraphQL.
-// A check run is looked up in every check suite of the head, since the suite of the workflow that runs it has no stable id.
 const summaryFields = (bots: readonly ReviewBot[]) => {
+  // Each bot's progress is read under an alias by its place in the list; JSON's string escapes are valid GraphQL.
   const contexts = bots.flatMap((bot, index) =>
     bot.status === null || !("context" in bot.status)
       ? []
@@ -319,6 +318,7 @@ const summaryFields = (bots: readonly ReviewBot[]) => {
           `b${index}: context(name: ${JSON.stringify(bot.status.context)}) { state description createdAt }`,
         ],
   );
+  // A check run is looked up in every check suite of the head, since the suite of the workflow that runs it has no stable id.
   const runs = bots.flatMap((bot, index) =>
     bot.status === null || !("checkRun" in bot.status)
       ? []
@@ -339,11 +339,12 @@ const summaryFields = (bots: readonly ReviewBot[]) => {
 // A head gets one check suite per app that checks it, far fewer than this.
 const MAX_SUITES = 50;
 
-// One aliased query for every PR of an account, which GitHub counts as a single point.
+// One aliased query for every PR of an account.
 const summaryQuery = (refs: readonly PrRef[], bots: readonly ReviewBot[]) => {
   const fields = summaryFields(bots);
   const variables: Record<string, unknown> = {};
   const declared: string[] = [];
+  // GitHub counts one aliased query as a single point, however many PRs it reads.
   const pulls = refs.map((ref, index) => {
     const [owner, name] = ref.repo.split("/");
     Object.assign(variables, {
@@ -477,9 +478,9 @@ const summaryOf = (
   };
 };
 
-// A run started again is a later run of the same name, so the latest one counts; ids grow with creation, while a queued run has no start time yet.
 const checkRunStatusOf = (suites: unknown): BotStatus | null => {
   const runs = nodesOf(suites).flatMap((suite) => nodesOf(suite.checkRuns));
+  // A run started again is a later run of the same name, so the latest one counts; ids grow with creation, while a queued run has no start time yet.
   const run = runs.reduce<Record<string, unknown> | null>(
     (latest, next) =>
       latest === null || idOf(next) > idOf(latest) ? next : latest,
@@ -573,19 +574,19 @@ const plainOf =
     approved: node.state === "APPROVED",
   });
 
-// GraphQL drops the [bot] suffix that REST, the web and the ignore list use for apps.
 const loginOf = (author: unknown) => {
   if (!isObject(author) || typeof author.login !== "string") return "ghost";
+  // GraphQL drops the [bot] suffix that REST, the web and the ignore list use for apps.
   return author.__typename === "Bot" ? `${author.login}[bot]` : author.login;
 };
 
-// A bot's own status tells its review's progress, not a failure of the PR.
 const failedRequired = (
   pull: Record<string, unknown>,
   bots: readonly ReviewBot[],
 ): FailedCheck[] => {
   const rollup = lastCommit(pull.checks).statusCheckRollup;
   const contexts = nodesOf(isObject(rollup) ? rollup.contexts : null);
+  // A bot's own status tells its review's progress, not a failure of the PR.
   const statuses = new Set(
     bots.flatMap((bot) =>
       bot.status !== null && "context" in bot.status ? bot.status.context : [],

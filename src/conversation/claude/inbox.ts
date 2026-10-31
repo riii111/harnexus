@@ -1,5 +1,4 @@
-// Holds what Claude sent for the one reader that owns it, in order; a reader that stops takes back what it never read.
-// settled waits until the reader has handled everything it was given, so the sender gives no more than the reader keeps up with.
+// Holds what Claude sent, in order, for the one reader that owns it.
 export const createInbox = <T>() => {
   const queued: T[] = [];
   let waiting: ((item: T) => void) | null = null;
@@ -25,6 +24,7 @@ export const createInbox = <T>() => {
       });
     },
     settled: () =>
+      // The sender waits until the reader has handled everything it was given, so it gives no more than the reader keeps up with.
       queued.length === 0 && waiting !== null
         ? Promise.resolve()
         : new Promise<void>((resolve) => {
@@ -32,6 +32,7 @@ export const createInbox = <T>() => {
           }),
     queued: (): readonly T[] => queued,
     drain: () => {
+      // A reader that stops takes back what it never read.
       const left = queued.splice(0);
       settle();
       return left;

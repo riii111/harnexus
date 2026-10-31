@@ -27,17 +27,16 @@ export const processAlive = (pid: number) => {
   }
 };
 
-// The group is signalled, so a child the wrapper started does not outlive it.
 const signalGroup = (pid: number, signal: NodeJS.Signals) => {
   try {
+    // The group is signalled, so a child the wrapper started does not outlive it.
     process.kill(-pid, signal);
   } catch {
     // Already gone.
   }
 };
 
-// The prompt goes in through stdin, so it never shows in the process list.
-// The promise settles only once the process has exited: a timeout sends SIGTERM, then SIGKILL after the grace, and fails if it still lives.
+// Runs a command with its input on stdin, settling only once the process has exited: a timeout sends SIGTERM, then SIGKILL after the grace, and fails if it still lives.
 export const runProcess = (
   file: string,
   args: readonly string[],
@@ -99,6 +98,7 @@ export const runProcess = (
           started = true;
         });
         child.stdin.on("error", () => {});
+        // The prompt goes in through stdin, so it never shows in the process list.
         child.stdin.end(input);
         child.once("close", (code) => {
           exited = true;

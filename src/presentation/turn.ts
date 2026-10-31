@@ -81,7 +81,7 @@ export const renderTurnStarted = (params: {
   return { ...seal(draft), turn };
 };
 
-// A turn/start that joins the running turn is answered with that turn, without its items, as Codex answers one it steers.
+// The answer to a turn/start that joins the running turn: that turn without its items, as Codex answers a steer.
 export const steeredTurn = (state: TurnState): Turn =>
   inProgressTurn(state.turnId, state.startedAtMs, "notLoaded");
 
@@ -121,7 +121,7 @@ export const renderUserInput = (
   return seal(draft);
 };
 
-// The bridge's own message, such as an answer to /session, appears as an agent message but never reaches Claude's record.
+// Shows the bridge's own message, such as an answer to /session, as an agent message that never reaches Claude's record.
 export const renderNotice = (
   state: TurnState,
   text: string,
@@ -136,7 +136,6 @@ export const renderNotice = (
   return seal(draft);
 };
 
-// A subagent's messages belong to its own thread, so only a result completing an item of this turn, such as a subagent's call asked about here, is taken from them; anything after the turn ends is dropped.
 export const renderSdkMessage = (
   state: TurnState,
   message: SDKMessage,
@@ -144,6 +143,7 @@ export const renderSdkMessage = (
 ): Rendered => {
   if (state.finished) return { state, notifications: [] };
   const draft = open(state);
+  // A subagent's messages belong to its own thread, so only a result completing an item of this turn, such as a subagent's call asked about here, is taken from them.
   switch (message.type) {
     // A compaction's only text is the command's own report, which its outcome already carries.
     case "stream_event":
@@ -174,7 +174,7 @@ export const renderSdkMessage = (
   return seal(draft);
 };
 
-// A steer Claude had not taken when its turn ended runs as Claude's next turn, which the app sees as the same turn, so this result closes nothing but its own items.
+// Renders a result after which the app turn goes on, as when a steer Claude had not taken runs as its next turn.
 export const renderInterimResult = (
   state: TurnState,
   result: SDKResultMessage,
@@ -211,7 +211,6 @@ export const closeTurnUnchecked = (
   return { ...seal(draft), turn };
 };
 
-// A permission request can reach the bridge before the message carrying its tool call, and the app's prompt points at the tool's item, so the item starts here; the later tool call is skipped as already started.
 export const renderToolRequest = (
   state: TurnState,
   block: { id: string; name: string; input: unknown },
@@ -220,11 +219,11 @@ export const renderToolRequest = (
 ): Rendered => {
   if (state.finished) return { state, notifications: [] };
   const draft = open(state);
+  // A permission request can reach the bridge before the message carrying its tool call, and the app's prompt points at the tool's item, so the item starts here; the later tool call is skipped as already started.
   startTool(draft, block, now, closesText);
   return seal(draft);
 };
 
-// A subagent can ask about a tool only while its Agent call runs in the turn or after that call launched it in the background, so with no Agent call running the asking agent is a background one.
 export const runsAgent = (state: TurnState) =>
   Object.values(state.tools).some(
     (tool) =>
@@ -241,17 +240,16 @@ export const runningToolItem = (
   return tool?.state === "running" ? tool.item : null;
 };
 
-// An interrupted SDK query still ends with a result, which must close the turn as interrupted rather than failed.
 export const markInterrupting = (state: TurnState): TurnState => ({
   ...state,
   interrupting: true,
 });
 
-// The permission callback refuses a tool without any SDK message saying so, so it reports the refusal here; the call may come before or after the tool item starts.
 export const markToolDeclined = (
   state: TurnState,
   toolUseId: string,
 ): TurnState =>
+  // The permission callback refuses a tool without any SDK message saying so, so it reports the refusal here; the call may come before or after the tool item starts.
   state.declinedToolUseIds.includes(toolUseId)
     ? state
     : {
@@ -297,16 +295,17 @@ type StreamDelta = Extract<
   { type: "content_block_delta" }
 >["delta"];
 
-// Claude compacts on its own inside a turn as well as when the app asks, and both show the same item; only a compaction the app asked for fails its turn, since after one Claude tried on its own the turn reports what followed.
 const renderSystem = (draft: Draft, message: SystemMessage, now: number) => {
   switch (message.subtype) {
     case "permission_denied":
       draft.declinedToolUseIds.push(message.tool_use_id);
       break;
+    // Claude compacts on its own inside a turn as well as when the app asks, and both show the same item.
     case "compact_boundary":
       renderCompaction(draft, now);
       break;
     case "status":
+      // Only a compaction the app asked for fails its turn, since after one Claude tried on its own the turn reports what followed.
       if (draft.compaction && message.compact_result === "failed") {
         draft.compactionError = message.compact_error ?? COMPACTION_FAILED;
       }
@@ -314,12 +313,13 @@ const renderSystem = (draft: Draft, message: SystemMessage, now: number) => {
   }
 };
 
-// Claude reports a compaction only once it is done, so its item starts and completes together; thread/compacted is deprecated but still in the protocol for apps that read it.
 const renderCompaction = (draft: Draft, now: number) => {
   const item: ThreadItem = { type: "contextCompaction", id: nextItemId(draft) };
   draft.compacted = true;
+  // Claude reports a compaction only once it is done, so its item starts and completes together.
   itemStarted(draft, item, now);
   itemCompleted(draft, item, now);
+  // thread/compacted is deprecated but still in the protocol for apps that read it.
   notify(draft, now, {
     method: "thread/compacted",
     params: { threadId: draft.threadId, turnId: draft.turnId },
@@ -329,6 +329,7 @@ const renderCompaction = (draft: Draft, now: number) => {
 const renderStreamEvent = (draft: Draft, event: StreamEvent, now: number) => {
   switch (event.type) {
     case "message_start":
+      // A retried or abandoned message may never send its block stops, so its blocks close when the next message starts.
       closeBlocks(draft, now);
       flushPending(draft, null, now);
       draft.streamingMessageId = event.message.id;
@@ -400,16 +401,15 @@ const appendBlock = (
   }
 };
 
-// Whether a text block is commentary or the final answer is known only from the stop reason that follows it, so its completion waits.
 const stopBlock = (draft: Draft, index: number, now: number) => {
   const block = draft.openBlocks[index];
   if (block === undefined) return;
   delete draft.openBlocks[index];
+  // Whether a text block is commentary or the final answer is known only from the stop reason that follows it, so its completion waits.
   if (block.kind === "text") draft.pendingTexts.push(block);
   else itemCompleted(draft, reasoning(block.id, block.text), now);
 };
 
-// A retried or abandoned message may never send its block stops, so its blocks close when the next message starts.
 const closeBlocks = (draft: Draft, now: number) => {
   for (const index of Object.keys(draft.openBlocks)) {
     stopBlock(draft, Number(index), now);
@@ -433,12 +433,12 @@ const flushPending = (
   }
 };
 
-// Without partial messages, or for a block the stream did not carry, the whole block arrives here at once; an SDK-made API error message is skipped because the result reports the same error.
 const renderAssistant = (
   draft: Draft,
   message: SDKAssistantMessage,
   now: number,
 ) => {
+  // An SDK-made API error message is skipped because the result reports the same error.
   if (message.error !== undefined) return;
   const phase = message.message.stop_reason
     ? phaseOf(message.message.stop_reason)
@@ -450,16 +450,17 @@ const renderAssistant = (
       (block.type === "text" || block.type === "thinking") &&
       !consumeStreamedBlock(draft, message.message.id)
     ) {
+      // Without partial messages, or for a block the stream did not carry, the whole block arrives here at once.
       renderWholeBlock(draft, block, now);
     }
   }
   if (phase !== null) flushPending(draft, phase, now);
 };
 
-// Streamed text and thinking blocks arrive again in order as assistant messages, so only those beyond the streamed count are new.
 const consumeStreamedBlock = (draft: Draft, messageId: string) => {
   const counts = draft.blockCounts[messageId] ?? { streamed: 0, seen: 0 };
   draft.blockCounts[messageId] = { ...counts, seen: counts.seen + 1 };
+  // Streamed text and thinking blocks arrive again in order as assistant messages, so only those beyond the streamed count are new.
   return counts.seen < counts.streamed;
 };
 
@@ -481,7 +482,6 @@ const renderWholeBlock = (
   }
 };
 
-// Text before a tool call is commentary, and closing it first keeps the app's items in the order Claude produced them.
 const startTool = (
   draft: Draft,
   block: { id: string; name: string; input: unknown },
@@ -489,6 +489,7 @@ const startTool = (
   closesText = true,
 ) => {
   if (draft.tools[block.id] !== undefined) return;
+  // Text before a tool call is commentary, and closing it first keeps the app's items in the order Claude produced them.
   if (closesText) flushPending(draft, "commentary", now);
   const item = startToolItem(nextItemId(draft), block, draft.cwd);
   draft.tools[block.id] = { state: "running", item, startedAtMs: now };
@@ -522,24 +523,26 @@ const renderToolResults = (
   }
 };
 
-// Path deny rules and hook denials reach the host only in the result, after their items closed as failed, so those items are completed again as declined; the app keeps the latest completion of an item id.
 const correctDenials = (draft: Draft, toolUseIds: string[], now: number) => {
   for (const toolUseId of toolUseIds) {
     draft.declinedToolUseIds.push(toolUseId);
     const tool = draft.tools[toolUseId];
+    // Path deny rules and hook denials reach the host only in the result, after their items closed as failed, so those items are completed again as declined; the app keeps the latest completion of an item id.
     const declined =
       tool?.state === "failed" ? declineToolItem(tool.item) : null;
     if (declined !== null) itemCompleted(draft, declined, now);
   }
 };
 
-// The CLI ends a failed compaction with a successful result, so the failure its status reported decides the outcome, and a compaction that reported neither is not shown as done.
 const resultOutcome = (draft: Draft, result: SDKResultMessage): TurnOutcome => {
+  // An interrupted SDK query still ends with a result, which must close the turn as interrupted rather than failed.
   if (draft.interrupting) return { status: "interrupted" };
+  // The CLI ends a failed compaction with a successful result, so the failure its status reported decides the outcome.
   if (draft.compactionError !== null) {
     return { status: "failed", message: draft.compactionError };
   }
   const outcome = outcomeOf(result);
+  // A compaction that reported neither its boundary nor a failure is not shown as done.
   return outcome.status === "completed" && draft.compaction && !draft.compacted
     ? { status: "failed", message: NOT_COMPACTED }
     : outcome;
@@ -631,8 +634,9 @@ const notify = (
   draft.notifications.push({ ...notification, emittedAtMs: now });
 };
 
-// Item ids only need to be unique within the thread, and the turn id already is.
-const nextItemId = (draft: Draft) => `${draft.turnId}-item-${draft.nextItem++}`;
+const nextItemId = (draft: Draft) =>
+  // Item ids only need to be unique within the thread, and the turn id already is.
+  `${draft.turnId}-item-${draft.nextItem++}`;
 
 const itemRef = (draft: Draft, itemId: string) => ({
   threadId: draft.threadId,

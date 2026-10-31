@@ -36,7 +36,7 @@ export const sideChatBrief = (
       };
 };
 
-// Built as the app hands a main conversation to a cloud side chat: the user's messages and the agent's replies only, as reference-only text; null when there is nothing to hand over.
+// The main conversation as reference-only text, built as the app hands one to a cloud side chat: the user's messages and the agent's replies only.
 export const sideChatReference = (
   history: readonly Turn[],
   main: MainThread,
@@ -51,7 +51,7 @@ export const sideChatReference = (
   );
 };
 
-// A page of thread/turns/list, newest or oldest first as asked; a turn still running keeps only what the user sent, since its replies are not done. Null when the answer is not a page of turns.
+// The turns of a thread/turns/list page, newest or oldest first as asked.
 export const listedTurns = (
   result: unknown,
 ): { turns: ListedTurn[]; more: boolean } | null => {
@@ -69,6 +69,7 @@ export const listedTurns = (
     const items = turn.items as ThreadItem[];
     turns.push({
       id: turn.id,
+      // A turn still running keeps only what the user sent, since its replies are not done.
       items:
         turn.status === "completed"
           ? items
@@ -78,10 +79,10 @@ export const listedTurns = (
   return { turns, more: typeof result.nextCursor === "string" };
 };
 
-// Only the messages are read, so only they must have the shape the reference takes text from.
 const isReadableItem = (item: unknown) => {
   if (!isObject(item) || typeof item.type !== "string") return false;
   if (item.type === "agentMessage") return typeof item.text === "string";
+  // Only the messages are read, so only they must have the shape the reference takes text from.
   if (item.type !== "userMessage") return true;
   return Array.isArray(item.content) && item.content.every(isReadableInput);
 };
@@ -110,7 +111,6 @@ const messagesOf = (history: readonly Turn[]) =>
     }),
   );
 
-// The first message often sets the task, so it keeps up to a share of the budget and the newest messages fill the rest; the message at each edge is cut rather than dropped.
 const fitBudget = (messages: Message[], budget: number): Fitted => {
   const blocks = messages.map(blockOf);
   const total = blocks.reduce(
@@ -121,6 +121,7 @@ const fitBudget = (messages: Message[], budget: number): Fitted => {
   if (first === undefined || total <= budget) {
     return { blocks, omittedThrough: null };
   }
+  // The first message often sets the task, so it keeps up to a share of the budget and the newest messages fill the rest.
   const head = cutBlock(first, Math.floor(budget * FIRST_SHARE), "start");
   let left = budget - (head?.length ?? 0) - SEPARATOR.length;
   const tail: string[] = [];
@@ -133,6 +134,7 @@ const fitBudget = (messages: Message[], budget: number): Fitted => {
       kept += 1;
       continue;
     }
+    // The message at the edge is cut rather than dropped.
     const cut = cutBlock(message, left - SEPARATOR.length, "end");
     if (cut !== null) {
       tail.unshift(cut);
@@ -169,7 +171,6 @@ const headerOf = (main: MainThread, omittedThrough: number | null) =>
 const blockOf = ({ turn, role, text }: Message) =>
   `${labelOf(turn, role)}${text}`;
 
-// Null when the room cannot hold the label and the mark with any of the text.
 const cutBlock = (
   message: Message,
   room: number,

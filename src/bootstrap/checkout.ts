@@ -13,13 +13,13 @@ export type CheckoutHead = {
   movedAtMs: number | null;
 };
 
-// Git's own files are read rather than running git, since on macOS /usr/bin/git without the developer tools opens an install dialog, and the bridge must start fast.
-// .git is a file naming the real directory in a worktree, whose refs live in the shared directory its commondir names.
 export const readCheckoutHead = async (
   repo: string,
 ): Promise<CheckoutHead | null> => {
+  // Git's own files are read rather than running git, since on macOS /usr/bin/git without the developer tools opens an install dialog, and the bridge must start fast.
   const marker = await readTextFileIfExists(join(repo, ".git"));
   if (marker.isOk() && marker.value === null) return null;
+  // .git is a file naming the real directory in a worktree, whose refs live in the shared directory its commondir names.
   const gitDir =
     marker.isOk() && marker.value !== null
       ? gitDirOf(repo, marker.value)
@@ -79,12 +79,12 @@ const resolveFrom = (base: string, path: string) =>
 const commitOf = (text: string) =>
   /^([0-9a-f]{40}|[0-9a-f]{64})\s*$/.exec(text)?.[1] ?? null;
 
-// A ref is a loose file, or a line of packed-refs once git has packed it.
 const resolveRef = async (gitDir: string, commonDir: string, ref: string) => {
   for (const dir of new Set([gitDir, commonDir])) {
     const loose = await readTextFileIfExists(join(dir, ref));
     if (loose.isOk() && loose.value !== null) return commitOf(loose.value);
   }
+  // A ref git has packed is a line of packed-refs rather than a loose file.
   const packed = await readTextFileIfExists(join(commonDir, "packed-refs"));
   if (packed.isErr() || packed.value === null) return null;
   for (const line of packed.value.split("\n")) {
@@ -94,7 +94,7 @@ const resolveRef = async (gitDir: string, commonDir: string, ref: string) => {
   return null;
 };
 
-// The reflog line names who moved HEAD, so only its time is kept; it is when the code last changed by checkout, pull or reset, unlike a commit's date.
+// When the code last changed by checkout, pull or reset, which a commit's date does not tell.
 const headMovedAt = async (gitDir: string) => {
   const path = join(gitDir, "logs", "HEAD");
   const found = await statFileIfExists(path);
@@ -103,6 +103,7 @@ const headMovedAt = async (gitDir: string) => {
   const tail = await readFileSlice(path, start, found.value.size - start);
   if (tail.isErr()) return null;
   const last = tail.value.trimEnd().split("\n").at(-1) ?? "";
+  // The reflog line names who moved HEAD, so only its time is kept.
   const seconds = / (\d{9,11}) [+-]\d{4}(?:\t|$)/.exec(last)?.[1];
   return seconds === undefined ? null : Number(seconds) * 1000;
 };

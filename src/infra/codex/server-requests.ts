@@ -32,7 +32,7 @@ export type ServerRequest = (
   options: { timeoutMs: number },
 ) => Promise<Result<unknown, ServerRequestError>>;
 
-// Requests from the bridge take string ids with their own prefix so they never collide with the app's, and their responses never reach the app.
+// The bridge's own requests to the server, sent between the app's lines.
 export const attachServerRequests = ({
   serverInput,
   serverOutput,
@@ -45,13 +45,14 @@ export const attachServerRequests = ({
   let sequence = 0;
   let closed = false;
 
-  // The app must never see a response to a request it did not send; a late answer to a request that already timed out is still dropped, since the app never sent that id.
   const dropOwnResponse = (line: Buffer) => {
+    // The bridge's ids take their own prefix so they never collide with the app's.
     if (sequence === 0 || !line.includes(ID_PREFIX_BYTES)) return line;
     const parsed = parseJson(line.toString());
     if (parsed.isErr() || !isResponse(parsed.value)) return line;
     const response = parsed.value;
     if (!isIssued(response.id)) return line;
+    // The app must never see a response to a request it did not send, so even a late answer to a request that already timed out is dropped.
     pending.get(response.id)?.(
       "error" in response
         ? { kind: "rejected", error: response.error }
@@ -65,7 +66,6 @@ export const attachServerRequests = ({
     return /^[1-9]\d*$/.test(number) && Number(number) <= sequence;
   };
 
-  // A response can only arrive before the server output ends, so everything still waiting then is unanswered.
   const closeAll = () => {
     closed = true;
     for (const answer of [...pending.values()]) answer({ kind: "closed" });
@@ -73,6 +73,7 @@ export const attachServerRequests = ({
 
   const filtered = createLineRewriter(dropOwnResponse);
   serverOutput.on("error", () => filtered.end());
+  // A response can only arrive before the server output ends, so everything still waiting then is unanswered.
   filtered.once("finish", closeAll);
 
   const request: ServerRequest = (method, params, { timeoutMs }) => {
@@ -146,8 +147,8 @@ const notSent = (method: string) =>
     message: `the connection to the server is closed, so ${method} was not sent`,
   });
 
-// Only a top-level response to an id this module issued matches, so the same text nested in another message never does.
 const isResponse = (value: unknown): value is Response =>
+  // Only a top-level response matches, so the same text nested in another message never does.
   typeof value === "object" &&
   value !== null &&
   !Array.isArray(value) &&

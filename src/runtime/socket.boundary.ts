@@ -75,7 +75,6 @@ export const serveLines = (
     return Result.ok({ close: () => server.close() });
   });
 
-// A socket another bridge serves is checked again until that bridge is gone, since the bridge that took it may be a short-lived one the app started beside this one.
 export const serveLinesWhenFree = (
   path: string,
   handle: (line: string) => Promise<string>,
@@ -91,6 +90,7 @@ export const serveLinesWhenFree = (
       if (served.isErr() && served.error._tag === "SocketInUse") {
         if (!reported) onInUse?.();
         reported = true;
+        // The bridge that took the socket may be a short-lived one the app started beside this one, so the socket is checked again until it is gone.
         setTimeout(attempt, retryMs).unref();
         return;
       }
@@ -99,7 +99,6 @@ export const serveLinesWhenFree = (
     void attempt();
   });
 
-// An empty line is only a probe: the server answers nothing to it but the connection proves it is alive.
 export const requestLine = (path: string, line: string, timeoutMs: number) => {
   let connected = false;
   return Result.tryPromise({
@@ -114,6 +113,7 @@ export const requestLine = (path: string, line: string, timeoutMs: number) => {
         socket.setEncoding("utf8");
         socket.on("connect", () => {
           connected = true;
+          // An empty line is only a probe: the server answers nothing to it but the connection proves it is alive.
           if (line === "") {
             clearTimeout(timer);
             socket.destroy();

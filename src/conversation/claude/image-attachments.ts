@@ -6,7 +6,6 @@ import {
 } from "../../infra/claude/images.ts";
 import type { Refusal } from "../thread-request.ts";
 
-// Images are read together, and the first that cannot be sent decides why the whole message is refused, since Claude would otherwise answer without seeing it.
 export const readImages = async (
   sources: readonly ImageSource[],
   resize: ResizeImage,
@@ -14,6 +13,7 @@ export const readImages = async (
   const read = await Promise.all(
     sources.map((source) => readImage(source, resize)),
   );
+  // The first image that cannot be sent refuses the whole message, since Claude would otherwise answer without seeing it.
   return Result.all(read).mapError((error) => ({
     _tag: error._tag,
     refusal: REFUSALS[error._tag],

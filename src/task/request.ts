@@ -36,8 +36,8 @@ const COMPLETION_TARGETS = ["implementation", "draft_pr", "merge"];
 
 export const homeOf = (env: Env) => env.HOME ?? homedir();
 
-// A relative directory is ignored, as the XDG spec has it, so the working directory never picks the templates or the state.
 export const absoluteOr = (value: string | undefined, fallback: string) =>
+  // A relative directory is ignored, as the XDG spec has it, so the working directory never picks the templates or the state.
   value?.startsWith("/") ? value : fallback;
 
 export const codexHome = (env: Env) =>
@@ -98,9 +98,9 @@ export const singleLine = (value: unknown, name: string) =>
     ? fail(`${name} must be a nonempty single-line string`)
     : Result.ok(value);
 
-// The ID is pasted into worker and reviewer prompts, so it may not carry spaces or prose.
 const taskId = (value: unknown) =>
   singleLine(value, "taskId").andThen((id) =>
+    // The ID is pasted into worker and reviewer prompts, so it may not carry spaces or prose.
     /^[\p{L}\p{N}_#][\p{L}\p{N}_.#/:-]*$/u.test(id)
       ? Result.ok(id)
       : fail(
@@ -108,8 +108,8 @@ const taskId = (value: unknown) =>
         ),
   );
 
-// Only the thread title shows the name, so it may carry any single-line text.
 const displayName = (value: unknown) =>
+  // Only the thread title shows the name, so it may carry any single-line text.
   value === undefined || value === null
     ? Result.ok(null)
     : singleLine(value, "displayName");
@@ -128,8 +128,8 @@ export const callerId = (env: Env) => {
   return chatId(value, "CODEX_THREAD_ID");
 };
 
-// urlsplit's scheme and netloc, which decide whether a reference is a URL rather than a path.
 const isHttpsUrl = (value: string) => {
+  // urlsplit's scheme and netloc, which decide whether a reference is a URL rather than a path.
   const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]*)/s.exec(value);
   return (
     scheme?.[1]?.toLowerCase() === "https" &&
@@ -230,7 +230,6 @@ const PR_URL = new RegExp(
   "u",
 );
 
-// A Claude Code cloud session works in its own checkout, so there the checkout only has to be the top level of a repository.
 export const reviewRequest = (
   path: string,
   env: Env,
@@ -276,6 +275,7 @@ export const reviewRequest = (
         ? "checkout must be the absolute path of a repository's top level"
         : `checkout must be the top level of a worker worktree ${worktrees}/<id>/<name>`,
     );
+    // A Claude Code cloud session works in its own checkout, so there the checkout only has to be the top level of a repository.
     if (
       !requested.startsWith("/") ||
       (!anyCheckout && dirname(dirname(checkout)) !== worktrees) ||
@@ -347,9 +347,9 @@ export const sessionValue = async (data: Fields, key: string) => {
     : (value ?? null);
 };
 
-// replyTo names how the reviewer returns its result: the worker's chat in the app, or, in a Claude Code cloud session, the run's own answer.
 export const reviewFields = (
   data: Fields,
+  // How the reviewer returns its result: the worker's chat in the app, or, in a Claude Code cloud session, the run's own answer.
   replyTo: string = String(data.workerAI),
 ) =>
   Result.gen(async function* () {

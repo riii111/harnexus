@@ -138,10 +138,10 @@ const threadTitle = (kind: string, data: Fields) =>
     ? `${kind}｜${asText(data.displayName)}`
     : `${kind} ${asText(data.taskId)}`;
 
-// The name is only shown, so renaming a task still finds its worker.
 const withoutName = ({ displayName: _, ...rest }: Fields) => rest;
 
 const sameTask = (recorded: unknown, data: Fields) =>
+  // The name is only shown, so renaming a task still finds its worker.
   isObject(recorded) && jsonEqual(withoutName(recorded), withoutName(data));
 
 const launch = (args: LaunchArgs, deps: TaskDeps) =>
@@ -302,7 +302,6 @@ const resolve = (args: ResolveArgs, deps: TaskDeps) =>
 const PR_NUMBER =
   /^(?:#?([1-9][0-9]*)|https:\/\/\S+\/pull\/([1-9][0-9]*)(?:[/?#]\S*)?)$/;
 
-// The number goes last so the title still reads as the task, while a search for the PR finds the worker.
 const name = (args: NameArgs, deps: TaskDeps) =>
   Result.gen(async function* () {
     yield* refuseInCloud(deps.env, "name");
@@ -316,6 +315,7 @@ const name = (args: NameArgs, deps: TaskDeps) =>
     const watched = yield* Result.await(linkPr(deps, args.pr, worker));
     const request = yield* Result.await(launchOfThread(deps.env, worker));
     // Only a launched worker has a title to extend; another chat keeps its own.
+    // The number goes last so the title still reads as the task, while a search for the PR finds the worker.
     const title =
       request === null ? null : `${threadTitle("Impl", request)} PR#${number}`;
     const answer =
@@ -343,8 +343,7 @@ const name = (args: NameArgs, deps: TaskDeps) =>
     });
   });
 
-// A linked chat nothing can send to is told so, since the link alone would read as watched.
-// Never fails, since the link it reports on is already made.
+// Warns about a linked chat nothing can send to, which the link alone would show as watched.
 const deliveryWarning = async (
   deps: TaskDeps,
   worker: string,
@@ -359,7 +358,7 @@ const deliveryWarning = async (
 const NOT_LINKABLE =
   "the PR watch needs the URL https://github.com/<owner>/<repo>/pull/<number>";
 
-// Kept apart from the title, so the watch finds the worker of a PR without reading thread names.
+// Links the PR to the worker in the watch's records.
 const linkPr = (deps: TaskDeps, value: string, worker: string) =>
   Result.gen(async function* () {
     const pr = githubPr(value);
@@ -367,6 +366,7 @@ const linkPr = (deps: TaskDeps, value: string, worker: string) =>
     const root = watchPaths(deps.env).state;
     // Only the link is read, so an unreadable state never stops a chat from naming its PR.
     const current = yield* Result.await(loadLink(root, pr));
+    // The link is kept apart from the title, so the watch finds the worker of a PR without reading thread names.
     yield* Result.await(
       recordLink(root, {
         ...pr,
@@ -438,7 +438,7 @@ const registerSender = (deps: TaskDeps, root: string) =>
     return Result.ok<Fields>({ sender: thread });
   });
 
-// Any chat can ask to be told about a PR without being renamed, but never takes a PR another chat is watched for.
+// Links the calling chat to a PR without renaming it.
 const linkOnly = (deps: TaskDeps, value: string) =>
   Result.gen(async function* () {
     const worker = yield* callerId(deps.env);
@@ -447,6 +447,7 @@ const linkOnly = (deps: TaskDeps, value: string) =>
     const current = yield* Result.await(
       linkedChat(watchPaths(deps.env).state, pr),
     );
+    // A chat never takes a PR another chat is watched for.
     if (current?.active && current.worker !== worker)
       return fail(
         `${pr.url} is already watched for chat ${current.worker}; name it with name --pr from the chat that takes it over`,
@@ -459,7 +460,7 @@ const linkOnly = (deps: TaskDeps, value: string) =>
     });
   });
 
-// A chat that shows a Cloud session is a new Claude chat whose first message is /cloud, which links it as if the user had typed it.
+// Opens a chat that shows a Cloud session: a new Claude chat whose first message, /cloud, links it as if the user had typed it.
 const cloud = (args: CloudArgs, deps: TaskDeps) =>
   Result.gen(async function* () {
     yield* refuseInCloud(deps.env, "cloud");

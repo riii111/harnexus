@@ -26,9 +26,7 @@ import {
 } from "./store.ts";
 import { runCycle, type WatchDeps, type WatchPaths } from "./watcher.ts";
 
-// Runs until stopped; a failed cycle is logged and retried, so a config or network error never ends the watch.
-// Between cycles the process only sleeps on a timer.
-// Once its program has been replaced it ends between cycles, never mid-send, so the service that keeps it running starts the new one.
+// Runs the PR watch until it is stopped or its program is replaced.
 export const watchForever = (
   deps: WatchDeps,
   sleep: (ms: number) => Promise<unknown>,
@@ -43,6 +41,7 @@ export const watchForever = (
       // Checked before each cycle, so no cycle runs on a program replaced while the watch slept.
       if (await replaced()) {
         deps.log({ event: "replaced" });
+        // Ending between cycles, never mid-send, lets the service that keeps the watch running start the new program.
         return Result.err(
           new WatchReplaced({
             message:
@@ -51,6 +50,7 @@ export const watchForever = (
         );
       }
       const cycle = await runCycle(cycleDeps);
+      // A failed cycle is logged and retried, so a config or network error never ends the watch.
       if (cycle.isErr())
         deps.log({ event: "cycle_failed", error: cycle.error._tag });
       await sleep(
@@ -61,13 +61,13 @@ export const watchForever = (
 
 const RETRY_MS = 60_000;
 
-// One watch at a time, so two never send the same event.
 const acquireLock = (
   root: string,
 ): Promise<Result<void, StateUnwritable | WatchRefused>> =>
   Result.gen(async function* () {
     yield* Result.await(prepareDirectory(root).then(io));
 
+    // One watch at a time, so two never send the same event.
     const held = yield* io(holdProcessLock(lockPath(root)));
     return held ? Result.ok() : refuse("another PR watch is running");
   });
@@ -76,7 +76,7 @@ const io = <T>(
   result: Result<T, { message: string; cause?: unknown }>,
 ): Result<T, StateUnwritable> => result.mapError(stateUnwritable);
 
-// Decides from each PR's saved watch state as the watch would, but writes none, so a run before starting shows what the first cycle sends.
+// Decides from each PR's saved watch state what the watch would send, without writing any.
 export const dryRun = (
   deps: { paths: WatchPaths; github: GitHub },
   urls: readonly string[],
@@ -104,7 +104,6 @@ export const dryRun = (
     return Result.ok<Fields>({ dryRun: true, prs: reports });
   });
 
-// Without --pr, the open PRs each account wrote in the configured repositories.
 const dryRunTargets = (
   github: GitHub,
   config: WatchConfig,
@@ -118,6 +117,7 @@ const dryRunTargets = (
       refs.push(ref);
     }
     if (urls.length > 0) return Result.ok(refs);
+    // Without --pr, the open PRs each account wrote in the configured repositories.
 
     for (const [repo, { account }] of Object.entries(config.repositories))
       refs.push(...(yield* Result.await(github.openPulls(account, repo))));
@@ -182,7 +182,7 @@ const ignoredOf = (verdict: Verdict) =>
       ]
     : [];
 
-// Releasing takes the halted message as delivered, since the owner checked the app and it must never be sent again.
+// Lets a halted PR's watch go on, taking its halted message as delivered.
 export const release = (root: string, url: string) =>
   Result.gen(async function* () {
     const ref = githubPr(url);
@@ -196,6 +196,7 @@ export const release = (root: string, url: string) =>
 
     const state = yield* Result.await(loadWatchState(root, link));
     if (state.status !== "halted") return refuse(`${ref.url} is not halted`);
+    // The owner checked the app, so the halted message must never be sent again.
 
     yield* Result.await(
       saveWatchState(root, link, {
@@ -211,7 +212,7 @@ export const release = (root: string, url: string) =>
     return Result.ok<Fields>({ released: ref.url, worker: link.worker });
   });
 
-// What each linked PR's watch is doing, read from the records alone, so it works whether or not a watch runs.
+// What each linked PR's watch is doing, read from the records alone whether or not a watch runs.
 export const status = (root: string) =>
   Result.gen(async function* () {
     const prs: Fields[] = [];
