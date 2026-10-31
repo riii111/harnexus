@@ -1,9 +1,9 @@
 import { Writable } from "node:stream";
 
-// The writer on the other side may split a message across writes, so an injected line waits for a line boundary.
-// The tap sees every byte the target is given, relayed and injected alike, in the order the target gets them.
+// A stream into target that also takes whole lines injected between the relayed ones.
 export const createLineInjector = (
   target: Writable,
+  // Sees every byte the target is given, relayed and injected alike, in the order the target gets them.
   tap: (bytes: Uint8Array) => void = () => {},
 ) => {
   let atBoundary = true;
@@ -56,9 +56,9 @@ export const createLineInjector = (
   });
   return {
     stream,
-    // False means the line was never handed to the target.
     inject: (line: string) => {
       if (broken || target.writableEnded) return false;
+      // The writer on the other side may split a message across writes, so an injected line waits for a line boundary.
       if (atBoundary) write(line);
       else pending.push(line);
       return true;

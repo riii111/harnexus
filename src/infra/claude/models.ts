@@ -24,14 +24,14 @@ export type EffortSettings = Pick<
   "effortLevel" | "maxEffortLevel" | "modelSettings"
 >;
 
-// Ids are SDK model names, whose "claude-" prefix keeps them apart from Codex model ids, so a thread on a model Claude Code no longer lists is still a Claude thread.
 export const isClaudeModel = (model: unknown): model is string =>
+  // Ids are SDK model names, whose "claude-" prefix keeps them apart from Codex model ids, so a thread on a model Claude Code no longer lists is still a Claude thread.
   typeof model === "string" && model.startsWith(CLAUDE_PREFIX);
 
 export const isClaudeEffort = (effort: unknown): effort is EffortLevel =>
   (EFFORT_ORDER as readonly unknown[]).includes(effort);
 
-// The models Claude Code lists replace the built-in ones once read; a built-in model it no longer lists stays for the threads already on it.
+// The Claude models the app is offered: the built-in ones until Claude Code lists its own.
 export const createModelCatalog = () => {
   let listed: readonly ClaudeModel[] | null = null;
   return {
@@ -46,31 +46,33 @@ export const createModelCatalog = () => {
         ? { offered: BUILT_IN_MODELS, retired: [] }
         : {
             offered: listed,
+            // A built-in model Claude Code no longer lists stays for the threads already on it.
             retired: BUILT_IN_MODELS.filter(
               ({ id }) => !listed?.some((model) => model.id === id),
             ),
           },
-    // A model neither list names, such as one only Claude Code's unread list has, is given every level, so a saved pick is not lost; the SDK ran xhigh as high on Opus 4.6 and ignored a level on Haiku 4.5 (SDK 0.3.284).
     effortsOf: (model: string): readonly EffortLevel[] =>
       (
         listed?.find(({ id }) => id === model) ??
         BUILT_IN_MODELS.find(({ id }) => id === model)
-      )?.efforts ?? EFFORT_ORDER,
+      )?.efforts ??
+      // A model neither list names, such as one only Claude Code's unread list has, is given every level, so a saved pick is not lost; the SDK ran xhigh as high on Opus 4.6 and ignored a level on Haiku 4.5 (SDK 0.3.284).
+      EFFORT_ORDER,
   };
 };
 
-// The SDK gives no release date, so the version in the name stands in for it across families; a tie keeps the given order and a name without a version goes last.
 const newestFirst = (models: readonly ClaudeModel[]): ClaudeModel[] =>
+  // The SDK gives no release date, so the version in the name stands in for it across families; a tie keeps the given order and a name without a version goes last.
   models
     .map((model) => ({ model, version: versionOf(model.displayName) }))
     .sort((a, b) => compareVersions(b.version, a.version))
     .map(({ model }) => model);
 
-// An alias such as sonnet is pinned to the model it resolves to now, while an explicit id keeps a suffix such as [1m] that picks the context window.
 export const modelsFromSdk = (infos: readonly ModelInfo[]): ClaudeModel[] => {
   const models: ClaudeModel[] = [];
   for (const info of infos) {
     if (info.value === DEFAULT_ALIAS) continue;
+    // An alias such as sonnet is pinned to the model it resolves to now, while an explicit id keeps a suffix such as [1m] that picks the context window.
     const id = isClaudeModel(info.value) ? info.value : info.resolvedModel;
     if (!isClaudeModel(id) || models.some((model) => model.id === id)) continue;
     models.push({
@@ -111,8 +113,8 @@ export const effortRule =
     return runnable[runnable.length - 1] ?? ascending[0] ?? null;
   };
 
-// An alias's displayName is a family such as Opus, and its version comes before the description's separator; a description that does not start with the name, such as an upgrade hint, is not a name.
 const versionedName = (info: ModelInfo) => {
+  // An alias's displayName is a family such as Opus, and its version comes before the description's separator; a description that does not start with the name, such as an upgrade hint, is not a name.
   const [name] = info.description.split(DESCRIPTION_SEPARATOR);
   return info.description.includes(DESCRIPTION_SEPARATOR) &&
     name?.startsWith(info.displayName)
@@ -122,7 +124,6 @@ const versionedName = (info: ModelInfo) => {
 
 const rank = (effort: EffortLevel) => EFFORT_ORDER.indexOf(effort);
 
-// A number standing alone in a name such as "Claude Opus 4.6 (1M)", so a context size such as 1M is not read as a version.
 const versionOf = (displayName: string): readonly number[] | null => {
   const version = VERSION.exec(displayName)?.[1];
   return version === undefined ? null : version.split(".").map(Number);
@@ -140,6 +141,7 @@ const compareVersions = (
   return 0;
 };
 
+// A number standing alone in a name such as "Claude Opus 4.6 (1M)", so a context size such as 1M is not read as a version.
 const VERSION = /(?:^|\s)(\d+(?:\.\d+)*)(?=\s|$)/;
 
 const CLAUDE_PREFIX = "claude-";

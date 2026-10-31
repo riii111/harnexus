@@ -1,7 +1,7 @@
 // The server numbers its own requests to the app, so the bridge's string ids with this prefix never collide with them.
 const ID_PREFIX = "harnexus-";
 
-// The app keeps a prompt open until told its request is resolved, so every settled request is announced, answered or not.
+// The bridge's own requests to the app, such as approval prompts, and their answers.
 export const createAppRequests = ({
   send,
   now,
@@ -30,6 +30,7 @@ export const createAppRequests = ({
       const settle = (answer: unknown) => {
         if (!pending.delete(id)) return;
         signal.removeEventListener("abort", abort);
+        // The app keeps a prompt open until told its request is resolved, so every settled request is announced, answered or not.
         send({
           method: "serverRequest/resolved",
           params: { threadId, requestId: id },
@@ -43,10 +44,10 @@ export const createAppRequests = ({
       send({ id, method, params });
     });
 
-  // A late answer to a request that already settled is still consumed, since the server never issued that id.
   const answer = (response: Record<string, unknown>) => {
     const { id } = response;
     if (typeof id !== "string" || !id.startsWith(ID_PREFIX)) return false;
+    // A late answer to a request that already settled is still consumed, since the server never issued that id.
     pending.get(id)?.settle("result" in response ? response.result : null);
     return true;
   };

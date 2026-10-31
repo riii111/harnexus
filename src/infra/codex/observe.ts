@@ -70,7 +70,7 @@ type SchemaShape =
 
 const DEFAULT_MAX_LINE_BYTES = 8 * 1024 * 1024;
 
-// The relayed bytes are never altered; this only reads a copy of each chunk.
+// Records what the relayed messages look like, without altering the relayed bytes.
 export const createObserver = (
   record: (event: ObservationEvent) => void,
   {
@@ -204,8 +204,6 @@ export const serializeObservationEvent = (entry: ObservationEvent) => {
   }
 };
 
-// Every message of a method is parsed anyway, but walking it again costs time before each line is relayed, so after the first few of a method and variant only one in a hundred is walked; recorded sessions, which nothing waits on, are walked whole.
-// A shape is recorded the first time this bridge sees it, and the count of recorded shapes is capped, so a stream of deltas cannot fill the log.
 const createShapeSampler = (every: boolean) => {
   const seen = new Set<string>();
   const counts = new Map<string, number>();
@@ -216,11 +214,14 @@ const createShapeSampler = (every: boolean) => {
       method: string | null,
       message: JsonObject,
     ) => {
+      // The count of recorded shapes is capped, so a stream of deltas cannot fill the log.
       if (seen.size >= MAX_SHAPES) return null;
+      // Each variant is sampled on its own, so a rare one is still walked when it first comes.
       const methodKey = `${direction}:${kind}:${method}:${variantOf(message)}`;
       const count = (counts.get(methodKey) ?? 0) + 1;
       if (counts.size < MAX_SHAPES || counts.has(methodKey))
         counts.set(methodKey, count);
+      // Walking a message again costs time before each line is relayed, so after the first few of a method and variant only one in a hundred is walked; recorded sessions, which nothing waits on, are walked whole.
       if (
         !every &&
         count > SHAPE_EVERY_FIRST &&
@@ -236,7 +237,7 @@ const createShapeSampler = (every: boolean) => {
   };
 };
 
-// Item and event notifications carry many variants under one method, so each variant is sampled on its own and a rare one is still walked when it first comes.
+// The variant of an item or event notification, which carries many under one method.
 const variantOf = (message: JsonObject) => {
   const params = asObject(message.params);
   const type =
@@ -248,7 +249,7 @@ const MAX_SHAPES = 300;
 const SHAPE_EVERY_FIRST = 20;
 const SHAPE_EVERY_LATER = 100;
 
-// Responses carry only an id, so the method comes from the request sent the other way; the map is bounded because some requests are never answered.
+// The method each pending request asked for, looked up when its response, which carries only an id, arrives.
 const createRequestTracker = () => {
   const pending = new Map<string, string>();
   const key = (direction: Direction, id: RequestId) =>
@@ -260,6 +261,7 @@ const createRequestTracker = () => {
       method: string | null,
     ) => {
       if (id === null || method === null) return;
+      // Some requests are never answered, so the map is bounded.
       if (pending.size >= MAX_PENDING_REQUESTS) {
         const oldest = pending.keys().next();
         if (!oldest.done) pending.delete(oldest.value);
@@ -286,12 +288,12 @@ const classify = (message: JsonObject): MessageKind | null => {
   return null;
 };
 
-// Only the fields the app-server protocol defines for tool definitions are read, so a { name, inputSchema } inside arguments or other bodies is never recorded.
 const toolDefinitions = (
   kind: MessageKind,
   method: string | null,
   message: JsonObject,
 ): ToolDefinition[] => {
+  // Only the fields the app-server protocol defines for tool definitions are read, so a { name, inputSchema } inside arguments or other bodies is never recorded.
   if (kind === "request" && method === "thread/start") {
     const params = asObject(message.params);
     return dynamicTools(asArray(params?.dynamicTools), null, 0);
@@ -325,9 +327,9 @@ const mcpStartupStatus = (
   };
 };
 
-// Besides its fixed values, threadSource carries any feature name the client picks; only a plain lowercase word is kept, since a side chat may be told apart by that name, while a value with digits, case or separators could be a key or a path.
 const threadSource = (value: Json | undefined) => {
   if (typeof value !== "string") return null;
+  // Besides its fixed values, threadSource carries any feature name the client picks; only a plain lowercase word is kept, since a side chat may be told apart by that name, while a value with digits, case or separators could be a key or a path.
   return SOURCE_LABEL.test(value) ? value : REDACTED;
 };
 
@@ -362,9 +364,9 @@ const threadOpenShape = (
   return null;
 };
 
-// The protocol types the error as `string | null`.
 const startupFailure = (error: Json | undefined): McpStartup["failure"] => {
   if (error === undefined || error === null) return null;
+  // The protocol types the error as `string | null`.
   if (typeof error !== "string") return "other";
   if (error.includes("pipe closed")) return "pipe_closed";
   if (error.includes("did not provide CODEX_APP_TOOLS_PIPE_PATH")) {
@@ -373,17 +375,18 @@ const startupFailure = (error: Json | undefined): McpStartup["failure"] => {
   return "other";
 };
 
-// A namespace spec ({ name, tools: [...] }) prefixes its tools as "namespace.tool"; nesting beyond MAX_DEPTH is not followed, because observation runs before each chunk is relayed and must not overflow the stack.
 const dynamicTools = (
   specs: Json[],
   namespace: string | null,
   depth: number,
 ): ToolDefinition[] => {
+  // Observation runs before each chunk is relayed and must not overflow the stack, so nesting beyond MAX_DEPTH is not followed.
   if (depth > MAX_DEPTH) return [];
   return specs.flatMap((value) => {
     const spec = asObject(value);
     if (typeof spec?.name !== "string") return [];
     const name = namespace === null ? spec.name : `${namespace}.${spec.name}`;
+    // A namespace spec ({ name, tools: [...] }) prefixes its tools as "namespace.tool".
     if (Array.isArray(spec.tools)) {
       return dynamicTools(spec.tools, name, depth + 1);
     }
@@ -410,12 +413,12 @@ const toolDefinition = (
   inputSchema: sanitizeSchema(inputSchema ?? null, 0),
 });
 
-// Only structural keywords are kept: literal values (enum, const, default, examples) and free text (description, title, pattern) can carry arbitrary data even in a legitimate tool definition.
 const sanitizeSchema = (value: Json, depth: number): SchemaShape => {
   if (typeof value === "boolean") return value;
   if (!isObject(value) || depth > MAX_DEPTH) return REDACTED;
   const shape: { [key: string]: SchemaShape } = {};
   for (const [key, child] of Object.entries(value)) {
+    // Only structural keywords are kept: literal values (enum, const, default, examples) and free text (description, title, pattern) can carry arbitrary data even in a legitimate tool definition.
     const kept = sanitizeKeyword(key, child, depth + 1);
     if (kept !== undefined) shape[key] = kept;
   }

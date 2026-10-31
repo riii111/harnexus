@@ -16,8 +16,8 @@ class ClaudeSettingsOverrideAuth extends TaggedError(
 
 export type Env = Record<string, string | undefined>;
 
-// Removing these keeps Claude Code on the claude.ai login; checkSubscription still rejects a key the CLI finds elsewhere, such as an apiKeyHelper.
 export const withoutApiBilling = (env: Env): Env => {
+  // Removing these keeps Claude Code on the claude.ai login; checkSubscription still rejects a key the CLI finds elsewhere, such as an apiKeyHelper.
   const kept = Object.fromEntries(
     Object.entries(env).filter(
       ([name]) => !API_BILLING_ENV.has(name) && name !== CUSTOM_HEADERS_ENV,
@@ -27,8 +27,8 @@ export const withoutApiBilling = (env: Env): Env => {
   return headers === "" ? kept : { ...kept, [CUSTOM_HEADERS_ENV]: headers };
 };
 
-// The CLI copies the settings env into its own environment after launch, so a billing variable or an auth header found there is refused rather than removed; accountInfo does not report a header that replaces the OAuth token.
 export const checkSettingsEnv = (env: Record<string, string>) => {
+  // The CLI copies the settings env into its own environment after launch, so a billing variable or an auth header found there is refused rather than removed; accountInfo does not report a header that replaces the OAuth token.
   const names = Object.keys(env).filter(
     (name) =>
       API_BILLING_ENV.has(name) ||
@@ -43,12 +43,13 @@ export const checkSettingsEnv = (env: Record<string, string>) => {
   );
 };
 
-// The CLI reports a subscription even while an API key is in use, so the key source decides who is billed; a setup-token login reports its token source instead of the subscription.
 export const checkSubscription = (account: AccountInfo) => {
   const apiKeySource = account.apiKeySource ?? "none";
+  // A setup-token login reports its token source instead of the subscription.
   const subscribed =
     (account.subscriptionType ?? "") !== "" ||
     SUBSCRIPTION_TOKEN_SOURCES.has(account.tokenSource ?? "");
+  // The CLI reports a subscription even while an API key is in use, so the key source decides who is billed.
   if (
     account.apiProvider === "firstParty" &&
     subscribed &&
@@ -75,8 +76,9 @@ const withoutAuthHeaders = (headers: string) =>
 const hasAuthHeader = (headers: string) =>
   headerLines(headers).some(isAuthHeader);
 
-// Split the way the CLI reads the variable: one "Name: value" per line.
-const headerLines = (headers: string) => headers.split(/\n|\r\n/);
+const headerLines = (headers: string) =>
+  // Split the way the CLI reads the variable: one "Name: value" per line.
+  headers.split(/\n|\r\n/);
 
 const isAuthHeader = (line: string) => AUTH_HEADERS.has(headerName(line));
 

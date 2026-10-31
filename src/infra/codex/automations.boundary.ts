@@ -26,7 +26,7 @@ type SavedAutomation = {
   prompt: string | null;
 };
 
-// The app's automation_update answers never say whose thread an automation wakes, so the file the app saves for it is the only record; null when it is missing.
+// The automation the app saved for an id, which is the only record of whose thread it wakes.
 export const readAutomation = (codexHome: string, id: string) => {
   const path = join(codexHome, "automations", id, "automation.toml");
   return Result.gen(async function* () {
@@ -56,8 +56,9 @@ const stringField = (parsed: unknown, key: string) =>
 
 export type CronRecord = ReturnType<typeof openCronRecord>;
 
-// The ids of the cron automations Claude threads created through the bridge, kept beside the thread store; a cron run starts a new thread each time, so the record belongs to no single thread.
+// The ids of the cron automations Claude threads created through the bridge.
 export const openCronRecord = (path: string) => {
+  // One record beside the thread store rather than one per thread, since a cron run starts a new thread each time.
   const queue = createSerialQueue();
 
   const read = () =>

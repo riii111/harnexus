@@ -2,7 +2,6 @@ import { Transform } from "node:stream";
 
 type Rewritten = Buffer | null;
 
-// A line whose rewrite is still pending holds back every later line, so the output keeps the input's order.
 export const createLineRewriter = (
   rewrite: (line: Buffer) => Rewritten | Promise<Rewritten>,
 ) => {
@@ -22,6 +21,7 @@ export const createLineRewriter = (
       const pending = pushLines(splitLines(bytes), rewrite, (kept) =>
         this.push(kept),
       );
+      // A line whose rewrite is still pending holds back every later line, so the output keeps the input's order.
       if (pending === null) callback();
       // A rewrite that fails breaks the stream rather than stalling every later line.
       else
@@ -37,7 +37,6 @@ export const createLineRewriter = (
   });
 };
 
-// Null means every line was rewritten at once, so a chunk without a pending line still passes in the same tick.
 const pushLines = (
   lines: Buffer[],
   rewrite: (line: Buffer) => Rewritten | Promise<Rewritten>,
@@ -56,6 +55,7 @@ const pushLines = (
     if (rewritten !== null) kept.push(rewritten);
   }
   if (kept.length > 0) push(Buffer.concat(kept));
+  // Every line was rewritten at once, so a chunk without a pending line still passes in the same tick.
   return null;
 };
 

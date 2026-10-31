@@ -1,3 +1,4 @@
+// Only types come from the SDK, so the SDK itself is loaded only when a Claude session starts.
 import type {
   SdkMcpToolDefinition,
   tool,
@@ -5,7 +6,7 @@ import type {
 
 export type ToolResult = Awaited<ReturnType<SdkMcpToolDefinition["handler"]>>;
 
-// The definition the SDK's tool() builds, written out here so that the SDK itself is loaded only when a Claude session starts.
+// The definition the SDK's tool() builds, written out here.
 export const defineTool: typeof tool = (
   name,
   description,

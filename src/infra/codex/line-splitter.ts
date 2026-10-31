@@ -1,6 +1,5 @@
 type LineEvent = { kind: "line"; bytes: Uint8Array } | { kind: "oversized" };
 
-// A line over maxLineBytes is reported once and skipped up to its newline, so a huge message is never held in memory.
 export const createLineSplitter = (
   maxLineBytes: number,
   onLine: (event: LineEvent) => void,
@@ -26,6 +25,7 @@ export const createLineSplitter = (
       const newline = chunk.indexOf(NEWLINE, start);
       const end = newline === -1 ? chunk.length : newline;
       if (!skipping) {
+        // A line over maxLineBytes is reported once and skipped up to its newline, so a huge message is never held in memory.
         if (pendingBytes + (end - start) > maxLineBytes) {
           skipping = true;
           reset();

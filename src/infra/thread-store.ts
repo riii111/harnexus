@@ -113,7 +113,6 @@ class StateFileCorrupt extends TaggedError("StateFileCorrupt")<{
 
 export type ThreadStore = ReturnType<typeof createThreadStore>;
 
-// A write is guarded by a marker file that exists from before the operation until its outcome is known, so a restart finds every unfinished write as outcome unknown.
 export const openThreadStore = (
   path: string,
   files: Partial<StoreFiles> = {},
@@ -123,6 +122,7 @@ export const openThreadStore = (
     const mappings = text === null ? [] : yield* parseStateFile(path, text);
     const markerDirectory = `${path}.writes`;
     yield* Result.await(prepareDirectory(markerDirectory));
+    // A write is guarded by a marker file that exists from before the operation until its outcome is known, so a restart finds every unfinished write as outcome unknown.
     const markerNames = yield* Result.await(listFileNames(markerDirectory));
     const unknown = markerNames.flatMap(decodeMarkerName);
     return Result.ok(
@@ -171,13 +171,12 @@ const createThreadStore = (
     );
   };
 
-  // Every change to mappings happens inside the file queue, so a snapshot being written is never overtaken by another change.
-  // The change is kept in memory only after the file holds it, so a write that fails before the rename leaves both unchanged.
   const persistThenCommit = <E>(
     change: (
       current: ReadonlyMap<string, ThreadMapping>,
     ) => Result<ThreadMapping, E>,
   ) =>
+    // Every change to mappings happens inside the file queue, so a snapshot being written is never overtaken by another change.
     fileQueue.run(path, () =>
       Result.gen(async function* () {
         const changed = yield* change(mappings);
@@ -192,6 +191,7 @@ const createThreadStore = (
           );
         }
         const next = new Map(mappings).set(threadId, changed);
+        // The change is kept in memory only after the file holds it, so a write that fails before the rename leaves both unchanged.
         yield* Result.await(save(next));
         mappings = next;
         return Result.ok(changed);
@@ -209,9 +209,9 @@ const createThreadStore = (
         : Result.ok(change(mapping));
     });
 
-  // An unlinked marker whose directory sync failed may come back after a crash, which only reloads the thread as outcome unknown, so it counts as removed.
   const clearMarker = async (threadId: string) => {
     const removed = await files.removeMarker(markerPath(threadId));
+    // An unlinked marker whose directory sync failed may come back after a crash, which only reloads the thread as outcome unknown, so it counts as removed.
     if (removed.isErr() && removed.error._tag === "FileRemoveFailed") {
       runStates.set(threadId, "outcomeUnknown");
       return Result.err(
@@ -272,8 +272,8 @@ const createThreadStore = (
 
     sessionOwner: (sessionId: string) => ownerOfSession(mappings, sessionId),
 
-    // The check runs in the file queue with the write, so of two threads picking one conversation at once only the first gets it.
     bindSession: (threadId: string, sessionId: string) =>
+      // The check runs in the file queue with the write, so of two threads picking one conversation at once only the first gets it.
       persistThenCommit<ThreadNotFound | SessionTaken>((current) => {
         const mapping = current.get(threadId);
         if (mapping === undefined) return Result.err(notFound(threadId));
@@ -296,8 +296,8 @@ const createThreadStore = (
         .filter((mapping) => mapping.cloud !== undefined)
         .map((mapping) => mapping.threadId),
 
-    // Only a thread with no conversation takes a Cloud session, and the check runs in the file queue with the write, so of two threads linking one session at once only the first gets it.
     linkCloud: (threadId: string, cloud: CloudLink, copySessionId: string) =>
+      // The check runs in the file queue with the write, so of two threads linking one session at once only the first gets it.
       persistThenCommit<
         ThreadNotFound | ThreadHasConversation | CloudSessionTaken
       >((current) => {
@@ -322,7 +322,6 @@ const createThreadStore = (
             );
       }),
 
-    // A new copy replaces the one the thread read, together with how far the app was shown, so a restart resumes from the same point.
     setCloudCopy: (
       threadId: string,
       copySessionId: string,
@@ -333,6 +332,7 @@ const createThreadStore = (
           ? mapping
           : {
               ...withSession(mapping, copySessionId),
+              // Saved with the copy, so a restart resumes from the same point.
               cloud: { ...mapping.cloud, shown },
             },
       ),
@@ -349,12 +349,13 @@ const createThreadStore = (
             },
       ),
 
-    // Clearing the unknown state is left to an explicit user action, because re-running could duplicate a write that already landed.
+    // Clears a thread's unknown outcome on the user's explicit action.
     resolveOutcomeUnknown: (threadId: string) =>
       threadQueue.run(threadId, async () => {
         const record = get(threadId);
         if (record === undefined) return Result.err(notFound(threadId));
         if (record.runState !== "outcomeUnknown") return Result.ok();
+        // Only the user clears it, since re-running could duplicate a write that already landed.
         return clearMarker(threadId);
       }),
 
@@ -442,14 +443,15 @@ const notFound = (threadId: string) =>
     message: `thread ${threadId} is not registered`,
   });
 
-// Thread IDs are hex-encoded so any ID becomes a safe file name, and other files such as leftovers are ignored.
 const encodeMarkerName = (threadId: string) =>
+  // Thread IDs are hex-encoded so any ID becomes a safe file name.
   `${Buffer.from(threadId, "utf8").toString("hex")}${MARKER_SUFFIX}`;
 
 const decodeMarkerName = (name: string) => {
   const hex = name.endsWith(MARKER_SUFFIX)
     ? name.slice(0, -MARKER_SUFFIX.length)
     : "";
+  // Other files, such as leftovers, are ignored.
   return /^(?:[0-9a-f]{2})+$/.test(hex)
     ? [Buffer.from(hex, "hex").toString("utf8")]
     : [];

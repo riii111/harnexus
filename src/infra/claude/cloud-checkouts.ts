@@ -17,7 +17,6 @@ class CheckoutFailed extends TaggedError("CheckoutFailed")<{
   message: string;
 }> {}
 
-// repository is owner/name on GitHub.
 export const createCloudCheckouts = (
   root: string,
   env: Record<string, string | undefined>,
@@ -58,7 +57,6 @@ export const createCloudCheckouts = (
   };
 };
 
-// Every step leaves an existing checkout as it is, so a folder left by an earlier bridge is used again.
 const prepareCheckout = async (
   dir: string,
   repository: string,
@@ -66,6 +64,7 @@ const prepareCheckout = async (
 ): Promise<Result<void, CheckoutFailed>> => {
   const failed = (message: string) =>
     Result.err(new CheckoutFailed({ message }));
+  // Every step leaves an existing checkout as it is, so a folder left by an earlier bridge is used again.
   const ready = await prepareDirectory(dir);
   if (ready.isErr()) return failed(ready.error.message);
   // A branch is fetched without the contents of its history, which the copy never reads.
@@ -82,16 +81,18 @@ const prepareCheckout = async (
   return Result.ok();
 };
 
-// A checkout holds whatever a branch the session named put there, and teleport refuses one that is not clean, so each copy finds it as its last commit left it; a checkout with no commit has nothing to reset.
+// Returns the checkout to its last commit.
 const cleanCheckout = async (
   dir: string,
   env: Record<string, string | undefined>,
 ): Promise<Result<void, CheckoutFailed>> => {
+  // A branch the session named may have left anything there, and teleport refuses a checkout that is not clean.
   const head = await runCommand(
     "git",
     ["-C", dir, "rev-parse", "-q", "--verify", "HEAD"],
     env,
   );
+  // A checkout with no commit has nothing to reset.
   if (head.isOk() && head.value.status === 0) {
     const reset = await git(dir, ["reset", "-q", "--hard"], env);
     if (reset.isErr()) return reset;

@@ -33,7 +33,7 @@ class CronNotIdentified extends TaggedError("CronNotIdentified")<{
   message: string;
 }> {}
 
-// A heartbeat is reachable only when it wakes this thread and a cron only when a Claude thread created it here, since the app changes whatever automation an id names and these calls skip its approval.
+// The automation_update tool for a Claude thread, limited to the automations it may reach.
 export const createAutomationTool = ({
   callerThreadId,
   codexHome,
@@ -141,7 +141,6 @@ export const createAutomationTool = ({
     );
   };
 
-  // The app's answer does not reliably name the automation it made, so the new one is found as the cron with the same name and prompt that was not there before the call.
   const createCron = async (
     fields: Record<string, unknown>,
     queuedIn: number | null,
@@ -163,6 +162,7 @@ export const createAutomationTool = ({
           return null;
         },
         onSuccess: async (result) => {
+          // The app's answer does not reliably name the automation it made, so the new one is found as the cron with the same name and prompt that was not there before the call.
           const created = await findCreatedCron(existing, fields);
           const recorded = created.isOk()
             ? await cronRecord.add(created.value)
@@ -223,6 +223,7 @@ export const createAutomationTool = ({
     >
   > => {
     const saved = await readAutomation(codexHome, id);
+    // The app changes whatever automation an id names and these calls skip its approval, so a heartbeat is reachable only when it wakes this thread and a cron only when a Claude thread created it here.
     if (saved.isErr()) {
       return Result.err(
         new AutomationUnreadable({

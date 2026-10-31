@@ -117,9 +117,9 @@ export class ClaudeRecordUnreadable extends TaggedError(
 
 export type { ClaudeStreamFailed };
 
-// The SDK takes about 50 ms to load, so it is imported when Claude is first needed rather than when the bridge starts, which would hold back the app's connection.
 export const loadClaudeSdk = () =>
   Result.tryPromise({
+    // The SDK takes about 50 ms to load, so it is imported when Claude is first needed rather than when the bridge starts, which would hold back the app's connection.
     try: () => import("@anthropic-ai/claude-agent-sdk"),
     catch: (cause) =>
       new ClaudeSdkUnavailable({
@@ -146,13 +146,13 @@ export const openToolServers = (
       new ClaudeStartFailed({ cause, message: "cannot start Claude" }),
   });
 
-// resolveSettings merges the same files as the CLI without starting it, but skips an admin policyHelper.
 export const readSettings = (
   resolve: ResolveSettings,
   cwd: string,
   settingSources: SettingSource[],
 ) =>
   Result.tryPromise({
+    // resolveSettings merges the same files as the CLI without starting it, but skips an admin policyHelper.
     try: async () => (await resolve({ cwd, settingSources })).effective,
     catch: (cause) =>
       new ClaudeSettingsUnavailable({
@@ -172,9 +172,9 @@ export const openQuery = (
       new ClaudeStartFailed({ cause, message: "cannot start Claude" }),
   });
 
-// Without a limit a session waits for the account as long as Claude Code starts; a caller outside a session gives a limit so a stuck start cannot hold it.
 export const readAccount = (
   query: ClaudeQuery,
+  // Without a limit a session waits for the account as long as Claude Code starts; a caller outside a session gives a limit so a stuck start cannot hold it.
   timeoutMs?: number,
   signal?: AbortSignal,
 ) =>
@@ -230,9 +230,9 @@ export const setQueryPermissionMode = (
       }),
   });
 
-// A Claude Code that never answers would otherwise keep its process running for the whole bridge.
 export const readSupportedModels = (query: ClaudeQuery, timeoutMs: number) =>
   Result.tryPromise({
+    // A Claude Code that never answers would otherwise keep its process running for the whole bridge.
     try: () => withinTime(query.supportedModels(), timeoutMs),
     catch: (cause) =>
       new ClaudeModelsUnavailable({
@@ -241,9 +241,9 @@ export const readSupportedModels = (query: ClaudeQuery, timeoutMs: number) =>
       }),
   });
 
-// The flag layer holds the level for this session only, so the user's settings files keep their own effortLevel.
 export const setQueryEffort = (query: ClaudeQuery, effort: EffortLevel) =>
   Result.tryPromise({
+    // The flag layer holds the level for this session only, so the user's settings files keep their own effortLevel.
     try: () => query.applyFlagSettings({ effortLevel: effort }),
     catch: (cause) =>
       new ClaudeEffortFailed({
@@ -252,13 +252,13 @@ export const setQueryEffort = (query: ClaudeQuery, effort: EffortLevel) =>
       }),
   });
 
-// The SDK also answers a missing or unreadable record with no messages, so an error here covers only a read that fails outright.
 export const readSessionMessages = (
   read: GetSessionMessages,
   sessionId: string,
 ) =>
   Result.tryPromise({
     try: () => read(sessionId),
+    // The SDK also answers a missing or unreadable record with no messages, so an error here covers only a read that fails outright.
     catch: (cause) =>
       new ClaudeRecordUnreadable({
         cause,
@@ -280,10 +280,10 @@ export const readSubagentMessages = (
       }),
   });
 
-// Closing kills the Claude process, and a failure there leaves nothing the caller can do.
 export const closeQuery = (query: ClaudeQuery) => {
   try {
     query.close();
+    // Closing kills the Claude process, and a failure there leaves nothing the caller can do.
   } catch {}
 };
 
