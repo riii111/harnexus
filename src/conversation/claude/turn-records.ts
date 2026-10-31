@@ -1,5 +1,6 @@
-// Kept while the bridge runs, since a revert or a history page may name any turn the app was shown; only a thread the server archived or deleted lets them go.
+// The record each turn the app was shown started at.
 export const createTurnRecords = () => {
+  // Kept while the bridge runs, since a revert or a history page may name any turn the app was shown; only a thread the server archived or deleted lets them go.
   const records = new Map<string, Map<string, string>>();
 
   const note = (threadId: string, turnId: string, record: string) => {

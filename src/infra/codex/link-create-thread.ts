@@ -66,9 +66,9 @@ export const createThreadTool = ({
     | "markUnknownWrite"
   >;
 } & ThreadWaits) => {
-  // The model path only needs the thread's id, while a checked create reports the first turn it saw and whether the thread may exist unseen.
   const createThread = async (
     args: CreateArgs,
+    // A checked create reports the first turn it saw and whether the thread may exist unseen, while the model's create only needs the thread's id.
     checked: boolean,
   ): Promise<CreateAttempt> => {
     const queuedIn = calls.currentGeneration();
@@ -124,7 +124,6 @@ export const createThreadTool = ({
     };
   };
 
-  // A created thread that cannot be named is out of reach but real, so it is treated like an unknown outcome to prevent a duplicate.
   const confirmCreated = async (
     answer: ToolResult,
     watch: CreateWatch,
@@ -144,6 +143,7 @@ export const createThreadTool = ({
           });
     watch.outcome = outcome;
     const threadId = outcome?.threadId ?? answeredThreadId(answer);
+    // A created thread that cannot be named is out of reach but real, so it is treated like an unknown outcome to prevent a duplicate.
     if (threadId === null) {
       calls.markUnknownWrite("create_thread");
       return failure(
@@ -173,11 +173,11 @@ export const createThreadTool = ({
     } satisfies ToolResult;
   };
 
-  // Keep the default Codex model for existing review callers; a Claude worker is selected explicitly.
   const childModel = async (
     requested: string | undefined,
   ): Promise<Result<string, ModelListUnreadable | NoDefaultModel>> => {
     if (requested !== undefined) return Result.ok(requested);
+    // Existing review callers rely on the default Codex model; a Claude worker is selected explicitly.
     let cursor: string | null = null;
     for (let page = 0; page < MAX_MODEL_PAGES; page += 1) {
       const listed = await request(
@@ -250,7 +250,7 @@ const modelRefusal = (error: ModelListUnreadable | NoDefaultModel) =>
       "The Codex app lists no default model; give create_thread a Codex model. Nothing was created.",
   });
 
-// The server's own model/list, which never includes the Claude models the bridge adds for the app.
+// A page of the server's own model/list, which never includes the Claude models the bridge adds for the app.
 const readModelPage = (value: unknown) => {
   const page = isObject(value) ? value : {};
   const data = Array.isArray(page.data) ? page.data : [];

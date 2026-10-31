@@ -3,10 +3,10 @@ import type { Answer, Workers } from "../prwatch/worker.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { type Fields, isObject } from "../runtime/object.ts";
 
-// The PR watch's workers are Codex chats linked to a PR; the watch reaches them through the app.
-// Every message comes from the one chat registered with watch --sender, so the watch depends on no other command's records.
+// The PR watch's workers, Codex chats linked to a PR, reached through the app.
 export const codexWorkers = (
   callApp: AppCall,
+  // Every message comes from the one chat registered with watch --sender, so the watch depends on no other command's records.
   registered: () => Promise<Result<string | null, { message: string }>>,
 ): Workers => ({
   senderOf: async (worker) => senderFor(await registered(), worker),
@@ -52,8 +52,7 @@ const answerOf = (turn: Turn): Answer => ({
   text: turn.answer,
 });
 
-// Why nothing can send to the worker, or the chat that sends to it; shared with the warning name --pr and watch --link print.
-// A thread cannot message itself, so the registered chat is never sent to from itself.
+// The chat that sends to the worker, or why nothing can; shared with the warning name --pr and watch --link print.
 export const senderFor = (
   registered: Result<string | null, { message: string }>,
   worker: string,
@@ -63,6 +62,7 @@ export const senderFor = (
       missing: `cannot read the registered sender: ${registered.error.message}`,
     };
   if (registered.value === null) return { missing: NO_SENDER };
+  // A thread cannot message itself, so the registered chat is never sent to from itself.
   if (registered.value === worker)
     return {
       missing:
@@ -90,8 +90,7 @@ type Turn = {
   answer: string;
 };
 
-// Null means the app could not be asked, as while it is closed or the Mac sleeps; the next cycle asks again.
-// While an answer to a message sent at sentAt is awaited, older pages are read until they reach it, so later talk in the chat cannot hide the answer.
+// A worker's thread, or null when the app could not be asked, as while it is closed or the Mac sleeps; the next cycle asks again.
 const readThread = async (
   callApp: AppCall,
   caller: string,
@@ -104,6 +103,7 @@ const readThread = async (
   const turns = [...first.turns];
   const after = sentAt === null ? null : turnsAfter(sentAt);
   let cursor = first.nextCursor;
+  // While an answer is awaited, older pages are read until they reach when the message was sent, so later talk in the chat cannot hide the answer.
   for (let page = 1; page < MAX_PAGES; page++) {
     const oldest = turns.at(-1)?.startedAt ?? null;
     if (after === null || cursor === null || oldest === null || oldest < after)
@@ -194,9 +194,9 @@ const turnOf = (turn: Record<string, unknown>): Turn => {
   };
 };
 
-// A Claude thread shows a message from another thread as a user message carrying the delegation, and a Codex thread as the output of the call that sent it.
 const delegationOf = (first: unknown) => {
   if (!isObject(first)) return null;
+  // A Claude thread shows a message from another thread as a user message carrying the delegation, and a Codex thread as the output of the call that sent it.
 
   const carried = first.codexDelegation;
   if (
@@ -217,7 +217,6 @@ const delegationOf = (first: unknown) => {
   return null;
 };
 
-// The app writes the delegation as escaped XML, which a cut output may end inside.
 const parseDelegation = (text: unknown) => {
   if (
     typeof text !== "string" ||
@@ -228,6 +227,7 @@ const parseDelegation = (text: unknown) => {
   const source = /<source_thread_id>\s*([^<\s]+)\s*<\/source_thread_id>/.exec(
     text,
   )?.[1];
+  // A cut output may end inside the escaped XML the app writes.
   const input = /<input>([\s\S]*?)(?:<\/input>|$)/.exec(text)?.[1];
   return {
     source: source ?? "",
@@ -274,26 +274,29 @@ const busyReason = (view: { active: boolean; turns: Turn[] }, now: Date) => {
 // A worker the owner just talked to may still be in that conversation, so a message waits this long after the owner's turn.
 const OWNER_GRACE_MS = 5 * 60_000;
 
-// The turn our message started: sent from our thread with our text, no earlier than we sent it. The read lists turns newest first.
+// The turn our message started: sent from our thread with our text, no earlier than we sent it.
 const answerTo = (
   turns: readonly Turn[],
   sent: { at: string; sender: string; prompt: string },
 ) => {
   const after = turnsAfter(sent.at);
-  return turns
-    .filter(
-      (turn) =>
-        turn.delegation !== null &&
-        turn.delegation.source === sent.sender &&
-        isPromptOf(turn.delegation.input, sent.prompt) &&
-        turn.startedAt !== null &&
-        turn.startedAt >= after,
-    )
-    .at(-1);
+  return (
+    turns
+      .filter(
+        (turn) =>
+          turn.delegation !== null &&
+          turn.delegation.source === sent.sender &&
+          isPromptOf(turn.delegation.input, sent.prompt) &&
+          turn.startedAt !== null &&
+          turn.startedAt >= after,
+      )
+      // The read lists turns newest first.
+      .at(-1)
+  );
 };
 
-// A Codex thread's copy may be cut short, so a nonempty start of the prompt counts as the prompt.
 const isPromptOf = (input: string, prompt: string) =>
+  // A Codex thread's copy may be cut short, so a nonempty start of the prompt counts as the prompt.
   input.trim() !== "" && prompt.startsWith(input.trimEnd());
 
 const turnsAfter = (sentAt: string) =>

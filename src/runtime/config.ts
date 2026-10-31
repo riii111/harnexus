@@ -39,13 +39,13 @@ export const loadPermissionMode = (
 
 const LOG_PATH_ENV = "HARNEXUS_LOG_PATH";
 
-// Kept beside the thread store unless "off", since the app may discard the bridge's stderr and a log is what a report of a failure needs; only a path set here asks for every line.
 export const loadLogPath = (
   env: Record<string, string | undefined>,
   statePath: string,
 ) => {
   const path = env[LOG_PATH_ENV];
   if (path === "off") return Result.ok(null);
+  // The app may discard the bridge's stderr and a log is what a report of a failure needs, so the log is kept beside the thread store by default; only a path set here asks for every line.
   if (path === undefined || path === "") {
     return Result.ok({
       path: join(dirname(statePath), "bridge.log"),
@@ -97,10 +97,10 @@ export const loadShutdownGraceMs = (
 
 const UNVERIFIED_CODEX_ENV = "HARNEXUS_UNVERIFIED_CODEX";
 
-// The app bundles a new Codex CLI almost daily, so only "fallback" refuses an unverified one.
 export const loadUnverifiedCodexPolicy = (
   env: Record<string, string | undefined>,
 ): "run" | "fallback" =>
+  // The app bundles a new Codex CLI almost daily, so only "fallback" refuses an unverified one.
   env[UNVERIFIED_CODEX_ENV] === "fallback" ? "fallback" : "run";
 
 const CALL_SOCKET_ENV = "HARNEXUS_CALL_SOCKET";
@@ -129,24 +129,25 @@ const callSocketSetting = (
   return Result.ok({ kind: "path", path: value });
 };
 
-// Open beside the thread store unless "off", since harnexus-task sends through it; "off" closes it, as the socket lets any process of the user create and message threads in the app.
 export const loadCallSocketPath = (
   env: Record<string, string | undefined>,
   statePath: string,
 ) =>
   callSocketSetting(env).map((setting) => {
+    // The socket lets any process of the user create and message threads in the app, so "off" closes it; it is open by default, since harnexus-task sends through it.
     if (setting.kind === "off") return null;
     return setting.kind === "path"
       ? setting.path
       : defaultCallSocketPath(statePath);
   });
 
-// A caller finds the socket at an absolute HARNEXUS_CALL_SOCKET, or where the bridge places it by default; a value the bridge refuses is refused here too.
+// Where a caller finds the bridge's call socket.
 export const loadCallerSocketPath = (
   env: Record<string, string | undefined>,
   home: () => string = homedir,
 ) =>
   Result.gen(function* () {
+    // Read through the bridge's own setting, so a value the bridge refuses is refused here too.
     const setting = yield* callSocketSetting(env);
     if (setting.kind === "path") return Result.ok(setting.path);
     const state = yield* loadStatePath(env, home);

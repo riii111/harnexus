@@ -7,7 +7,7 @@ class GitHubUnreachable extends TaggedError("GitHubUnreachable")<{
 
 export type GraphqlAnswer = { status: number; text: string };
 
-// Only reads are ever sent; the caller parses the body, so an answer GitHub sends with an error status still reaches it.
+// Sends a read-only query to GitHub's GraphQL API.
 export const postGraphql = (
   token: string,
   query: string,
@@ -26,6 +26,7 @@ export const postGraphql = (
         body: JSON.stringify({ query, variables }),
         signal: AbortSignal.timeout(timeoutMs),
       });
+      // The caller parses the body, so an answer GitHub sends with an error status still reaches it.
       return { status: response.status, text: await response.text() };
     },
     catch: (cause) =>

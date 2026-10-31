@@ -82,7 +82,6 @@ class NoClaudeModelsListed extends TaggedError("NoClaudeModelsListed")<{
 
 type ClaudeRuntime = ClaudeSdk & { env: Env };
 
-// The settings and the account are checked before any prompt is sent, so a login that would bill the API never starts a conversation.
 export const startClaudeSession = (
   settings: ClaudeSessionSettings,
   given?: ClaudeRuntime,
@@ -94,6 +93,7 @@ export const startClaudeSession = (
     const resolved = yield* Result.await(
       readSettings(runtime.resolveSettings, settings.cwd, SETTING_SOURCES),
     );
+    // The settings and the account are checked before any prompt is sent, so a login that would bill the API never starts a conversation.
     yield* checkSettingsEnv(resolved.env ?? {});
     if (signal?.aborted) return Result.err(sessionStartCancelled());
     const prompt = createPromptQueue();
@@ -133,13 +133,13 @@ export const startClaudeSession = (
     return Result.ok(createSession(claude, prompt));
   });
 
-// Project settings differ by thread, while the model list shows one default, so only the user's settings are read; a turn's level overrides a project's level but not a cap set by a project or an organization.
 export const loadEffortSettings = (
   cwd: string = process.cwd(),
   given?: Pick<ClaudeRuntime, "resolveSettings">,
 ) =>
   Result.gen(async function* () {
     const runtime = given ?? (yield* Result.await(processRuntime()));
+    // Project settings differ by thread, while the model list shows one default, so only the user's settings are read; a turn's level overrides a project's level but not a cap set by a project or an organization.
     return Result.ok(
       yield* Result.await(
         readSettings(runtime.resolveSettings, cwd, USER_SETTINGS),
@@ -147,12 +147,12 @@ export const loadEffortSettings = (
     );
   });
 
-// The models Claude Code runs depend on the Claude Code version the SDK bundles.
 export const loadClaudeModels = async (
   runtime?: ClaudeRuntime,
   cwd: string = process.cwd(),
   timeoutMs: number = MODELS_TIMEOUT_MS,
 ) =>
+  // The models Claude Code runs depend on the Claude Code version the SDK bundles, so Claude Code is asked.
   (
     await askClaude(runtime, cwd, (claude) =>
       readSupportedModels(claude, timeoutMs),
@@ -183,8 +183,6 @@ export const readClaudeLogin = async (
     ),
   );
 
-// Asking Claude Code about itself sends no prompt, so the process is closed as soon as it answers.
-// Only the user's settings are read, since the bridge's directory is no thread's project, and they pass the same check as a session so the answer is the subscription's.
 const askClaude = <T, E>(
   given: ClaudeRuntime | undefined,
   cwd: string,
@@ -192,6 +190,7 @@ const askClaude = <T, E>(
 ) =>
   Result.gen(async function* () {
     const runtime = given ?? (yield* Result.await(processRuntime()));
+    // Only the user's settings are read, since the bridge's directory is no thread's project, and they pass the same check as a session so the answer is the subscription's.
     const resolved = yield* Result.await(
       readSettings(runtime.resolveSettings, cwd, USER_SETTINGS),
     );
@@ -203,21 +202,21 @@ const askClaude = <T, E>(
       settingSources: USER_SETTINGS,
     });
     const answer = await ask(claude);
+    // Asking Claude Code about itself sends no prompt, so the process is closed as soon as it answers.
     prompt.end();
     closeQuery(claude);
     const value = yield* answer;
     return Result.ok(value);
   });
 
-// Claude keeps a conversation as <session id>.jsonl in a project folder under its config directory, which the user may delete or move to another machine.
-// The SDK's lookup reports an unreadable record as missing, so absence is concluded only when every project folder could be listed without finding the file.
+// Whether Claude still keeps the conversation's record, which the user may have deleted or moved.
 export const claudeSessionExists = async (
   sessionId: string,
   configDir: string = claudeConfigDir(process.env),
-) => (await findSessionFile(sessionId, configDir)).map((path) => path !== null);
+) =>
+  // The SDK's lookup reports an unreadable record as missing, so absence is concluded only when every project folder could be listed without finding the file.
+  (await findSessionFile(sessionId, configDir)).map((path) => path !== null);
 
-// Without a project folder the SDK searches every project, as the thread's directory may not be where the record was written.
-// getSessionMessages answers a record it cannot read with no messages, so an empty answer is checked against the record file itself.
 export const readClaudeSession = (
   sessionId: string,
   {
@@ -231,9 +230,11 @@ export const readClaudeSession = (
   Result.gen(async function* () {
     const reader =
       read ?? (yield* Result.await(loadClaudeSdk())).getSessionMessages;
+    // Without a project folder the SDK searches every project, as the thread's directory may not be where the record was written.
     const messages = yield* Result.await(
       readSessionMessages(reader, sessionId),
     );
+    // getSessionMessages answers a record it cannot read with no messages, so an empty answer is checked against the record file itself.
     if (messages.length === 0) {
       yield* Result.await(checkRecordReadable(sessionId, configDir));
     }
@@ -251,7 +252,7 @@ export type SubagentRecord = {
   messages: SessionMessage[];
 };
 
-// Claude keeps each subagent's messages in a folder beside the conversation's record, at any depth below it, each with a note of how it was started beside them; the agents are found as Claude's own reader finds them, and one whose note or messages cannot be read is left out.
+// The subagents Claude started in a conversation, found as Claude's own reader finds them.
 export const readClaudeSubagents = (
   sessionId: string,
   {
@@ -262,6 +263,7 @@ export const readClaudeSubagents = (
   Result.gen(async function* () {
     const path = yield* Result.await(findSessionFile(sessionId, configDir));
     if (path === null) return Result.ok<SubagentRecord[]>([]);
+    // Each subagent's messages sit in a folder beside the conversation's record, at any depth below it, with a note of how it was started beside them.
     const folder = join(path.slice(0, -RECORD_SUFFIX.length), "subagents");
     const files = yield* Result.await(listFilesDeepIfExists(folder));
     const reader =
@@ -296,6 +298,7 @@ const readAgent = async (
   );
   const note =
     text.isOk() && text.value !== null ? agentNote(text.value) : null;
+  // An agent whose note or messages cannot be read is left out.
   if (note === null) return null;
   const messages = await readSubagentMessages(read, sessionId, agentId);
   return messages.isOk()
@@ -325,11 +328,11 @@ const RECORD_SUFFIX = ".jsonl";
 // Claude's reader lists an agent by its messages' file, and reads the note kept beside it.
 const AGENT_RECORD = /^agent-(.+)\.jsonl$/;
 
-// A record that is absent is an empty conversation, but one that exists or may exist without being readable is a failure.
 const checkRecordReadable = async (sessionId: string, configDir: string) =>
   (
     await Result.gen(async function* () {
       const path = yield* Result.await(findSessionFile(sessionId, configDir));
+      // A record that is absent is an empty conversation, but one that exists or may exist without being readable is a failure.
       if (path !== null) yield* Result.await(readTextFileIfExists(path));
       return Result.ok();
     })
@@ -341,7 +344,6 @@ const checkRecordReadable = async (sessionId: string, configDir: string) =>
       }),
   );
 
-// Codex instructions and the app's history are never appended to the preset system prompt; only the instructions the app gives a side chat are, as they set what the side chat may do.
 const sessionOptions = (
   settings: ClaudeSessionSettings,
   env: Env,
@@ -356,6 +358,7 @@ const sessionOptions = (
     }),
   },
   settingSources: SETTING_SOURCES,
+  // Codex instructions and the app's history are never appended to the preset system prompt; only the instructions the app gives a side chat are, as they set what the side chat may do.
   systemPrompt:
     settings.instructions === undefined
       ? { type: "preset", preset: "claude_code" }
@@ -443,13 +446,13 @@ const USER_SETTINGS: SettingSource[] = ["user"];
 // Starting Claude Code and listing its models takes about 3.5 s on the verification Mac.
 const MODELS_TIMEOUT_MS = 30_000;
 
-// resolveSettings resolves settings directories such as CLAUDE_CONFIG_DIR from this process's environment, so Claude starts from the same one and differs only by the billing variables removed from it.
 const processRuntime = async () =>
   (await loadClaudeSdk()).map(
     (sdk): ClaudeRuntime => ({
       query: sdk.query,
       resolveSettings: sdk.resolveSettings,
       createSdkMcpServer: sdk.createSdkMcpServer,
+      // resolveSettings resolves settings directories such as CLAUDE_CONFIG_DIR from this process's environment, so Claude starts from the same one and differs only by the billing variables removed from it.
       env: process.env,
     }),
   );

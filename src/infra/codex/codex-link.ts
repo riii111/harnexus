@@ -102,13 +102,14 @@ export const createCodexLink = ({
     ),
   ];
 
-  // The call socket reaches the same tools without a Claude turn, so their checks and the stop after an unknown write all still apply.
+  // Runs a tool for the call socket, which reaches the same tools without a Claude turn.
   const call = async (name: string, args: unknown): Promise<ToolResult> => {
     const found = tools.find((entry) => entry.name === name) as
       | SdkMcpToolDefinition
       | undefined;
     if (found === undefined) return failure(`${name} is not a Codex app tool.`);
     const parsed = z.object(found.inputSchema).safeParse(args);
+    // The tool's own handler runs, so its checks and the stop after an unknown write all still apply.
     return parsed.success
       ? found.handler(parsed.data, undefined)
       : failure(`Invalid arguments for ${name}: ${parsed.error.message}`);

@@ -9,16 +9,16 @@ export type CompatibilityLogEvent =
   | CompatibilityEvent
   | { event: "codex_version"; version: string | null; verified: boolean };
 
-// While the server is incompatible, a Claude turn is refused rather than handed to Codex, which would run it without the Claude conversation.
 export const createCompatibility = (
   log: (event: CompatibilityLogEvent) => void,
 ) => {
+  // While the server is incompatible, a Claude turn is refused rather than handed to Codex, which would run it without the Claude conversation.
   let incompatible = false;
   let serverVersion: string | null = null;
 
   return {
     isIncompatible: () => incompatible,
-    // True when the response shows a protocol the bridge was not verified against, which leaves it untouched.
+    // Marks the server incompatible when a response shows a protocol the bridge was not verified against.
     judge: (
       kind: "initialize" | "modelList",
       message: Record<string, unknown>,

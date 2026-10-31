@@ -55,7 +55,7 @@ type BindErrorTag = NonNullable<
 
 type SessionErrorTag = ErrorTagOf<ListConversations> | BindErrorTag;
 
-// The last record each thread's own turn left, so a record that moved on before the next turn was continued elsewhere, such as by claude --resume.
+// Answers the bridge's session commands, and notices when a thread's conversation was continued elsewhere.
 export const createSessionCommands = ({
   threads,
   listConversations,
@@ -71,6 +71,7 @@ export const createSessionCommands = ({
   log: (event: SessionEvent) => void;
   now: () => number;
 }) => {
+  // The last record each thread's own turn left, so a record that moved on before the next turn was continued elsewhere, such as by claude --resume.
   const lastRecords = new Map<string, string>();
 
   const answer = async (
@@ -108,13 +109,13 @@ export const createSessionCommands = ({
     }
   };
 
-  // A thread with a conversation would lose it, so only an empty thread lists others.
   const resume = async (
     threadId: string,
     cwd: string,
     search: string | null,
     ask: AskPick,
   ) => {
+    // A thread with a conversation would lose it, so only an empty thread lists others.
     if (threads.sessionIdOf(threadId) !== null) {
       return answered({ kind: "hasConversation" });
     }
@@ -138,7 +139,6 @@ export const createSessionCommands = ({
     );
   };
 
-  // A conversation another thread continues stays listed so it is not mistaken for a missing one.
   const pick = async (
     threadId: string,
     cwd: string,
@@ -153,6 +153,7 @@ export const createSessionCommands = ({
       maxAgeDays: MAX_AGE_DAYS,
       conversations: shown.map((conversation) => ({
         ...conversation,
+        // A conversation another thread continues stays listed so it is not mistaken for a missing one.
         continued: threads.isBound(conversation.sessionId),
       })),
       offset,
@@ -178,11 +179,11 @@ export const createSessionCommands = ({
     }
   };
 
-  // Another thread may have taken the conversation, or Claude may have lost its record, since the list was shown.
   const select = async (threadId: string, chosen: ClaudeConversation) => {
     if (threads.sessionIdOf(threadId) !== null) {
       return answered({ kind: "hasConversation" });
     }
+    // Another thread may have taken the conversation, or Claude may have lost its record, since the list was shown.
     if (threads.isBound(chosen.sessionId)) return answered({ kind: "taken" });
     const found = await findSession(chosen.sessionId);
     if (found.isOk() && !found.value) return answered({ kind: "recordGone" });
@@ -207,10 +208,10 @@ export const createSessionCommands = ({
     };
   };
 
-  // A record that cannot be read is not compared, so the next turn is not wrongly reported as continued elsewhere.
   const remember = async (threadId: string, sessionId: string | null) => {
     lastRecords.delete(threadId);
     const last = sessionId === null ? null : await readLast(sessionId);
+    // A record that cannot be read is not compared, so the next turn is not wrongly reported as continued elsewhere.
     if (last !== null) lastRecords.set(threadId, last);
   };
 

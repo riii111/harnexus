@@ -1,4 +1,3 @@
-// The app sends a picked skill as a link to its SKILL.md, and Codex adds the file after the prompt; Claude turns never reach Codex, so the bridge adds it in the same shape.
 export const skillLinks = (text: string) => {
   const seen = new Set<string>();
   const links: { name: string; path: string }[] = [];
@@ -11,6 +10,7 @@ export const skillLinks = (text: string) => {
 };
 
 export const skillBlock = (name: string, path: string, body: string) =>
+  // The app sends a picked skill as a link to its SKILL.md and Codex adds the file after the prompt; Claude turns never reach Codex, so the bridge adds it in the same shape.
   `<skill>\n<name>${name}</name>\n<path>${path}</path>\n${body.replace(/\n$/, "")}\n</skill>`;
 
 const SKILL_LINK = /\[\$([^\]\s]+)\]\((\/[^)\s]*\/SKILL\.md)\)/g;

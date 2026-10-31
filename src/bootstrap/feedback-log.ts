@@ -18,11 +18,10 @@ type ParsedLog = {
   leftOutFields: Set<string>;
 };
 
-// Each serializer already copies only known fields; this second pass keeps a report safe from a log an older or newer harnexus wrote, or one edited by hand.
-// Only fields named here survive, each value checked against what its serializers write, so free text such as a prompt, a title, a path or an error message never reaches a report.
-// A line cut by a writer still appending is the last one, and is not counted as unreadable.
+// Reads a bridge log again for a report, keeping only the fields named here, each checked against what its serializers write.
 export const parseLog = (text: string): ParsedLog => {
   const leftOutFields = new Set<string>();
+  // A line cut by a writer still appending is the last one, and is not counted as unreadable.
   const complete = text.split("\n").slice(0, -1);
   let unreadable = 0;
   const lines: LogLine[] = [];
@@ -43,6 +42,7 @@ const readLine = (row: string, leftOut: Set<string>): LogLine | null => {
   if (typeof event !== "string" || !WORD.test(event)) return null;
   const fields: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(rest)) {
+    // Each serializer already copies only known fields, but a log an older or newer harnexus wrote, or one edited by hand, may not, so free text such as a prompt, a title, a path or an error message is dropped here too.
     const kept = keepField(event, key, value);
     if (kept === LEFT_OUT) {
       if (WORD.test(key)) leftOut.add(key);
@@ -102,7 +102,7 @@ const isRoutine = (line: LogLine) =>
     (ROUTINE_STEPS.has(String(line.fields.step)) ||
       (line.fields.step === "finished" && line.fields.status === "completed")));
 
-// Relayed messages, kept only in a log set by hand, are counted by method; shapes, which every log keeps, go to the protocol section.
+// The log lines a report shows for its window, with relayed messages counted by method and shapes kept for the protocol section.
 export const selectLog = (
   lines: readonly LogLine[],
   {
@@ -154,7 +154,6 @@ export const selectLog = (
   };
 };
 
-// A bridge records a shape when it first meets it, mostly before the window, so every shape a bridge in the window recorded since its last start counts; a pid reused by an earlier bridge brings none of that bridge's shapes.
 const shapesOf = (
   lines: readonly LogLine[],
   pids: ReadonlySet<number | null>,
@@ -162,7 +161,9 @@ const shapesOf = (
 ): RecordedShape[] => {
   const byPid = new Map<number | null, RecordedShape[]>();
   for (const line of lines) {
+    // A bridge records a shape when it first meets it, mostly before the window, so every shape a bridge in the window recorded since its last start counts.
     if (line.timeMs > untilMs || !pids.has(line.pid)) continue;
+    // A pid reused by an earlier bridge brings none of that bridge's shapes.
     if (line.event === "bridge_started") byPid.set(line.pid, []);
     if (line.event !== "rpc_shape") continue;
     const { direction, kind, method, paths } = line.fields;
@@ -186,7 +187,7 @@ type Row = { line: LogLine; text: string };
 
 const CONTEXT_SHARE = 0.3;
 
-// Repeats of one line from one bridge, such as a refusal on every retry, print once with their count.
+// Prints repeats of one line from one bridge, such as a refusal on every retry, once with their count.
 const collapse = (lines: readonly LogLine[]): Row[] => {
   const rows: { line: LogLine; key: string; count: number; last: string }[] =
     [];
@@ -209,7 +210,7 @@ const collapse = (lines: readonly LogLine[]): Row[] => {
 const render = ({ time, pid, event, fields }: LogLine) =>
   JSON.stringify({ time, pid, event, ...fields });
 
-// Notable rows are kept first, then routine ones, each from the newest back, and the kept rows print in their order.
+// The rows that fit the room: notable ones first, then routine ones, each from the newest back, printed in their order.
 const keepWithin = (rows: readonly Row[], room: number) => {
   const newest = [...rows].reverse();
   const order = [
@@ -237,7 +238,7 @@ export type LoggedStart = {
   codex: string | null;
 };
 
-// The last start line of each bridge names the commit and SDK it loaded, and the Codex CLI version it met follows it.
+// The commit and SDK each bridge loaded, from its last start line, and the Codex CLI version that follows it.
 export const loggedStarts = (lines: readonly LogLine[]): LoggedStart[] => {
   const starts = new Map<number, LoggedStart>();
   for (const line of lines) {

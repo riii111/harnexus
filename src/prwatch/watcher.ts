@@ -96,12 +96,12 @@ const openEntry = (deps: WatchDeps, config: WatchConfig, link: PrLink) =>
     return Result.ok<Entry | null>({ link, state, account, before });
   });
 
-// A PR linked to another chat drops what it awaited from the last one, which the new chat never answers, and a watch stopped or halted for the last chat runs again.
-// A state that has never named its chat takes the linked one as its own.
+// Moves a PR's watch to the chat it was linked to last.
 const handOver = (deps: WatchDeps, state: WatchState, link: PrLink) => {
   if (state.worker === link.worker) return;
   const previous = state.worker;
   state.worker = link.worker;
+  // A state that has never named its chat takes the linked one as its own.
   if (previous === null || state.status === "ended") return;
 
   // What only the last chat was told goes to the new one again.
@@ -118,9 +118,11 @@ const handOver = (deps: WatchDeps, state: WatchState, link: PrLink) => {
       .map((finding): WatchEvent => ({ type: "finding", finding })),
     ...state.pending,
   ];
+  // The new chat never answers what the watch awaited from the last one.
   state.followUp = [];
   state.delivered = null;
   state.halted = null;
+  // A watch stopped or halted for the last chat runs again.
   if (state.status === "stopped" || state.status === "halted") {
     state.status = "watching";
     state.reason = null;
@@ -159,8 +161,8 @@ const isDue = (state: WatchState, now: Date, config: WatchConfig) =>
 // Timers drift by a few hundred milliseconds, so a PR due at this cycle is not left to the next one.
 const DUE_MARGIN_MS = 5_000;
 
-// A PR nothing has happened to for a while is polled less often.
 const intervalMs = (state: WatchState, now: Date, config: WatchConfig) =>
+  // A PR nothing has happened to for a while is polled less often.
   (since(state.changedAt, now) >= config.idleAfterHours * 3_600_000
     ? config.idleIntervalSeconds
     : config.pollIntervalSeconds) * 1000;
@@ -302,7 +304,7 @@ const hasWork = (state: WatchState) =>
   state.followUp.length > 0 ||
   state.delivered !== null;
 
-// False while the answer to the last message is still to come, so a new message never interrupts it.
+// Whether a new message may go out.
 const checkAnswer = (
   deps: WatchDeps,
   state: WatchState,
@@ -311,6 +313,7 @@ const checkAnswer = (
   now: Date,
 ) => {
   const delivered = state.delivered;
+  // A message waits while the answer to the last one is still to come, so it never interrupts it.
   if (delivered === null) return true;
 
   if (turn === null) {

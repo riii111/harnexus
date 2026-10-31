@@ -20,9 +20,9 @@ export const userInputParams = <Q extends object>(
   autoResolutionMs: null,
 });
 
-// Each caller picks which answers it takes, since a picker reads one trimmed reply and an approval reads every non-empty one.
 export const answerValuesOf = (answer: unknown, id: string): unknown[] => {
   if (!isObject(answer) || !isObject(answer.answers)) return [];
   const entry = answer.answers[id];
+  // Each caller picks which answers it takes, since a picker reads one trimmed reply and an approval reads every non-empty one.
   return isObject(entry) && Array.isArray(entry.answers) ? entry.answers : [];
 };

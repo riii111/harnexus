@@ -151,7 +151,6 @@ export const createTurnController = <Tag extends string>({
   const appRequests = createAppRequests({ send, now });
   let closed = false;
 
-  // A turn/start that waits behind a running turn is answered on acceptance, since its sender gives up long before the running turn may end.
   const startTurn = (
     { id, params }: AppRequest,
     fallbackCwd: string | undefined,
@@ -260,7 +259,6 @@ export const createTurnController = <Tag extends string>({
     );
   };
 
-  // A turn Claude starts on its own does not wait for messages being steered, since the runtime is told at once whether the turn will be shown.
   const startOwnTurn = (threadId: string) => {
     const thread = threads.threadOf(threadId);
     if (thread === undefined || closed || changingConversations.has(threadId))
@@ -274,6 +272,7 @@ export const createTurnController = <Tag extends string>({
       effort: threads.pickedEffortOf(threadId),
       startedBy: "claude",
     };
+    // The runtime is told at once whether the turn will be shown, so it does not wait for messages being steered.
     acceptTurn(null, threadId, thread, turn, null, false);
     return true;
   };
@@ -300,6 +299,7 @@ export const createTurnController = <Tag extends string>({
     const request = {
       id,
       turnId: newTurnId(),
+      // A turn/start that waits behind a running turn is answered on acceptance, since its sender gives up long before the running turn may end.
       answered: compaction || inFlight > 0 || id === null,
       stopped: false,
       compaction,
@@ -330,9 +330,9 @@ export const createTurnController = <Tag extends string>({
     });
   };
 
-  // A turn already waiting behind the running one would run after a message that came later, so the message waits too; a compaction or a turn being stopped takes no steer.
   const steerableTurn = (threadId: string) => {
     const active = activeTurns.get(threadId);
+    // A turn already waiting behind the running one would run after a message that came later, so the message waits too; a compaction or a turn being stopped takes no steer.
     return active === undefined ||
       active.state.finished ||
       active.state.interrupting ||
@@ -368,9 +368,9 @@ export const createTurnController = <Tag extends string>({
       apply(active, renderInput(active.state, input, null));
     });
 
-  // A message still being steered may yet run as a turn, so a turn/start or compaction that came after it is accepted only once it is done, and the turns keep the order they came in; with nothing ahead, a turn is accepted at once.
   const afterSteers = (threadId: string, run: () => void | Promise<void>) => {
     const ahead = steeringMessages.get(threadId);
+    // A message still being steered may yet run as a turn, so a later turn/start or compaction is accepted only once it is done, keeping the order they came in.
     const steering = ahead === undefined ? run() : ahead.then(run);
     if (steering === undefined) return;
     steeringMessages.set(threadId, steering);
@@ -380,7 +380,6 @@ export const createTurnController = <Tag extends string>({
     });
   };
 
-  // Claude takes a steer at its next tool boundary, or runs it as its next turn when the running one has ended, and either way the app turn stays open until Claude has taken it.
   const steerTurn = async ({ id, params }: AppRequest) => {
     const active = activeTurns.get(String(params.threadId));
     if (
@@ -403,6 +402,7 @@ export const createTurnController = <Tag extends string>({
       refuse(id, input);
       return;
     }
+    // Claude takes a steer at its next tool boundary, or as its next turn once the running one ends; the app turn stays open until then.
     const refusal = await runtime.steer(active.turn, input);
     if (refusal !== null) {
       refuse(id, refusal);
@@ -413,7 +413,6 @@ export const createTurnController = <Tag extends string>({
     apply(active, renderUserInput(active.state, input.items, null, now()));
   };
 
-  // The reply comes first so the app sees it before the interrupted turn completes.
   const interruptTurn = ({ id, params }: AppRequest) => {
     const threadId = String(params.threadId);
     const active = activeTurns.get(threadId);
@@ -428,12 +427,12 @@ export const createTurnController = <Tag extends string>({
     // A stop while the session already has an interrupt in flight, from this turn or an earlier one, is answered without asking Claude again; that interrupt decides the session, and a turn that has not sent yet stops before sending.
     const repeated = active.state.interrupting;
     active.state = markInterrupting(active.state);
+    // The reply comes first so the app sees it before the interrupted turn completes.
     send({ id, result: {} });
     appRequests.cancel(threadId);
     runtime.interrupt(active.turn, repeated);
   };
 
-  // The running turn's prompts are left open, since the stop is for a turn behind it.
   const stopWaitingTurn = (
     id: AppRequest["id"],
     threadId: string,
@@ -445,6 +444,7 @@ export const createTurnController = <Tag extends string>({
       refuse(id, "no_running_turn");
       return;
     }
+    // The running turn's prompts are left open, since the stop is for a turn behind it.
     waiting.request.stopped = true;
     send({ id, result: {} });
   };
@@ -774,7 +774,6 @@ export const createTurnController = <Tag extends string>({
     };
   };
 
-  // The app may start the next turn as soon as it sees turn/completed, so the thread stops counting as active then; the store's per-thread queue still holds that turn until this one's marker is cleared.
   const apply = (
     active: ActiveTurn<Tag>,
     rendered: Rendered,
@@ -782,6 +781,7 @@ export const createTurnController = <Tag extends string>({
   ) => {
     const wasFinished = active.state.finished;
     active.state = rendered.state;
+    // The app may start the next turn as soon as it sees turn/completed, so the thread stops counting as active then; the store's per-thread queue still holds that turn until this one's marker is cleared.
     if (rendered.state.finished) release(active);
     for (const notification of rendered.notifications) {
       send(notification);
@@ -821,10 +821,10 @@ export const createTurnController = <Tag extends string>({
     apply(active, renderTurnCompleted(active.state, outcome, now()), error);
   };
 
-  // A prompt still open when its turn ends can no longer change what Claude did, so it is closed with the turn.
   const release = (active: ActiveTurn<Tag>) => {
     if (activeTurns.get(active.threadId) === active) {
       activeTurns.delete(active.threadId);
+      // A prompt still open when its turn ends can no longer change what Claude did, so it is closed with the turn.
       appRequests.cancel(active.threadId);
     }
   };
@@ -848,8 +848,8 @@ export const createTurnController = <Tag extends string>({
       error: cause?._tag ?? null,
     });
 
-  // The router logs its own refusals, so this only answers the app.
   const reject = ({ id }: Pick<AppRequest, "id">, message: string) =>
+    // The router logs its own refusals, so this only answers the app.
     send({ id, error: { code: INVALID_REQUEST, message } });
 
   const changeConversation = async <T>(
@@ -881,7 +881,6 @@ export const createTurnController = <Tag extends string>({
     closeAll,
     reject,
     answerRequest: appRequests.answer,
-    // A turn accepted but not yet started keeps the thread running between one turn's end and the next one's start.
     liveTurnOf: (threadId: string): LiveTurn | null => {
       const active = activeTurns.get(threadId);
       if (active !== undefined && !active.state.finished) {
@@ -892,6 +891,7 @@ export const createTurnController = <Tag extends string>({
           startedAtMs,
         };
       }
+      // A turn accepted but not yet started keeps the thread running between one turn's end and the next one's start.
       for (const [turnId, starting] of startingTurns) {
         if (starting.threadId === threadId) {
           return { turnId, record: null, startedAtMs: starting.acceptedAtMs };
@@ -903,8 +903,8 @@ export const createTurnController = <Tag extends string>({
       threads.adoptFork(threadId, thread, sourceId);
       return runtime.noteFork(threadId);
     },
-    // A saved thread, a Claude conversation or a turn on its way means Claude already holds part of the thread.
     claudeBegun: (threadId: string) =>
+      // A saved thread, a Claude conversation or a turn on its way means Claude already holds part of the thread.
       store.get(threadId) !== undefined ||
       threads.sessionIdOf(threadId) !== null ||
       turnsInFlight.has(threadId),
@@ -912,8 +912,9 @@ export const createTurnController = <Tag extends string>({
       threads.forgetFork(threadId);
       runtime.dropFork(threadId);
     },
-    // The server answered that it archived or deleted the thread; one with a turn or an app request in progress keeps its state, since that work still uses it.
+    // Called once the server answered that it archived or deleted the thread.
     releaseThread: (threadId: string, ended: ThreadEnd) => {
+      // A thread with a turn or an app request in progress keeps its state, since that work still uses it.
       const kept =
         turnsInFlight.has(threadId) ||
         activeTurns.has(threadId) ||
@@ -978,7 +979,6 @@ const clientMessageId = (params: Record<string, unknown>) =>
     ? params.clientUserMessageId
     : null;
 
-// The app names a pasted or picked image by the file it saved; an image held only by a server, such as a URL or an uploaded file id, cannot be read here.
 const messageInput = (
   value: unknown,
   delegated: { text: string; toolOutput: ToolOutput } | null,
@@ -994,6 +994,7 @@ const messageInput = (
     } else if (item.type === "localImage" && typeof item.path === "string") {
       images.push({ path: item.path });
     } else if (item.type === "image") {
+      // The app names a pasted or picked image by the file it saved; an image held only by a server, such as a URL or an uploaded file id, cannot be read here.
       if (typeof item.url !== "string" || !item.url.startsWith("data:")) {
         return "image_not_local";
       }

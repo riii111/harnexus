@@ -50,7 +50,6 @@ export const botOf = (bots: readonly ReviewBot[], login: string) =>
 export const severityOf = (bot: ReviewBot, body: string) =>
   bot.severity === null ? undefined : compiled(bot.severity).exec(body)?.[1];
 
-// Each pattern is compiled once, since every inline comment of every read is matched against it.
 const compiled = (source: string) => {
   const kept = PATTERNS.get(source);
   if (kept !== undefined) return kept;
@@ -60,4 +59,5 @@ const compiled = (source: string) => {
   return pattern;
 };
 
+// Each pattern is compiled once, since every inline comment of every read is matched against it.
 const PATTERNS = new Map<string, RegExp>();

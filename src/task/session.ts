@@ -89,11 +89,12 @@ export const projectsIn = (result: unknown): unknown[] => {
   return [];
 };
 
-// A reviewer reads the worker's checkout by its path, so it runs in an empty project rather than a worktree of its own that counts toward the app's worktree limit.
+// The empty project a reviewer runs in.
 export const reviewProject = async (
   env: Env,
   caller: string,
 ): Promise<Result<string, TaskFailed>> => {
+  // A reviewer reads the worker's checkout by its path, so it runs in an empty project rather than a worktree of its own that counts toward the app's worktree limit.
   const home = await realPathOrSelf(join(homeOf(env), "review-home"));
   const answer = await callApp(env, caller, "list_projects", {});
   if (answer.outcome !== ("done" satisfies CallOutcome))
@@ -128,9 +129,9 @@ const settingsOf = (record: unknown) => ({
   effort: field(record, "effort"),
 });
 
-// A thread runs on what its create asked and got until a later send names a model or thinking, so a send naming neither leaves its settings as they were.
 const sentSettings = (sent: unknown) => {
   const expected = settingsOf(field(sent, "expected"));
+  // A thread runs on what its create asked and got until a later send names a model or thinking, so a send naming neither leaves its settings as they were.
   return field(sent, "tool") === "create_thread" ||
     expected.model !== null ||
     expected.effort !== null
@@ -143,8 +144,8 @@ const checkedOf = (settings: Fields): TurnSettings => ({
   effort: typeof settings.effort === "string" ? settings.effort : null,
 });
 
-// The app answers a refusal with the settings it checked; anything else is shown as it came.
 const refusalText = (expected: unknown, actual: unknown) =>
+  // The app answers a refusal with the settings it checked; anything else is shown as it came.
   isObject(expected) && isObject(actual)
     ? refusalOf(checkedOf(expected), checkedOf(actual))
     : `expected ${asText(expected)}, actual ${asText(actual)}`;
@@ -423,14 +424,15 @@ export const listState = (env: Env) =>
     return Result.ok(listed);
   });
 
-// The worker learns its own launch from the thread it runs in, since it is never told the request's path.
-// Another task's unreadable state is skipped, so it cannot stop every worker from finding its own.
+// The launch whose worker runs in the thread.
 export const launchOfThread = (env: Env, thread: string) =>
   Result.gen(async function* () {
+    // A worker is never told the request's path, so its launch is found from the thread it runs in.
     const root = join(stateRoot(env), "launch");
     for (const key of (yield* Result.await(namesIn(root))).sort()) {
       if (!(await isDirectory(join(root, key)))) continue;
       const loaded = await load(join(root, key, "state.json"));
+      // Another task's unreadable state is skipped, so it cannot stop every worker from finding its own.
       const state = loaded.isOk() ? loaded.value : null;
       if (
         isObject(state) &&

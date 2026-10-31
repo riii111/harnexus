@@ -31,7 +31,7 @@ export type SubagentRestoreEvent<E extends { _tag: string }> = {
   error: E["_tag"];
 };
 
-// The bridge keeps no agent across a restart, so a Claude thread's agents are read back from Claude's records the first time its conversation is read; messages is the conversation's own record, whose calls may have resumed its agents.
+// Reads a Claude thread's agents back from Claude's records the first time its conversation is read after a restart.
 export const createSubagentRestore = <E extends { _tag: string }>({
   subagents,
   readSubagents,
@@ -74,9 +74,7 @@ export const createSubagentRestore = <E extends { _tag: string }>({
   return { restore };
 };
 
-// Agents are numbered under their parent in the order they started, as they were while they ran; an agent another agent started names it in its records, and one that does not, though Claude noted it as nested, is left out.
-// Records Claude kept may disagree with each other, so an agent whose id or starting call an earlier agent already has is left out.
-// Each agent's runs are its starting call and then each call that resumed it, in the order they were made, so the history of whichever conversation made a call shows the agent's activity and edits there.
+// The agents, their histories and each run's edits, rebuilt from the records Claude kept.
 const rebuild = (
   threadId: string,
   cwd: string,
@@ -88,6 +86,7 @@ const rebuild = (
   history: HistoryTurn[];
   edits: ReadonlyMap<string, readonly FileChangeItem[]>;
 }[] => {
+  // Sorted by start, so agents are numbered under their parent as they were while they ran.
   const started = usable(
     records
       .map((record) => ({
@@ -102,6 +101,7 @@ const rebuild = (
     const parent =
       parentAgentId === null ? undefined : threads.get(parentAgentId);
     if (parentAgentId !== null && parent === undefined) continue;
+    // A nested agent whose records do not name the agent that started it cannot be placed.
     if (parentAgentId === null && record.depth > 1) continue;
     const parentThreadId = parent?.id ?? threadId;
     const siblings = [...threads.values()].filter(
@@ -130,6 +130,7 @@ const rebuild = (
     started.map(({ record }) => record),
   );
   const madeAt = new Map<string, number | null>();
+  // The history of whichever conversation made a call shows the agent's activity and edits there, so every resuming call is a run of the agent.
   for (const [agentId, calls] of resumes) {
     const thread = threads.get(agentId);
     if (thread === undefined) continue;
@@ -199,7 +200,6 @@ const rebuild = (
   });
 };
 
-// A record does not say which call a turn ran under, so it is taken as the last call made before the turn started.
 const editsByRun = (
   history: readonly HistoryTurn[],
   { calls }: SubagentThread,
@@ -211,6 +211,7 @@ const editsByRun = (
   );
   for (const { turn, items } of history) {
     const startedAt = items[0]?.startedAtMs ?? null;
+    // A record does not say which call a turn ran under, so it is taken as the last call made before the turn started.
     const call = [...calls]
       .reverse()
       .find(
@@ -241,6 +242,7 @@ const editIds = (edits: ReadonlyMap<string, readonly FileChangeItem[]>) =>
 const usable = <T extends { record: SubagentRecord }>(
   started: readonly T[],
 ) => {
+  // Records Claude kept may disagree with each other, so an agent whose id or starting call an earlier agent already has is left out.
   const agentIds = new Set<string>();
   const calls = new Set<string>();
   return started.filter(({ record }) => {
@@ -253,7 +255,7 @@ const usable = <T extends { record: SubagentRecord }>(
   });
 };
 
-// The calls that resumed each agent, in the order they were made; a call names the agent it resumed by its id, or as the call addressed it, by the agent's id or the name it was started with, with any reference Claude appended to the name left off.
+// The calls that resumed each agent, in the order they were made.
 const resumesOf = (
   conversations: readonly (readonly SessionMessage[])[],
   records: readonly SubagentRecord[],
@@ -270,6 +272,7 @@ const resumesOf = (
     .flatMap((messages) => findAgentResumes(messages))
     .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   for (const resume of found) {
+    // A call names the agent by its id, or as the call addressed it, by its id or the name it was started with plus any reference Claude appended.
     const agentId =
       resume.resumedAgentId ??
       byAddress.get(resume.recipient.replace(APPENDED_REFERENCE, ""));

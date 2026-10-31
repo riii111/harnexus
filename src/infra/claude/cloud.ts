@@ -35,11 +35,12 @@ export type CloudCli = {
   run: RunProcess;
 };
 
-// The SDK's own claude is used by default, since it already holds the sign-in the bridge runs with; a claude installed elsewhere may stop to ask macOS for keychain access when the app starts it. HARNEXUS_CLAUDE_CLI names another one.
 export const claudeCliFile = (
   env: Record<string, string | undefined>,
   bundled: () => string | null = bundledClaude,
-) => env.HARNEXUS_CLAUDE_CLI || bundled() || "claude";
+) =>
+  // The SDK's own claude already holds the sign-in the bridge runs with, while one installed elsewhere may stop to ask macOS for keychain access when the app starts it.
+  env.HARNEXUS_CLAUDE_CLI || bundled() || "claude";
 
 export const cloudCli = (
   env: Record<string, string | undefined>,
@@ -60,7 +61,7 @@ export class CloudSendUnknown extends TaggedError("CloudSendUnknown")<{
 
 export type CloudSendFailure = CloudSendRejected | CloudSendUnknown;
 
-// The message goes in through stdin, so it never shows in the process list; the CLI exits once the session has queued it, without waiting for a reply.
+// Sends a message to the Cloud session; the CLI exits once the session has queued it, without waiting for a reply.
 export const sendToCloud = async (
   cli: CloudCli,
   cloudSessionId: string,
@@ -70,6 +71,7 @@ export const sendToCloud = async (
   const ran = await cli.run(
     cli.file,
     ["-p", "--cloud", cloudSessionId, "--output-format", "json"],
+    // The message goes in through stdin, so it never shows in the process list.
     text,
     {
       cwd,
@@ -138,8 +140,7 @@ const copyFailed = (
   stopped: CloudCopyFailed["stopped"] = null,
 ) => Result.err(new CloudCopyFailed({ stopped, message }));
 
-// teleport writes a new local record of the Cloud conversation each time, in cwd's project folder; /cost is answered by the CLI itself, so no model turn runs and nothing reaches the Cloud session.
-// The copy is returned with its uuids made stable, and removed when it cannot be.
+// Copies the Cloud conversation into a new local record in cwd's project folder, with its uuids made stable.
 export const copyCloudSession = async (
   cli: CloudCli,
   cloudSessionId: string,
@@ -184,6 +185,7 @@ export const copyCloudSession = async (
       : copyFailed(COPY_UNCHECKED, "unchecked");
   }
   const stable = await stabilizeCopy(sessionId, copiedAt, configDir);
+  // A copy whose uuids cannot be made stable would change what the app holds, so it is removed.
   if (stable.isErr()) {
     await removeCloudCopy(sessionId, configDir);
     return copyFailed(stable.error.message);
@@ -191,7 +193,6 @@ export const copyCloudSession = async (
   return Result.ok(sessionId);
 };
 
-// In print mode teleport prints nothing when it refuses; the reason is written only to its debug log, which is removed once read.
 const teleport = async (
   cli: CloudCli,
   cloudSessionId: string,
@@ -220,9 +221,11 @@ const teleport = async (
         "--teleport",
         cloudSessionId,
         "-p",
+        // The CLI answers this command itself, so no model turn runs and nothing reaches the Cloud session.
         COPY_PROMPT,
         "--output-format",
         "json",
+        // In print mode teleport prints nothing when it refuses; the reason is written only to its debug log, which is removed once read.
         "--debug-file",
         log,
         // A checkout may hold a branch the Cloud session wrote, so its settings, hooks and MCP servers are never loaded here.
@@ -251,12 +254,13 @@ const teleport = async (
   }
 };
 
-// A copy whose bridge stopped while it ran leaves its debug log, which holds the session's details, so the logs left over are removed when the bridge starts.
+// Removes the debug logs left by copies whose bridge stopped while they ran.
 export const sweepCloudLogs = async (copyDir: string) => {
   const logDir = join(copyDir, LOG_FOLDER);
   const names = await listDirectoryIfExists(logDir);
   if (names.isErr() || names.value === null) return;
   for (const name of names.value) {
+    // A debug log holds the session's details.
     if (name.endsWith(".log")) await removeFile(join(logDir, name));
   }
 };
@@ -280,9 +284,7 @@ class CloudCopyUnstable extends TaggedError("CloudCopyUnstable")<{
   message: string;
 }> {}
 
-// Each teleport copy gives the records new uuids, which would change the turn ids, pages and cursors the app holds; a record's uuid is rewritten from when it was written, its kind and its content, so every copy names a record the same way.
-// Every occurrence of an old uuid is replaced, so the links between records, such as parentUuid, follow; a record without a time keeps its uuid.
-// teleport ends each copy with records of its own, the note that the session goes on here and the /cost command, timed when the copy ran; they are left out, so every copy ends with the Cloud session's last record. A Cloud record written while the copy ran is left out too and comes with the next copy.
+// Rewrites a copy's uuids so every copy names a record the same way.
 const stabilizeCopy = async (
   copySessionId: string,
   copiedAt: number,
@@ -298,6 +300,7 @@ const stabilizeCopy = async (
   if (text.isErr() || text.value === null) {
     return unstable("the copy of the Cloud session could not be read");
   }
+  // Each teleport copy gives the records new uuids, which would change the turn ids, pages and cursors the app holds.
   const renamed = new Map<string, string>();
   const seen = new Map<string, number>();
   const kept: string[] = [];
@@ -305,12 +308,15 @@ const stabilizeCopy = async (
     const parsed = parseJson(line);
     const record =
       parsed.isOk() && isObject(parsed.value) ? parsed.value : null;
+    // teleport ends each copy with records of its own, timed when the copy ran, so every copy ends with the Cloud session's last record; a Cloud record written meanwhile comes with the next copy.
     if (record !== null && writtenSince(record.timestamp, copiedAt)) continue;
     kept.push(line);
     if (record === null) continue;
     const { uuid, timestamp, type } = record;
     if (typeof uuid !== "string" || !UUID.test(uuid)) continue;
+    // A record without a time keeps its uuid.
     if (typeof timestamp !== "string" || typeof type !== "string") continue;
+    // A record's uuid is made from when it was written, its kind and its content.
     const body = JSON.stringify(
       record.message ?? record.attachment ?? record.subtype ?? null,
     );
@@ -319,6 +325,7 @@ const stabilizeCopy = async (
     seen.set(key, count + 1);
     renamed.set(uuid, uuidFrom(`${key}#${count}`));
   }
+  // Every occurrence of an old uuid is replaced, so the links between records, such as parentUuid, follow.
   const stable = kept
     .join("\n")
     .replace(UUID_IN_TEXT, (id) => renamed.get(id) ?? id);
@@ -343,12 +350,12 @@ const uuidFrom = (text: string) => {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 };
 
-// A copy the thread no longer reads is removed; one that cannot be found or removed is left, since it holds nothing the thread needs.
 export const removeCloudCopy = async (
   copySessionId: string,
   configDir: string = claudeConfigDir(process.env),
 ) => {
   const found = await findSessionFile(copySessionId, configDir);
+  // A copy that cannot be found or removed is left, since it holds nothing the thread needs.
   if (found.isErr() || found.value === null) return;
   await removeFile(found.value);
 };

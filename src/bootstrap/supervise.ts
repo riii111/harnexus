@@ -38,7 +38,7 @@ export const exitOnUnhandledRejection =
 const stackOf = (reason: unknown) =>
   reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
 
-// The server is alive only while it is still this process's parent; without a pid from the launcher nothing is ever signaled, so a reparented bridge cannot mistake launchd or a reused pid for the server.
+// The app-server the launcher started, which the bridge watches and stops.
 export const serverFromEnv = (
   env: NodeJS.ProcessEnv,
   {
@@ -51,7 +51,9 @@ export const serverFromEnv = (
 ) => {
   const pid = Number(env[SERVER_PID_ENV]);
   const known = Number.isInteger(pid) && pid > 1;
-  const isRunning = () => known && parentPid() === pid;
+  const isRunning = () =>
+    // The server is alive only while it is still this process's parent; without a pid from the launcher nothing is ever signaled, so a reparented bridge cannot mistake launchd or a reused pid for the server.
+    known && parentPid() === pid;
   return {
     isRunning,
     signal: (signal: Signal) =>
@@ -83,7 +85,7 @@ export const signalWithLog =
     }
   };
 
-// The server can close stdout and keep running, and once the relay ends the bridge is the only process left to stop it.
+// Stops a server that closed stdout but keeps running, which once the relay ends only the bridge is left to stop.
 export const stopLingeringServer = async ({
   isRunning,
   signal,

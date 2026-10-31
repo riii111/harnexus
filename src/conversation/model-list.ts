@@ -6,22 +6,23 @@ import {
   type ModelCatalog,
 } from "../infra/claude/models.ts";
 
-// Claude models join the last page only, so a paging client sees each once; a server id with the Claude prefix is reported, since requests for it go to Claude.
-// A retired model is listed hidden, so the app can still name the model of a thread already on it.
 export const withClaudeModels = (
   result: Record<string, unknown>,
   { offered, retired }: ReturnType<ModelCatalog["models"]>,
   rule: EffortRule,
 ) => {
   const data = result.data;
+  // Claude models join the last page only, so a paging client sees each once.
   if (!Array.isArray(data) || (result.nextCursor ?? null) !== null) {
     return { result, collisions: [] };
   }
   const listed = new Set(data.map((model) => modelId(model)));
   const models = [
     ...offered.map((model) => ({ model, hidden: false })),
+    // A retired model is listed hidden, so the app can still name the model of a thread already on it.
     ...retired.map((model) => ({ model, hidden: true })),
   ];
+  // A server id with the Claude prefix is reported, since requests for it go to Claude.
   const collisions = data
     .map((model) => modelId(model))
     .filter((id) => isClaudeModel(id));
@@ -63,11 +64,11 @@ const modelEntry = (
   isDefault: false,
 });
 
-// The app offers only listed levels, so a model without effort still lists one to keep the picker usable.
 const reasoningEfforts = (
   displayName: string,
   efforts: readonly EffortLevel[],
 ) =>
+  // The app offers only listed levels, so a model without effort still lists one to keep the picker usable.
   efforts.length === 0
     ? [
         {

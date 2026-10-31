@@ -108,7 +108,6 @@ export const createServerResponses = ({
   rememberCwd,
   log,
 }: Deps) => {
-  // A response that opens a Claude thread waits for its history, which holds back the server's later lines until it is read.
   const rewrite = (
     request: Pending,
     line: Buffer,
@@ -130,6 +129,7 @@ export const createServerResponses = ({
           ...message,
           result: subagents.withChildren(result, request.params),
         });
+      // A response that opens a Claude thread waits for its history, which holds back the server's later lines until it is read.
       case "threadRead":
         return rewriteThreadRead(line, message, result, request);
       case "threadOpen":
@@ -259,7 +259,6 @@ export const createServerResponses = ({
     );
   };
 
-  // Whether a turn runs is asked as the answer goes out, since it may end while the server answers.
   const serveHistory = (
     method: "thread/read" | "thread/resume",
     loading: ReturnType<History["load"]>,
@@ -283,6 +282,7 @@ export const createServerResponses = ({
   ) =>
     loading.then((loaded) => {
       if (loaded.isErr()) return unreadable();
+      // A turn may end while the server answers, so whether one runs is asked as the answer goes out.
       const shown = withLiveTurn(loaded.value, turns.liveTurnOf(threadId));
       const { result, ...flags } = reply(shown);
       log({
@@ -299,7 +299,7 @@ export const createServerResponses = ({
       });
     });
 
-  // The server keeps its own model, effort and mode for a Claude thread, and the app shows what this notice reports after any settings change.
+  // Rewrites the server's settings notice, which the app shows, to the model, effort and mode the bridge runs a Claude thread with.
   const rewriteSettingsUpdated = (message: Record<string, unknown>) => {
     const params = isObject(message.params) ? message.params : {};
     const threadId =
@@ -349,7 +349,6 @@ const newestTurnOf = (shown: readonly HistoryTurn[]) => {
   return id === undefined ? null : shortId(id);
 };
 
-// The id's head is enough to tell threads apart in a log without carrying the whole id.
 const threadIdOf = (result: Record<string, unknown>) =>
   isObject(result.thread) && typeof result.thread.id === "string"
     ? result.thread.id.slice(0, 8)

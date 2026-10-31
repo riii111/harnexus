@@ -9,9 +9,10 @@ class ImageResizeFailed extends TaggedError("ImageResizeFailed")<{
   message: string;
 }> {}
 
-// sips ships with macOS and enlarges an image smaller than the edge, so the caller passes an edge no longer than the image's own.
+// Resizes an image with sips, which ships with macOS.
 export const resizeImage = (
   bytes: Uint8Array,
+  // sips enlarges an image smaller than the edge, so the caller passes an edge no longer than the image's own.
   longEdge: number,
   format: "png" | "jpeg",
 ) =>

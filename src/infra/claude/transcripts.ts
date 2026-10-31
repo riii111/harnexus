@@ -19,7 +19,7 @@ export type ClaudeConversation = {
   entrypoint: string | null;
 };
 
-// Claude keeps a conversation as <session id>.jsonl in a folder named after the directory it ran in, whatever started it; a Claude Code worktree of cwd has a folder of its own, and its conversations are listed with cwd's since resuming finds a record in any folder.
+// The conversations Claude kept as <session id>.jsonl in the folders named after cwd, whatever started them.
 export const listClaudeConversations = (
   cwd: string,
   {
@@ -31,6 +31,7 @@ export const listClaudeConversations = (
     const projectsDir = join(configDir, "projects");
     const projects = yield* Result.await(listDirectoryIfExists(projectsDir));
     const found: ClaudeConversation[] = [];
+    // A Claude Code worktree of cwd has a folder of its own, and its conversations are listed with cwd's since resuming finds a record in any folder.
     for (const project of (projects ?? []).filter(isFolderOf(cwd))) {
       const folder = join(projectsDir, project);
       const files = yield* Result.await(listDirectoryIfExists(folder));
@@ -47,7 +48,6 @@ export const listClaudeConversations = (
     return Result.ok(found.sort((a, b) => b.updatedAtMs - a.updatedAtMs));
   });
 
-// Records are appended, so the last main-conversation record is read from the end, widening the read until a whole record fits.
 export const readLastRecordUuid = (
   sessionId: string,
   configDir: string = claudeConfigDir(process.env),
@@ -57,6 +57,7 @@ export const readLastRecordUuid = (
     if (path === null) return Result.ok<string | null>(null);
     const file = yield* Result.await(statFileIfExists(path));
     if (file === null) return Result.ok<string | null>(null);
+    // Records are appended, so the last one is read from the end, widening the read until a whole record fits.
     for (let length = END_BYTES; ; length *= 2) {
       const start = Math.max(0, file.size - length);
       const tail = yield* Result.await(
@@ -97,21 +98,21 @@ export const findSessionFile = (sessionId: string, configDir: string) =>
     return Result.ok<string | null>(null);
   });
 
-// A cached path is trusted only while its file still exists, because Cloud copies are deleted and Claude can move a record.
 const cachedSessionFile = async (sessionId: string, configDir: string) => {
   const key = sessionFileKey(sessionId, configDir);
   const path = sessionFiles.get(key);
   if (path === undefined) return null;
+  // A cached path is trusted only while its file still exists, because Cloud copies are deleted and Claude can move a record.
   const file = await statFileIfExists(path);
   if (file.isOk() && file.value !== null) return path;
   sessionFiles.delete(key);
   return null;
 };
 
-// A deleted Cloud copy is never looked up again, so the oldest entries are dropped to keep the resident process from growing.
 const rememberSessionFile = (key: string, path: string) => {
   sessionFiles.delete(key);
   sessionFiles.set(key, path);
+  // A deleted Cloud copy is never looked up again, so the oldest entries are dropped to keep the resident process from growing.
   for (const oldest of sessionFiles.keys()) {
     if (sessionFiles.size <= SESSION_FILE_LIMIT) break;
     sessionFiles.delete(oldest);
@@ -128,16 +129,17 @@ const SESSION_FILE_LIMIT = 256;
 export const claudeConfigDir = (env: NodeJS.ProcessEnv) =>
   env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
 
-// Like Claude's own session list, only the head and the tail are read, so a long conversation costs no more than a short one; a record that cannot be read is left out rather than failing the list.
 const readConversation = async (
   path: string,
   sessionId: string,
   { cwd, since }: { cwd: string; since: number },
 ): Promise<ClaudeConversation | null> => {
   const file = await statFileIfExists(path);
+  // A record that cannot be read is left out rather than failing the list.
   if (file.isErr() || file.value === null) return null;
   const { size, modifiedMs } = file.value;
   if (modifiedMs < since) return null;
+  // Like Claude's own session list, only the head and the tail are read, so a long conversation costs no more than a short one.
   const tailStart = Math.max(0, size - END_BYTES);
   const tail = await readFileSlice(path, tailStart, size - tailStart);
   if (tail.isErr()) return null;
@@ -181,12 +183,12 @@ const readConversation = async (
   };
 };
 
-// A pasted prompt can make a record longer than the first read, even after short slash-command records, so the read widens until the records it needs are whole.
 const readHead = async (
   path: string,
   size: number,
   enough: (records: Record<string, unknown>[]) => boolean,
 ) => {
+  // A pasted prompt can make a record longer than the first read, even after short slash-command records, so the read widens until the records it needs are whole.
   for (let length = Math.min(size, END_BYTES); ; length *= 2) {
     const read = Math.min(size, length);
     const text = await readFileSlice(path, 0, read);
@@ -199,12 +201,12 @@ const readHead = async (
   }
 };
 
-// Claude replaces every character other than a letter or digit with a hyphen and cuts a long name, adding a hash this does not reproduce, so a long name matches by its kept prefix and the record's own directory decides.
-// A worktree's folder is cut on its own length, which can pass the limit while cwd's does not.
 const isFolderOf = (cwd: string) => {
+  // Claude replaces every character other than a letter or digit with a hyphen and cuts a long name, adding a hash this does not reproduce, so a long name matches by its kept prefix and the record's own directory decides.
   const name = resolve(cwd).replace(/[^a-zA-Z0-9]/g, "-");
   const worktrees = `${name}${WORKTREES.replace(/[^a-zA-Z0-9]/g, "-")}`;
   return (folder: string) =>
+    // A worktree's folder is cut on its own length, which can pass the limit while cwd's does not.
     folder.startsWith(worktrees.slice(0, FOLDER_NAME_LIMIT)) ||
     (name.length <= FOLDER_NAME_LIMIT
       ? folder === name
@@ -221,8 +223,8 @@ const worktreeOf = (cwd: string, ranIn: string) => {
 
 const WORKTREES = "/.claude/worktrees/";
 
-// Older Claude Code versions wrote a subagent's record beside the conversation as agent-<id>.jsonl.
 const sessionIdOf = (file: string) =>
+  // Older Claude Code versions wrote a subagent's record beside the conversation as agent-<id>.jsonl.
   file.endsWith(".jsonl") && !file.startsWith("agent-") && file !== ".jsonl"
     ? file.slice(0, -".jsonl".length)
     : null;
@@ -257,7 +259,6 @@ const lastString = (records: Record<string, unknown>[], key: string) => {
   return typeof value === "string" ? value : null;
 };
 
-// The first thing the user typed, skipping tool results, hidden records, compact summaries and the records a slash command leaves.
 const firstPrompt = (records: Record<string, unknown>[]) => {
   for (const record of records) {
     if (record.type !== "user") continue;

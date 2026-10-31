@@ -75,8 +75,8 @@ const matches = (rule: IgnoreRule, comment: PrComment) =>
   (rule.kind === undefined || rule.kind === comment.kind) &&
   (rule.bodyIncludes === undefined || comment.body.includes(rule.bodyIncludes));
 
-// Only the comment's kind, author and place are kept, so a body can never steer what the worker is told.
 const findingOf = (comment: PrComment, bot: ReviewBot | null): Finding => ({
+  // Only the comment's kind, author and place are kept, so a body can never steer what the worker is told.
   id: comment.id,
   kind: comment.kind,
   bot: bot?.id ?? null,
@@ -88,8 +88,8 @@ const findingOf = (comment: PrComment, bot: ReviewBot | null): Finding => ({
   approval: approvalOf(comment, bot),
 });
 
-// A review bot's approval is read like its other reviews.
 const isApproval = (comment: PrComment, bot: ReviewBot | null) =>
+  // A review bot's approval is read like its other reviews.
   bot === null && comment.kind === "review" && comment.approved;
 
 const approvalOf = (

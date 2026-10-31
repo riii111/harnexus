@@ -69,7 +69,6 @@ export const createAppToolCalls = ({
     return called.isOk() ? called.value : failure(called.error.message);
   };
 
-  // Writes run one at a time so a write never starts while an earlier one is still undecided, and none runs after one whose outcome is unknown.
   const write = (
     name: AppTool,
     args: Record<string, unknown>,
@@ -84,6 +83,7 @@ export const createAppToolCalls = ({
       beforeSend?: () => string | null | Promise<string | null>;
     } = {},
   ) =>
+    // Writes run one at a time so a write never starts while an earlier one is still undecided, and none runs after one whose outcome is unknown.
     writes.run(CODEX_APP_SERVER, async () => {
       if (unknownWrite !== null) {
         return failure(
@@ -103,6 +103,7 @@ export const createAppToolCalls = ({
           if (called.error._tag === "ServerRequestNotSent") {
             return failure(called.error.message);
           }
+          // A malformed answer is still an answer to a call that ran, so like a lost one it leaves the outcome unknown.
           unknownWrite = name;
           return failure(
             `${called.error.message}. The ${name} call may or may not have taken effect and will not be repeated; ask the user to check the app.`,
@@ -118,7 +119,6 @@ export const createAppToolCalls = ({
 
   const currentGeneration = () => (stopped ? null : generation);
 
-  // Messaging this thread itself would start a turn behind the one making the call and could wake itself without end, so it may only be read and waited on.
   const refuseTargets = (
     targets: readonly string[],
     { allowSelf }: { allowSelf: boolean },
@@ -126,6 +126,7 @@ export const createAppToolCalls = ({
     if (store.get(callerThreadId) === undefined) {
       return "This conversation is not registered as a Claude thread, so it cannot use the Codex app threads.";
     }
+    // Messaging this thread itself would start a turn behind the one making the call and could wake itself without end, so it may only be read and waited on.
     // Any other thread the app itself lets the caller reach is a valid target, since parallel threads read, wait on and message one another.
     return allowSelf || !targets.includes(callerThreadId)
       ? null
@@ -141,8 +142,9 @@ export const createAppToolCalls = ({
     markUnknownWrite: (name: AppTool) => {
       unknownWrite = name;
     },
-    // A turn that ends while a write is still waiting for its answer cannot know the outcome either, so both count; the turn runner turns this into the thread's outcome-unknown state so a restart does not repeat the turn.
-    hasUnsettledWrite: () => unknownWrite !== null || writesInFlight > 0,
+    hasUnsettledWrite: () =>
+      // A turn that ends while a write is still waiting for its answer cannot know the outcome either, so both count.
+      unknownWrite !== null || writesInFlight > 0,
     stopWrites: () => {
       generation += 1;
       stopped = true;
@@ -162,7 +164,6 @@ class AppToolAnswerMalformed extends TaggedError("AppToolAnswerMalformed")<{
 
 type ContentItem = ToolResult["content"][number];
 
-// A malformed answer is still an answer to a call that ran, so for writes it counts as an unknown outcome like a lost one.
 const readToolResult = (answer: unknown) => {
   if (!isObject(answer) || !Array.isArray(answer.content)) {
     return Result.err(
@@ -179,6 +180,7 @@ const readToolResult = (answer: unknown) => {
     }),
     ...(answer.isError === true && { isError: true }),
   };
+  // The app answers with text, image and audio items only, so any other item makes the whole answer malformed rather than being dropped.
   return content.length === answer.content.length
     ? Result.ok(result)
     : Result.err(
@@ -188,7 +190,6 @@ const readToolResult = (answer: unknown) => {
       );
 };
 
-// The app answers with text, image and audio items only, so any other item makes the whole answer malformed rather than being dropped.
 const toContentItem = (item: unknown): ContentItem[] => {
   if (!isObject(item)) return [];
   if (item.type === "text" && typeof item.text === "string") {

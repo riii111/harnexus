@@ -34,12 +34,13 @@ type FirstTurnRefusal =
     }
   | { kind: "bridge"; threadId: string; reason: string };
 
-// The app answers create_thread with a provisional id only; the real id first appears in the new thread's turn/start, whose tool output names the calling thread.
+// Matches each created thread's first turn/start to the create_thread call that made it.
 export const createDelegationWatch = ({
   armedMs = CHECK_ARMED_MS,
 }: {
   armedMs?: number;
 } = {}) => {
+  // The app answers create_thread with a provisional id only; the real id first appears in the new thread's turn/start, whose tool output names the calling thread.
   // At most one unconfirmed create per caller, since nothing in the first turn tells two creates of one caller apart.
   // A Codex caller's own create_thread never passes through the bridge, so a caller must not mix it with socket creates in parallel.
   const waiters = new Map<string, Waiter>();
@@ -47,9 +48,10 @@ export const createDelegationWatch = ({
   const claimed = new Set<string>();
   // So the app resending a refused first turn never gets it run.
   const refusedThreads = new Set<string>();
+  // The router sets and clears an entry in the same tick as observe, so it never outlives the turn it was set for.
   const starting = new Map<string, (refusal: string | null) => void>();
 
-  // A thread nobody waits for is ignored; the answer is whether the turn may run.
+  // Whether a thread's first turn/start may run, checked against the create its caller waits on.
   const observe = (
     sourceThreadId: string,
     threadId: string,
@@ -65,12 +67,12 @@ export const createDelegationWatch = ({
     }
     if (claimed.has(threadId)) return true;
     claimed.add(threadId);
+    // A thread nobody waits for is ignored.
     if (waiter === undefined || waiter.named !== null) return true;
     waiters.delete(sourceThreadId);
     return settle(waiter, threadId, actual, bridgeRuns);
   };
 
-  // The router calls it in the same tick as observe, so an entry never outlives the turn it was set for.
   const started = (threadId: string, refusal: string | null) => {
     const waiting = starting.get(threadId);
     if (waiting === undefined) return;
@@ -80,7 +82,6 @@ export const createDelegationWatch = ({
     starting.delete(threadId);
   };
 
-  // Registered before create_thread is sent, since the new thread's turn/start can arrive before the tool answer; null while the caller has an unconfirmed create.
   const expect = (
     sourceThreadId: string,
     { expected = NOT_GIVEN }: { expected?: TurnSettings } = {},
@@ -103,6 +104,7 @@ export const createDelegationWatch = ({
         resolve(turn);
       },
     };
+    // Registered before create_thread is sent, since the new thread's turn/start can arrive before the tool answer.
     waiters.set(sourceThreadId, waiter);
     const cancel = () => {
       if (waiters.get(sourceThreadId) === waiter) {
@@ -150,8 +152,6 @@ export const createDelegationWatch = ({
   return { observe, started, expect };
 };
 
-// answer is null when the app gave none, and mayExist then says whether the call may still have made the thread.
-// waitMs is null for a caller that needs no more than the id the answer names, and keepArmed false for one that never reports a late first turn.
 export const concludeCreate = async (
   created: CreatedThread,
   {
@@ -160,9 +160,12 @@ export const concludeCreate = async (
     mayExist = false,
     keepArmed = true,
   }: {
+    // Null when the app gave none; mayExist then says whether the call may still have made the thread.
     answer: { result: unknown } | null;
+    // Null for a caller that needs no more than the id the answer names.
     waitMs: number | null;
     mayExist?: boolean;
+    // False for a caller that never reports a late first turn.
     keepArmed?: boolean;
   },
 ): Promise<CreateOutcome> => {
@@ -185,11 +188,11 @@ export const concludeCreate = async (
   };
 };
 
-// A turn refused on its settings is never run by the bridge, so it has no refusal of its own.
 export const firstTurnRefusal = (
   turn: FirstTurn | null,
 ): FirstTurnRefusal | null => {
   if (turn === null) return null;
+  // A turn refused on its settings is never run by the bridge, so it has no refusal of its own.
   if (turn.refused) {
     return {
       kind: "settings",
@@ -211,8 +214,8 @@ type Waiter = {
   settle: (turn: FirstTurn | null) => void;
 };
 
-// A value the app leaves out cannot confirm what was asked, so it refuses the turn like a different one; a setting nobody asked for is not checked.
 const differs = (expected: string | null, actual: string | null) =>
+  // A value the app leaves out cannot confirm what was asked, so it refuses the turn like a different one; a setting nobody asked for is not checked.
   expected !== null && expected !== actual;
 
 export const refusalOf = (expected: TurnSettings, actual: TurnSettings) =>
@@ -231,9 +234,9 @@ const NOT_GIVEN: TurnSettings = { model: null, effort: null };
 export const FIRST_TURN_WAIT_MS = 120_000;
 const CHECK_ARMED_MS = 600_000;
 
-// A provisional id such as clientThreadId is not a thread id, so only an explicit threadId or thread.id in the app's create_thread answer counts.
 export const answeredThreadId = (answer: unknown) => {
   if (!isObject(answer)) return null;
+  // A provisional id such as clientThreadId is not a thread id, so only an explicit threadId or thread.id in the app's create_thread answer counts.
   const structured = threadIdField(answer.structuredContent);
   if (structured !== null) return structured;
   const content = Array.isArray(answer.content) ? answer.content : [];
@@ -256,13 +259,13 @@ const threadIdField = (value: unknown): string | null => {
   return typeof nested === "string" && nested !== "" ? nested : null;
 };
 
-// Only the create_thread tool output names the thread that created the one it starts.
 export const delegationSource = (params: Record<string, unknown>) => {
   const message = delegatedMessage(params);
+  // Only the create_thread tool output names the thread that created the one it starts.
   return message?.tool === "create_thread" ? message.sourceThreadId : null;
 };
 
-// A message from another thread arrives as the output of the codex_app call that sent it, with the sender as <source_thread_id>…</source_thread_id> in text the app writes; only an output made of text can reach Claude.
+// The message another thread sent, which arrives as the output of the codex_app call that sent it.
 export const delegatedMessage = (params: Record<string, unknown>) => {
   const output = params.toolOutput;
   if (
@@ -273,11 +276,13 @@ export const delegatedMessage = (params: Record<string, unknown>) => {
     return null;
   }
   const texts = outputTexts(output.output);
+  // Only an output made of text can reach Claude.
   if (texts === null) return null;
   const text = texts.join("\n");
   return {
     tool: output.name,
     text,
+    // The app writes the sender as <source_thread_id>…</source_thread_id> in the text.
     sourceThreadId: SOURCE_THREAD.exec(text)?.[1] ?? null,
     toolOutput: {
       name: output.name,

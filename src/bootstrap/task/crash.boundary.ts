@@ -1,7 +1,7 @@
 import { FEEDBACK_HINT, type TaskRun } from "../../task/cli.ts";
 import { NAME } from "../../task/request.ts";
 
-// An exception nothing expected, such as a Bun API an older runtime lacks, is a Panic wrapping it once per Result.gen it left, and Bun prints each layer; only the innermost is shown, with where to report it.
+// Reports an exception nothing expected, such as a Bun API an older runtime lacks, with where to report it.
 export const reportCrash = async (
   run: () => Promise<TaskRun>,
 ): Promise<TaskRun> => {
@@ -13,6 +13,7 @@ export const reportCrash = async (
 };
 
 const crashReport = (error: unknown) => {
+  // The exception is a Panic wrapping it once per Result.gen it left, and Bun prints each layer, so only the innermost is shown.
   const cause = innermost(error);
   const detail =
     cause instanceof Error

@@ -54,7 +54,7 @@ export class CommandFailed extends TaggedError("CommandFailed")<{
   message: string;
 }> {}
 
-// Only the output is returned, so a caller decides what of it may be shown; a command that hangs is stopped at the timeout.
+// The output of a command that succeeds; a command that hangs is stopped at the timeout.
 export const readCommandOutput = (
   file: string,
   args: readonly string[],
@@ -64,6 +64,7 @@ export const readCommandOutput = (
     try: async () => {
       const { error, stdout } = await captureCommand(file, args, { timeoutMs });
       if (error !== null) throw error;
+      // Only the output is returned, so a caller decides what of it may be shown.
       return stdout;
     },
     catch: (cause) =>
@@ -80,7 +81,6 @@ export type CommandOutput = {
   stderr: string;
 };
 
-// A command that ran is ok whatever its exit status, so the caller decides what a failure means; one that could not start or hung past the timeout is an error.
 export const runCommand = (
   file: string,
   args: readonly string[],
@@ -94,6 +94,7 @@ export const runCommand = (
         timeoutMs,
       });
       if (error === null) return { status: 0, stdout, stderr };
+      // A command that ran is ok whatever its exit status, so the caller decides what a failure means; one that could not start or hung past the timeout is an error.
       if (typeof error.code === "number" && !error.killed)
         return { status: error.code, stdout, stderr };
       throw error;
@@ -109,11 +110,11 @@ export const runCommand = (
       }),
   });
 
-// No pipes or awaited exit: a notification process must not keep the relay alive or hold its protocol descriptors.
 export const startDetachedCommand = (file: string, args: readonly string[]) =>
   Result.tryPromise({
     try: () =>
       new Promise<void>((resolve, reject) => {
+        // No pipes or awaited exit: a notification process must not keep the relay alive or hold its protocol descriptors.
         const child = spawn(file, [...args], {
           detached: true,
           stdio: "ignore",
@@ -132,7 +133,7 @@ export const startDetachedCommand = (file: string, args: readonly string[]) =>
       }),
   });
 
-// The one place a command's end is awaited: a failed command is returned as the error, so each caller decides what an exit status, a kill or a missing file means.
+// The one place a command's end is awaited, answering a failed command with its error rather than failing.
 export const captureCommand = (
   file: string,
   args: readonly string[],
@@ -159,7 +160,7 @@ const COMMAND_TIMEOUT_MS = 10_000;
 
 const COMMAND_OUTPUT_LIMIT = 16 * 1024 * 1024;
 
-// The launcher retains the app descriptors until all bridge startup work succeeds.
+// Tells the launcher whether the bridge started.
 export const announceBridgeStatus = (
   status:
     | { ready: true }
@@ -167,6 +168,7 @@ export const announceBridgeStatus = (
 ) =>
   Result.try({
     try: () => {
+      // The launcher retains the app descriptors until all bridge startup work succeeds.
       writeSync(5, JSON.stringify(status));
     },
     catch: (cause) =>

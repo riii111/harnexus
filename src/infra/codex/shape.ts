@@ -6,9 +6,9 @@ import { PROTOCOL_FIELDS } from "./protocol-fields.ts";
 // Tool arguments and results, configuration and schemas are the user's own data, so below them only the type is kept.
 export type ShapePath = string;
 
-// The walk visits a bounded number of values, since it runs on the relay's path before each line is passed on.
 export const shapeOf = (value: unknown): ShapePath[] => {
   const paths = new Set<ShapePath>();
+  // The walk runs on the relay's path before each line is passed on, so it visits a bounded number of values.
   walk(value, "", "", 0, paths, { left: MAX_VISITS });
   const kept: ShapePath[] = [];
   let size = 0;
@@ -75,13 +75,13 @@ const walk = (
   paths.add(`${at}:${typeName(value)}`);
 };
 
-// A word under type, kind, status or role elsewhere, such as in a map entry or a user's own object, may be the user's value, so only these places keep it.
 const isDiscriminator = (at: string, key: string, value: string) => {
   if (at === "" && key === "method") return METHOD_WORD.test(value);
   if (!PLAIN_WORD.test(value)) return false;
   const place = `${at}.${key}`
     .replaceAll("[]", "")
     .replace(/^(?:params|result|error)\./, "");
+  // A word under type, kind, status or role elsewhere, such as in a map entry or a user's own object, may be the user's value, so only these places keep it.
   return DISCRIMINATOR_PLACES.has(place);
 };
 
@@ -105,8 +105,8 @@ const typeName = (value: unknown) => {
 export const shapeKey = (paths: readonly ShapePath[]) =>
   Bun.hash(paths.join("\n")).toString(16).padStart(16, "0");
 
-// Only a path the walk could have written passes, so a log edited by hand cannot carry text, a file path or an odd key through it.
 export const isShapePath = (path: string) =>
+  // Only a path the walk could have written passes, so a log edited by hand cannot carry text, a file path or an odd key through it.
   path.length <= MAX_PATH_CHARS && SHAPE_PATH.test(path);
 
 // The protocol names fields in camelCase, with a few in snake_case.

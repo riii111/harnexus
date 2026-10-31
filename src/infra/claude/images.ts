@@ -27,7 +27,6 @@ class ImageTooLarge extends TaggedError("ImageTooLarge")<{
   message: string;
 }> {}
 
-// Claude refuses a whole request once it holds an image over its limits, and a conversation keeps every image it was sent, so an image is brought within them before it reaches Claude.
 export const readImage = async (
   source: ImageSource,
   resize: ResizeImage,
@@ -52,6 +51,7 @@ export const readImage = async (
     );
   }
   const longEdge = Math.max(size.width, size.height);
+  // Claude refuses a whole request once it holds an image over its limits, and a conversation keeps every image it was sent, so an image is brought within them before it reaches Claude.
   if (longEdge <= MAX_EDGE && fits(bytes)) {
     return Result.ok(block(mediaType, bytes));
   }
@@ -76,13 +76,13 @@ const bytesOf = async (
     : Result.ok(read.value);
 };
 
-// Text in a screenshot stays readable as PNG, so JPEG is used only for a JPEG or when PNG at the edge is still too large.
 const shrink = async (
   bytes: Uint8Array,
   mediaType: MediaType,
   longEdge: number,
   resize: ResizeImage,
 ): Promise<Result<ImageBlock, ImageTooLarge>> => {
+  // Text in a screenshot stays readable as PNG, so JPEG is used only for a JPEG or when PNG at the edge is still too large.
   const formats =
     mediaType === "image/jpeg"
       ? (["jpeg"] as const)
@@ -167,8 +167,8 @@ const webpSize = (bytes: Uint8Array, view: DataView) => {
   }
 };
 
-// The size is in the first start-of-frame segment, which may follow metadata segments such as EXIF.
 const jpegSize = (bytes: Uint8Array, view: DataView) => {
+  // The size is in the first start-of-frame segment, which may follow metadata segments such as EXIF.
   let offset = 2;
   while (offset + 9 <= bytes.length) {
     if (bytes[offset] !== 0xff) return null;

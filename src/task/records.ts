@@ -50,7 +50,7 @@ export const readRecords = (directory: string) =>
     });
   });
 
-// A recovery flag is how the user, having checked what the lost send did, releases it: discard removes the record, and adopt returns it for the caller to continue from.
+// Settles a pending send by the user's recovery flag: discard removes the record, and adopt returns it for the caller to continue from.
 export const settlePending = (
   { pending, pendingPath }: Pick<Records, "pending" | "pendingPath">,
   recover: Recovery | undefined,
@@ -61,6 +61,7 @@ export const settlePending = (
       return recover === undefined
         ? Result.ok<Fields | null>(null)
         : fail(messages.nothingPending);
+    // Only the user, having checked what the lost send did, releases it.
     if (recover === undefined) return fail(messages.blocked(pending));
     if (recover === "discard") {
       yield* Result.await(removeRecord(pendingPath));
@@ -76,10 +77,10 @@ const asRecord = (value: unknown, path: string) =>
       ? Result.ok(value)
       : fail(`${path} does not hold a JSON object`);
 
-// Indented by one space like the Python taskctl, so the files read alike in either version.
 export const saveJson: SaveJson = (path, data, { exclusive }) =>
   Result.gen(async function* () {
     yield* Result.await(io(prepareDirectory(dirname(path))));
+    // Indented by one space like the Python taskctl, so the files read alike in either version.
     const content = JSON.stringify(data, null, 1);
     if (!exclusive) {
       yield* Result.await(io(writeFileAtomic(path, content)));
@@ -108,10 +109,10 @@ export const stateRoot = (env: Env) =>
     "taskctl",
   );
 
-// Each kind lays out its own key, since changing one would lose the directories already recorded under it.
 export const stateDirectory = (env: Env, kind: string, key: string) =>
   join(
     stateRoot(env),
     kind,
+    // Each kind lays out its own key, since changing one would lose the directories already recorded under it.
     createHash("sha256").update(key).digest("hex").slice(0, 16),
   );
