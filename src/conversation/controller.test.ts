@@ -813,21 +813,6 @@ describe("turn/interrupt", () => {
     expect(turnCompleted(sent)).toMatchObject({ status: "interrupted" });
   });
 
-  test("refuses a turn that already completed", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
-
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => responseTo(sent, 10) !== undefined);
-    claude.emit(sdk(answer("msg-1", "hi")));
-    claude.emit(sdk(success()));
-    await until(() => turnCompleted(sent) !== undefined);
-    turns.interruptTurn(interrupt(20, "turn-1"));
-
-    expect(responseTo(sent, 20)?.error).toBeDefined();
-    expect(claude.interrupts()).toBe(0);
-  });
-
   test("asks Claude once when the stop is sent twice", async () => {
     const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
     const { turns, sent } = await harness([claude]);
@@ -844,13 +829,39 @@ describe("turn/interrupt", () => {
     expect(claude.interrupts()).toBe(1);
   });
 
-  test("refuses a turn id that is not running", async () => {
+  test.each<{
+    name: string;
+    turnId: string;
+    beforeInterrupt: (
+      claude: ReturnType<typeof fakeClaude>,
+      sent: Sent[],
+    ) => Promise<void>;
+  }>([
+    {
+      name: "a turn that already completed",
+      turnId: "turn-1",
+      beforeInterrupt: async (claude, sent) => {
+        claude.emit(sdk(answer("msg-1", "hi")));
+        claude.emit(sdk(success()));
+        await until(() => turnCompleted(sent) !== undefined);
+      },
+    },
+    {
+      name: "a turn id that is not running",
+      turnId: "turn-9",
+      beforeInterrupt: async () => {},
+    },
+  ])("refuses to stop $name without asking Claude", async ({
+    turnId,
+    beforeInterrupt,
+  }) => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
-
     turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
-    turns.interruptTurn(interrupt(20, "turn-9"));
+    await until(() => responseTo(sent, 10) !== undefined);
+    await beforeInterrupt(claude, sent);
+
+    turns.interruptTurn(interrupt(20, turnId));
 
     expect(responseTo(sent, 20)?.error).toBeDefined();
     expect(claude.interrupts()).toBe(0);
