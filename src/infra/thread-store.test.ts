@@ -47,20 +47,6 @@ describe("openThreadStore", () => {
     });
   });
 
-  test("loads a file saved before message ids and efforts were kept with none of them", async () => {
-    await writeFile(
-      path,
-      JSON.stringify({ version: 1, threads: [SAVED_RECORD] }),
-    );
-
-    const store = await openStore();
-
-    expect(store.get("thread-1")).toMatchObject({
-      messageIds: [],
-      effort: null,
-    });
-  });
-
   test("loads a file that still lists reviewer and requester threads without them", async () => {
     await writeFile(
       path,

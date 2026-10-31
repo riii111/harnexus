@@ -1,4 +1,4 @@
-export type LogSink = (line: string) => void;
+type LogSink = (line: string) => void;
 
 // Each layer owns its event type and a serializer that copies only known fields, so request bodies, conversations, code and credentials cannot reach the log even through a widened object.
 export const createLogger = <E>(

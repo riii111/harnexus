@@ -321,6 +321,7 @@ export const harness = async (
     ...(permissionMode !== undefined && { permissionMode }),
   });
   const runs = new Map<string, Promise<void>>();
+  const idled: string[] = [];
   const turns = createTurnController({
     store,
     threads,
@@ -332,6 +333,10 @@ export const harness = async (
         const ran = runtime.run(turn);
         runs.set(turn.turnId, ran);
         return ran;
+      },
+      threadIdle: (threadId) => {
+        runtime.threadIdle(threadId);
+        idled.push(threadId);
       },
     },
     materializeThread: async (threadId) => {
@@ -362,6 +367,7 @@ export const harness = async (
     subagents,
     runtime,
     sessionLinks,
+    idled,
   };
 };
 

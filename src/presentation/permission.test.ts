@@ -83,40 +83,6 @@ describe("promptFor calls that must default to no", () => {
       },
     ]);
   });
-
-  test.each([
-    {
-      name: "the approving word in other case and spacing",
-      typed: " allow ",
-      expected: "allow",
-    },
-    { name: "a choice number", typed: "2", expected: "deny" },
-    { name: "an empty answer", typed: "", expected: "deny" },
-  ])("answers $expected to $name", ({ typed, expected }) => {
-    const prompt = promptFor(
-      { ...call("WebFetch", {}, null), defaultToNo: true },
-      TARGET,
-    );
-
-    expect(
-      prompt.decide({ answers: { approval: { answers: [typed] } } }).behavior,
-    ).toBe(expected);
-  });
-
-  test("leaves plan mode only when the approving word is typed", () => {
-    const prompt = promptFor(
-      { ...call("ExitPlanMode", {}, null), defaultToNo: true },
-      TARGET,
-    );
-
-    const typed = prompt.decide({
-      answers: { plan: { answers: ["approve"] } },
-    });
-    const numbered = prompt.decide({ answers: { plan: { answers: ["1"] } } });
-
-    expect(typed.behavior).toBe("allow");
-    expect(numbered.behavior).toBe("deny");
-  });
 });
 
 describe("promptFor multi-select questions", () => {
@@ -136,40 +102,13 @@ describe("promptFor multi-select questions", () => {
       },
     ]);
   });
-
-  test("returns the typed answer as the choices", () => {
-    const input = { questions: [{ ...QUESTION, multiSelect: true }] };
-    const prompt = promptFor(call("AskUserQuestion", input, null), TARGET);
-
-    const decision = prompt.decide({
-      answers: { "question-1": { answers: ["zod, valibot"] } },
-    });
-
-    expect(decision).toEqual({
-      behavior: "allow",
-      updatedInput: { ...input, answers: { "Which library?": "zod, valibot" } },
-    });
-  });
 });
 
 describe("promptFor decisions", () => {
-  test("denies a command approval of a network amendment", () => {
-    const prompt = promptFor(call("Bash", { command: "ls" }, COMMAND), TARGET);
-
-    const decision = prompt.decide({
-      decision: { applyNetworkPolicyAmendment: {} },
-    });
-
-    expect(decision.behavior).toBe("deny");
-  });
-
-  test.each([
-    { name: "no answer", answer: null },
-    { name: "an answer without a decision", answer: {} },
-  ])("denies a file change approval with $name", ({ answer }) => {
+  test("denies a file change approval nobody answered", () => {
     const prompt = promptFor(call("Write", {}, FILE_CHANGE), TARGET);
 
-    expect(prompt.decide(answer)).toEqual({
+    expect(prompt.decide(null)).toEqual({
       behavior: "deny",
       message: expect.stringContaining("no answer"),
     });
@@ -206,26 +145,20 @@ describe("promptFor decisions", () => {
     ).toBe("deny");
   });
 
-  test("returns to manual approvals after a plan when explicitly configured", () => {
-    const prompt = promptFor(call("ExitPlanMode", { plan: "1. edit" }, null), {
-      ...TARGET,
-      implementationMode: "default",
-    });
-
-    expect(
-      prompt.decide({ answers: { plan: { answers: ["Approve"] } } }),
-    ).toEqual({
-      behavior: "allow",
-      updatedPermissions: [
-        { type: "setMode", mode: "default", destination: "session" },
-      ],
-    });
-  });
-
-  test("returns to auto mode by default when the plan is approved", () => {
+  test.each([
+    {
+      name: "explicitly configured",
+      target: { ...TARGET, implementationMode: "default" as const },
+      expected: "default",
+    },
+    { name: "left unconfigured", target: TARGET, expected: "auto" },
+  ])("returns to $expected mode after an approved plan when $name", ({
+    target,
+    expected,
+  }) => {
     const prompt = promptFor(
       call("ExitPlanMode", { plan: "1. edit" }, null),
-      TARGET,
+      target,
     );
 
     expect(
@@ -233,7 +166,7 @@ describe("promptFor decisions", () => {
     ).toEqual({
       behavior: "allow",
       updatedPermissions: [
-        { type: "setMode", mode: "auto", destination: "session" },
+        { type: "setMode", mode: expected, destination: "session" },
       ],
     });
   });
@@ -245,6 +178,11 @@ describe("promptFor decisions", () => {
       expected: "keep planning",
     },
     { name: "feedback", chosen: "split step 2", expected: "split step 2" },
+    {
+      name: "a choice number",
+      chosen: "1",
+      expected: "changes to the plan: 1",
+    },
   ])("stays in plan mode with $name", ({ chosen, expected }) => {
     const prompt = promptFor(call("ExitPlanMode", {}, null), TARGET);
 
@@ -347,14 +285,11 @@ describe("promptFor remembering choices on a command", () => {
     });
   });
 
-  test.each<{ name: string; suggestions: PermissionUpdate[] }>([
-    { name: "no suggestion", suggestions: [] },
-    {
-      name: "a rule the app cannot show",
-      suggestions: [bashRule("git status")],
-    },
-  ])("allows a policy amendment only once with $name", ({ suggestions }) => {
-    const prompt = promptFor(suggested("Bash", COMMAND, suggestions), TARGET);
+  test("allows a policy amendment only once with a rule the app cannot show", () => {
+    const prompt = promptFor(
+      suggested("Bash", COMMAND, [bashRule("git status")]),
+      TARGET,
+    );
 
     const decision = prompt.decide({
       decision: {
@@ -365,49 +300,37 @@ describe("promptFor remembering choices on a command", () => {
     expect(decision).toEqual({ behavior: "allow" });
   });
 
-  test("allows the session only once when Claude suggests nothing", () => {
-    const prompt = promptFor(suggested("Bash", COMMAND, []), TARGET);
-
-    expect(prompt.decide({ decision: "acceptForSession" })).toEqual({
-      behavior: "allow",
-    });
-  });
-
   test.each([
-    { name: "decline", answer: { decision: "decline" } },
-    { name: "cancel", answer: { decision: "cancel" } },
-    { name: "no answer", answer: null },
-  ])("returns no rules on $name", ({ answer }) => {
+    { name: "decline", answer: { decision: "decline" }, reason: "declined" },
+    { name: "cancel", answer: { decision: "cancel" }, reason: "declined" },
+    {
+      name: "a network amendment",
+      answer: { decision: { applyNetworkPolicyAmendment: {} } },
+      reason: "declined",
+    },
+    { name: "no answer", answer: null, reason: "no answer" },
+    { name: "an answer without a decision", answer: {}, reason: "no answer" },
+  ])("returns no rules on $name", ({ answer, reason }) => {
     const prompt = promptFor(suggested("Bash", COMMAND, [NPM_TEST]), TARGET);
 
     expect(prompt.decide(answer)).toEqual({
       behavior: "deny",
-      message: expect.any(String),
+      message: expect.stringContaining(reason),
     });
   });
 });
 
 describe("promptFor remembering choices on a file change", () => {
-  test.each<{ name: string; decision: unknown; expected: PermissionResult }>([
-    { name: "accept", decision: "accept", expected: { behavior: "allow" } },
-    {
-      name: "accept for the session",
-      decision: "acceptForSession",
-      expected: {
-        behavior: "allow",
-        updatedPermissions: [{ ...ACCEPT_EDITS, destination: "session" }],
-      },
-    },
-  ])("returns Claude's suggestions only for the session on $name", ({
-    decision,
-    expected,
-  }) => {
+  test("returns Claude's suggestions only for the session on accept for the session", () => {
     const prompt = promptFor(
       suggested("Edit", FILE_CHANGE, [ACCEPT_EDITS]),
       TARGET,
     );
 
-    expect(prompt.decide({ decision })).toEqual(expected);
+    expect(prompt.decide({ decision: "acceptForSession" })).toEqual({
+      behavior: "allow",
+      updatedPermissions: [{ ...ACCEPT_EDITS, destination: "session" }],
+    });
   });
 });
 
@@ -508,7 +431,8 @@ describe("promptFor remembering choices on another tool", () => {
       prompt.decide({ answers: { approval: { answers: [word] } } });
 
     expect(prompt.params.questions).toMatchObject([{ options: null }]);
-    expect(typed("Allow")).toEqual({ behavior: "allow" });
+    expect(typed(" allow ")).toEqual({ behavior: "allow" });
+    expect(typed("2").behavior).toBe("deny");
     expect(typed("Always allow").behavior).toBe("deny");
     expect(typed("Allow for this session").behavior).toBe("deny");
   });

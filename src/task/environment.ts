@@ -4,14 +4,14 @@ import { requestLine } from "../runtime/socket.boundary.ts";
 import { fail, type TaskFailed } from "./format.ts";
 import { type Env, homeOf } from "./request.ts";
 
-export const EXECUTION_ENV = "HARNEXUS_EXECUTION_ENV";
+const EXECUTION_ENV = "HARNEXUS_EXECUTION_ENV";
 const CLOUD_HINT_ENV = "CODEX_ENVIRONMENT_ID";
 const CLAUDE_CLOUD_ENV = "CLAUDE_CODE_REMOTE";
 const PROBE_TIMEOUT_MS = 1500;
 
-export type ExecutionEnvironment = "cloud" | "local" | "unknown";
+type ExecutionEnvironment = "cloud" | "local" | "unknown";
 
-export type Detected = {
+type Detected = {
   environment: ExecutionEnvironment;
   // Names where the answer came from; never a value of the environment.
   source:

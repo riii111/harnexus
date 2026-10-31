@@ -74,10 +74,6 @@ export const createSubagentRestore = <E extends { _tag: string }>({
   return { restore };
 };
 
-export type SubagentRestore<E extends { _tag: string }> = ReturnType<
-  typeof createSubagentRestore<E>
->;
-
 // Agents are numbered under their parent in the order they started, as they were while they ran; an agent another agent started names it in its records, and one that does not, though Claude noted it as nested, is left out.
 // Records Claude kept may disagree with each other, so an agent whose id or starting call an earlier agent already has is left out.
 // Each agent's runs are its starting call and then each call that resumed it, in the order they were made, so the history of whichever conversation made a call shows the agent's activity and edits there.

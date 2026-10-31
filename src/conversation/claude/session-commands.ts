@@ -17,7 +17,7 @@ export type SessionCommand =
   | { kind: "session" };
 
 // Asks the user to pick from a page of the list; it answers none once the turn is stopped.
-export type AskPick = (page: PickerPage) => Promise<PickerAnswer>;
+type AskPick = (page: PickerPage) => Promise<PickerAnswer>;
 
 // Only the command, the reply's kind and error tags are logged, never a title or a session id.
 export type SessionEvent =

@@ -31,9 +31,9 @@ export type GitHub = {
   ) => Promise<Result<PrRef[], WatchFailed>>;
 };
 
-export type Env = Record<string, string | undefined>;
+type Env = Record<string, string | undefined>;
 
-export type RunCommand = (
+type RunCommand = (
   argv: readonly string[],
   env: Env,
 ) => Promise<Result<CommandOutput, CommandFailed>>;
@@ -53,7 +53,7 @@ export type PrSummary = {
 };
 
 // A check run is read into a commit status's terms: PENDING until it completes, then its conclusion, with an empty description.
-export type BotStatus = {
+type BotStatus = {
   state: string;
   description: string;
   createdAt: string;

@@ -74,17 +74,13 @@ export const senderFor = (
 const NO_SENDER =
   "no chat is registered to send from: run harnexus-task watch --sender in a chat kept for it";
 
-export type AppCall = (
-  caller: string,
-  tool: string,
-  args: Fields,
-) => Promise<Fields>;
+type AppCall = (caller: string, tool: string, args: Fields) => Promise<Fields>;
 
-export type ThreadView =
+type ThreadView =
   | { gone: true }
   | { gone: false; active: boolean; turns: Turn[] };
 
-export type Turn = {
+type Turn = {
   status: string;
   startedAt: number | null;
   completedAt: number | null;
@@ -96,7 +92,7 @@ export type Turn = {
 
 // Null means the app could not be asked, as while it is closed or the Mac sleeps; the next cycle asks again.
 // While an answer to a message sent at sentAt is awaited, older pages are read until they reach it, so later talk in the chat cannot hide the answer.
-export const readThread = async (
+const readThread = async (
   callApp: AppCall,
   caller: string,
   thread: string,
@@ -262,10 +258,7 @@ const finalTextOf = (items: unknown[]) => {
 const numberOrNull = (value: unknown) =>
   typeof value === "number" ? value : null;
 
-export const busyReason = (
-  view: { active: boolean; turns: Turn[] },
-  now: Date,
-) => {
+const busyReason = (view: { active: boolean; turns: Turn[] }, now: Date) => {
   const latest = view.turns[0];
   if (view.active || latest?.status === "inProgress")
     return "worker turn in progress";
@@ -282,7 +275,7 @@ export const busyReason = (
 const OWNER_GRACE_MS = 5 * 60_000;
 
 // The turn our message started: sent from our thread with our text, no earlier than we sent it. The read lists turns newest first.
-export const answerTo = (
+const answerTo = (
   turns: readonly Turn[],
   sent: { at: string; sender: string; prompt: string },
 ) => {

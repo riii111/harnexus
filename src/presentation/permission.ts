@@ -26,7 +26,7 @@ export type ToolCall = {
   suppressAlwaysAllow: boolean;
 };
 
-export type PromptTarget = {
+type PromptTarget = {
   threadId: string;
   turnId: string;
   itemId: string;
@@ -34,7 +34,7 @@ export type PromptTarget = {
   implementationMode?: "default" | "auto";
 };
 
-export type AppPrompt = {
+type AppPrompt = {
   method: string;
   params: Record<string, unknown>;
   decide: (answer: unknown) => PermissionResult;

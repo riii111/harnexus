@@ -34,7 +34,7 @@ const THREAD_ID =
 const VERDICT = /^\s*判定:\s*(LGTM|修正必要|判定保留)/m;
 const NO_ROLLOUT = "no rollout found";
 
-export type CloudReviewArgs = {
+type CloudReviewArgs = {
   request: string;
   model?: string;
   thinking?: string;
@@ -42,7 +42,7 @@ export type CloudReviewArgs = {
   recover?: "discard";
 };
 
-export type CloudReviewDeps = { env: Env; saveJson: SaveJson; git: Git };
+type CloudReviewDeps = { env: Env; saveJson: SaveJson; git: Git };
 
 // One reviewer per task and checkout, as in the app.
 const directory = (env: Env, checkout: string, taskId: string) =>

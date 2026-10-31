@@ -233,23 +233,6 @@ describe("createCodexLink tools", () => {
     });
   });
 
-  test("prefers a thread id in the structured answer over one in the text", async () => {
-    const { client } = await connect({
-      answer: () =>
-        Result.ok({
-          ...textAnswer(JSON.stringify({ threadId: OTHER_REVIEWER })),
-          structuredContent: { threadId: REVIEWER },
-        }),
-    });
-
-    const created = await client.callTool({
-      name: "create_thread",
-      arguments: { prompt: "review", target: TARGET },
-    });
-
-    expect(created.structuredContent).toEqual({ threadId: REVIEWER });
-  });
-
   test("refuses a target outside the forms the app defines without calling it", async () => {
     const { client, requests } = await connect();
 

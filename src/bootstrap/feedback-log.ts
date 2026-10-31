@@ -4,7 +4,7 @@ import { isObject } from "../runtime/object.ts";
 import { VERSION } from "./checkout.ts";
 import type { RecordedShape } from "./feedback-protocol.ts";
 
-export type LogLine = {
+type LogLine = {
   time: string;
   timeMs: number;
   pid: number | null;
@@ -12,7 +12,7 @@ export type LogLine = {
   fields: Record<string, unknown>;
 };
 
-export type ParsedLog = {
+type ParsedLog = {
   lines: LogLine[];
   unreadable: number;
   leftOutFields: Set<string>;

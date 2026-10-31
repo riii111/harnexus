@@ -1,18 +1,33 @@
 import { describe, expect, test } from "bun:test";
+import { Result } from "better-result";
 import type { Fields } from "../runtime/object.ts";
-import { answerTo, busyReason, readThread } from "./watch-worker.ts";
+import { codexWorkers } from "./watch-worker.ts";
 
 const answered = (read: unknown) => async () => ({
   outcome: "done",
   result: { content: [{ type: "text", text: JSON.stringify(read) }] },
 });
 
-describe("readThread", () => {
+const NOW = new Date(1_000_000_000);
+
+const look = (
+  call: (caller: string, tool: string, args: Fields) => Promise<Fields>,
+  awaited: { at: string; sender: string; prompt: string } | null,
+) =>
+  codexWorkers(call, async () => Result.ok(null)).look(
+    "reviewer",
+    "worker",
+    awaited,
+    NOW,
+  );
+
+describe("codexWorkers.look", () => {
   test("reads a Codex worker's delegation from the call output, even when cut short", async () => {
     const prompt =
       "$task-worker\nPR <https://github.com/org/pay/pull/7> で対応が必要なこと";
     const calls: Fields[] = [];
-    const view = await readThread(
+
+    const view = await look(
       async (caller, tool, args) => {
         calls.push({ caller, tool, ...args });
         return answered({
@@ -42,9 +57,7 @@ describe("readThread", () => {
           ],
         })();
       },
-      "reviewer",
-      "worker",
-      null,
+      { at: new Date(100_000).toISOString(), sender: "reviewer", prompt },
     );
 
     expect(calls).toEqual([
@@ -57,13 +70,11 @@ describe("readThread", () => {
         maxOutputCharsPerItem: 2000,
       },
     ]);
-    const turns = view !== null && !view.gone ? view.turns : [];
-    const turn = answerTo(turns, {
-      at: new Date(100_000).toISOString(),
-      sender: "reviewer",
-      prompt,
+    expect(view).toEqual({
+      gone: false,
+      busy: null,
+      answer: { status: "completed", text: "指摘なし" },
     });
-    expect([turn?.origin, turn?.answer]).toEqual(["delegated", "指摘なし"]);
   });
 
   test("reads older pages until it reaches the answer to the sent message", async () => {
@@ -79,19 +90,18 @@ describe("readThread", () => {
       [ownerTurn(10)],
     ]);
 
-    const view = await readThread(app.call, "reviewer", "worker", sent.at);
+    const view = await look(app.call, sent);
 
-    const turns = view !== null && !view.gone ? view.turns : [];
-    expect(answerTo(turns, sent)?.answer).toBe("answered");
+    expect(view !== null && !view.gone && view.answer?.text).toBe("answered");
     expect(app.cursors).toEqual([undefined, "page:1", "page:2"]);
   });
 
   test("reads only the latest page while no answer is awaited", async () => {
     const app = pagedApp([[ownerTurn(400)], [ownerTurn(300)]]);
 
-    const view = await readThread(app.call, "reviewer", "worker", null);
+    const view = await look(app.call, null);
 
-    expect(view !== null && !view.gone && view.turns.length).toBe(1);
+    expect(view !== null && !view.gone && view.answer).toBeNull();
     expect(app.cursors).toEqual([undefined]);
   });
 
@@ -115,63 +125,60 @@ describe("readThread", () => {
       expected: null,
     },
   ])("reports $name", async ({ answer, expected }) => {
-    const view = await readThread(
-      async () => answer,
-      "reviewer",
-      "worker",
-      null,
-    );
+    const view = await look(async () => answer, null);
 
     expect(view).toEqual(expected);
   });
 });
 
-describe("busyReason", () => {
-  const now = new Date(1_000_000_000);
-  const at = (secondsAgo: number) => now.getTime() / 1000 - secondsAgo;
-  const turn = (fields: Fields) => ({
-    status: "completed",
-    startedAt: at(600),
-    completedAt: at(600),
-    origin: "owner" as const,
-    delegation: null,
-    answer: "",
-    ...fields,
-  });
+describe("codexWorkers.look busy reason", () => {
+  const at = (secondsAgo: number) => NOW.getTime() / 1000 - secondsAgo;
 
   test.each([
     {
       name: "a running thread",
       active: true,
-      latest: turn({}),
+      latest: ownerTurn(at(600)),
       expected: "worker turn in progress",
     },
     {
       name: "a turn still in progress",
       active: false,
-      latest: turn({ status: "inProgress", completedAt: null }),
+      latest: {
+        ...ownerTurn(at(600)),
+        status: "inProgress",
+        completedAt: null,
+      },
       expected: "worker turn in progress",
     },
     {
       name: "the owner's turn that ended a minute ago",
       active: false,
-      latest: turn({ completedAt: at(60) }),
+      latest: ownerTurn(at(60)),
       expected: "owner just talked to the worker",
     },
     {
       name: "the owner's turn that ended ten minutes ago",
       active: false,
-      latest: turn({}),
+      latest: ownerTurn(at(600)),
       expected: null,
     },
     {
       name: "another thread's turn that ended a minute ago",
       active: false,
-      latest: turn({ origin: "delegated", completedAt: at(60) }),
+      latest: delegatedTurn(at(60), "hi"),
       expected: null,
     },
-  ])("tells $name", ({ active, latest, expected }) => {
-    expect(busyReason({ active, turns: [latest] }, now)).toBe(expected);
+  ])("tells $name", async ({ active, latest, expected }) => {
+    const view = await look(
+      answered({
+        thread: { status: { type: active ? "active" : "idle" } },
+        turns: [latest],
+      }),
+      null,
+    );
+
+    expect(view).toEqual({ gone: false, busy: expected, answer: null });
   });
 });
 

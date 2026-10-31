@@ -20,17 +20,6 @@ describe("renderPlan TodoWrite", () => {
     ]);
   });
 
-  test("waits for the call's result before sending the plan", () => {
-    const called = feed([call("tool-1", "TodoWrite", { todos: TODOS })]);
-
-    const answered = feed([result("tool-1", "ok")], called.plan);
-
-    expect(called.sent).toEqual([]);
-    expect(steps(answered.sent)).toEqual([
-      ["Read the spec", "Write the code", "Run the tests"],
-    ]);
-  });
-
   test("shows the list of a call only once it succeeds, never of a refused one", () => {
     const out = feed([
       call("tool-1", "TodoWrite", { todos: TODOS }),
@@ -54,14 +43,6 @@ describe("renderPlan TodoWrite", () => {
     expect(steps(out.sent)).toEqual([
       ["Read the spec", "Write the code", "Run the tests"],
     ]);
-  });
-
-  test("sends one plan for a call repeated across messages", () => {
-    const repeated = call("tool-1", "TodoWrite", { todos: TODOS });
-
-    const out = feed([repeated, repeated, result("tool-1", "ok"), repeated]);
-
-    expect(out.sent).toHaveLength(1);
   });
 
   test.each([

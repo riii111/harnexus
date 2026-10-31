@@ -24,14 +24,14 @@ import { createTurnRecords } from "./turn-records.ts";
 // A Cloud thread's turns log their failure tags beside the Claude runtime's, so the log takes any tag a runtime writes.
 export type CloudLogEvent = CloudEvent | TurnEvent;
 
-export type CloudFailureTag =
+type CloudFailureTag =
   | "CloudInputUnsupported"
   | "CloudSendRejected"
   | "CloudSendUnknown"
   | "CloudCopyFailed";
 
 // Only steps, counts, durations and error tags are logged, never a session id or text.
-export type CloudEvent =
+type CloudEvent =
   | {
       event: "claude_cloud";
       step:

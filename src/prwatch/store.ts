@@ -117,7 +117,7 @@ export type WatchState = {
   halted: Fields | null;
 };
 
-export type Delivered = {
+type Delivered = {
   at: string;
   sender: string;
   prompt: string;

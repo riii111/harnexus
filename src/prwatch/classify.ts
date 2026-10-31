@@ -20,7 +20,7 @@ export type Finding = {
   approval: Approval | null;
 };
 
-export type Approval = "with_body" | "without_body";
+type Approval = "with_body" | "without_body";
 
 export const classify = (
   comments: readonly PrComment[],

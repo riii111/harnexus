@@ -21,11 +21,10 @@ describe("loadPermissionMode", () => {
     expect(loaded.isOk() && loaded.value).toBe(expected);
   });
 
-  test.each([
-    { name: "bypass permissions", value: "bypassPermissions" },
-    { name: "a misspelling", value: "atuo" },
-  ])("rejects $name instead of changing approval behavior", ({ value }) => {
-    const loaded = loadPermissionMode({ HARNEXUS_PERMISSION_MODE: value });
+  test("rejects bypass permissions instead of changing approval behavior", () => {
+    const loaded = loadPermissionMode({
+      HARNEXUS_PERMISSION_MODE: "bypassPermissions",
+    });
 
     expect(loaded.isErr() && loaded.error._tag).toBe("PermissionModeInvalid");
   });

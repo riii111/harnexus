@@ -23,7 +23,7 @@ export type ForkPoint = {
 } | null;
 
 // A Claude main conversation is read only when the side chat moves to Codex, from the point fixed at the fork; a Codex one is read while the fork is asked for, since the server keeps no turns of an ephemeral fork, and only the reference made from it is kept. An unread one keeps the side chat on its main thread's agent.
-export type Parent =
+type Parent =
   | { agent: "Claude"; point: ForkPoint }
   | { agent: "Codex"; reference: string | null }
   | { agent: "Claude" | "Codex"; unread: true };

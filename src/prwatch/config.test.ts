@@ -64,10 +64,9 @@ describe("loadConfig", () => {
     ]);
   });
 
-  test("takes the Claude preset and a described bot that waits for a check run", async () => {
+  test("takes a described bot that waits for a check run", async () => {
     const config = await configWith({
       reviewBots: [
-        "claude",
         {
           id: "other",
           name: "OtherBot",
@@ -77,11 +76,8 @@ describe("loadConfig", () => {
       ],
     });
 
-    expect(
-      config.unwrap().reviewBots.map((bot) => [bot.id, bot.status]),
-    ).toEqual([
-      ["claude", { checkRun: "Claude AI Review" }],
-      ["other", { checkRun: "Other Review" }],
+    expect(config.unwrap().reviewBots.map((bot) => bot.status)).toEqual([
+      { checkRun: "Other Review" },
     ]);
   });
 

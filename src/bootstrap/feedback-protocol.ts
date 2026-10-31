@@ -43,7 +43,7 @@ export type ProtocolDiff = {
   unseen: readonly RecordedShape[];
 };
 
-export type VariantChange = {
+type VariantChange = {
   method: string;
   recorded: number;
   added: readonly ShapePath[];
