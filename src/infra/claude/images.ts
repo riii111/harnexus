@@ -1,5 +1,5 @@
 import { Result, TaggedError } from "better-result";
-import { readRegularFileBytes } from "../../runtime/fs.boundary.ts";
+import { readRegularFileBytesWithin } from "../../runtime/fs.boundary.ts";
 
 export type ImageBlock = {
   type: "image";
@@ -67,7 +67,7 @@ const bytesOf = async (
       ? Result.err(new ImageUnreadable({ message: "not a base64 data URL" }))
       : Result.ok(Buffer.from(data, "base64"));
   }
-  const read = await readRegularFileBytes(source.path, MAX_FILE_BYTES);
+  const read = await readRegularFileBytesWithin(source.path, MAX_FILE_BYTES);
   if (read.isErr()) {
     return Result.err(new ImageUnreadable({ message: read.error.message }));
   }

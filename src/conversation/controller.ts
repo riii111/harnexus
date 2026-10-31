@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { Result, TaggedError } from "better-result";
 import type { ImageSource } from "../infra/claude/images.ts";
-import { type EffortRule, isClaudeEffort } from "../infra/claude/models.ts";
 import { createAppRequests } from "../infra/codex/app-requests.ts";
 import { delegatedMessage } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
@@ -26,7 +25,6 @@ import { isObject } from "../runtime/object.ts";
 import {
   type AppRequest,
   checkThread,
-  type Mode,
   type Refusal,
   refusalMessage,
   requestedEffort,
@@ -50,8 +48,10 @@ import type {
 } from "./turn-runtime.ts";
 
 // Only steps, turn statuses, models, effort levels, token counts, durations, refusal reasons and error tags are logged, never thread ids or text.
-// Tag is the failure tags a runtime declares, so only a tag written in code can reach the log as a turn's error.
-export type TurnEvent<Tag extends string = string> =
+export type TurnEvent<
+  // The failure tags a runtime declares, so only a tag written in code can reach the log as a turn's error.
+  Tag extends string = string,
+> =
   | ThreadValueEvent
   | {
       event: "claude_turn";
@@ -60,8 +60,7 @@ export type TurnEvent<Tag extends string = string> =
         | "queued"
         | "outcome_unknown"
         | "steered"
-        | "outcome_cleared"
-        | "effort_unsupported";
+        | "outcome_cleared";
     }
   | {
       event: "claude_turn";
@@ -117,7 +116,6 @@ export const createTurnController = <Tag extends string>({
   log,
   now = Date.now,
   newTurnId = () => `harnexus-turn-${randomUUID()}`,
-  effortRule,
 }: {
   store: ThreadStore;
   threads: ThreadValues;
@@ -127,14 +125,11 @@ export const createTurnController = <Tag extends string>({
   log: (event: TurnEvent<Tag>) => void;
   now?: () => number;
   newTurnId?: () => string;
-  effortRule: EffortRule;
 }) => {
   const activeTurns = new Map<string, ActiveTurn<Tag>>();
   // Message ids accepted but not yet saved, so a copy arriving while the first waits or runs is caught too.
   const acceptedMessageIds = new Map<string, Set<string>>();
   const turnsInFlight = new Map<string, number>();
-  // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
-  const modes = new Map<string, Mode>();
   const materialized = new Set<string>();
   const changingConversations = new Set<string>();
   const startingTurns = new Map<
@@ -184,12 +179,12 @@ export const createTurnController = <Tag extends string>({
     if (messageId !== null) acceptMessage(threadId, messageId);
     threads.changeModel(threadId, checked.thread.model);
     const effort = requestedEffort(params);
-    if (effort !== undefined) selectEffort(threadId, effort);
+    if (effort !== undefined) threads.selectEffort(threadId, effort);
     const turn = {
       ...input,
-      permissionMode: selectMode(
+      permissionMode: threads.selectMode(
         threadId,
-        requestedMode(params) ?? modes.get(threadId) ?? "default",
+        requestedMode(params) ?? threads.modeOf(threadId) ?? "default",
       ),
       effort: threads.pickedEffortOf(threadId),
       startedBy: "app" as const,
@@ -249,7 +244,7 @@ export const createTurnController = <Tag extends string>({
       toolOutput: null,
       text: runtime.compactPrompt,
       images: [],
-      permissionMode: modes.get(threadId) ?? "default",
+      permissionMode: threads.modeOf(threadId) ?? "default",
       effort: threads.pickedEffortOf(threadId),
       startedBy: "app" as const,
     };
@@ -268,7 +263,7 @@ export const createTurnController = <Tag extends string>({
       toolOutput: null,
       text: "",
       images: [],
-      permissionMode: modes.get(threadId) ?? "default",
+      permissionMode: threads.modeOf(threadId) ?? "default",
       effort: threads.pickedEffortOf(threadId),
       startedBy: "claude",
     };
@@ -445,20 +440,6 @@ export const createTurnController = <Tag extends string>({
     }
     waiting.request.stopped = true;
     send({ id, result: {} });
-  };
-
-  const selectMode = (threadId: string, mode: Mode) => {
-    modes.set(threadId, mode);
-    return mode;
-  };
-
-  // A level only Codex models have, such as minimal or ultra, would leave Claude on some other level, so the thread keeps its own.
-  const selectEffort = (threadId: string, effort: string) => {
-    if (!isClaudeEffort(effort)) {
-      log({ event: "claude_turn", step: "effort_unsupported" });
-      return;
-    }
-    threads.changeEffort(threadId, effort);
   };
 
   const closeAll = () => {
@@ -687,7 +668,7 @@ export const createTurnController = <Tag extends string>({
       turnId: request.turnId,
       cwd: record.worktree,
       now: now(),
-      compaction: request.compaction,
+      compactionRequested: request.compaction,
     });
     const active = activeTurn(
       request,
@@ -884,27 +865,9 @@ export const createTurnController = <Tag extends string>({
     compactThread,
     steerTurn,
     interruptTurn,
-    changeModel: threads.changeModel,
     closeAll,
     reject,
     answerRequest: appRequests.answer,
-    selectMode,
-    modeOf: (threadId: string) => modes.get(threadId),
-    selectEffort,
-    effortOf: (threadId: string) => {
-      const model = threads.threadOf(threadId)?.model;
-      return model === undefined
-        ? null
-        : effortRule(model, threads.pickedEffortOf(threadId));
-    },
-    effortRule,
-    isClaudeThread: (threadId: unknown) =>
-      typeof threadId === "string" && threads.threadOf(threadId) !== undefined,
-    isCloudThread: (threadId: string) => threads.cloudOf(threadId) !== null,
-    threadOf: threads.threadOf,
-    sessionIdOf: threads.sessionIdOf,
-    takePicked: threads.takePicked,
-    rewindOf: threads.rewindOf,
     // A turn accepted but not yet started keeps the thread running between one turn's end and the next one's start.
     liveTurnOf: (threadId: string): LiveTurn | null => {
       const active = activeTurns.get(threadId);
@@ -923,8 +886,6 @@ export const createTurnController = <Tag extends string>({
       }
       return null;
     },
-    recordOf: runtime.recordOf,
-    adopt: threads.adopt,
     adoptFork: (threadId: string, thread: Thread, sourceId: string) => {
       threads.adoptFork(threadId, thread, sourceId);
       return runtime.noteFork(threadId);
@@ -934,10 +895,9 @@ export const createTurnController = <Tag extends string>({
       store.get(threadId) !== undefined ||
       threads.sessionIdOf(threadId) !== null ||
       turnsInFlight.has(threadId),
-    noteSideChat: threads.noteSideChat,
     dropFork: (threadId: string) => {
       threads.forgetFork(threadId);
-      modes.delete(threadId);
+      runtime.dropFork(threadId);
     },
   };
 };

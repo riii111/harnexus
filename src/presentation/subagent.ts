@@ -20,7 +20,7 @@ import {
   toSeconds,
 } from "./protocol-values.ts";
 import {
-  closeTurn,
+  closeTurnUnchecked,
   markToolDeclined,
   renderSdkMessage,
   renderTurnStarted,
@@ -210,7 +210,7 @@ export const closeSubagentTurn = (
   outcome: TurnOutcome,
   now: number,
 ): { history: HistoryTurn; notifications: AppNotification[] } => {
-  const closed = closeTurn(turn.state, outcome, now);
+  const closed = closeTurnUnchecked(turn.state, outcome, now);
   const { items } = collect(turn, closed.notifications);
   return {
     history: { turn: closed.turn, items: [...items.values()] },

@@ -1,8 +1,8 @@
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import type { Result } from "better-result";
-import { isClaudeEffort } from "../infra/claude/models.ts";
+import { type EffortRule, isClaudeEffort } from "../infra/claude/models.ts";
 import type { CloudLink, ThreadStore } from "../infra/thread-store.ts";
-import type { Thread } from "./thread-request.ts";
+import type { Mode, Thread } from "./thread-request.ts";
 import type { ErrorTag } from "./turn-runtime.ts";
 
 export type ThreadValues = ReturnType<typeof createThreadValues>;
@@ -17,11 +17,10 @@ export type ThreadValueEvent =
   | { event: "claude_turn"; step: "model_changed" }
   | { event: "claude_turn"; step: "session_picked"; thread: string }
   | { event: "claude_turn"; step: "effort_changed"; effort: EffortLevel }
-  | {
-      event: "claude_turn";
-      step: "session_not_saved" | "model_not_saved" | "effort_not_saved";
-      error: StoreTag;
-    };
+  | { event: "claude_turn"; step: "effort_unsupported" }
+  | { event: "claude_turn"; step: UnsavedStep; error: StoreTag };
+
+type UnsavedStep = "session_not_saved" | "model_not_saved" | "effort_not_saved";
 
 // runWrite is generic in the operation's error, so the store's own tags are listed; a new tag there fails to compile here.
 export type StoreTag =
@@ -35,10 +34,11 @@ export type StoreTag =
   | "WriteNotStarted"
   | "RunStateNotSaved";
 
-// The model, effort and session id a thread runs with are set here before the store saves them and win over what it holds, so a failed save still applies while the bridge runs; a null session id is one Claude lost.
+// The model, effort and session id a thread runs with are set here before the store saves them and win over what it holds, so a failed save still applies while the bridge runs.
 export const createThreadValues = (
   store: ThreadStore,
   log: (event: ThreadValueEvent) => void,
+  effortRule: EffortRule,
 ) => {
   // Threads created with a Claude model are saved to the store only on their first turn, so a thread never used leaves nothing behind.
   const adopted = new Map<string, Thread>();
@@ -48,9 +48,12 @@ export const createThreadValues = (
   >();
   const models = new Map<string, string>();
   const efforts = new Map<string, EffortLevel>();
+  // A null session id is one Claude lost.
   const sessionIds = new Map<string, string | null>();
   const picked = new Set<string>();
   const sideChats = new Map<string, SideChatContext>();
+  // The server keeps a Claude thread in its default mode, so the mode the app picked is remembered here.
+  const modes = new Map<string, Mode>();
 
   const threadOf = (threadId: string): Thread | undefined => {
     const record = store.get(threadId);
@@ -68,6 +71,16 @@ export const createThreadValues = (
   const pickedEffortOf = (threadId: string): EffortLevel | null => {
     const effort = efforts.get(threadId) ?? store.get(threadId)?.effort;
     return isClaudeEffort(effort) ? effort : null;
+  };
+
+  const isClaudeThread = (threadId: unknown) =>
+    typeof threadId === "string" && threadOf(threadId) !== undefined;
+
+  const effortOf = (threadId: string) => {
+    const model = threadOf(threadId)?.model;
+    return model === undefined
+      ? null
+      : effortRule(model, pickedEffortOf(threadId));
   };
 
   const sessionIdOf = (threadId: string) =>
@@ -117,6 +130,7 @@ export const createThreadValues = (
   const forgetFork = (threadId: string) => {
     adopted.delete(threadId);
     forkSources.delete(threadId);
+    modes.delete(threadId);
   };
 
   const forkSourceOf = (threadId: string) =>
@@ -182,47 +196,45 @@ export const createThreadValues = (
     if (store.get(threadId) !== undefined) saveEffort(threadId, effort);
   };
 
+  const selectMode = (threadId: string, mode: Mode) => {
+    modes.set(threadId, mode);
+    return mode;
+  };
+
+  // A level only Codex models have, such as minimal or ultra, would leave Claude on some other level, so the thread keeps its own.
+  const selectEffort = (threadId: string, effort: string) => {
+    if (!isClaudeEffort(effort)) {
+      log({ event: "claude_turn", step: "effort_unsupported" });
+      return;
+    }
+    changeEffort(threadId, effort);
+  };
+
   const setSessionId = (threadId: string, sessionId: string | null) => {
     sessionIds.set(threadId, sessionId);
-    return logUnsaved(store.setSessionId(threadId, sessionId));
+    return logUnsaved(
+      "session_not_saved",
+      store.setSessionId(threadId, sessionId),
+    );
   };
 
   const logUnsaved = async <T extends Result<unknown, { _tag: StoreTag }>>(
+    step: UnsavedStep,
     saving: Promise<T>,
   ) => {
     const saved = await saving;
     if (saved.isErr()) {
-      log({
-        event: "claude_turn",
-        step: "session_not_saved",
-        error: saved.error._tag,
-      });
+      log({ event: "claude_turn", step, error: saved.error._tag });
     }
     return saved;
   };
 
   const saveModel = (threadId: string, model: string) => {
-    void store.setModel(threadId, model).then((saved) => {
-      if (saved.isErr()) {
-        log({
-          event: "claude_turn",
-          step: "model_not_saved",
-          error: saved.error._tag,
-        });
-      }
-    });
+    void logUnsaved("model_not_saved", store.setModel(threadId, model));
   };
 
   const saveEffort = (threadId: string, effort: EffortLevel) => {
-    void store.setEffort(threadId, effort).then((saved) => {
-      if (saved.isErr()) {
-        log({
-          event: "claude_turn",
-          step: "effort_not_saved",
-          error: saved.error._tag,
-        });
-      }
-    });
+    void logUnsaved("effort_not_saved", store.setEffort(threadId, effort));
   };
 
   const cloudOf = (threadId: string): CloudLink | null =>
@@ -248,17 +260,22 @@ export const createThreadValues = (
     shown: string | null,
   ) => {
     sessionIds.set(threadId, copySessionId);
-    return logUnsaved(store.setCloudCopy(threadId, copySessionId, shown));
+    return logUnsaved(
+      "session_not_saved",
+      store.setCloudCopy(threadId, copySessionId, shown),
+    );
   };
 
   // True once per pick, so only the first reopen after it carries the whole history.
-  const takePicked = (threadId: string) => picked.delete(threadId);
+  const consumePick = (threadId: string) => picked.delete(threadId);
 
   return {
     threadOf,
+    isClaudeThread,
     pickedEffortOf,
+    effortOf,
     sessionIdOf,
-    takePicked,
+    consumePick,
     rewindOf: (threadId: string) => store.get(threadId)?.rewind,
     adopt,
     adoptFork,
@@ -273,6 +290,9 @@ export const createThreadValues = (
     markRegistered,
     changeModel,
     changeEffort,
+    selectMode,
+    modeOf: (threadId: string) => modes.get(threadId),
+    selectEffort,
     setSessionId,
     cloudOf,
     linkCloud,

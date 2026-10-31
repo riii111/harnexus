@@ -60,7 +60,9 @@ describe("/resume", () => {
 
   test("continues the picked conversation from the next turn without reaching Claude", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, store, settings, events } = await harness([claude]);
+    const { turns, threads, sent, store, settings, events } = await harness([
+      claude,
+    ]);
     await writeClaudeRecord("se-a", conversationRecords("fixture ask"));
     turns.startTurn(turnStart(10, "/resume"), undefined);
     const question = await pickQuestion(sent, 1);
@@ -86,7 +88,7 @@ describe("/resume", () => {
       thread: THREAD.slice(0, 8),
     });
     expect(JSON.stringify(events)).not.toContain("fixture ask");
-    expect([turns.takePicked(THREAD), turns.takePicked(THREAD)]).toEqual([
+    expect([threads.consumePick(THREAD), threads.consumePick(THREAD)]).toEqual([
       true,
       false,
     ]);
@@ -280,7 +282,7 @@ describe("/resume", () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const replay = [{ method: "turn/started", params: { replayed: true } }];
     const asked: string[][] = [];
-    const { turns, sent } = await harness([claude], {
+    const { turns, threads, sent } = await harness([claude], {
       readHistory: async (threadId, sessionId, cwd) => {
         asked.push([threadId, sessionId, cwd]);
         return replay;
@@ -298,7 +300,7 @@ describe("/resume", () => {
       .map((message: Sent) => message.method)
       .lastIndexOf("turn/completed");
     expect(sent.indexOf(replay[0])).toBeGreaterThan(lastCompleted);
-    expect(turns.takePicked(THREAD)).toBe(false);
+    expect(threads.consumePick(THREAD)).toBe(false);
   });
 
   test.each<{ name: string; records: () => object[] }>([
@@ -388,8 +390,8 @@ describe("/resume", () => {
   });
 
   test("binds a conversation two threads pick at once to only one of them", async () => {
-    const { turns, sent, store } = await harness([]);
-    turns.adopt(OTHER_THREAD, { model: MODEL, cwd: dir });
+    const { turns, threads, sent, store } = await harness([]);
+    threads.adopt(OTHER_THREAD, { model: MODEL, cwd: dir });
     await writeClaudeRecord("se-a", conversationRecords("fixture ask"));
     turns.startTurn(turnStart(10, "/resume"), undefined);
     turns.startTurn(turnStart(11, "/resume", OTHER_THREAD), undefined);

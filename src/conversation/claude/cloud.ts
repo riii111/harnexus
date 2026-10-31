@@ -8,8 +8,8 @@ import type { CloudLink } from "../../infra/thread-store.ts";
 import {
   endsTurn,
   mainRecords,
-  promptTextOf,
   renderRecords,
+  turnOpeningTextOf,
 } from "../../presentation/history.ts";
 import { renderNotice } from "../../presentation/turn.ts";
 import { createSerialQueue } from "../../runtime/serial-queue.ts";
@@ -17,7 +17,9 @@ import type { TurnEvent } from "../controller.ts";
 import { type Refusal, refusalMessage } from "../thread-request.ts";
 import type { ThreadValues } from "../thread-values.ts";
 import type { RunningTurn, TurnInput, TurnRuntime } from "../turn-runtime.ts";
-import { typedText } from "./runtime.ts";
+import { type CloudChild, childSessionsIn } from "./cloud-children.ts";
+import { sessionCommandTextOf } from "./runtime.ts";
+import { createTurnRecords } from "./turn-records.ts";
 
 // A Cloud thread's turns log their failure tags beside the Claude runtime's, so the log takes any tag a runtime writes.
 export type CloudLogEvent = CloudEvent | TurnEvent;
@@ -45,6 +47,7 @@ export type CloudEvent =
         | "copy_unchecked";
     }
   | { event: "claude_cloud"; step: "sent"; ms: number }
+  | { event: "claude_cloud"; step: "child"; outcome: string }
   | { event: "claude_cloud"; step: "copied"; records: number; ms: number }
   | { event: "claude_cloud"; step: "copy_failed"; error: string };
 
@@ -64,7 +67,7 @@ export type CloudDeps = {
     | "linkCloud"
     | "setCloudCopy"
     | "sessionIdOf"
-    | "takePicked"
+    | "consumePick"
   >;
   sendToCloud: (
     cloudSessionId: string,
@@ -84,6 +87,9 @@ export type CloudDeps = {
   ) => Promise<readonly object[]>;
   send: (message: object) => void;
   log: (event: CloudEvent) => void;
+  // Opens a chat in the app linked to a session a linked Cloud session started.
+  // Answers how the app took it, such as done, for the log.
+  openChild?: (parentThreadId: string, child: CloudChild) => Promise<string>;
   now?: () => number;
   // Waits the time, or less once woken; a turn being stopped wakes its wait.
   sleep?: (ms: number, woken: Promise<void>) => Promise<void>;
@@ -99,6 +105,15 @@ type Started = {
   at: number;
   overlapped: boolean;
   copied: Promise<Result<Copied, CopyFailure>>;
+};
+
+// What the runtime holds of a thread while it is in use; a thread with none of it set has no entry.
+type CloudThread = {
+  busy: boolean;
+  follow: Follow | null;
+  pendingOwn: Copied | null;
+  // A thread whose copy may have run a model turn is not copied again until the bridge restarts, so the cost is not repeated.
+  halted: boolean;
 };
 
 // What a turn the app started waits for: every text it sent, in order, then a reply that ends Claude's turn.
@@ -128,6 +143,7 @@ export const createCloudRuntime = <Tag extends string>(
     replayHistory,
     send,
     log,
+    openChild,
     now = Date.now,
     sleep = defaultSleep,
     schedule = defaultSchedule,
@@ -136,16 +152,34 @@ export const createCloudRuntime = <Tag extends string>(
 ): TurnRuntime<Tag | CloudFailureTag> => {
   type Turn = RunningTurn<Tag | CloudFailureTag>;
 
-  const follows = new Map<string, Follow>();
-  const records = new Map<string, Map<string, string>>();
-  const busy = new Set<string>();
-  // A thread whose copy may have run a model turn is not copied again until the bridge restarts, so the cost is not repeated.
-  const halted = new Set<string>();
-  const pendingOwn = new Map<string, Copied>();
+  const states = new Map<string, CloudThread>();
+  const turnRecords = createTurnRecords();
+  const openedChildren = new Set<string>();
+  const unsentChildren = new Map<
+    string,
+    { threadId: string; child: CloudChild }
+  >();
   const copies = createSerialQueue();
   let startOwnTurn = (_threadId: string) => false;
   let cancelTick: (() => void) | null = null;
   let closed = false;
+
+  const stateOf = (threadId: string): CloudThread =>
+    states.get(threadId) ?? {
+      busy: false,
+      follow: null,
+      pendingOwn: null,
+      halted: false,
+    };
+
+  const keep = (threadId: string, change: Partial<CloudThread>) => {
+    const next = { ...stateOf(threadId), ...change };
+    if (next.busy || next.halted || next.follow || next.pendingOwn) {
+      states.set(threadId, next);
+    } else {
+      states.delete(threadId);
+    }
+  };
 
   const run = async (turn: Turn) => {
     const command =
@@ -233,7 +267,7 @@ export const createCloudRuntime = <Tag extends string>(
     );
     if (replayed.length === 0) return;
     for (const notification of replayed) send(notification);
-    threads.takePicked(threadId);
+    threads.consumePick(threadId);
   };
 
   const sendAndFollow = async (turn: Turn, cloud: CloudLink) => {
@@ -256,14 +290,8 @@ export const createCloudRuntime = <Tag extends string>(
       turn.finish({ status: "interrupted" }, null);
       return;
     }
-    const sendStartedAt = now();
-    const sent = await sendToCloud(
-      cloud.sessionId,
-      turn.input.text,
-      turn.record.worktree,
-    );
+    const sent = await sendMessage(turn, cloud, turn.input.text);
     if (sent.kind === "rejected") {
-      log({ event: "claude_cloud", step: "send_rejected" });
       turn.fail({
         _tag: "CloudSendRejected",
         message: `${refusalMessage("cloud_not_sent")} (${sent.message})`,
@@ -271,22 +299,34 @@ export const createCloudRuntime = <Tag extends string>(
       return;
     }
     if (sent.kind === "unknown") {
-      log({ event: "claude_cloud", step: "send_unknown" });
-      turn.markOutcomeUnknown();
       turn.fail({
         _tag: "CloudSendUnknown",
         message: `${refusalMessage("cloud_send_unknown")} (${sent.message})`,
       });
       return;
     }
-    log({ event: "claude_cloud", step: "sent", ms: now() - sendStartedAt });
     const follow = newFollow(turn.input.text, cloud.shown);
-    follows.set(threadId, follow);
+    keep(threadId, { follow });
     try {
       await waitForReply(turn, follow, cloud.sessionId);
     } finally {
-      if (follows.get(threadId) === follow) follows.delete(threadId);
+      if (stateOf(threadId).follow === follow) keep(threadId, { follow: null });
     }
+  };
+
+  // The outcome is logged alike for a turn's first message and a steer; an unknown one leaves the thread to check before going on.
+  const sendMessage = async (turn: Turn, cloud: CloudLink, text: string) => {
+    const startedAt = now();
+    const sent = await sendToCloud(cloud.sessionId, text, turn.record.worktree);
+    if (sent.kind === "rejected") {
+      log({ event: "claude_cloud", step: "send_rejected" });
+    } else if (sent.kind === "unknown") {
+      log({ event: "claude_cloud", step: "send_unknown" });
+      turn.markOutcomeUnknown();
+    } else {
+      log({ event: "claude_cloud", step: "sent", ms: now() - startedAt });
+    }
+    return sent;
   };
 
   const waitForReply = async (
@@ -395,8 +435,9 @@ export const createCloudRuntime = <Tag extends string>(
         // The history the app reads is built from the latest copy, so the turn names its prompt by that copy's uuid.
         const prompt =
           copied.value.records[indexOf(copied.value.records, follow.record)];
-        if (prompt !== undefined)
-          noteRecord(threadId, turn.turnId, prompt.uuid);
+        if (prompt !== undefined) {
+          turnRecords.note(threadId, turn.turnId, prompt.uuid);
+        }
         await keepCopy(
           threadId,
           copied.value.copy,
@@ -466,10 +507,10 @@ export const createCloudRuntime = <Tag extends string>(
 
   const showOwn = async (turn: Turn, cloud: CloudLink) => {
     const { threadId } = turn;
-    const taken = pendingOwn.get(threadId);
-    pendingOwn.delete(threadId);
+    const { pendingOwn: taken } = stateOf(threadId);
+    keep(threadId, { pendingOwn: null });
     const copied =
-      taken === undefined
+      taken === null
         ? await copyOf(threadId, cloud.sessionId)
         : Result.ok<Copied, CopyFailure>(taken);
     if (copied.isErr()) {
@@ -482,7 +523,9 @@ export const createCloudRuntime = <Tag extends string>(
     if (shown.length > 0) {
       turn.apply(renderRecords(turn.state(), shown, now()));
       const first = shown[0];
-      if (first !== undefined) noteRecord(threadId, turn.turnId, first.uuid);
+      if (first !== undefined) {
+        turnRecords.note(threadId, turn.turnId, first.uuid);
+      }
     }
     await keepCopy(threadId, copied.value.copy, keyOfLast(all) ?? cloud.shown);
     turn.finish({ status: "completed" }, null);
@@ -496,7 +539,7 @@ export const createCloudRuntime = <Tag extends string>(
     threadId: string,
     cloudSessionId: string,
   ): Promise<Result<Copied, CopyFailure>> => {
-    if (halted.has(threadId)) {
+    if (stateOf(threadId).halted) {
       return Result.err({
         _tag: "CloudCopyStopped",
         stopped: "ran_model",
@@ -507,7 +550,7 @@ export const createCloudRuntime = <Tag extends string>(
     const copied = await copy(cloudSessionId);
     if (copied.isErr()) {
       const { stopped } = copied.error;
-      if (stopped !== null) halted.add(threadId);
+      if (stopped !== null) keep(threadId, { halted: true });
       log(
         stopped === null
           ? {
@@ -544,7 +587,39 @@ export const createCloudRuntime = <Tag extends string>(
       records: all.length,
       ms: now() - startedAt,
     });
+    noticeChildren(threadId, all);
     return Result.ok({ copy: copied.value, records: all });
+  };
+
+  // A session a linked one started after the app was last shown gets a chat of its own, once; one started before was the user's to link, and one already linked has its chat.
+  const noticeChildren = (threadId: string, all: readonly SessionMessage[]) => {
+    // A copy made while a chat is being linked, or one whose link failed, opens nothing.
+    const cloud = threads.cloudOf(threadId);
+    if (openChild === undefined || cloud === null) return;
+    const after = indexAfter(all, cloud.shown);
+    const unsent = [...unsentChildren.values()]
+      .filter((entry) => entry.threadId === threadId)
+      .map((entry) => entry.child);
+    for (const child of [...unsent, ...childSessionsIn(all, after)]) {
+      if (openedChildren.has(child.sessionId)) continue;
+      if (threads.cloudOwner(child.sessionId) !== undefined) {
+        unsentChildren.delete(child.sessionId);
+        continue;
+      }
+      openedChildren.add(child.sessionId);
+      void openChild(threadId, child)
+        .catch(() => "threw")
+        .then((outcome) => {
+          // Only a chat known not to be created is tried again, from here and not from the shown position, which a turn moves past it; any other answer may have made the chat.
+          if (UNSENT_OUTCOMES.has(outcome)) {
+            openedChildren.delete(child.sessionId);
+            unsentChildren.set(child.sessionId, { threadId, child });
+          } else {
+            unsentChildren.delete(child.sessionId);
+          }
+          log({ event: "claude_cloud", step: "child", outcome });
+        });
+    }
   };
 
   // A copy started for a turn that has ended is removed once it is written.
@@ -567,17 +642,12 @@ export const createCloudRuntime = <Tag extends string>(
     }
   };
 
-  const noteRecord = (threadId: string, turnId: string, record: string) => {
-    const known = records.get(threadId) ?? new Map<string, string>();
-    known.set(turnId, record);
-    records.set(threadId, known);
-  };
-
   // A thread with no turn running is copied now and then; what it shows past where the app was shown opens a turn of Claude's own.
   const tick = async () => {
     for (const threadId of threads.cloudThreadIds()) {
       if (closed) return;
-      if (busy.has(threadId) || halted.has(threadId)) continue;
+      const { busy, halted } = stateOf(threadId);
+      if (busy || halted) continue;
       const cloud = threads.cloudOf(threadId);
       if (cloud === null) continue;
       const reading = threads.sessionIdOf(threadId);
@@ -585,7 +655,7 @@ export const createCloudRuntime = <Tag extends string>(
       // A turn that ran while this copy was made saved a newer one, which this copy may be older than.
       if (
         copied.isErr() ||
-        busy.has(threadId) ||
+        stateOf(threadId).busy ||
         threads.sessionIdOf(threadId) !== reading
       ) {
         if (copied.isOk()) await discardCopy(copied.value.copy);
@@ -601,9 +671,9 @@ export const createCloudRuntime = <Tag extends string>(
         await discardCopy(copied.value.copy);
         continue;
       }
-      pendingOwn.set(threadId, copied.value);
+      keep(threadId, { pendingOwn: copied.value });
       if (!startOwnTurn(threadId)) {
-        pendingOwn.delete(threadId);
+        keep(threadId, { pendingOwn: null });
         await keepCopy(threadId, copied.value.copy, cloud.shown);
       }
     }
@@ -615,8 +685,8 @@ export const createCloudRuntime = <Tag extends string>(
   };
 
   const stopFollowing = (threadId: string) => {
-    const follow = follows.get(threadId);
-    if (follow === undefined) return false;
+    const { follow } = stateOf(threadId);
+    if (follow === null) return false;
     follow.stop = true;
     follow.wake();
     return true;
@@ -628,28 +698,18 @@ export const createCloudRuntime = <Tag extends string>(
   ): Promise<Refusal | null> => {
     const cloud = threads.cloudOf(turn.threadId);
     if (cloud === null) return inner.steer(turn as RunningTurn<Tag>, input);
-    const follow = follows.get(turn.threadId);
-    if (follow === undefined || follow.stop) return "steer_not_sent";
+    const { follow } = stateOf(turn.threadId);
+    if (follow === null || follow.stop) return "steer_not_sent";
     if (input.images.length > 0) return "cloud_images";
     // Counted before it is sent, so a reply that arrives meanwhile does not end the turn before this message is answered.
     follow.texts.push(input.text);
     follow.sending += 1;
-    const sendStartedAt = now();
-    const sent = await sendToCloud(
-      cloud.sessionId,
-      input.text,
-      turn.record.worktree,
-    );
+    const sent = await sendMessage(turn, cloud, input.text);
     follow.sending -= 1;
     if (sent.kind !== "sent") forget(follow, input.text);
-    if (sent.kind === "rejected") {
-      log({ event: "claude_cloud", step: "send_rejected" });
-      return "cloud_not_sent";
-    }
+    if (sent.kind === "rejected") return "cloud_not_sent";
     // The message may have reached the session, so it is taken rather than refused, which would run it again as a turn; the thread is left with an unknown outcome to check before going on.
     if (sent.kind === "unknown") {
-      log({ event: "claude_cloud", step: "send_unknown" });
-      turn.markOutcomeUnknown();
       turn.apply(
         renderNotice(
           turn.state(),
@@ -658,9 +718,7 @@ export const createCloudRuntime = <Tag extends string>(
           now(),
         ),
       );
-      return null;
     }
-    log({ event: "claude_cloud", step: "sent", ms: now() - sendStartedAt });
     return null;
   };
 
@@ -669,7 +727,8 @@ export const createCloudRuntime = <Tag extends string>(
     closeSession: (threadId) => inner.closeSession(threadId),
     pauseMessages: (threadId) => inner.pauseMessages(threadId),
     recordOf: (threadId, turnId) =>
-      records.get(threadId)?.get(turnId) ?? inner.recordOf(threadId, turnId),
+      turnRecords.recordOf(threadId, turnId) ??
+      inner.recordOf(threadId, turnId),
     run,
     steer,
     // Stopping only ends the wait; the Cloud session keeps working, which only claude.ai can stop.
@@ -682,12 +741,13 @@ export const createCloudRuntime = <Tag extends string>(
     },
     dropSession: (threadId, link) => inner.dropSession(threadId, link),
     noteFork: (threadId) => inner.noteFork(threadId),
+    dropFork: (threadId) => inner.dropFork(threadId),
     threadBusy: (threadId) => {
-      busy.add(threadId);
+      keep(threadId, { busy: true });
       inner.threadBusy(threadId);
     },
     threadIdle: (threadId) => {
-      busy.delete(threadId);
+      keep(threadId, { busy: false });
       inner.threadIdle(threadId);
     },
     listen: (start) => {
@@ -698,7 +758,7 @@ export const createCloudRuntime = <Tag extends string>(
     closeAll: () => {
       closed = true;
       cancelTick?.();
-      for (const threadId of follows.keys()) stopFollowing(threadId);
+      for (const threadId of states.keys()) stopFollowing(threadId);
       inner.closeAll();
     },
   };
@@ -732,7 +792,7 @@ const pollMs = (waited: number, failing: boolean) => {
 
 // Besides what the user typed, the first message of a chat another chat opened with create_thread, such as harnexus-task cloud does, can link it; it arrives wrapped in its delegation, as its <prompt>.
 const commandText = (input: TurnInput) => {
-  const typed = typedText(input);
+  const typed = sessionCommandTextOf(input);
   if (typed !== null || input.toolOutput?.name !== "create_thread")
     return typed;
   return DELEGATED_PROMPT.exec(input.text)?.[1] ?? null;
@@ -748,6 +808,8 @@ const cloudCommandOf = (text: string | null) => {
 
 const CLOUD_COMMAND = /^\/cloud(?:\s+(\S+))?\s*$/;
 
+const UNSENT_OUTCOMES = new Set(["not_sent", "no_project", "no_parent"]);
+
 // A message whose send failed is no longer waited for; one not yet matched is taken from the end, so the order of the others stays.
 const forget = (follow: Follow, text: string) => {
   const at = follow.texts.lastIndexOf(text);
@@ -755,7 +817,7 @@ const forget = (follow: Follow, text: string) => {
 };
 
 const samePrompt = (message: SessionMessage, text: string) =>
-  promptTextOf(message)?.trim() === text.trim();
+  turnOpeningTextOf(message)?.trim() === text.trim();
 
 const keyOf = (message: SessionMessage | undefined) => message?.uuid ?? null;
 
@@ -789,6 +851,8 @@ export const serializeCloudEvent = (entry: CloudEvent) => {
   switch (entry.step) {
     case "sent":
       return { event: entry.event, step: entry.step, ms: entry.ms };
+    case "child":
+      return { event: entry.event, step: entry.step, outcome: entry.outcome };
     case "copied":
       return {
         event: entry.event,

@@ -31,6 +31,7 @@ import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
 import { buildHistory, replayHistory } from "../presentation/history.ts";
 import { resizeImage } from "../runtime/image.boundary.ts";
+import { openCloudChild } from "./cloud-children.ts";
 
 type Runtime = Parameters<typeof createClaudeRuntime>[0];
 
@@ -81,7 +82,7 @@ export const connectClaudeThreads = ({
       codexHome,
       cronRecord,
     });
-  const threads = createThreadValues(store, log);
+  const threads = createThreadValues(store, log, effortRule);
   const subagents = createSubagents({ send });
   const subagentRestore = createSubagentRestore({
     subagents,
@@ -131,6 +132,12 @@ export const connectClaudeThreads = ({
     subagents,
     resizeImage,
   });
+  const callGateway = createCallGateway({
+    isClaudeThread: (threadId) => store.get(threadId) !== undefined,
+    openLink,
+    request,
+    delegations,
+  });
   const runtime = createCloudRuntime(claude, {
     threads,
     sendToCloud: (cloudSessionId, text, cwd) =>
@@ -152,6 +159,17 @@ export const connectClaudeThreads = ({
     replayHistory: readHistory,
     send,
     log,
+    openChild: (parentThreadId, child) => {
+      const parent = store.get(parentThreadId);
+      return parent === undefined
+        ? Promise.resolve("no_parent")
+        : openCloudChild(
+            (call) => callGateway.handle(call),
+            parentThreadId,
+            parent.worktree,
+            child,
+          );
+    },
   });
   const turns = createTurnController({
     store,
@@ -165,10 +183,11 @@ export const connectClaudeThreads = ({
       ),
     send,
     log,
-    effortRule,
   });
   const history = createHistoryRequests({
-    threads: turns,
+    threads,
+    liveTurnOf: turns.liveTurnOf,
+    recordOf: runtime.recordOf,
     readSession,
     send,
     log,
@@ -180,15 +199,15 @@ export const connectClaudeThreads = ({
   });
   const subagentRequests = createSubagentRequests({
     subagents,
-    threads: turns,
+    threads,
     call: (method, params) =>
       request(method, params, { timeoutMs: SUBAGENT_PARENT_TIMEOUT_MS }),
     history: history.load,
     send,
   });
   const sideChats = createSideChats({
-    sessionIdOf: turns.sessionIdOf,
-    rewindOf: turns.rewindOf,
+    sessionIdOf: threads.sessionIdOf,
+    rewindOf: threads.rewindOf,
     lastRecordOf,
     readSession,
     listTurns: (threadId, page) =>
@@ -203,17 +222,19 @@ export const connectClaudeThreads = ({
         { threadId, items },
         { timeoutMs: INJECT_TIMEOUT_MS },
       ),
-    isClaudeThread: turns.isClaudeThread,
+    isClaudeThread: threads.isClaudeThread,
     claudeBegun: turns.claudeBegun,
     dropFork: turns.dropFork,
-    noteSideChat: turns.noteSideChat,
+    noteSideChat: threads.noteSideChat,
   });
   const router = createRouter({
     turns,
+    threads,
     log,
     delegations,
     history,
     claudeModels,
+    effortRule,
     subagents: subagentRequests,
     revert: createRevertRequests({
       store,
@@ -225,12 +246,6 @@ export const connectClaudeThreads = ({
       send,
     }),
     sideChats,
-  });
-  const callGateway = createCallGateway({
-    isClaudeThread: (threadId) => store.get(threadId) !== undefined,
-    openLink,
-    request,
-    delegations,
   });
   return { router, closeAll: turns.closeAll, callGateway };
 };

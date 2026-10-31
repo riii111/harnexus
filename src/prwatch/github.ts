@@ -141,7 +141,6 @@ export const createGitHub = (
       return Result.ok(body.data);
     });
 
-  // Every page of every list, so a PR with more items than one page holds still has each of them read.
   const readAllPages = (
     account: string,
     ref: PrRef,

@@ -40,13 +40,12 @@ export type TurnOutcome =
   | { status: "failed"; message: string }
   | { status: "interrupted" };
 
-// compaction marks a turn the app asked to compact the conversation, which shows the compaction instead of Claude's reply.
 export const renderTurnStarted = (params: {
   threadId: string;
   turnId: string;
   cwd: string;
   now: number;
-  compaction?: boolean;
+  compactionRequested?: boolean;
 }): Rendered & { turn: Turn } => {
   const draft = open({
     threadId: params.threadId,
@@ -63,7 +62,7 @@ export const renderTurnStarted = (params: {
     finalMessage: null,
     interrupting: false,
     finished: false,
-    compaction: params.compaction ?? false,
+    compaction: params.compactionRequested ?? false,
     compactionError: null,
     compacted: false,
   });
@@ -103,7 +102,6 @@ export const renderToolOutput = (
   return seal(draft);
 };
 
-// Used for the opening prompt and for each steer, since both appear as user messages in the thread.
 export const renderUserInput = (
   state: TurnState,
   input: UserInput[],
@@ -194,18 +192,16 @@ export const renderInterimResult = (
   return seal(draft);
 };
 
-// Called directly for an interrupt or a stream failure, where no result message closes the turn.
 export const renderTurnCompleted = (
   state: TurnState,
   outcome: TurnOutcome,
   now: number,
 ): Rendered => {
   if (state.finished) return { state, notifications: [] };
-  return closeTurn(state, outcome, now);
+  return closeTurnUnchecked(state, outcome, now);
 };
 
-// Unlike renderTurnCompleted this does not check for an ended turn, so it serves a replayed record, which carries no result message and so is still open when the replay closes it.
-export const closeTurn = (
+export const closeTurnUnchecked = (
   state: TurnState,
   outcome: TurnOutcome,
   now: number,

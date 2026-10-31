@@ -777,17 +777,20 @@ describe("model changes", () => {
   test("restart Claude on the new model at the next turn and resume the conversation at the same effort", async () => {
     const first = fakeClaude(SUBSCRIPTION);
     const second = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, settings, store } = await harness([first, second]);
+    const { turns, threads, sent, settings, store } = await harness([
+      first,
+      second,
+    ]);
 
     await completeTurn(turns, sent, first, 10, undefined, "xhigh");
-    turns.changeModel(THREAD, OTHER_MODEL);
+    threads.changeModel(THREAD, OTHER_MODEL);
     await completeTurn(turns, sent, second, 11);
 
     expect(first.closes()).toBe(1);
     expect(settings[1]).toMatchObject({ model: OTHER_MODEL, resume: "se-1" });
     expect(first.efforts()).toEqual(["xhigh"]);
     expect(second.efforts()).toEqual(["xhigh"]);
-    expect(turns.threadOf(THREAD)?.model).toBe(OTHER_MODEL);
+    expect(threads.threadOf(THREAD)?.model).toBe(OTHER_MODEL);
     await until(() => store.get(THREAD)?.model === OTHER_MODEL);
   });
 
@@ -815,12 +818,16 @@ describe("model changes", () => {
     });
     const second = fakeClaude(SUBSCRIPTION);
     const third = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, settings } = await harness([first, second, third]);
+    const { turns, threads, sent, settings } = await harness([
+      first,
+      second,
+      third,
+    ]);
     await interruptBeforeReceipt(turns, sent, first);
 
     turns.startTurn(turnStart(11, "again"), undefined);
     await until(() => responseTo(sent, 11) !== undefined);
-    turns.changeModel(THREAD, OTHER_MODEL);
+    threads.changeModel(THREAD, OTHER_MODEL);
     gate.open();
     await until(() => second.prompted());
     second.emit(sdk(success()));
@@ -838,7 +845,7 @@ describe("model changes", () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const firstWrite = createGate();
     let writes = 0;
-    const { turns, store } = await harness([claude], {
+    const { turns, threads, store } = await harness([claude], {
       files: {
         writeState: async (target, content) => {
           if (++writes === 1) await firstWrite.promise;
@@ -849,11 +856,11 @@ describe("model changes", () => {
 
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => writes === 1);
-    turns.changeModel(THREAD, OTHER_MODEL);
+    threads.changeModel(THREAD, OTHER_MODEL);
     firstWrite.open();
     await until(() => store.get(THREAD)?.model === OTHER_MODEL);
 
-    expect(turns.threadOf(THREAD)?.model).toBe(OTHER_MODEL);
+    expect(threads.threadOf(THREAD)?.model).toBe(OTHER_MODEL);
   });
 
   test("run a turn that lost the race to register the thread on the model it asked for", async () => {
@@ -884,11 +891,11 @@ describe("model changes", () => {
 
   test("leave the running turn on its model", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, settings } = await harness([claude]);
+    const { turns, threads, sent, settings } = await harness([claude]);
 
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => claude.started());
-    turns.changeModel(THREAD, OTHER_MODEL);
+    threads.changeModel(THREAD, OTHER_MODEL);
     claude.emit(sdk(answer("msg-1", "hi")));
     claude.emit(sdk(success()));
     await until(() => turnCompleted(sent) !== undefined);
@@ -902,15 +909,18 @@ describe("model changes", () => {
     const first = fakeClaude(SUBSCRIPTION);
     const second = fakeClaude(SUBSCRIPTION);
     let writes = 0;
-    const { turns, sent, settings, events } = await harness([first, second], {
-      files: {
-        writeState: async (target, content) =>
-          ++writes <= 2 ? writeFileAtomic(target, content) : diskFull(target),
+    const { turns, threads, sent, settings, events } = await harness(
+      [first, second],
+      {
+        files: {
+          writeState: async (target, content) =>
+            ++writes <= 2 ? writeFileAtomic(target, content) : diskFull(target),
+        },
       },
-    });
+    );
 
     await completeTurn(turns, sent, first, 10);
-    turns.changeModel(THREAD, OTHER_MODEL);
+    threads.changeModel(THREAD, OTHER_MODEL);
     await until(() => events.some((event) => event.step === "model_not_saved"));
     await completeTurn(turns, sent, second, 11);
 

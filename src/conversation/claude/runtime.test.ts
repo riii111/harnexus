@@ -391,8 +391,8 @@ describe("permission mode", () => {
 
   test("keeps auto mode when a plan is approved and the next turn reuses Claude", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
-    turns.selectMode(THREAD, "plan");
+    const { turns, threads, sent } = await harness([claude]);
+    threads.selectMode(THREAD, "plan");
     turns.startTurn(turnStart(10, "plan this"), undefined);
     await until(() => claude.modes().length === 1);
     expect(claude.options().permissionMode).toBe("plan");
@@ -414,7 +414,7 @@ describe("permission mode", () => {
     claude.emit(sdk(success([prompt?.uuid])));
     await until(() => turnCompleted(sent) !== undefined);
 
-    turns.selectMode(THREAD, "default");
+    threads.selectMode(THREAD, "default");
     await completeTurn(turns, sent, claude, 11);
     expect(claude.modes()).toEqual(["plan", "auto"]);
   });
@@ -563,11 +563,11 @@ describe("effort", () => {
 
   test("leaves the running turn at its effort and sets a change at the next turn", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
+    const { turns, threads, sent } = await harness([claude]);
     turns.startTurn(withEffort(turnStart(10, "hello"), "low"), undefined);
     await until(() => claude.efforts().length === 1);
 
-    turns.selectEffort(THREAD, "max");
+    threads.selectEffort(THREAD, "max");
     claude.emit(sdk(success()));
     await until(() => completedTurnStatuses(sent).length === 1);
     const whileRunning = [...claude.efforts()];
@@ -579,13 +579,13 @@ describe("effort", () => {
 
   test("runs a queued turn at the effort it was accepted with", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
+    const { turns, threads, sent } = await harness([claude]);
     turns.startTurn(withEffort(turnStart(10, "hello"), "low"), undefined);
     await until(() => claude.efforts().length === 1);
 
     turns.startTurn(withEffort(turnStart(11, "next"), "high"), undefined);
     await until(() => responseTo(sent, 11) !== undefined);
-    turns.selectEffort(THREAD, "max");
+    threads.selectEffort(THREAD, "max");
     claude.emit(sdk(success()));
     await until(() => claude.efforts().length === 2);
 
@@ -594,7 +594,7 @@ describe("effort", () => {
 
   test("runs a turn with no level picked at the default the app shows for the thread", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns } = await harness([claude], {
+    const { turns, threads } = await harness([claude], {
       effortRule: effortRule({ effortLevel: "low" }, BUILT_IN_EFFORTS),
     });
 
@@ -602,7 +602,7 @@ describe("effort", () => {
     await until(() => claude.efforts().length === 1);
 
     expect(claude.efforts()).toEqual(["low"]);
-    expect(turns.effortOf(THREAD)).toBe("low");
+    expect(threads.effortOf(THREAD)).toBe("low");
   });
 
   test("sends the prompt to a model without effort without setting one", async () => {
@@ -645,7 +645,7 @@ describe("effort", () => {
     const restarted = await harness([after]);
     await completeTurn(restarted.turns, restarted.sent, after, 11);
 
-    expect(restarted.turns.effortOf(THREAD)).toBe("max");
+    expect(restarted.threads.effortOf(THREAD)).toBe("max");
     expect(after.efforts()).toEqual(["max"]);
   });
 
@@ -672,7 +672,7 @@ describe("effort", () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const firstWrite = createGate();
     let writes = 0;
-    const { turns, store } = await harness([claude], {
+    const { turns, threads, store } = await harness([claude], {
       files: {
         writeState: async (target, content) => {
           if (++writes === 1) await firstWrite.promise;
@@ -683,17 +683,17 @@ describe("effort", () => {
 
     turns.startTurn(withEffort(turnStart(10, "hello"), "low"), undefined);
     await until(() => writes === 1);
-    turns.selectEffort(THREAD, "max");
+    threads.selectEffort(THREAD, "max");
     firstWrite.open();
     await until(() => store.get(THREAD)?.effort === "max");
 
-    expect(turns.effortOf(THREAD)).toBe("max");
+    expect(threads.effortOf(THREAD)).toBe("max");
   });
 
   test("keeps an effort the store failed to save while the bridge runs", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     let writes = 0;
-    const { turns, sent, events } = await harness([claude], {
+    const { turns, threads, sent, events } = await harness([claude], {
       files: {
         writeState: async (target, content) =>
           ++writes <= 2 ? writeFileAtomic(target, content) : diskFull(target),
@@ -701,7 +701,7 @@ describe("effort", () => {
     });
     await completeTurn(turns, sent, claude, 10);
 
-    turns.selectEffort(THREAD, "max");
+    threads.selectEffort(THREAD, "max");
     await until(() =>
       events.some((event) => event.step === "effort_not_saved"),
     );
@@ -3189,8 +3189,8 @@ describe("turn/steer", () => {
 describe("a side chat Claude runs", () => {
   test("starts Claude with the side chat's instructions and attaches the main conversation after the typed text", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, settings } = await harness([claude]);
-    turns.noteSideChat(THREAD, SIDE_CHAT);
+    const { turns, threads, sent, settings } = await harness([claude]);
+    threads.noteSideChat(THREAD, SIDE_CHAT);
 
     turns.startTurn(turnStart(10, "what did I ask?"), undefined);
     await until(() => claude.started());
@@ -3212,8 +3212,8 @@ describe("a side chat Claude runs", () => {
   test("attaches the main conversation again to a turn sent after one that failed before Claude took its prompt", async () => {
     const failed = fakeClaude(new Error("account lookup failed"));
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([failed, claude]);
-    turns.noteSideChat(THREAD, SIDE_CHAT);
+    const { turns, threads, sent } = await harness([failed, claude]);
+    threads.noteSideChat(THREAD, SIDE_CHAT);
 
     turns.startTurn(turnStart(10, "first try"), undefined);
     await until(() => turnCompleted(sent) !== undefined);
@@ -3232,8 +3232,8 @@ describe("a side chat Claude runs", () => {
 
   test("stops attaching the main conversation once Claude holds the side chat's conversation", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, store } = await harness([claude]);
-    turns.noteSideChat(THREAD, SIDE_CHAT);
+    const { turns, threads, sent, store } = await harness([claude]);
+    threads.noteSideChat(THREAD, SIDE_CHAT);
 
     await completeTurn(turns, sent, claude, 10);
     await completeTurn(turns, sent, claude, 11);
@@ -3347,10 +3347,10 @@ describe("skill links in Claude input", () => {
     const typed = `[$demo](${skill}) go`;
     const first = fakeClaude(SUBSCRIPTION);
     const second = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([first, second]);
+    const { turns, threads, sent } = await harness([first, second]);
 
     await skillTurn(turns, sent, first, 10, typed);
-    turns.changeModel(THREAD, OTHER_MODEL);
+    threads.changeModel(THREAD, OTHER_MODEL);
     await skillTurn(turns, sent, second, 11, typed);
 
     const [prompt] = await readPrompts(second, 1);

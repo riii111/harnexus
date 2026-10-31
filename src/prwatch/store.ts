@@ -48,7 +48,6 @@ export const loadLink = async (
   (await loadJson(linkPath(root, ref))).map(linkOf);
 
 // Whether a PR's watch still runs for its chat, for a caller deciding whether another chat may take it.
-// Only a watch stopped for a gone chat has let it go; a halted one may have just reached it.
 export const linkedChat = (root: string, ref: PrRef) =>
   Result.gen(async function* () {
     const link = yield* Result.await(loadLink(root, ref));
@@ -56,6 +55,7 @@ export const linkedChat = (root: string, ref: PrRef) =>
     const state = yield* Result.await(loadWatchState(root, ref));
     return Result.ok({
       worker: link.worker,
+      // Only a watch stopped for a gone chat has let it go; a halted one may have just reached it.
       active: state.status !== "stopped" && state.status !== "ended",
     });
   });
@@ -64,7 +64,6 @@ const linkPath = (root: string, ref: PrRef) =>
   join(root, keyOf(ref), "link.json");
 
 // An unreadable link is skipped, so one broken record cannot stop the watch of every other PR.
-// The keys in skip are not read at all, which spares the watch every PR it has finished with.
 export const listLinks = (root: string, skip: ReadonlySet<string> = EMPTY) =>
   Result.gen(async function* () {
     const names = yield* Result.await(
@@ -72,6 +71,7 @@ export const listLinks = (root: string, skip: ReadonlySet<string> = EMPTY) =>
     );
     const links: PrLink[] = [];
     for (const key of (names ?? []).sort()) {
+      // The keys in skip are not read at all, which spares the watch every PR it has finished with.
       if (skip.has(key) || !(await isDirectory(join(root, key)))) continue;
 
       const loaded = await loadJson(join(root, key, "link.json"));
@@ -141,8 +141,9 @@ export const freshState = (): WatchState => ({
 });
 
 // No command brings an ended PR back, so a watch may stop reading it for as long as it runs.
-// A stopped one is left readable, since naming it from another worker resumes it.
-export const isOver = (state: WatchState) => state.status === "ended";
+export const isOver = (state: WatchState) =>
+  // A stopped one is left readable, since naming it from another worker resumes it.
+  state.status === "ended";
 
 export const loadWatchState = (root: string, ref: PrRef) =>
   Result.gen(async function* () {
