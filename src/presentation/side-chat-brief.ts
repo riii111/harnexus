@@ -9,14 +9,14 @@ type Fitted = { blocks: string[]; omittedThrough: number | null };
 type Turn = { items: readonly ThreadItem[] };
 
 // The agent the main thread runs on, named in the reference; model is null when it is not known, and unreadAfterFirst marks a reference made from the oldest turn and the newest ones alone.
-export type MainThread = {
+type MainThread = {
   agent: "Claude" | "Codex";
   model: string | null;
   unreadAfterFirst?: boolean;
 };
 
 // A turn as the server lists it, with the id that tells whether two pages hold it.
-export type ListedTurn = Turn & { id: string };
+type ListedTurn = Turn & { id: string };
 
 // A Claude main conversation handed to a Codex side chat, as one reference-only user message the server takes.
 export const sideChatBrief = (

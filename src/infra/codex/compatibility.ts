@@ -1,6 +1,6 @@
 import { isObject } from "../../runtime/object.ts";
 
-export type CompatibilityFailure =
+type CompatibilityFailure =
   | "InitializeResponseChanged"
   | "ModelListResponseChanged";
 export type CompatibilityEvent = {

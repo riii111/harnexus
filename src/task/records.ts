@@ -23,7 +23,7 @@ export type SaveJson = (
   options: { exclusive: boolean },
 ) => Promise<Result<void, TaskFailed>>;
 
-export type Records = {
+type Records = {
   statePath: string;
   pendingPath: string;
   // As read, so a later read can tell whether another run wrote the file in between.

@@ -109,7 +109,7 @@ export const reviewProject = async (
   );
 };
 
-export type SessionDeps = { env: Env; saveJson: SaveJson };
+type SessionDeps = { env: Env; saveJson: SaveJson };
 
 type Confirmed = (
   thread: string,
@@ -442,5 +442,5 @@ export const launchOfThread = (env: Env, thread: string) =>
     return Result.ok<Fields | null>(null);
   });
 
-export const namesIn = async (path: string) =>
+const namesIn = async (path: string) =>
   (await io(listDirectoryIfExists(path))).map((names) => names ?? []);

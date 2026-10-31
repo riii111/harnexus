@@ -22,7 +22,6 @@ import {
   copyCloudSession,
   parseCloudSessionId,
   sendToCloud,
-  stabilizeCopy,
   sweepCloudLogs,
 } from "./cloud.ts";
 import { createCloudCheckouts } from "./cloud-checkouts.ts";
@@ -279,6 +278,54 @@ describe("copyCloudSession", () => {
     );
   });
 
+  test("gives the records of every copy the same uuids and keeps their links", async () => {
+    const first = await copying([copyOf(FIRST_COPY, "aaaaaaaa")], FIRST_COPY);
+    const second = await copying(
+      [copyOf(SECOND_COPY, "bbbbbbbb")],
+      SECOND_COPY,
+    );
+
+    const copied = await Promise.all([first.copy(), second.copy()]);
+    const [a, b] = [
+      await readRecords(first.record),
+      await readRecords(second.record),
+    ];
+
+    expect(copied.every((result) => result.isOk())).toBe(true);
+    expect(a.map((line) => line.uuid)).toEqual(b.map((line) => line.uuid));
+    expect(a[0].uuid).not.toBe("aaaaaaaa-0000-4000-8000-000000000001");
+    expect(a[1].parentUuid).toBe(a[0].uuid);
+    expect(a[2].uuid).not.toBe(a[1].uuid);
+    expect(a[3].leafUuid).toBe(a[2].uuid);
+    expect(a[0].sessionId).toBe(FIRST_COPY);
+  });
+
+  test("leaves out the records teleport writes when it runs, so every copy ends with the same record", async () => {
+    const first = await copying(
+      [copyOf(FIRST_COPY, "aaaaaaaa", true)],
+      FIRST_COPY,
+    );
+    const second = await copying(
+      [copyOf(SECOND_COPY, "bbbbbbbb", true)],
+      SECOND_COPY,
+    );
+
+    await first.copy();
+    await second.copy();
+    const [a, b] = [
+      await readRecords(first.record),
+      await readRecords(second.record),
+    ];
+
+    expect(a.map((line) => line.uuid)).toEqual(b.map((line) => line.uuid));
+    expect(a.map((line) => line.type)).toEqual([
+      "user",
+      "assistant",
+      "assistant",
+      "last-prompt",
+    ]);
+  });
+
   test("copies a session made in a repository from the checkout its refusal names, and goes there first next time", async () => {
     const copier = await copying([
       { refusal: NOT_IN_REPO, status: 1 },
@@ -396,11 +443,11 @@ describe("copyCloudSession", () => {
   });
 
   // Each call plays the next answer: a refusal goes to the debug log as teleport writes it, and a copy is written under the config folder unless told otherwise.
-  const copying = async (plays: readonly Play[]) => {
+  const copying = async (plays: readonly Play[], copyId = COPY) => {
     const root = await mkdtemp(join(tmpdir(), "harnexus-copy-"));
     roots.push(root);
     const configDir = join(root, "config");
-    const record = join(configDir, "projects", "-copies", `${COPY}.jsonl`);
+    const record = join(configDir, "projects", "-copies", `${copyId}.jsonl`);
     const calls: Call[] = [];
     const cli: CloudCli = {
       file: "/usr/local/bin/claude",
@@ -417,9 +464,10 @@ describe("copyCloudSession", () => {
           await mkdir(join(configDir, "projects", "-copies"), {
             recursive: true,
           });
+          const records = play.records?.() ?? [FIRST_RECORD];
           await writeFile(
             record,
-            `${JSON.stringify({ type: "user", uuid: "aaaaaaaa-0000-4000-8000-000000000001", timestamp: "2026-10-30T07:00:00.000Z", message: { role: "user", content: "hi" } })}\n`,
+            `${records.map((line) => JSON.stringify(line)).join("\n")}\n`,
           );
         }
         const stdout =
@@ -448,204 +496,12 @@ describe("copyCloudSession", () => {
     );
 });
 
-describe("stabilizeCopy", () => {
-  const folders: string[] = [];
-  afterEach(async () => {
-    for (const folder of folders.splice(0)) {
-      await rm(folder, { recursive: true, force: true });
-    }
-  });
-
-  const COPIED_AT = Date.parse("2026-10-30T08:00:00.000Z");
-
-  // Two teleports of one session, as Claude Code writes them: the same records under new uuids, then the records teleport adds when it runs.
-  const writeCopy = async (
-    configDir: string,
-    copy: string,
-    ids: string[],
-    ranAt: string | null = null,
-  ) => {
-    const [prompt, answer, again, note, command] = ids;
-    const own =
-      ranAt === null
-        ? []
-        : [
-            {
-              type: "user",
-              uuid: note,
-              parentUuid: again,
-              timestamp: ranAt,
-              sessionId: copy,
-              isMeta: true,
-              message: {
-                role: "user",
-                content:
-                  "This session is being continued from another machine.",
-              },
-            },
-            {
-              type: "user",
-              uuid: command,
-              parentUuid: note,
-              timestamp: ranAt,
-              sessionId: copy,
-              message: {
-                role: "user",
-                content: "<command-name>/usage</command-name>",
-              },
-            },
-          ];
-    const lines = [
-      {
-        type: "user",
-        uuid: prompt,
-        parentUuid: null,
-        timestamp: "2026-10-30T07:00:00.000Z",
-        sessionId: copy,
-        message: { role: "user", content: "1+2?" },
-      },
-      {
-        type: "assistant",
-        uuid: answer,
-        parentUuid: prompt,
-        timestamp: "2026-10-30T07:00:01.000Z",
-        sessionId: copy,
-        message: { role: "assistant", content: [{ type: "text", text: "3" }] },
-      },
-      {
-        type: "assistant",
-        uuid: again,
-        parentUuid: answer,
-        timestamp: "2026-10-30T07:00:01.000Z",
-        sessionId: copy,
-        message: { role: "assistant", content: [{ type: "text", text: "3" }] },
-      },
-      ...own,
-      {
-        type: "last-prompt",
-        leafUuid: own.at(-1)?.uuid ?? again,
-        sessionId: copy,
-      },
-    ];
-    const folder = join(configDir, "projects", "-state-cloud-copies");
-    await mkdir(folder, { recursive: true });
-    const path = join(folder, `${copy}.jsonl`);
-    await writeFile(
-      path,
-      `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`,
-    );
-    return path;
-  };
-
-  const read = async (path: string) =>
-    (await readFile(path, "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-
-  test("gives the records of every copy the same uuids and keeps their links", async () => {
-    const configDir = await mkdtemp(join(tmpdir(), "harnexus-copy-"));
-    folders.push(configDir);
-    const first = await writeCopy(
-      configDir,
-      "11111111-1111-4111-8111-111111111111",
-      [
-        "aaaaaaaa-0000-4000-8000-000000000001",
-        "aaaaaaaa-0000-4000-8000-000000000002",
-        "aaaaaaaa-0000-4000-8000-000000000003",
-      ],
-    );
-    const second = await writeCopy(
-      configDir,
-      "22222222-2222-4222-8222-222222222222",
-      [
-        "bbbbbbbb-0000-4000-8000-000000000001",
-        "bbbbbbbb-0000-4000-8000-000000000002",
-        "bbbbbbbb-0000-4000-8000-000000000003",
-      ],
-    );
-
-    const stabilized = await Promise.all([
-      stabilizeCopy(
-        "11111111-1111-4111-8111-111111111111",
-        COPIED_AT,
-        configDir,
-      ),
-      stabilizeCopy(
-        "22222222-2222-4222-8222-222222222222",
-        COPIED_AT,
-        configDir,
-      ),
-    ]);
-    const [a, b] = [await read(first), await read(second)];
-
-    expect(stabilized.every((result) => result.isOk())).toBe(true);
-    expect(a.map((line) => line.uuid)).toEqual(b.map((line) => line.uuid));
-    expect(a[0].uuid).not.toBe("aaaaaaaa-0000-4000-8000-000000000001");
-    expect(a[1].parentUuid).toBe(a[0].uuid);
-    expect(a[2].uuid).not.toBe(a[1].uuid);
-    expect(a[3].leafUuid).toBe(a[2].uuid);
-    expect(a[0].sessionId).toBe("11111111-1111-4111-8111-111111111111");
-  });
-
-  test("leaves out the records teleport writes when it runs, so every copy ends with the same record", async () => {
-    const configDir = await mkdtemp(join(tmpdir(), "harnexus-copy-"));
-    folders.push(configDir);
-    const ids = (prefix: string) =>
-      [1, 2, 3, 4, 5].map((n) => `${prefix}-0000-4000-8000-00000000000${n}`);
-    const first = await writeCopy(
-      configDir,
-      "11111111-1111-4111-8111-111111111111",
-      ids("aaaaaaaa"),
-      "2026-10-30T08:00:02.000Z",
-    );
-    const second = await writeCopy(
-      configDir,
-      "22222222-2222-4222-8222-222222222222",
-      ids("bbbbbbbb"),
-      "2026-10-30T08:05:02.000Z",
-    );
-
-    await stabilizeCopy(
-      "11111111-1111-4111-8111-111111111111",
-      COPIED_AT,
-      configDir,
-    );
-    await stabilizeCopy(
-      "22222222-2222-4222-8222-222222222222",
-      COPIED_AT + 5 * 60_000,
-      configDir,
-    );
-    const [a, b] = [await read(first), await read(second)];
-
-    expect(a.map((line) => line.uuid)).toEqual(b.map((line) => line.uuid));
-    expect(a.map((line) => line.type)).toEqual([
-      "user",
-      "assistant",
-      "assistant",
-      "last-prompt",
-    ]);
-  });
-
-  test("fails when the copy cannot be found", async () => {
-    const configDir = await mkdtemp(join(tmpdir(), "harnexus-copy-"));
-    folders.push(configDir);
-
-    const stabilized = await stabilizeCopy(
-      "33333333-3333-4333-8333-333333333333",
-      COPIED_AT,
-      configDir,
-    );
-
-    expect(stabilized.isErr()).toBe(true);
-  });
-});
-
 type Play = {
   refusal?: string;
   answer?: object | string;
   status?: number;
   writes?: boolean;
+  records?: () => object[];
 };
 
 const COPIED = {
@@ -654,6 +510,102 @@ const COPIED = {
   num_turns: 0,
   session_id: COPY,
 };
+
+const FIRST_COPY = "11111111-1111-4111-8111-111111111111";
+
+const SECOND_COPY = "22222222-2222-4222-8222-222222222222";
+
+const FIRST_RECORD = {
+  type: "user",
+  uuid: "aaaaaaaa-0000-4000-8000-000000000001",
+  timestamp: "2026-10-30T07:00:00.000Z",
+  message: { role: "user", content: "hi" },
+};
+
+// Two teleports of one session, as Claude Code writes them: the same records under new uuids, then the records teleport adds when it runs.
+const copyOf = (session: string, prefix: string, ran = false): Play => ({
+  answer: { ...COPIED, session_id: session },
+  records: () =>
+    copyRecords(
+      session,
+      [1, 2, 3, 4, 5].map((n) => `${prefix}-0000-4000-8000-00000000000${n}`),
+      ran ? new Date().toISOString() : null,
+    ),
+});
+
+const copyRecords = (
+  copy: string,
+  ids: string[],
+  ranAt: string | null,
+): object[] => {
+  const [prompt, answer, again, note, command] = ids;
+  const own =
+    ranAt === null
+      ? []
+      : [
+          {
+            type: "user",
+            uuid: note,
+            parentUuid: again,
+            timestamp: ranAt,
+            sessionId: copy,
+            isMeta: true,
+            message: {
+              role: "user",
+              content: "This session is being continued from another machine.",
+            },
+          },
+          {
+            type: "user",
+            uuid: command,
+            parentUuid: note,
+            timestamp: ranAt,
+            sessionId: copy,
+            message: {
+              role: "user",
+              content: "<command-name>/usage</command-name>",
+            },
+          },
+        ];
+  return [
+    {
+      type: "user",
+      uuid: prompt,
+      parentUuid: null,
+      timestamp: "2026-10-30T07:00:00.000Z",
+      sessionId: copy,
+      message: { role: "user", content: "1+2?" },
+    },
+    {
+      type: "assistant",
+      uuid: answer,
+      parentUuid: prompt,
+      timestamp: "2026-10-30T07:00:01.000Z",
+      sessionId: copy,
+      message: { role: "assistant", content: [{ type: "text", text: "3" }] },
+    },
+    {
+      type: "assistant",
+      uuid: again,
+      parentUuid: answer,
+      timestamp: "2026-10-30T07:00:01.000Z",
+      sessionId: copy,
+      message: { role: "assistant", content: [{ type: "text", text: "3" }] },
+    },
+    ...own,
+    {
+      type: "last-prompt",
+      leafUuid: own.at(-1)?.uuid ?? again,
+      sessionId: copy,
+    },
+  ];
+};
+
+const readRecords = async (path: string) =>
+  (await readFile(path, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
 
 const NOT_IN_REPO =
   "Teleport in print mode failed: You must run claude --teleport session_01Nfj from a checkout of riii111/harnexus.";

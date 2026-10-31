@@ -6,7 +6,6 @@ import {
   type FeedbackFacts,
   findBridges,
   formatFeedback,
-  parseElapsed,
   parseTimeArgument,
   parseTimedProcesses,
   redactPaths,
@@ -41,14 +40,16 @@ describe("parseTimeArgument", () => {
   });
 });
 
-describe("parseElapsed", () => {
+describe("parseTimedProcesses elapsed time", () => {
   test.each([
     { name: "minutes and seconds", etime: "05:07", expected: 307_000 },
     { name: "hours", etime: "02:05:07", expected: 7_507_000 },
     { name: "days", etime: "3-02:05:07", expected: 266_707_000 },
     { name: "something else", etime: "Sat", expected: null },
   ])("reads $name", ({ etime, expected }) => {
-    expect(parseElapsed(etime)).toBe(expected);
+    const processes = parseTimedProcesses(`  100     1 ${etime} /usr/bin/bun`);
+
+    expect(processes.map(({ elapsedMs }) => elapsedMs)).toEqual([expected]);
   });
 });
 

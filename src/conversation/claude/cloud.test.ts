@@ -23,12 +23,13 @@ import { refusalMessage } from "../thread-request.ts";
 import type { RunningTurn, TurnInput, TurnRuntime } from "../turn-runtime.ts";
 import {
   type CloudDeps,
-  type CloudEvent,
   createCloudRuntime,
   serializeCloudEvent,
 } from "./cloud.ts";
 
 const CLOUD_ID = "session_01NfjPqrX1AK5RmKyV182VYD";
+
+type CloudEvent = Parameters<typeof serializeCloudEvent>[0];
 
 describe("createCloudRuntime child sessions", () => {
   const CHILD = "session_01NfjPqs5GNSgknfAaJ3mdYA";

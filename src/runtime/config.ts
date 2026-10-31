@@ -137,7 +137,7 @@ export const loadCallerSocketPath = (
   return state.isOk() ? Result.ok(defaultCallSocketPath(state.value)) : state;
 };
 
-export const defaultCallSocketPath = (statePath: string) =>
+const defaultCallSocketPath = (statePath: string) =>
   join(dirname(statePath), "call.sock");
 
 const DEFAULT_SHUTDOWN_GRACE_MS = 5000;

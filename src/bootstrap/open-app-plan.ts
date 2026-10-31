@@ -1,6 +1,6 @@
 import type { ProcessEntry } from "./doctor-report.ts";
 
-export type OpenAppPaths = {
+type OpenAppPaths = {
   app: string;
   launcher: string;
   codex: string;

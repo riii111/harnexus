@@ -63,7 +63,7 @@ export const parseTimedProcesses = (output: string): TimedProcess[] =>
   });
 
 // ps prints a process's elapsed time as [[dd-]hh:]mm:ss whatever the locale, unlike its start time.
-export const parseElapsed = (etime: string) => {
+const parseElapsed = (etime: string) => {
   const matched = /^(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)$/.exec(etime);
   if (matched === null) return null;
   const [days = 0, hours = 0, minutes = 0, seconds = 0] = matched
@@ -72,7 +72,7 @@ export const parseElapsed = (etime: string) => {
   return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
 };
 
-export type RunningBridge = { pid: number; startedAtMs: number | null };
+type RunningBridge = { pid: number; startedAtMs: number | null };
 
 // Only pids and start times are kept, since a command line can carry a prompt.
 // Another checkout's bridge runs main.ts with --launcher too, so it is counted, which tells a report run from the wrong checkout.

@@ -5,11 +5,10 @@ import { isFile, pathExists, realPathOrSelf } from "../runtime/fs.boundary.ts";
 import { fail, formatTemplate, TaskFailed } from "./format.ts";
 import { configHome, type Env, readJson, readText } from "./request.ts";
 
-export type TemplateKind = "worker" | "reviewer";
+type TemplateKind = "worker" | "reviewer";
 
 // Beside harnexus's other config, never in the repository or the working directory, so a sandboxed agent cannot pick the prompt a new chat receives.
-export const templateConfigPath = (env: Env) =>
-  join(configHome(env), "task.json");
+const templateConfigPath = (env: Env) => join(configHome(env), "task.json");
 
 const TEMPLATE_PATH = z
   .string()

@@ -44,7 +44,7 @@ export const readCheckoutHead = async (
   };
 };
 
-export type InstalledPackage = {
+type InstalledPackage = {
   version: string | null;
   claudeCodeVersion: string | null;
 };

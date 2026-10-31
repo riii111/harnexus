@@ -40,7 +40,7 @@ export type HistoryEvent =
       returned: string[] | null;
     };
 
-export type HistoryMethod = (typeof HISTORY_METHODS)[number];
+type HistoryMethod = (typeof HISTORY_METHODS)[number];
 
 type ReadSession = (sessionId: string) => ReturnType<typeof readClaudeSession>;
 
