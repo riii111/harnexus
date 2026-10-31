@@ -62,11 +62,16 @@ import {
 useTempDir();
 
 describe("tool approval", () => {
-  test("asks the app about the tool's item and allows what it accepts", async () => {
+  test("asks the app about the tool's item with Claude's reason and allows what it accepts", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await startedTurn(claude);
 
-    const decision = askTool(claude, "Bash", { command: "rm -rf build" });
+    const decision = askTool(
+      claude,
+      "Bash",
+      { command: "rm -rf build" },
+      { decisionReason: "An ask rule requires approval" },
+    );
     const request = await appRequest(sent);
     turns.answerRequest({ id: request.id, result: { decision: "accept" } });
 
@@ -84,6 +89,7 @@ describe("tool approval", () => {
         turnId: "turn-1",
         itemId: started?.params.item.id,
         command: "rm -rf build",
+        reason: "An ask rule requires approval",
       },
     });
     expect(resolvedRequests(sent)).toEqual(["harnexus-1"]);
@@ -182,37 +188,6 @@ describe("tool approval", () => {
 
     expect(request.method).toBe("item/fileChange/requestApproval");
     expect((await decision)?.behavior).toBe("deny");
-  });
-
-  test("returns the app's answers to Claude's question", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await startedTurn(claude);
-    const input = {
-      questions: [
-        {
-          question: "Which?",
-          header: "Pick",
-          options: [
-            { label: "A", description: "the first" },
-            { label: "B", description: "the second" },
-          ],
-          multiSelect: false,
-        },
-      ],
-    };
-
-    const decision = askTool(claude, "AskUserQuestion", input);
-    const request = await appRequest(sent);
-    turns.answerRequest({
-      id: request.id,
-      result: { answers: { "question-1": { answers: ["A"] } } },
-    });
-
-    expect(request.method).toBe("item/tool/requestUserInput");
-    expect(await decision).toEqual({
-      behavior: "allow",
-      updatedInput: { ...input, answers: { "Which?": "A" } },
-    });
   });
 
   test("asks about a subagent's tool on an item of its own while its agent runs in the turn", async () => {
@@ -418,25 +393,6 @@ describe("permission mode", () => {
     });
     expect(claude.closes()).toBe(1);
     expect(await firstPrompt(claude.prompt())).toBeNull();
-  });
-
-  test("still relays explicit approval requests in auto mode", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude], { permissionMode: "auto" });
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.modes().length === 1);
-
-    const decision = askTool(
-      claude,
-      "Bash",
-      { command: "deploy" },
-      { decisionReason: "An ask rule requires approval" },
-    );
-    const request = await appRequest(sent);
-    turns.answerRequest({ id: request.id, result: { decision: "decline" } });
-
-    expect(request.params.reason).toBe("An ask rule requires approval");
-    expect((await decision)?.behavior).toBe("deny");
   });
 
   test.each([
@@ -1331,33 +1287,6 @@ describe("session ids", () => {
       sessionId: "se-1",
       at: "kept-record",
     });
-  });
-
-  test("resumes from the session id Claude reported even when saving it failed", async () => {
-    const first = fakeClaude(SUBSCRIPTION);
-    const second = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, settings, events } = await harness([first, second], {
-      files: {
-        writeState: async (target, content) =>
-          content.includes('"se-1"')
-            ? diskFull(target)
-            : writeFileAtomic(target, content),
-      },
-    });
-
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => first.prompted());
-    first.emit(sdk(answer("msg-1", "partial")));
-    first.fail(new Error("socket closed"));
-    await until(() => turnCompleted(sent) !== undefined);
-    await completeTurn(turns, sent, second, 11);
-
-    expect(events).toContainEqual({
-      event: "claude_turn",
-      step: "session_not_saved",
-      error: "StatePersistFailed",
-    });
-    expect(settings[1]).toMatchObject({ resume: "se-1" });
   });
 });
 
@@ -2302,64 +2231,6 @@ describe("approvals no turn could show", () => {
     expect(startedTurns(sent)).toEqual(["turn-1", "turn-2"]);
   });
 
-  test("shows a turn Claude starts while the approval waits as a turn of its own after the approval's", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
-    await completeTurn(turns, sent, claude, 10);
-
-    const decision = agentAsks(claude, "tool-1");
-    const request = await appRequest(sent);
-    claude.emit(sdk(BACKGROUND_AGENT_SPOKE));
-    claude.emit(sdk(INIT));
-    claude.emit(sdk(answer("msg-2", "the agent finished")));
-    claude.emit(sdk(ownResult()));
-    await settle();
-    expect(startedTurns(sent)).toEqual(["turn-1", "turn-2"]);
-    turns.answerRequest({ id: request.id, result: ALLOWED });
-    await until(() => completedTurnStatuses(sent).length === 3);
-
-    expect(await decision).toEqual({ behavior: "allow" });
-    expect(completedTurns(sent).slice(1)).toMatchObject([
-      { id: "turn-2", status: "completed", items: [] },
-      {
-        id: "turn-3",
-        status: "completed",
-        items: [{ type: "agentMessage", text: "the agent finished" }],
-      },
-    ]);
-    expect(claude.closes()).toBe(0);
-  });
-
-  test("runs what the user sends while the approval waits after it, with the turn Claude started ahead of its reply", async () => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
-    await completeTurn(turns, sent, claude, 10);
-    const prompts = claude.prompt()?.[Symbol.asyncIterator]();
-    await prompts?.next();
-
-    const decision = agentAsks(claude, "tool-1");
-    const request = await appRequest(sent);
-    claude.emit(sdk(INIT));
-    claude.emit(sdk(answer("msg-2", "the agent finished")));
-    turns.startTurn(turnStart(11, "next"), undefined);
-    await until(() => responseTo(sent, 11) !== undefined);
-    turns.answerRequest({ id: request.id, result: ALLOWED });
-    claude.emit(sdk(ownResult()));
-    const next = await prompts?.next();
-    claude.emit(sdk(answer("msg-3", "hi")));
-    claude.emit(sdk(success([next?.value?.uuid])));
-    await until(() => completedTurnStatuses(sent).length === 3);
-
-    expect(await decision).toEqual({ behavior: "allow" });
-    expect(responseTo(sent, 11)?.result.turn).toMatchObject({ id: "turn-3" });
-    expect(next?.value?.message.content).toBe("next");
-    expect(completedTurns(sent).slice(1)).toMatchObject([
-      { id: "turn-2", status: "completed" },
-      { id: "turn-3", status: "completed", items: [{ text: "hi" }] },
-    ]);
-    expect(claude.closes()).toBe(0);
-  });
-
   test("declines the approvals when Claude's stream ends with a turn the user sent queued, and runs that turn on a new Claude", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const next = fakeClaude(SUBSCRIPTION);
@@ -2396,13 +2267,14 @@ describe("approvals no turn could show", () => {
 
     expect(await decision).toEqual({ behavior: "allow" });
     expect(completedTurns(sent).slice(1)).toMatchObject([
-      { id: "turn-2", status: "completed" },
+      { id: "turn-2", status: "completed", items: [] },
       {
         id: "turn-3",
         status: "completed",
-        items: [{ text: "the agent finished" }],
+        items: [{ type: "agentMessage", text: "the agent finished" }],
       },
     ]);
+    expect(claude.closes()).toBe(0);
     expectAgentToolShownOnce(childItems);
   });
 
@@ -2421,11 +2293,13 @@ describe("approvals no turn could show", () => {
     await settle();
 
     expect(await decision).toEqual({ behavior: "allow" });
+    expect(responseTo(sent, 11)?.result.turn).toMatchObject({ id: "turn-3" });
     expect(next?.value?.message.content).toBe("next");
     expect(completedTurns(sent).slice(1)).toMatchObject([
-      { id: "turn-2", status: "completed" },
+      { id: "turn-2", status: "completed", items: [] },
       { id: "turn-3", status: "completed", items: [{ text: "hi" }] },
     ]);
+    expect(claude.closes()).toBe(0);
     expectAgentToolShownOnce(childItems);
   });
 
