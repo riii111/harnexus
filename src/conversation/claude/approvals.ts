@@ -115,6 +115,7 @@ export const createApprovals = <Tag extends string>({
     if (options.agentID === undefined && approval.held?.turn !== turn) {
       turn.apply(renderToolRequest(turn.state(), block, now()));
     } else if (runsAgent(turn.state())) {
+      // A subagent asks only while its Agent call runs in the turn or after that call launched it in the background, so with an Agent call running the asking agent runs in the turn.
       turn.apply(renderToolRequest(turn.state(), block, now(), false));
     }
     const item = runningToolItem(turn.state(), options.toolUseID);

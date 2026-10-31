@@ -53,13 +53,13 @@ export const itemCompletedAt = (
   emittedAtMs: at,
 });
 
-// A history rebuilt from the record and the live turn must name an activity alike, or the app shows it twice after a reload.
 export const subagentActivityItem = (
   agent: { threadId: string; path: string },
   kind: SubAgentActivityItem["kind"],
   toolUseId: string,
 ): SubAgentActivityItem => ({
   type: "subAgentActivity",
+  // A history rebuilt from the record and the live turn must name an activity alike, or the app shows it twice after a reload.
   id: `${agent.threadId}-${kind}-${toolUseId}`,
   kind,
   agentThreadId: agent.threadId,

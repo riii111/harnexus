@@ -30,7 +30,6 @@ type TimelineEntry =
       durationMs: number | null;
     };
 
-// Cursors name a turn or item id, which stays put as the conversation grows, rather than a position; a null page means the cursor names nothing in this history.
 export const pageTurns = (
   history: readonly HistoryTurn[],
   request: {
@@ -54,7 +53,6 @@ export const pageTurns = (
       };
 };
 
-// The app starts every turn's item pages from the thread's newest item, so a cursor may name an item of another turn and the turn filter applies after it.
 export const pageItems = (
   history: readonly HistoryTurn[],
   request: {
@@ -70,14 +68,15 @@ export const pageItems = (
       request.sortDirection,
     ),
     (entry) => entry.item.id,
+    // The app starts every turn's item pages from the thread's newest item, so a cursor may name an item of another turn and the turn filter applies after it.
     (entry) => request.turnId === null || entry.turnId === request.turnId,
     request,
   );
 
-// An item anchor is exclusive in the asked direction, so it starts the page as a next cursor after that item does.
-export const itemAnchorCursor = (itemId: string) => `${AFTER}${itemId}`;
+export const itemAnchorCursor = (itemId: string) =>
+  // An item anchor is exclusive in the asked direction, so it starts the page as a next cursor after that item does.
+  `${AFTER}${itemId}`;
 
-// The app reads the timeline from its newest page back, so a page holds the entries just before its cursor in record order.
 export const pageTimeline = (
   history: readonly HistoryTurn[],
   request: { cursor: string | null; limit: number | null },
@@ -86,6 +85,7 @@ export const pageTimeline = (
   const end =
     request.cursor === null ? entries.length : timelineEnd(request.cursor);
   if (end === null || end > entries.length) return null;
+  // The app reads the timeline from its newest page back, so a page holds the entries just before its cursor in record order.
   const start = Math.max(0, end - pageSize(request.limit, end));
   return {
     data: entries.slice(start, end),
@@ -93,7 +93,7 @@ export const pageTimeline = (
   };
 };
 
-// These let the app page back from the newest turn and item; the app shows no history when the turn cursor is null.
+// The cursors the app pages back from the newest turn and item with.
 export const resumeCursors = (history: readonly HistoryTurn[]) => {
   const newestTurn = history.at(-1);
   const newestItem = history.flatMap((entry) => entry.items).at(-1);
@@ -120,7 +120,6 @@ export const viewTurn = (entry: HistoryTurn, view: TurnsView): Turn => {
   }
 };
 
-// A running agent's turn has not completed yet, so it gets its completion entry only once it ends; it is always the last turn, so no earlier position moves.
 const timeline = (history: readonly HistoryTurn[]): TimelineEntry[] => {
   const entries: TimelineEntry[] = [];
   for (const { turn, items } of history) {
@@ -138,6 +137,7 @@ const timeline = (history: readonly HistoryTurn[]): TimelineEntry[] => {
         item,
       });
     }
+    // A running agent's turn gets its completion entry only once it ends; it is always the last turn, so no earlier position moves.
     if (turn.status === "inProgress") continue;
     entries.push({
       type: "turnCompleted",
@@ -159,7 +159,6 @@ const timelineEnd = (cursor: string) => {
   return Number.isInteger(end) && end > 0 ? end : null;
 };
 
-// A next cursor resumes after the page's last entry, and a backwards cursor reverses from its first entry, which it includes again.
 const page = <T>(
   entries: readonly T[],
   idOf: (entry: T) => string,
@@ -175,6 +174,7 @@ const page = <T>(
   const last = data.at(-1);
   return {
     data,
+    // A next cursor resumes after the page's last entry, and a backwards cursor reverses from its first entry, which it includes again.
     nextCursor:
       last !== undefined && candidates.length > data.length
         ? `${AFTER}${idOf(last)}`
@@ -199,10 +199,11 @@ const startOf = <T>(
 const ordered = <T>(entries: readonly T[], direction: SortDirection) =>
   direction === "asc" ? entries : [...entries].reverse();
 
-// Without a limit the whole rest is one page, as the history is already in memory.
 const pageSize = (limit: number | null, available: number) =>
+  // Without a limit the whole rest is one page, as the history is already in memory.
   limit === null ? available : Math.max(1, Math.floor(limit));
 
+// Cursors name a turn or item id, which stays put as the conversation grows, rather than a position.
 const AT = "at:";
 const AFTER = "after:";
 const BEFORE = "before:";

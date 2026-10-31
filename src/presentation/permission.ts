@@ -40,27 +40,28 @@ type AppPrompt = {
   decide: (answer: unknown) => PermissionResult;
 };
 
-// The app's permission request carries only network and file system grants, so tools without their own approval ask a yes/no question instead; so does a call that must default to no, since the app's approval prompts choose their own default.
 export const promptFor = (call: ToolCall, target: PromptTarget): AppPrompt => {
   if (call.toolName === ASK_USER_QUESTION) {
     const questions = askedQuestions(call.input);
     if (questions !== null) return questionsPrompt(call, questions, target);
   }
   if (call.toolName === EXIT_PLAN_MODE) return planPrompt(call, target);
+  // The app's approval prompts choose their own default, so a call that must default to no asks a question instead.
   if (call.defaultToNo) return toolPrompt(call, target);
   if (call.item?.type === "commandExecution") {
     return commandPrompt(call, call.item, target);
   }
   if (call.item?.type === "fileChange") return fileChangePrompt(call, target);
+  // The app's permission request carries only network and file system grants, so other tools ask a yes/no question.
   return toolPrompt(call, target);
 };
 
-// The app's policy amendment only displays the prefix; the saved rule is Claude's own suggestion, so it is offered only when that rule is one command prefix.
 const commandPrompt = (
   call: ToolCall,
   item: Extract<ToolItem, { type: "commandExecution" }>,
   target: PromptTarget,
 ): AppPrompt => {
+  // The app's policy amendment only displays the prefix while the saved rule is Claude's own suggestion, so it is offered only when that rule is one command prefix.
   const prefix = call.suppressAlwaysAllow
     ? null
     : commandPrefix(call.suggestions);
@@ -104,7 +105,6 @@ const fileChangePrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
   decide: (answer) => decideApproval(call, [], answer),
 });
 
-// Claude's AskUserQuestion reads answers keyed by question text, with several choices joined by commas; the app's choices are single-select, so a multi-select question is asked as free text listing its choices.
 const questionsPrompt = (
   call: ToolCall,
   questions: AskedQuestion[],
@@ -116,6 +116,7 @@ const questionsPrompt = (
     questions.map((asked, index) => ({
       id: questionId(index),
       header: asked.header,
+      // The app's choices are single-select, so a multi-select question is asked as free text listing its choices.
       question: asked.multiSelect ? multiSelectQuestion(asked) : asked.question,
       isOther: true,
       isSecret: false,
@@ -126,6 +127,7 @@ const questionsPrompt = (
     const answers: Record<string, string> = {};
     questions.forEach((asked, index) => {
       const chosen = answersTo(answer, questionId(index));
+      // AskUserQuestion reads answers keyed by question text, with several choices joined by commas.
       if (chosen.length > 0) answers[asked.question] = chosen.join(", ");
     });
     return Object.keys(answers).length === 0
@@ -134,7 +136,6 @@ const questionsPrompt = (
   },
 });
 
-// Approving leaves plan mode for the rest of the turn, as Claude Code does.
 const planPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
   method: REQUEST_USER_INPUT,
   params: userInputParams(target, [
@@ -158,6 +159,7 @@ const planPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
     const [chosen] = answersTo(answer, PLAN_QUESTION);
     if (chosen === undefined) return unanswered(call);
     if (isChoice(chosen, APPROVE_PLAN)) {
+      // Approving leaves plan mode for the rest of the turn, as Claude Code does.
       return {
         behavior: "allow",
         updatedPermissions: [
@@ -178,8 +180,8 @@ const planPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
   },
 });
 
-// A call that must default to no is never remembered, since a typed answer could otherwise save a rule.
 const toolPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => {
+  // A call that must default to no is never remembered, since a typed answer could otherwise save a rule.
   const sessionUpdates = call.defaultToNo ? [] : call.suggestions;
   const alwaysRules =
     call.defaultToNo || call.suppressAlwaysAllow
@@ -235,7 +237,6 @@ const toolPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => {
   };
 };
 
-// The bridge writes no files: only on the user's choice does it hand Claude its own suggestions, and Claude saves them.
 const decideApproval = (
   call: ToolCall,
   alwaysRules: PermissionUpdate[],
@@ -246,6 +247,7 @@ const decideApproval = (
   }
   const decision = answer.decision;
   if (decision === "accept") return { behavior: "allow" };
+  // The bridge writes no files: on the user's choice it hands Claude its own suggestions, and Claude saves them.
   if (decision === "acceptForSession") {
     return allowSaving(call.suggestions, "session");
   }
@@ -269,19 +271,19 @@ const allowSaving = (
         })),
       };
 
-// Only allow rules are saved to the shared settings, so a suggested mode or directory never persists beyond the session.
 const savableRules = (suggestions: PermissionUpdate[]) =>
+  // Only allow rules are saved to the shared settings, so a suggested mode or directory never persists beyond the session.
   suggestions.filter(
     (update) => update.type === "addRules" && update.behavior === "allow",
   );
 
-// Claude writes a command prefix rule as "npm test:*" or "npm test *"; anything else cannot be shown as the app's token prefix.
 const commandPrefix = (suggestions: PermissionUpdate[]): string[] | null => {
   const bashRules = savableRules(suggestions)
     .flatMap((update) => ("rules" in update ? update.rules : []))
     .filter((rule) => rule.toolName === BASH);
   const [rule] = bashRules;
   if (bashRules.length !== 1 || rule?.ruleContent === undefined) return null;
+  // Claude writes a command prefix rule as "npm test:*" or "npm test *"; anything else cannot be shown as the app's token prefix.
   const prefix = rule.ruleContent.match(/^(.*?)(?::\*| \*)$/)?.[1];
   if (prefix === undefined) return null;
   const tokens = prefix.trim().split(/\s+/);
@@ -296,8 +298,8 @@ const ruleNames = (updates: PermissionUpdate[]) =>
     )
     .join(", ");
 
-// The app picks and submits a choice on a single number key, so a call that must default to no offers no choices and approves only when the approving word is typed.
 const choicesFor = <T>(call: ToolCall, choices: T[]) =>
+  // The app picks and submits a choice on a single number key, so a call that must default to no offers no choices and approves only when the approving word is typed.
   call.defaultToNo ? null : choices;
 
 const typedApproval = (call: ToolCall, word: string) =>

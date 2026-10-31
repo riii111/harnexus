@@ -31,7 +31,6 @@ export type PickerAnswer =
   | { kind: "search"; text: string }
   | { kind: "none" };
 
-// The app returns a choice's label and typed text alike, so a page offers only choices, each label distinct, and searching asks for the words in a question of its own.
 export const pickerPrompt = (
   target: UserInputTarget,
   page: PickerPage,
@@ -39,6 +38,7 @@ export const pickerPrompt = (
 ) => {
   const newer = page.offset;
   const more = page.total - page.offset - page.conversations.length;
+  // The app returns a choice's label and typed text alike, so a page offers only choices, each label distinct, and searching asks for the words in a question of its own.
   const labels = distinctLabels(
     page.conversations.map(({ title }) => shortTitle(title)),
     [SEARCH, ...(newer > 0 ? [NEWER] : []), ...(more > 0 ? [OLDER] : [])],

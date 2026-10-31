@@ -16,7 +16,6 @@ export type ThreadPlan = {
 
 export const NO_PLAN: ThreadPlan = { steps: [], calls: {} };
 
-// The plan changes only when a main-conversation call succeeds, so a refused or failed call never shows, and a subagent's list never replaces the thread's.
 export const renderPlan = (
   plan: ThreadPlan,
   message: SDKMessage,
@@ -41,8 +40,8 @@ export const renderPlan = (
   };
 };
 
-// Only main-conversation calls are recorded, so a result is matched to one of them by its tool use id alone.
 const nextPlan = (plan: ThreadPlan, message: SDKMessage): ThreadPlan => {
+  // Only main-conversation calls are recorded, so a subagent's list never replaces the thread's and a result is matched to a call by its tool use id alone.
   if (message.type === "assistant" && message.parent_tool_use_id === null) {
     return { ...plan, calls: { ...plan.calls, ...planCallsOf(message) } };
   }
@@ -80,6 +79,7 @@ const applyResults = (
     const call = calls[result.tool_use_id];
     if (call === undefined) continue;
     delete calls[result.tool_use_id];
+    // A refused or failed call never changes the plan.
     if (result.is_error !== true) {
       steps = applyCall(steps, call, output, result.content) ?? steps;
     }
@@ -107,11 +107,11 @@ const applyCall = (
   }
 };
 
-// A TodoWrite call carries the whole list each time, so a malformed list yields null and the app never shows a partial plan.
 const todoStepsOf = (input: unknown): PlanStep[] | null => {
   if (!isObject(input) || !Array.isArray(input.todos)) return null;
   const steps: PlanStep[] = [];
   for (const todo of input.todos) {
+    // A TodoWrite call carries the whole list each time, so one malformed entry drops the call rather than show a partial plan.
     if (!isObject(todo) || typeof todo.content !== "string") return null;
     const status = statusOf(todo.status);
     if (status === undefined) return null;
@@ -120,7 +120,6 @@ const todoStepsOf = (input: unknown): PlanStep[] | null => {
   return steps;
 };
 
-// The task id comes only from the result, which states it in its text when no structured output is at hand.
 const createTask = (
   steps: readonly PlanStep[],
   input: unknown,
@@ -128,6 +127,7 @@ const createTask = (
   content: unknown,
 ): PlanStep[] | null => {
   if (!isObject(input) || typeof input.subject !== "string") return null;
+  // The task id comes only from the result, which states it in its text when no structured output is at hand.
   const id = createdIdOf(output) ?? createdIdInText(content);
   if (id === null) return null;
   return [

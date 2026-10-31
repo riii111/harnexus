@@ -17,7 +17,6 @@ type ToolResult = {
   durationMs: number;
 };
 
-// Claude Code tools without an app counterpart fall back to a generic MCP-style item so their arguments and result stay visible.
 export const startToolItem = (
   id: string,
   use: ToolUse,
@@ -50,6 +49,7 @@ export const startToolItem = (
       diff: input.content,
     });
   }
+  // Claude Code tools without an app counterpart fall back to a generic MCP-style item so their arguments and result stay visible.
   return startMcpToolCall(id, use);
 };
 
@@ -67,21 +67,21 @@ export const completeToolItem = (
   }
 };
 
-// An MCP tool call has no declined status, so a refused one stays failed.
 export const declineToolItem = (item: ToolItem): ToolItem | null =>
+  // An MCP tool call has no declined status, so a refused one stays failed.
   item.type === "mcpToolCall" ? null : { ...item, status: "declined" };
 
-// A tool left open when the turn ends never reports a result, so it is closed as failed rather than left running in the app.
 export const abandonToolItem = (item: ToolItem): ToolItem =>
+  // A tool left open when the turn ends never reports a result, so it is closed as failed rather than left running in the app.
   item.type === "mcpToolCall"
     ? { ...item, status: "failed", error: { message: ABANDONED } }
     : { ...item, status: "failed" };
 
-// The structured output belongs to a single tool, so it is used only when the message answers one call.
 export const singleCallOutput = (
   content: readonly { type: string }[],
   output: unknown,
 ): unknown =>
+  // The structured output belongs to a single tool, so it is used only when the message answers one call.
   content.filter((block) => block.type === "tool_result").length === 1
     ? output
     : undefined;
@@ -155,6 +155,7 @@ const completeFileChange = (
 ): FileChangeItem => {
   if (result.declined) return { ...item, status: "declined" };
   if (result.isError) return { ...item, status: "failed" };
+  // The Edit and Write outputs carry the applied hunks with line numbers, which the proposed input cannot provide.
   const applied = appliedChange(result.output);
   return {
     ...item,
@@ -187,7 +188,6 @@ const completeGeneric = (
   };
 };
 
-// The Edit and Write outputs carry the applied hunks with line numbers, which the proposed input cannot provide.
 const appliedChange = (output: unknown): FileUpdateChange | null => {
   const record = asRecord(output);
   if (typeof record.filePath !== "string") return null;
@@ -212,10 +212,10 @@ const formatHunk = (hunk: unknown) => {
   return `@@ -${oldStart},${oldLines} +${newStart},${newLines} @@\n${body.join("")}`;
 };
 
-// The proposed edit has no line numbers, so the hunk starts at line 1 until the applied hunks replace it.
 const replacementDiff = (oldText: string, newText: string) => {
   const removed = diffLines(oldText);
   const added = diffLines(newText);
+  // The proposed edit has no line numbers, so the hunk starts at line 1 until the applied hunks replace it.
   return [
     `@@ -1,${removed.length} +1,${added.length} @@\n`,
     ...removed.map((line) => `-${line}\n`),
@@ -226,8 +226,8 @@ const replacementDiff = (oldText: string, newText: string) => {
 const diffLines = (text: string) =>
   text === "" ? [] : text.replace(/\n$/, "").split("\n");
 
-// Claude Code reports a non-zero exit only in the result text.
 const exitCodeOf = (text: string) => {
+  // Claude Code reports a non-zero exit only in the result text.
   const match = EXIT_CODE.exec(text);
   return match?.[1] === undefined ? null : Number(match[1]);
 };
@@ -244,11 +244,11 @@ const resultContent = (content: unknown): unknown[] => {
   return Array.isArray(content) ? content.map(toMcpContent) : [];
 };
 
-// Tool results use the Anthropic image block, while the app reads MCP content with the image data at the top level.
 const toMcpContent = (block: unknown) => {
   const record = asRecord(block);
   if (record.type !== "image") return block;
   const source = asRecord(record.source);
+  // Tool results use the Anthropic image block, while the app reads MCP content with the image data at the top level.
   if (source.type === "base64") {
     return { type: "image", data: source.data, mimeType: source.media_type };
   }

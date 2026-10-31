@@ -50,11 +50,11 @@ export type SubagentThread = {
   updatedAtMs: number;
 };
 
-// The agent's own turn carries its thread's status, as a Codex subagent's does; turnId is the parent's turn that shows it, the one the agent started in unless named.
 export const renderSubagentActivity = (
   child: SubagentThread,
   kind: SubAgentActivityItem["kind"],
   now: number,
+  // The parent's turn that shows the activity.
   turnId: string | null = child.turnId,
 ): AppNotification[] => {
   if (turnId === null) return [];
@@ -94,12 +94,12 @@ const shownAt = (
   itemCompletedAt(item, ref, now),
 ];
 
-// The parent's own thread, as the server reports it, gives the fields only the server knows, such as its directory and environment, which the agent shares.
 export const childThreadView = (
   parentThread: Record<string, unknown>,
   child: SubagentThread,
   shown: { model: string; reasoningEffort: string | null },
 ) => ({
+  // The parent's own thread, as the server reports it, gives the fields only the server knows, such as its directory and environment, which the agent shares.
   ...parentThread,
   id: child.id,
   sessionId: child.parentThreadId,
@@ -180,7 +180,6 @@ export const openSubagentTurn = (
   };
 };
 
-// The agent's messages name the call that started it as their parent; in its own thread they are the conversation itself.
 export const renderSubagentMessage = (
   turn: SubagentTurn,
   message: SDKMessage,
@@ -188,6 +187,7 @@ export const renderSubagentMessage = (
 ): { turn: SubagentTurn; notifications: AppNotification[] } => {
   const rendered = renderSdkMessage(
     turn.state,
+    // The agent's messages name the call that started it as their parent; in its own thread they are the conversation itself.
     { ...message, parent_tool_use_id: null } as SDKMessage,
     now,
   );
@@ -221,17 +221,17 @@ export const closeSubagentTurn = (
 export const subagentCalls = (turn: SubagentTurn) =>
   Object.keys(turn.state.tools);
 
-// A turn still running reads as one in progress with the items it has so far, which the app reads apart from its summary.
 export const runningSubagentTurn = (turn: SubagentTurn): HistoryTurn => ({
+  // The app reads a running turn's items apart from its summary.
   turn: { ...turn.turn, itemsView: "notLoaded" },
   items: [...turn.items.values()],
 });
 
-// The turn's items are kept in one map for the turn's life, since an agent's turn can stream many messages.
 const collect = (
   turn: SubagentTurn,
   notifications: readonly AppNotification[],
 ): SubagentTurn => {
+  // The items stay in one map for the turn's life, since an agent's turn can stream many messages.
   noteItems(turn.items, notifications);
   return turn;
 };
