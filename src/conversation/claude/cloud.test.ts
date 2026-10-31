@@ -1220,6 +1220,7 @@ const fakeInner = (runs: string[]): TurnRuntime<string> => ({
   interrupt: () => {},
   dropSession: () => {},
   noteFork: async () => {},
+  dropFork: () => {},
   threadBusy: () => {},
   threadIdle: () => {},
   listen: () => {},
