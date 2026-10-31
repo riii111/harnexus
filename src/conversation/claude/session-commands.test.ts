@@ -88,7 +88,7 @@ describe("/resume", () => {
       thread: THREAD.slice(0, 8),
     });
     expect(JSON.stringify(events)).not.toContain("fixture ask");
-    expect([threads.takePicked(THREAD), threads.takePicked(THREAD)]).toEqual([
+    expect([threads.consumePick(THREAD), threads.consumePick(THREAD)]).toEqual([
       true,
       false,
     ]);
@@ -300,7 +300,7 @@ describe("/resume", () => {
       .map((message: Sent) => message.method)
       .lastIndexOf("turn/completed");
     expect(sent.indexOf(replay[0])).toBeGreaterThan(lastCompleted);
-    expect(threads.takePicked(THREAD)).toBe(false);
+    expect(threads.consumePick(THREAD)).toBe(false);
   });
 
   test.each<{ name: string; records: () => object[] }>([

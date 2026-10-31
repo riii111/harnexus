@@ -73,7 +73,7 @@ type Deps = {
   };
   threads: Pick<
     ThreadValues,
-    "adopt" | "threadOf" | "modeOf" | "effortOf" | "takePicked"
+    "adopt" | "threadOf" | "modeOf" | "effortOf" | "consumePick"
   >;
   sideChats: Pick<SideChats, "remember" | "showsCodex">;
   subagents: Pick<SubagentRequests, "withChildren" | "remember">;
@@ -248,7 +248,7 @@ export const createServerResponses = ({
       },
       (shown) => {
         // Taken only once the history goes out, since a resume the server fails would otherwise use up the pick.
-        const picked = threads.takePicked(threadId);
+        const picked = threads.consumePick(threadId);
         return {
           excludeTurns: params.excludeTurns === true,
           initialPage: isObject(params.initialTurnsPage),

@@ -1124,7 +1124,7 @@ const setup = ({
       cloudOwner: (cloudSessionId) => owners.get(cloudSessionId),
       cloudThreadIds: () => [...clouds.keys()],
       sessionIdOf: (threadId) => sessionIds.get(threadId) ?? null,
-      takePicked: (threadId) => {
+      consumePick: (threadId) => {
         picked.push(threadId);
         return true;
       },

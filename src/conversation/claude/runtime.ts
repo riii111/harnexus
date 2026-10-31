@@ -272,7 +272,7 @@ export const createClaudeRuntime = ({
     const command =
       turn.input.startedBy === "claude"
         ? null
-        : sessionCommandOf(typedText(turn.input));
+        : sessionCommandOf(sessionCommandTextOf(turn.input));
     const claude: ClaudeTurn = {
       command: command === null ? null : new AbortController(),
       own: false,
@@ -311,6 +311,7 @@ export const createClaudeRuntime = ({
         : undefined;
     if (held !== undefined) {
       claude.holdsApprovals = true;
+      // Claude sent nothing for this turn, so it reads nothing.
       await approvals.hold(turn, held);
       return;
     }
@@ -364,6 +365,7 @@ export const createClaudeRuntime = ({
       null,
     );
     if (reply.kind !== "selected") return;
+    // Not awaited, since the thread's next message waits for this turn and the name only changes what the app shows.
     if (reply.name !== null) void nameThread(turn.threadId, reply.name);
     await showPicked(turn);
   };
@@ -391,9 +393,9 @@ export const createClaudeRuntime = ({
     );
   };
 
-  // Not awaited, since the thread's next message waits for this turn and the name only changes what the app shows; a failed rename leaves the name as it was and the pick still stands.
   const nameThread = async (threadId: string, name: string) => {
     const renamed = await renameThread(threadId, name);
+    // A failed rename leaves the name as it was and the pick still stands.
     if (renamed.isErr()) {
       log({
         event: "claude_turn",
@@ -414,7 +416,7 @@ export const createClaudeRuntime = ({
     );
     if (replayed.length === 0) return;
     for (const notification of replayed) send(notification);
-    threads.takePicked(turn.threadId);
+    threads.consumePick(turn.threadId);
     log({ event: "claude_turn", step: "history_replayed" });
   };
 
@@ -1339,17 +1341,16 @@ const startsTurn = (message: SDKMessage) => {
   }
 };
 
-// Tasks Claude marks as ambient, such as a watcher, are no activity a user waits on.
 const trackTasks = (slot: SessionSlot, message: SDKMessage) => {
   if (message.type !== "system") return;
   if (message.subtype !== "background_tasks_changed") return;
   slot.backgroundTasks = message.tasks.filter(
+    // Tasks Claude marks as ambient, such as a watcher, are no activity a user waits on.
     (task) => task.ambient !== true,
   ).length;
 };
 
-// Only what the user typed can be a session command, never another thread's message or a compaction.
-export const typedText = (input: RunningTurn<string>["input"]) =>
+export const sessionCommandTextOf = (input: RunningTurn<string>["input"]) =>
   input.toolOutput === null && input.items.length > 0 ? input.text : null;
 
 const resumeFrom = (sessionId: string | null) =>

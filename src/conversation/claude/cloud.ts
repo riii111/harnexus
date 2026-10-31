@@ -8,8 +8,8 @@ import type { CloudLink } from "../../infra/thread-store.ts";
 import {
   endsTurn,
   mainRecords,
-  promptTextOf,
   renderRecords,
+  turnOpeningTextOf,
 } from "../../presentation/history.ts";
 import { renderNotice } from "../../presentation/turn.ts";
 import { createSerialQueue } from "../../runtime/serial-queue.ts";
@@ -18,7 +18,7 @@ import { type Refusal, refusalMessage } from "../thread-request.ts";
 import type { ThreadValues } from "../thread-values.ts";
 import type { RunningTurn, TurnInput, TurnRuntime } from "../turn-runtime.ts";
 import { type CloudChild, childSessionsIn } from "./cloud-children.ts";
-import { typedText } from "./runtime.ts";
+import { sessionCommandTextOf } from "./runtime.ts";
 import { createTurnRecords } from "./turn-records.ts";
 
 // A Cloud thread's turns log their failure tags beside the Claude runtime's, so the log takes any tag a runtime writes.
@@ -67,7 +67,7 @@ export type CloudDeps = {
     | "linkCloud"
     | "setCloudCopy"
     | "sessionIdOf"
-    | "takePicked"
+    | "consumePick"
   >;
   sendToCloud: (
     cloudSessionId: string,
@@ -267,7 +267,7 @@ export const createCloudRuntime = <Tag extends string>(
     );
     if (replayed.length === 0) return;
     for (const notification of replayed) send(notification);
-    threads.takePicked(threadId);
+    threads.consumePick(threadId);
   };
 
   const sendAndFollow = async (turn: Turn, cloud: CloudLink) => {
@@ -804,7 +804,7 @@ const pollMs = (waited: number, failing: boolean) => {
 
 // Besides what the user typed, the first message of a chat another chat opened with create_thread, such as harnexus-task cloud does, can link it; it arrives wrapped in its delegation, as its <prompt>.
 const commandText = (input: TurnInput) => {
-  const typed = typedText(input);
+  const typed = sessionCommandTextOf(input);
   if (typed !== null || input.toolOutput?.name !== "create_thread")
     return typed;
   return DELEGATED_PROMPT.exec(input.text)?.[1] ?? null;
@@ -829,7 +829,7 @@ const forget = (follow: Follow, text: string) => {
 };
 
 const samePrompt = (message: SessionMessage, text: string) =>
-  promptTextOf(message)?.trim() === text.trim();
+  turnOpeningTextOf(message)?.trim() === text.trim();
 
 const keyOf = (message: SessionMessage | undefined) => message?.uuid ?? null;
 

@@ -79,15 +79,15 @@ export const createSessionSlots = <Turn extends { threadId: string }>({
     startup.link?.stopWrites();
   };
 
-  // An idle session without a session id stays, since its next turn could not resume the conversation.
-  // Closing would end the tasks Claude runs in the background, so the close waits until none is left.
   const scheduleIdleClose = (threadId: string) => {
     cancelIdleClose(threadId);
     const timer = setTimeout(() => {
       idleTimers.delete(threadId);
       const slot = sessions.get(threadId);
       if (slot === undefined) return;
+      // An idle session without a session id stays, since its next turn could not resume the conversation.
       if (threads.sessionIdOf(threadId) == null) return;
+      // Closing would end the tasks Claude runs in the background, so the close waits until none is left.
       if (slot.backgroundTasks > 0) {
         scheduleIdleClose(threadId);
         return;
