@@ -31,6 +31,7 @@ import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
 import { buildHistory, replayHistory } from "../presentation/history.ts";
 import { resizeImage } from "../runtime/image.boundary.ts";
+import { openCloudChild } from "./cloud-children.ts";
 
 type Runtime = Parameters<typeof createClaudeRuntime>[0];
 
@@ -131,6 +132,12 @@ export const connectClaudeThreads = ({
     subagents,
     resizeImage,
   });
+  const callGateway = createCallGateway({
+    isClaudeThread: (threadId) => store.get(threadId) !== undefined,
+    openLink,
+    request,
+    delegations,
+  });
   const runtime = createCloudRuntime(claude, {
     threads,
     sendToCloud: (cloudSessionId, text, cwd) =>
@@ -152,6 +159,17 @@ export const connectClaudeThreads = ({
     replayHistory: readHistory,
     send,
     log,
+    openChild: (parentThreadId, child) => {
+      const parent = store.get(parentThreadId);
+      return parent === undefined
+        ? Promise.resolve("no_parent")
+        : openCloudChild(
+            (call) => callGateway.handle(call),
+            parentThreadId,
+            parent.worktree,
+            child,
+          );
+    },
   });
   const turns = createTurnController({
     store,
@@ -225,12 +243,6 @@ export const connectClaudeThreads = ({
       send,
     }),
     sideChats,
-  });
-  const callGateway = createCallGateway({
-    isClaudeThread: (threadId) => store.get(threadId) !== undefined,
-    openLink,
-    request,
-    delegations,
   });
   return { router, closeAll: turns.closeAll, callGateway };
 };

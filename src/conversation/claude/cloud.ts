@@ -17,6 +17,7 @@ import type { TurnEvent } from "../controller.ts";
 import { type Refusal, refusalMessage } from "../thread-request.ts";
 import type { ThreadValues } from "../thread-values.ts";
 import type { RunningTurn, TurnInput, TurnRuntime } from "../turn-runtime.ts";
+import { type CloudChild, childSessionsIn } from "./cloud-children.ts";
 import { typedText } from "./runtime.ts";
 
 // A Cloud thread's turns log their failure tags beside the Claude runtime's, so the log takes any tag a runtime writes.
@@ -45,6 +46,7 @@ export type CloudEvent =
         | "copy_unchecked";
     }
   | { event: "claude_cloud"; step: "sent"; ms: number }
+  | { event: "claude_cloud"; step: "child"; outcome: string }
   | { event: "claude_cloud"; step: "copied"; records: number; ms: number }
   | { event: "claude_cloud"; step: "copy_failed"; error: string };
 
@@ -84,6 +86,9 @@ export type CloudDeps = {
   ) => Promise<readonly object[]>;
   send: (message: object) => void;
   log: (event: CloudEvent) => void;
+  // Opens a chat in the app linked to a session a linked Cloud session started.
+  // Answers how the app took it, such as done, for the log.
+  openChild?: (parentThreadId: string, child: CloudChild) => Promise<string>;
   now?: () => number;
   // Waits the time, or less once woken; a turn being stopped wakes its wait.
   sleep?: (ms: number, woken: Promise<void>) => Promise<void>;
@@ -128,6 +133,7 @@ export const createCloudRuntime = <Tag extends string>(
     replayHistory,
     send,
     log,
+    openChild,
     now = Date.now,
     sleep = defaultSleep,
     schedule = defaultSchedule,
@@ -142,6 +148,11 @@ export const createCloudRuntime = <Tag extends string>(
   // A thread whose copy may have run a model turn is not copied again until the bridge restarts, so the cost is not repeated.
   const halted = new Set<string>();
   const pendingOwn = new Map<string, Copied>();
+  const openedChildren = new Set<string>();
+  const unsentChildren = new Map<
+    string,
+    { threadId: string; child: CloudChild }
+  >();
   const copies = createSerialQueue();
   let startOwnTurn = (_threadId: string) => false;
   let cancelTick: (() => void) | null = null;
@@ -544,7 +555,39 @@ export const createCloudRuntime = <Tag extends string>(
       records: all.length,
       ms: now() - startedAt,
     });
+    noticeChildren(threadId, all);
     return Result.ok({ copy: copied.value, records: all });
+  };
+
+  // A session a linked one started after the app was last shown gets a chat of its own, once; one started before was the user's to link, and one already linked has its chat.
+  const noticeChildren = (threadId: string, all: readonly SessionMessage[]) => {
+    // A copy made while a chat is being linked, or one whose link failed, opens nothing.
+    const cloud = threads.cloudOf(threadId);
+    if (openChild === undefined || cloud === null) return;
+    const after = indexAfter(all, cloud.shown);
+    const unsent = [...unsentChildren.values()]
+      .filter((entry) => entry.threadId === threadId)
+      .map((entry) => entry.child);
+    for (const child of [...unsent, ...childSessionsIn(all, after)]) {
+      if (openedChildren.has(child.sessionId)) continue;
+      if (threads.cloudOwner(child.sessionId) !== undefined) {
+        unsentChildren.delete(child.sessionId);
+        continue;
+      }
+      openedChildren.add(child.sessionId);
+      void openChild(threadId, child)
+        .catch(() => "threw")
+        .then((outcome) => {
+          // Only a chat known not to be created is tried again, from here and not from the shown position, which a turn moves past it; any other answer may have made the chat.
+          if (UNSENT_OUTCOMES.has(outcome)) {
+            openedChildren.delete(child.sessionId);
+            unsentChildren.set(child.sessionId, { threadId, child });
+          } else {
+            unsentChildren.delete(child.sessionId);
+          }
+          log({ event: "claude_cloud", step: "child", outcome });
+        });
+    }
   };
 
   // A copy started for a turn that has ended is removed once it is written.
@@ -748,6 +791,8 @@ const cloudCommandOf = (text: string | null) => {
 
 const CLOUD_COMMAND = /^\/cloud(?:\s+(\S+))?\s*$/;
 
+const UNSENT_OUTCOMES = new Set(["not_sent", "no_project", "no_parent"]);
+
 // A message whose send failed is no longer waited for; one not yet matched is taken from the end, so the order of the others stays.
 const forget = (follow: Follow, text: string) => {
   const at = follow.texts.lastIndexOf(text);
@@ -789,6 +834,8 @@ export const serializeCloudEvent = (entry: CloudEvent) => {
   switch (entry.step) {
     case "sent":
       return { event: entry.event, step: entry.step, ms: entry.ms };
+    case "child":
+      return { event: entry.event, step: entry.step, outcome: entry.outcome };
     case "copied":
       return {
         event: entry.event,

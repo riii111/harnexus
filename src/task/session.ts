@@ -74,7 +74,7 @@ export const callApp = async (
   return parsed.value;
 };
 
-const projectsIn = (result: unknown): unknown[] => {
+export const projectsIn = (result: unknown): unknown[] => {
   if (!isObject(result)) return [];
   const texts = Array.isArray(result.content)
     ? result.content.flatMap((item) =>

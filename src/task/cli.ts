@@ -818,5 +818,7 @@ const parseCommand = (
   if (parsed.isErr()) return shown(parsed.error.message);
   if (parsed.value.help === true) return shown("", 0);
   const prepared = prepare(parsed.value);
-  return prepared.isErr() ? shown(prepared.error.message) : prepared;
+  return prepared.isErr()
+    ? shown(prepared.error.message)
+    : Result.ok(prepared.value);
 };

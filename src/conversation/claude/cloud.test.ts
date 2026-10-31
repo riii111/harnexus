@@ -30,6 +30,164 @@ import {
 
 const CLOUD_ID = "session_01NfjPqrX1AK5RmKyV182VYD";
 
+describe("createCloudRuntime child sessions", () => {
+  const CHILD = "session_01NfjPqs5GNSgknfAaJ3mdYA";
+  const started = (id: string) =>
+    JSON.stringify({ ccr: { id, title: "worker" } });
+
+  test("opens a chat for a session the linked one started after the app was shown, once", async () => {
+    const env = linked({
+      copies: [
+        [
+          prompt("p0", "earlier"),
+          endReply("r0", "ok"),
+          prompt("p1", "start a worker"),
+          reply(
+            "a1",
+            "m1",
+            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+            "tool_use",
+          ),
+          toolResult("u1", "t1", started(CHILD)),
+          endReply("a2", "started"),
+        ],
+      ],
+      shown: "r0",
+    });
+    const turn = env.turn("start a worker");
+
+    await env.runtime.run(turn.running);
+    await env.tick();
+
+    expect(env.children).toEqual([
+      { parent: "thread-1", child: { sessionId: CHILD, title: "worker" } },
+    ]);
+  });
+
+  test("opens nothing for the sessions a session started before /cloud linked it", async () => {
+    const env = setup({
+      copies: [
+        [
+          reply(
+            "a1",
+            "m1",
+            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+            "tool_use",
+          ),
+          toolResult("u1", "t1", started(CHILD)),
+          endReply("a2", "started"),
+        ],
+      ],
+    });
+    const turn = env.turn(`/cloud ${CLOUD_ID}`);
+
+    await env.runtime.run(turn.running);
+    await env.tick();
+
+    expect(env.links).toHaveLength(1);
+    expect(env.children).toEqual([]);
+  });
+
+  test("tries a chat the app did not open again on a later copy", async () => {
+    const env = linked({
+      copies: [
+        [
+          prompt("p0", "earlier"),
+          endReply("r0", "ok"),
+          reply(
+            "a1",
+            "m1",
+            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+            "tool_use",
+          ),
+          toolResult("u1", "t1", started(CHILD)),
+          endReply("a2", "started"),
+        ],
+      ],
+      shown: "r0",
+    });
+    env.childOutcomes.push("not_sent");
+    env.runtime.listen(() => true);
+
+    await env.tick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await env.tick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(env.children.map((opened) => opened.child.sessionId)).toEqual([
+      CHILD,
+      CHILD,
+    ]);
+  });
+
+  test.each([
+    { name: "not sent", outcome: "not_sent", tries: 2 },
+    { name: "without a project", outcome: "no_project", tries: 2 },
+    { name: "of unknown result", outcome: "unknown", tries: 1 },
+  ])("tries a chat the app answered $name again only when none may exist, after a turn moved the shown position past it", async ({
+    outcome,
+    tries,
+  }) => {
+    const env = linked({
+      copies: [
+        [
+          prompt("p0", "earlier"),
+          endReply("r0", "ok"),
+          prompt("p1", "start a worker"),
+          reply(
+            "a1",
+            "m1",
+            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+            "tool_use",
+          ),
+          toolResult("u1", "t1", started(CHILD)),
+          endReply("a2", "started"),
+        ],
+      ],
+      shown: "r0",
+    });
+    env.childOutcomes.push(outcome);
+    env.runtime.listen(() => true);
+
+    await env.runtime.run(env.turn("start a worker").running);
+    await settle();
+    expect(env.cloudOf("thread-1")?.shown).toBe("a2");
+    await env.tick();
+    await settle();
+    await env.tick();
+    await settle();
+
+    expect(env.children.map((opened) => opened.child.sessionId)).toEqual(
+      Array(tries).fill(CHILD),
+    );
+  });
+
+  test("leaves a session started before the app was shown to the user", async () => {
+    const env = linked({
+      copies: [
+        [
+          reply(
+            "a1",
+            "m1",
+            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+            "tool_use",
+          ),
+          toolResult("u1", "t1", started(CHILD)),
+          endReply("a2", "started"),
+          prompt("p1", "hi"),
+          endReply("a3", "hello"),
+        ],
+      ],
+      shown: "a2",
+    });
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+
+    expect(env.children).toEqual([]);
+  });
+});
+
 describe("createCloudRuntime /cloud", () => {
   test("links an empty thread to the session, then replays its conversation after the reply", async () => {
     const env = setup({
@@ -829,6 +987,8 @@ describe("createCloudRuntime idle copies", () => {
   });
 });
 
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 const endReply = (uuid: string, value: string) =>
   reply(uuid, `m-${uuid}`, text(value), "end_turn");
 
@@ -876,6 +1036,11 @@ const setup = ({
     innerRuns,
     ownStarts,
     copyCalls: 0,
+    childOutcomes: [] as string[],
+    children: [] as {
+      parent: string;
+      child: { sessionId: string; title: string | null };
+    }[],
     // The clock moves by the waits between copies, which are kept in order, and by each copy.
     clock: 1_000,
     waits: [] as number[],
@@ -1012,6 +1177,10 @@ const setup = ({
       discarded.push(copy);
     },
     replayHistory: async (_threadId, copy) => [{ replayOf: copy }],
+    openChild: async (parent, child) => {
+      env.children.push({ parent, child });
+      return env.childOutcomes.shift() ?? "done";
+    },
     send: (message) => sent.push(message),
     log: (event) => events.push(event),
     now: () => env.clock,
