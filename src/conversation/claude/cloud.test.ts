@@ -88,12 +88,13 @@ describe("createCloudRuntime child sessions", () => {
     expect(env.children).toEqual([]);
   });
 
-  test("tries a chat the app did not open again on a later copy", async () => {
+  test("tries a chat the app did not open again on a later copy, after the app was shown past it", async () => {
     const env = linked({
       copies: [
         [
           prompt("p0", "earlier"),
           endReply("r0", "ok"),
+          prompt("p1", "start a worker"),
           reply(
             "a1",
             "m1",
@@ -103,15 +104,32 @@ describe("createCloudRuntime child sessions", () => {
           toolResult("u1", "t1", started(CHILD)),
           endReply("a2", "started"),
         ],
+        [
+          prompt("p0", "earlier"),
+          endReply("r0", "ok"),
+          prompt("p1", "start a worker"),
+          reply(
+            "a1",
+            "m1",
+            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+            "tool_use",
+          ),
+          toolResult("u1", "t1", started(CHILD)),
+          endReply("a2", "started"),
+          prompt("p2", "next"),
+          endReply("a3", "done"),
+        ],
       ],
       shown: "r0",
     });
     env.childOutcomes.push("not_sent");
-    env.runtime.listen(() => true);
-
-    await env.tick();
+    const first = env.turn("start a worker");
+    await env.runtime.run(first.running);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await env.tick();
+    expect(env.cloudOf("thread-1")?.shown).toBe("a2");
+
+    const second = env.turn("next");
+    await env.runtime.run(second.running);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(env.children.map((opened) => opened.child.sessionId)).toEqual([

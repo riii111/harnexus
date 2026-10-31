@@ -148,7 +148,11 @@ export const createCloudRuntime = <Tag extends string>(
   // A thread whose copy may have run a model turn is not copied again until the bridge restarts, so the cost is not repeated.
   const halted = new Set<string>();
   const pendingOwn = new Map<string, Copied>();
-  const openedChildren = new Set<string>();
+  const openingChildren = new Set<string>();
+  const unopenedChildren = new Map<
+    string,
+    { parent: string; child: CloudChild }
+  >();
   const copies = createSerialQueue();
   let startOwnTurn = (_threadId: string) => false;
   let cancelTick: (() => void) | null = null;
@@ -561,15 +565,28 @@ export const createCloudRuntime = <Tag extends string>(
     const cloud = threads.cloudOf(threadId);
     if (openChild === undefined || cloud === null) return;
     const after = indexAfter(all, cloud.shown);
-    for (const child of childSessionsIn(all, after)) {
-      if (openedChildren.has(child.sessionId)) continue;
-      if (threads.cloudOwner(child.sessionId) !== undefined) continue;
-      openedChildren.add(child.sessionId);
-      // A chat the app did not open is tried again by a later copy.
+    const waiting = [...unopenedChildren.values()].filter(
+      (entry) => entry.parent === threadId,
+    );
+    for (const child of [
+      ...childSessionsIn(all, after),
+      ...waiting.map((entry) => entry.child),
+    ]) {
+      if (openingChildren.has(child.sessionId)) continue;
+      if (threads.cloudOwner(child.sessionId) !== undefined) {
+        unopenedChildren.delete(child.sessionId);
+        continue;
+      }
+      openingChildren.add(child.sessionId);
+      unopenedChildren.delete(child.sessionId);
+      // A chat the app did not open is kept apart, since the record it came from may already be behind what was shown, and a later copy of the same parent tries it again.
       void openChild(threadId, child)
         .catch(() => "threw")
         .then((outcome) => {
-          if (outcome !== "done") openedChildren.delete(child.sessionId);
+          if (outcome !== "done") {
+            openingChildren.delete(child.sessionId);
+            unopenedChildren.set(child.sessionId, { parent: threadId, child });
+          }
           log({ event: "claude_cloud", step: "child", outcome });
         });
     }
