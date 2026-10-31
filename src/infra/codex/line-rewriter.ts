@@ -6,16 +6,21 @@ type Rewritten = Buffer | null;
 export const createLineRewriter = (
   rewrite: (line: Buffer) => Rewritten | Promise<Rewritten>,
 ) => {
-  let carry = Buffer.alloc(0);
+  // The unfinished line is kept as pieces and joined once its newline arrives, so a line spread over many chunks is copied once rather than once per chunk.
+  let carry: Buffer[] = [];
   return new Transform({
     transform(chunk: Uint8Array, _encoding, callback) {
-      const bytes = Buffer.concat([carry, Buffer.from(chunk)]);
-      const end = bytes.lastIndexOf(NEWLINE) + 1;
-      carry = Buffer.from(bytes.subarray(end));
-      const pending = pushLines(
-        splitLines(bytes.subarray(0, end)),
-        rewrite,
-        (kept) => this.push(kept),
+      const incoming = Buffer.from(chunk);
+      const end = incoming.lastIndexOf(NEWLINE) + 1;
+      if (end === 0) {
+        carry.push(incoming);
+        callback();
+        return;
+      }
+      const bytes = Buffer.concat([...carry, incoming.subarray(0, end)]);
+      carry = end < incoming.length ? [incoming.subarray(end)] : [];
+      const pending = pushLines(splitLines(bytes), rewrite, (kept) =>
+        this.push(kept),
       );
       if (pending === null) callback();
       // A rewrite that fails breaks the stream rather than stalling every later line.
@@ -26,7 +31,7 @@ export const createLineRewriter = (
         );
     },
     flush(callback) {
-      if (carry.length > 0) this.push(carry);
+      if (carry.length > 0) this.push(Buffer.concat(carry));
       callback();
     },
   });
