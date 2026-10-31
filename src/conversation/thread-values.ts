@@ -18,11 +18,9 @@ export type ThreadValueEvent =
   | { event: "claude_turn"; step: "session_picked"; thread: string }
   | { event: "claude_turn"; step: "effort_changed"; effort: EffortLevel }
   | { event: "claude_turn"; step: "effort_unsupported" }
-  | {
-      event: "claude_turn";
-      step: "session_not_saved" | "model_not_saved" | "effort_not_saved";
-      error: StoreTag;
-    };
+  | { event: "claude_turn"; step: UnsavedStep; error: StoreTag };
+
+type UnsavedStep = "session_not_saved" | "model_not_saved" | "effort_not_saved";
 
 // runWrite is generic in the operation's error, so the store's own tags are listed; a new tag there fails to compile here.
 export type StoreTag =
@@ -214,45 +212,29 @@ export const createThreadValues = (
 
   const setSessionId = (threadId: string, sessionId: string | null) => {
     sessionIds.set(threadId, sessionId);
-    return logUnsaved(store.setSessionId(threadId, sessionId));
+    return logUnsaved(
+      "session_not_saved",
+      store.setSessionId(threadId, sessionId),
+    );
   };
 
   const logUnsaved = async <T extends Result<unknown, { _tag: StoreTag }>>(
+    step: UnsavedStep,
     saving: Promise<T>,
   ) => {
     const saved = await saving;
     if (saved.isErr()) {
-      log({
-        event: "claude_turn",
-        step: "session_not_saved",
-        error: saved.error._tag,
-      });
+      log({ event: "claude_turn", step, error: saved.error._tag });
     }
     return saved;
   };
 
   const saveModel = (threadId: string, model: string) => {
-    void store.setModel(threadId, model).then((saved) => {
-      if (saved.isErr()) {
-        log({
-          event: "claude_turn",
-          step: "model_not_saved",
-          error: saved.error._tag,
-        });
-      }
-    });
+    void logUnsaved("model_not_saved", store.setModel(threadId, model));
   };
 
   const saveEffort = (threadId: string, effort: EffortLevel) => {
-    void store.setEffort(threadId, effort).then((saved) => {
-      if (saved.isErr()) {
-        log({
-          event: "claude_turn",
-          step: "effort_not_saved",
-          error: saved.error._tag,
-        });
-      }
-    });
+    void logUnsaved("effort_not_saved", store.setEffort(threadId, effort));
   };
 
   const cloudOf = (threadId: string): CloudLink | null =>
@@ -278,7 +260,10 @@ export const createThreadValues = (
     shown: string | null,
   ) => {
     sessionIds.set(threadId, copySessionId);
-    return logUnsaved(store.setCloudCopy(threadId, copySessionId, shown));
+    return logUnsaved(
+      "session_not_saved",
+      store.setCloudCopy(threadId, copySessionId, shown),
+    );
   };
 
   // True once per pick, so only the first reopen after it carries the whole history.
