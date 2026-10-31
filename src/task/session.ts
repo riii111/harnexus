@@ -1,41 +1,26 @@
-import { createHash } from "node:crypto";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { Result } from "better-result";
-import type { CallOutcome } from "../../infra/codex/call-gateway.ts";
-import { refusalOf, type TurnSettings } from "../../infra/codex/delegations.ts";
-import { loadCallerSocketPath } from "../../runtime/config.ts";
+import type { CallOutcome } from "../infra/codex/call-gateway.ts";
+import { refusalOf, type TurnSettings } from "../infra/codex/delegations.ts";
+import { loadCallerSocketPath } from "../runtime/config.ts";
 import {
-  entryExists,
   isDirectory,
-  isSymlink,
   listDirectoryIfExists,
-  prepareDirectory,
-  readTextFileIfExists,
   realPathOrSelf,
-  removeFile,
-  writeFileAtomic,
-  writeFileExclusive,
-} from "../../runtime/fs.boundary.ts";
-import { parseJson } from "../../runtime/json.boundary.ts";
-import { isObject } from "../../runtime/object.ts";
-import { requestLine } from "../../runtime/socket.boundary.ts";
+} from "../runtime/fs.boundary.ts";
+import { parseJson } from "../runtime/json.boundary.ts";
+import { type Fields, isObject } from "../runtime/object.ts";
+import { requestLine } from "../runtime/socket.boundary.ts";
+import { asText, fail, jsonEqual, type TaskFailed, truthy } from "./format.ts";
 import {
-  asText,
-  type Fields,
-  fail,
-  jsonEqual,
-  TaskFailed,
-  truthy,
-} from "./format.ts";
-import {
-  absoluteOr,
-  chatId,
-  type Env,
-  homeOf,
-  ioFailed,
-  NAME,
-  readJson,
-} from "./request.ts";
+  load,
+  readRecords,
+  removeRecord,
+  type SaveJson,
+  stateDirectory,
+  stateRoot,
+} from "./records.ts";
+import { chatId, type Env, homeOf, io, NAME } from "./request.ts";
 
 const CALL_TIMEOUT_MS = 15 * 60_000;
 const SOCKET_HINT = `open the app with bun run open-app without HARNEXUS_CALL_SOCKET=off and run ${NAME} outside the sandbox`;
@@ -55,42 +40,6 @@ const socketHint = (code: string | null) => {
 };
 
 const NOT_SENT: readonly CallOutcome[] = ["not_sent", "rejected", "invalid"];
-
-export type SaveJson = (
-  path: string,
-  data: unknown,
-  options: { exclusive: boolean },
-) => Promise<Result<void, TaskFailed>>;
-
-const io = async <T>(
-  pending: Promise<Result<T, { message: string; cause?: unknown }>>,
-): Promise<Result<T, TaskFailed>> => (await pending).mapError(ioFailed);
-
-// Indented by one space like the Python taskctl, so the files read alike in either version.
-export const saveJson: SaveJson = (path, data, { exclusive }) =>
-  Result.gen(async function* () {
-    yield* Result.await(io(prepareDirectory(dirname(path))));
-    const content = JSON.stringify(data, null, 1);
-    if (!exclusive) {
-      yield* Result.await(io(writeFileAtomic(path, content)));
-      return Result.ok();
-    }
-    const created = yield* Result.await(io(writeFileExclusive(path, content)));
-    return created
-      ? Result.ok()
-      : fail(`another ${NAME} run is sending; inspect ${path}`);
-  });
-
-export const load = (path: string) =>
-  Result.gen(async function* () {
-    const text = yield* Result.await(io(readTextFileIfExists(path)));
-    if (text === null) return Result.ok(null);
-    return parseJson(text).mapError(
-      () => new TaskFailed({ message: `${path} is not valid JSON` }),
-    );
-  });
-
-const remove = (path: string) => io(removeFile(path));
 
 export const callApp = async (
   env: Env,
@@ -200,33 +149,17 @@ const refusalText = (expected: unknown, actual: unknown) =>
     ? refusalOf(checkedOf(expected), checkedOf(actual))
     : `expected ${asText(expected)}, actual ${asText(actual)}`;
 
-const asRecord = (value: unknown, path: string) =>
-  !truthy(value)
-    ? Result.ok(null)
-    : isObject(value)
-      ? Result.ok(value)
-      : fail(`${path} does not hold a JSON object`);
-
-// state.json holds the confirmed thread; pending.json blocks any resend.
 const openSession = (
   directory: string,
   confirmed: Confirmed,
   summarize: Summarize,
   deps: SessionDeps,
-  legacy?: () => Promise<Result<Fields | null, TaskFailed>>,
 ) =>
   Result.gen(async function* () {
-    const statePath = join(directory, "state.json");
-    const pendingPath = join(directory, "pending.json");
     const historyPath = join(directory, "history.json");
-    const loaded = yield* Result.await(load(statePath));
-    const state = truthy(loaded)
-      ? yield* asRecord(loaded, statePath)
-      : legacy === undefined
-        ? null
-        : yield* Result.await(legacy());
-    const pendingLoaded = yield* Result.await(load(pendingPath));
-    let pending = yield* asRecord(pendingLoaded, pendingPath);
+    const records = yield* Result.await(readRecords(directory));
+    const { statePath, pendingPath, loaded, state } = records;
+    let { pending } = records;
     const save = deps.saveJson;
 
     const checkIdle = (): Result<void, TaskFailed> => {
@@ -269,7 +202,7 @@ const openSession = (
         const id = yield* chatId(thread, "threadId");
         const next = yield* confirmed(id, record, sent, state);
         yield* Result.await(save(statePath, next, { exclusive: false }));
-        yield* Result.await(remove(pendingPath));
+        yield* Result.await(removeRecord(pendingPath));
         // A message to an existing thread that asked for no model or effort learns neither, so nulls would only mislead.
         const unasked =
           sent.tool === "send_message_to_thread" &&
@@ -294,7 +227,7 @@ const openSession = (
         };
         yield* Result.await(save(pendingPath, record, { exclusive: true }));
         if (!jsonEqual(yield* Result.await(load(statePath)), loaded)) {
-          yield* Result.await(remove(pendingPath));
+          yield* Result.await(removeRecord(pendingPath));
           return fail(
             `another ${NAME} run changed the state; rerun to check it`,
           );
@@ -348,7 +281,7 @@ const openSession = (
             tool === "create_thread" &&
             !truthy(answer.threadId))
         ) {
-          yield* Result.await(remove(pendingPath));
+          yield* Result.await(removeRecord(pendingPath));
           return fail(`${tool} was not sent: ${text}`);
         }
         Object.assign(record, { status: "unknown", threadId: thread, answer });
@@ -369,7 +302,7 @@ const openSession = (
               save(historyPath, [...kept, pending], { exclusive: false }),
             );
           }
-          yield* Result.await(remove(pendingPath));
+          yield* Result.await(removeRecord(pendingPath));
           return Result.ok({
             released: pending.tool ?? null,
             status: pending.status ?? null,
@@ -408,18 +341,8 @@ const openSession = (
     return Result.ok({ statePath, state, checkIdle, send, resolve, show });
   });
 
-export const stateRoot = (env: Env) =>
-  join(
-    absoluteOr(env.XDG_STATE_HOME, join(homeOf(env), ".local/state")),
-    "taskctl",
-  );
-
 const sessionDir = (env: Env, kind: string, ...values: string[]) =>
-  join(
-    stateRoot(env),
-    kind,
-    createHash("sha256").update(values.join("\n")).digest("hex").slice(0, 16),
-  );
+  stateDirectory(env, kind, values.join("\n"));
 
 export const launchSession = (data: Fields, deps: SessionDeps) =>
   openSession(
@@ -474,27 +397,7 @@ export const reviewSession = (data: Fields, deps: SessionDeps) =>
       };
     },
     deps,
-    () => legacyReviewState(String(data.checkout)),
   );
-
-const legacyReviewState = (checkout: string) =>
-  Result.gen(async function* () {
-    const path = join(checkout, ".reviewctl/state.json");
-    if (!(await entryExists(path))) return Result.ok(null);
-    if ((await isSymlink(path)) || (await realPathOrSelf(path)) !== path)
-      return fail(`refusing symlinked legacy state ${path}`);
-    const state = yield* Result.await(readJson(path));
-    if (!isObject(state)) return fail(`${path} does not hold a JSON object`);
-    if (state.pending_create === true || !truthy(state.reviewer))
-      return fail(
-        `legacy reviewctl creation is pending in ${path}; check the App, ` +
-          "and remove it only if no reviewer was created",
-      );
-    return Result.ok<Fields | null>({
-      reviewer: state.reviewer,
-      candidate: state.candidate ?? null,
-    });
-  });
 
 export const listState = (env: Env) =>
   Result.gen(async function* () {

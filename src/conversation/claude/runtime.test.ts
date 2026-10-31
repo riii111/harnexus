@@ -3662,9 +3662,9 @@ describe("thread tools", () => {
 
     expect(links).toEqual([THREAD, THREAD]);
     expect(settings[0]?.allowedTools).toEqual(ALLOWED_TOOLS);
-    expect(Object.keys(settings[0]?.mcpServers ?? {})).toEqual(["codex_link"]);
-    expect(settings[1]?.mcpServers?.codex_link).not.toBe(
-      settings[0]?.mcpServers?.codex_link,
+    expect(Object.keys(settings[0]?.toolServers ?? {})).toEqual(["codex_link"]);
+    expect(settings[1]?.toolServers?.codex_link).not.toBe(
+      settings[0]?.toolServers?.codex_link,
     );
   });
 

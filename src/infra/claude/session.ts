@@ -1,17 +1,13 @@
 import { basename, dirname, join } from "node:path";
-import {
-  type CanUseTool,
-  type EffortLevel,
-  getSessionMessages,
-  getSubagentMessages,
-  type McpServerConfig,
-  type Options,
-  type PermissionMode,
-  query,
-  resolveSettings,
-  type SDKMessage,
-  type SessionMessage,
-  type SettingSource,
+import type {
+  CanUseTool,
+  EffortLevel,
+  McpServerConfig,
+  Options,
+  PermissionMode,
+  SDKMessage,
+  SessionMessage,
+  SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result, TaggedError } from "better-result";
 import {
@@ -36,8 +32,10 @@ import {
   closeQuery,
   type GetSubagentMessages,
   interruptQuery,
+  loadClaudeSdk,
   nextMessage,
   openQuery,
+  openToolServers,
   readAccount,
   readSessionMessages,
   readSettings,
@@ -45,6 +43,7 @@ import {
   readSupportedModels,
   setQueryEffort,
   setQueryPermissionMode,
+  type ToolServers,
 } from "./sdk.boundary.ts";
 import { claudeConfigDir, findSessionFile } from "./transcripts.ts";
 
@@ -58,6 +57,8 @@ export type ClaudeSessionSettings = {
   forkSession?: boolean;
   resumeAt?: string;
   mcpServers?: Record<string, McpServerConfig>;
+  // Served by the SDK itself, so the bridge loads the SDK only once a session starts.
+  toolServers?: ToolServers;
   allowedTools?: string[];
   permissionMode: "default" | "auto" | "plan";
   canUseTool: CanUseTool;
@@ -84,21 +85,26 @@ type ClaudeRuntime = ClaudeSdk & { env: Env };
 // The settings and the account are checked before any prompt is sent, so a login that would bill the API never starts a conversation.
 export const startClaudeSession = (
   settings: ClaudeSessionSettings,
-  runtime: ClaudeRuntime = PROCESS_RUNTIME,
+  given?: ClaudeRuntime,
   signal?: AbortSignal,
 ) =>
   Result.gen(async function* () {
     if (signal?.aborted) return Result.err(sessionStartCancelled());
+    const runtime = given ?? (yield* Result.await(processRuntime()));
     const resolved = yield* Result.await(
       readSettings(runtime.resolveSettings, settings.cwd, SETTING_SOURCES),
     );
     yield* checkSettingsEnv(resolved.env ?? {});
     if (signal?.aborted) return Result.err(sessionStartCancelled());
     const prompt = createPromptQueue();
+    const toolServers = yield* openToolServers(
+      runtime.createSdkMcpServer,
+      settings.toolServers ?? {},
+    );
     const claude = yield* openQuery(
       runtime.query,
       prompt.stream,
-      sessionOptions(settings, runtime.env),
+      sessionOptions(settings, runtime.env, toolServers),
     );
     let startupClosed = false;
     const closeStartup = () => {
@@ -130,12 +136,20 @@ export const startClaudeSession = (
 // Project settings differ by thread, while the model list shows one default, so only the user's settings are read; a turn's level overrides a project's level but not a cap set by a project or an organization.
 export const loadEffortSettings = (
   cwd: string = process.cwd(),
-  runtime: Pick<ClaudeRuntime, "resolveSettings"> = PROCESS_RUNTIME,
-) => readSettings(runtime.resolveSettings, cwd, USER_SETTINGS);
+  given?: Pick<ClaudeRuntime, "resolveSettings">,
+) =>
+  Result.gen(async function* () {
+    const runtime = given ?? (yield* Result.await(processRuntime()));
+    return Result.ok(
+      yield* Result.await(
+        readSettings(runtime.resolveSettings, cwd, USER_SETTINGS),
+      ),
+    );
+  });
 
 // The models Claude Code runs depend on the Claude Code version the SDK bundles.
 export const loadClaudeModels = async (
-  runtime: ClaudeRuntime = PROCESS_RUNTIME,
+  runtime?: ClaudeRuntime,
   cwd: string = process.cwd(),
   timeoutMs: number = MODELS_TIMEOUT_MS,
 ) =>
@@ -156,7 +170,7 @@ export const loadClaudeModels = async (
 
 // Reports the subscription a session would run on, refusing a login that would bill the API as a session does.
 export const readClaudeLogin = async (
-  runtime: ClaudeRuntime = PROCESS_RUNTIME,
+  runtime?: ClaudeRuntime,
   cwd: string = process.cwd(),
   timeoutMs: number = MODELS_TIMEOUT_MS,
 ) =>
@@ -172,11 +186,12 @@ export const readClaudeLogin = async (
 // Asking Claude Code about itself sends no prompt, so the process is closed as soon as it answers.
 // Only the user's settings are read, since the bridge's directory is no thread's project, and they pass the same check as a session so the answer is the subscription's.
 const askClaude = <T, E>(
-  runtime: ClaudeRuntime,
+  given: ClaudeRuntime | undefined,
   cwd: string,
   ask: (claude: ClaudeQuery) => Promise<Result<T, E>>,
 ) =>
   Result.gen(async function* () {
+    const runtime = given ?? (yield* Result.await(processRuntime()));
     const resolved = yield* Result.await(
       readSettings(runtime.resolveSettings, cwd, USER_SETTINGS),
     );
@@ -206,7 +221,7 @@ export const claudeSessionExists = async (
 export const readClaudeSession = (
   sessionId: string,
   {
-    read = getSessionMessages,
+    read,
     configDir = claudeConfigDir(process.env),
   }: {
     read?: (sessionId: string) => Promise<SessionMessage[]>;
@@ -214,7 +229,11 @@ export const readClaudeSession = (
   } = {},
 ) =>
   Result.gen(async function* () {
-    const messages = yield* Result.await(readSessionMessages(read, sessionId));
+    const reader =
+      read ?? (yield* Result.await(loadClaudeSdk())).getSessionMessages;
+    const messages = yield* Result.await(
+      readSessionMessages(reader, sessionId),
+    );
     if (messages.length === 0) {
       yield* Result.await(checkRecordReadable(sessionId, configDir));
     }
@@ -236,7 +255,7 @@ export type SubagentRecord = {
 export const readClaudeSubagents = (
   sessionId: string,
   {
-    read = getSubagentMessages,
+    read,
     configDir = claudeConfigDir(process.env),
   }: { read?: GetSubagentMessages; configDir?: string } = {},
 ) =>
@@ -245,6 +264,8 @@ export const readClaudeSubagents = (
     if (path === null) return Result.ok<SubagentRecord[]>([]);
     const folder = join(path.slice(0, -RECORD_SUFFIX.length), "subagents");
     const files = yield* Result.await(listFilesDeepIfExists(folder));
+    const reader =
+      read ?? (yield* Result.await(loadClaudeSdk())).getSubagentMessages;
     const found = new Map<string, string>();
     for (const file of files ?? []) {
       const agentId = AGENT_RECORD.exec(basename(file))?.[1];
@@ -254,7 +275,7 @@ export const readClaudeSubagents = (
     }
     const agents = await Promise.all(
       [...found].map(([agentId, at]) =>
-        readAgent(at, sessionId, agentId, read),
+        readAgent(at, sessionId, agentId, reader),
       ),
     );
     return Result.ok(
@@ -324,6 +345,7 @@ const checkRecordReadable = async (sessionId: string, configDir: string) =>
 const sessionOptions = (
   settings: ClaudeSessionSettings,
   env: Env,
+  toolServers: NonNullable<Options["mcpServers"]>,
 ): Options => ({
   cwd: settings.cwd,
   model: settings.model,
@@ -350,7 +372,7 @@ const sessionOptions = (
   includePartialMessages: true,
   // A subagent's thread shows what the agent wrote, not only the tools it called.
   forwardSubagentText: true,
-  mcpServers: settings.mcpServers ?? {},
+  mcpServers: { ...settings.mcpServers, ...toolServers },
   allowedTools: settings.allowedTools ?? [],
   ...(settings.resume === undefined ? {} : { resume: settings.resume }),
   ...(settings.forkSession === true && { forkSession: true }),
@@ -422,11 +444,15 @@ const USER_SETTINGS: SettingSource[] = ["user"];
 const MODELS_TIMEOUT_MS = 30_000;
 
 // resolveSettings resolves settings directories such as CLAUDE_CONFIG_DIR from this process's environment, so Claude starts from the same one and differs only by the billing variables removed from it.
-const PROCESS_RUNTIME: ClaudeRuntime = {
-  query,
-  resolveSettings,
-  env: process.env,
-};
+const processRuntime = async () =>
+  (await loadClaudeSdk()).map(
+    (sdk): ClaudeRuntime => ({
+      query: sdk.query,
+      resolveSettings: sdk.resolveSettings,
+      createSdkMcpServer: sdk.createSdkMcpServer,
+      env: process.env,
+    }),
+  );
 
 const sessionClosed = () =>
   new ClaudeSessionClosed({ message: "the Claude session is closed" });

@@ -8,8 +8,6 @@ export class WatchFailed extends TaggedError("WatchFailed")<{
 export const fail = (message: string) =>
   Result.err(new WatchFailed({ message }));
 
-export type Fields = Record<string, unknown>;
-
 export const ioFailed = (error: { message: string; cause?: unknown }) => {
   const { cause } = error;
   const code =

@@ -1,4 +1,9 @@
-import { isObject } from "../runtime/object.ts";
+import {
+  answerValuesOf,
+  REQUEST_USER_INPUT,
+  type UserInputTarget,
+  userInputParams,
+} from "./user-input.ts";
 
 // One page of the conversations /resume offers; offset and total place it in the list, which holds only those matching search, or every one when unmatched found none.
 export type PickerPage = {
@@ -26,11 +31,9 @@ export type PickerAnswer =
   | { kind: "search"; text: string }
   | { kind: "none" };
 
-type PromptTarget = { threadId: string; turnId: string; itemId: string };
-
 // The app returns a choice's label and typed text alike, so a page offers only choices, each label distinct, and searching asks for the words in a question of its own.
 export const pickerPrompt = (
-  target: PromptTarget,
+  target: UserInputTarget,
   page: PickerPage,
   now: number,
 ) => {
@@ -42,26 +45,30 @@ export const pickerPrompt = (
   );
   return {
     method: REQUEST_USER_INPUT,
-    params: userInputParams(target, {
-      id: PICK_QUESTION,
-      header: "Resume",
-      question: questionOf(page),
-      isOther: false,
-      isSecret: false,
-      options: [
-        ...page.conversations.map((conversation, index) => ({
-          label: labels[index] ?? "",
-          description: detailsOf(conversation, now),
-        })),
-        ...(newer > 0 ? [{ label: NEWER, description: `${newer} more` }] : []),
-        ...(more > 0 ? [{ label: OLDER, description: `${more} more` }] : []),
-        {
-          label: SEARCH,
-          description:
-            "Find conversations by words from a title or a session id",
-        },
-      ],
-    }),
+    params: userInputParams(target, [
+      {
+        id: PICK_QUESTION,
+        header: "Resume",
+        question: questionOf(page),
+        isOther: false,
+        isSecret: false,
+        options: [
+          ...page.conversations.map((conversation, index) => ({
+            label: labels[index] ?? "",
+            description: detailsOf(conversation, now),
+          })),
+          ...(newer > 0
+            ? [{ label: NEWER, description: `${newer} more` }]
+            : []),
+          ...(more > 0 ? [{ label: OLDER, description: `${more} more` }] : []),
+          {
+            label: SEARCH,
+            description:
+              "Find conversations by words from a title or a session id",
+          },
+        ],
+      },
+    ]),
     answerOf: (
       answer: unknown,
     ): Exclude<PickerAnswer, { kind: "search" }> | { kind: "searching" } => {
@@ -75,17 +82,19 @@ export const pickerPrompt = (
   };
 };
 
-export const searchPrompt = (target: PromptTarget) => ({
+export const searchPrompt = (target: UserInputTarget) => ({
   method: REQUEST_USER_INPUT,
-  params: userInputParams(target, {
-    id: SEARCH_QUESTION,
-    header: "Resume",
-    question:
-      "Type words from a conversation's title, or its session id, to list the conversations that match.",
-    isOther: true,
-    isSecret: false,
-    options: null,
-  }),
+  params: userInputParams(target, [
+    {
+      id: SEARCH_QUESTION,
+      header: "Resume",
+      question:
+        "Type words from a conversation's title, or its session id, to list the conversations that match.",
+      isOther: true,
+      isSecret: false,
+      options: null,
+    },
+  ]),
   answerOf: (answer: unknown): PickerAnswer => {
     const typed = answerTo(answer, SEARCH_QUESTION);
     return typed === null ? { kind: "none" } : { kind: "search", text: typed };
@@ -141,21 +150,8 @@ const distinctLabels = (labels: string[], reserved: string[]) => {
   });
 };
 
-const userInputParams = <Q extends object>(
-  target: PromptTarget,
-  question: Q,
-) => ({
-  ...target,
-  questions: [question],
-  isBlocking: true,
-  autoResolutionMs: null,
-});
-
 const answerTo = (answer: unknown, id: string) => {
-  if (!isObject(answer) || !isObject(answer.answers)) return null;
-  const entry = answer.answers[id];
-  if (!isObject(entry) || !Array.isArray(entry.answers)) return null;
-  const [first] = entry.answers;
+  const [first] = answerValuesOf(answer, id);
   const typed = typeof first === "string" ? first.trim() : "";
   return typed === "" ? null : typed;
 };
@@ -171,8 +167,6 @@ const ago = (at: number, now: number) => {
 
 const originOf = (entrypoint: string | null) =>
   entrypoint === null ? "unknown origin" : (ORIGINS[entrypoint] ?? entrypoint);
-
-const REQUEST_USER_INPUT = "item/tool/requestUserInput";
 
 const PICK_QUESTION = "conversation";
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { type InferErr, Result } from "better-result";
@@ -1588,10 +1589,11 @@ const messageThreads = async (
   session: ClaudeSessionSettings | undefined,
   threadIds: string[],
 ) => {
-  const server = session?.mcpServers?.codex_link;
-  if (server === undefined || !("instance" in server)) {
+  const tools = session?.toolServers?.codex_link;
+  if (tools === undefined) {
     return expect.unreachable("Claude has no thread tool server");
   }
+  const server = createSdkMcpServer({ name: "codex_link", tools });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   await server.instance.connect(serverTransport);

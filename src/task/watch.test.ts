@@ -3,13 +3,13 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result } from "better-result";
-import { fail } from "../../prwatch/failure.ts";
+import { fail } from "../prwatch/failure.ts";
 import type {
   GitHub,
   PrComment,
   PrDetail,
   PrSummary,
-} from "../../prwatch/github.ts";
+} from "../prwatch/github.ts";
 import {
   freshState,
   keyOf,
@@ -17,10 +17,10 @@ import {
   recordLink,
   saveWatchState,
   type WatchState,
-} from "../../prwatch/store.ts";
-import { runCycle } from "../../prwatch/watcher.ts";
+} from "../prwatch/store.ts";
+import { runCycle } from "../prwatch/watcher.ts";
+import type { Fields } from "../runtime/object.ts";
 import { watchPaths } from "./cli.ts";
-import type { Fields } from "./format.ts";
 import { codexWorkers } from "./watch-worker.ts";
 
 const PR = "https://github.com/org/pay/pull/7";

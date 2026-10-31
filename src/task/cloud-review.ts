@@ -1,22 +1,26 @@
-import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { Result } from "better-result";
-import { runClaude } from "../../infra/claude/run.boundary.ts";
-import { prepareDirectory, removeFile } from "../../runtime/fs.boundary.ts";
-import { parseJson } from "../../runtime/json.boundary.ts";
-import { isObject } from "../../runtime/object.ts";
-import { acquire, milliseconds, release } from "./cloud.ts";
-import { asText, type Fields, fail, jsonEqual } from "./format.ts";
+import { prepareDirectory, removeFile } from "../runtime/fs.boundary.ts";
+import { parseJson } from "../runtime/json.boundary.ts";
+import { type Fields, isObject } from "../runtime/object.ts";
+import { runProcess } from "../runtime/run.boundary.ts";
+import { acquire, configuredBinary, milliseconds, release } from "./cloud.ts";
+import { asText, detail, fail, jsonEqual } from "./format.ts";
+import {
+  readRecords,
+  type SaveJson,
+  settlePending,
+  stateDirectory,
+} from "./records.ts";
 import {
   candidate,
   type Env,
   type Git,
-  ioFailed,
+  io,
   reviewFields,
   reviewRequest,
   sessionValue,
 } from "./request.ts";
-import { load, type SaveJson, stateRoot } from "./session.ts";
 import { taskPrompt } from "./templates.ts";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
@@ -35,29 +39,14 @@ export type CloudReviewArgs = {
   model?: string;
   thinking?: string;
   updateBase: boolean;
-  recover?: string;
+  recover?: "discard";
 };
 
 export type CloudReviewDeps = { env: Env; saveJson: SaveJson; git: Git };
 
-const binary = (env: Env) => {
-  const configured = env.HARNEXUS_CODEX_BIN;
-  if (configured === undefined || configured === "") return Result.ok("codex");
-  return configured.startsWith("/")
-    ? Result.ok(configured)
-    : fail("HARNEXUS_CODEX_BIN must be an absolute path");
-};
-
 // One reviewer per task and checkout, as in the app.
 const directory = (env: Env, checkout: string, taskId: string) =>
-  join(
-    stateRoot(env),
-    "cloud-review",
-    createHash("sha256")
-      .update(`${checkout}\0${taskId}`)
-      .digest("hex")
-      .slice(0, 16),
-  );
+  stateDirectory(env, "cloud-review", `${checkout}\0${taskId}`);
 
 type Reply = {
   threadId: string | null;
@@ -89,8 +78,6 @@ const replyOf = (stdout: string): Reply => {
   return reply;
 };
 
-const detail = (text: string) => text.trim().slice(0, 500);
-
 const recoveryHint =
   "its result is unknown, so it is not sent again on its own. Check the reviewer, then rerun with --recover discard to send the candidate again";
 
@@ -101,24 +88,15 @@ const locked = (
   requested: Fields,
 ) =>
   Result.gen(async function* () {
-    const statePath = join(dir, "state.json");
-    const pendingPath = join(dir, "pending.json");
-    const loaded = yield* Result.await(load(statePath));
-    const state = isObject(loaded) ? loaded : null;
-    const pending = yield* Result.await(load(pendingPath));
-    if (args.recover !== undefined && args.recover !== "discard")
-      return fail("review takes only --recover discard");
-    if (isObject(pending)) {
-      if (args.recover !== "discard")
-        return fail(
+    const records = yield* Result.await(readRecords(dir));
+    const { statePath, pendingPath, state } = records;
+    yield* Result.await(
+      settlePending(records, args.recover, {
+        blocked: (pending) =>
           `the review of head ${asText(pending.head)} did not report back: ${recoveryHint}`,
-        );
-      yield* Result.await(
-        removeFile(pendingPath).then((r) => r.mapError(ioFailed)),
-      );
-    } else if (args.recover !== undefined) {
-      return fail("--recover applies only when a review is pending");
-    }
+        nothingPending: "--recover applies only when a review is pending",
+      }),
+    );
 
     const previous = isObject(state?.candidate) ? state.candidate : null;
     const data = yield* Result.await(
@@ -142,7 +120,11 @@ const locked = (
     const prompt = yield* Result.await(
       taskPrompt(deps.env, "reviewer", fields),
     );
-    const bin = yield* binary(deps.env);
+    const bin = yield* configuredBinary(
+      deps.env,
+      "HARNEXUS_CODEX_BIN",
+      "codex",
+    );
     const timeoutMs = yield* milliseconds(
       deps.env,
       "HARNEXUS_REVIEW_TIMEOUT_MS",
@@ -205,9 +187,8 @@ const locked = (
         { exclusive: false },
       ),
     );
-    const unsent = () =>
-      removeFile(pendingPath).then((r) => r.mapError(ioFailed));
-    const ran = await runClaude(bin, argv, prompt, {
+    const unsent = () => io(removeFile(pendingPath));
+    const ran = await runProcess(bin, argv, prompt, {
       cwd: checkout,
       env: deps.env,
       timeoutMs,
@@ -295,9 +276,7 @@ export const cloudReview = (args: CloudReviewArgs, deps: CloudReviewDeps) =>
     if (!Object.hasOwn(data, "workerChatId"))
       data.workerChatId = deps.env.CLAUDE_CODE_SESSION_ID || "cloud";
     const dir = directory(deps.env, String(data.checkout), String(data.taskId));
-    yield* Result.await(
-      prepareDirectory(dir).then((made) => made.mapError(ioFailed)),
-    );
+    yield* Result.await(io(prepareDirectory(dir)));
     const lock = join(dir, "lock.json");
     const token = yield* Result.await(acquire(lock, "review"));
     const done = await locked(args, deps, dir, data);

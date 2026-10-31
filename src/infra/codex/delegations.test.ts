@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   answeredThreadId,
+  concludeCreate,
   createDelegationWatch,
   delegatedMessage,
   delegationSource,
+  type FirstTurn,
+  firstTurnRefusal,
   refusalOf,
 } from "./delegations.ts";
 
@@ -175,6 +178,149 @@ describe("createDelegationWatch first turn check", () => {
   });
 });
 
+describe("concludeCreate", () => {
+  test("reports the first turn on the thread the answer names", async () => {
+    const watch = createDelegationWatch();
+    const created = expecting(watch, "th-codex");
+    watch.observe("th-codex", "th-worker");
+
+    const outcome = await concludeCreate(created, {
+      answer: { result: NAMING_WORKER },
+      waitMs: 1_000,
+    });
+
+    expect(outcome).toMatchObject({ threadId: "th-worker", unknown: false });
+    expect(outcome.firstTurn?.threadId).toBe("th-worker");
+  });
+
+  test("reports a first turn already seen even when the app answered with an error", async () => {
+    const watch = createDelegationWatch();
+    const created = expecting(watch, "th-codex");
+    watch.observe("th-codex", "th-worker");
+
+    const outcome = await concludeCreate(created, {
+      answer: { result: { isError: true, content: [] } },
+      waitMs: 1_000,
+    });
+
+    expect(outcome).toMatchObject({ threadId: "th-worker", unknown: false });
+    expect(outcome.firstTurn?.threadId).toBe("th-worker");
+  });
+
+  test.each([
+    {
+      name: "a successful answer whose thread was not seen",
+      answer: { result: { content: [] } },
+      mayExist: false,
+      keepArmed: true,
+      expected: { unknown: true, armed: true },
+    },
+    {
+      name: "an error answer that names a thread",
+      answer: { result: { isError: true, ...NAMING_WORKER } },
+      mayExist: false,
+      keepArmed: true,
+      expected: { unknown: true, armed: true },
+    },
+    {
+      name: "an error answer that names none",
+      answer: { result: { isError: true, content: [] } },
+      mayExist: false,
+      keepArmed: true,
+      expected: { unknown: false, armed: false },
+    },
+    {
+      name: "no answer from a call that may have gone out",
+      answer: null,
+      mayExist: true,
+      keepArmed: true,
+      expected: { unknown: true, armed: true },
+    },
+    {
+      name: "no answer from a call that never went out",
+      answer: null,
+      mayExist: false,
+      keepArmed: true,
+      expected: { unknown: false, armed: false },
+    },
+    {
+      name: "a successful answer for a caller that reports no late first turn",
+      answer: { result: { content: [] } },
+      mayExist: false,
+      keepArmed: false,
+      expected: { unknown: true, armed: false },
+    },
+  ])("leaves the check armed only while the thread may exist unseen after $name", async ({
+    answer,
+    mayExist,
+    keepArmed,
+    expected,
+  }) => {
+    const watch = createDelegationWatch();
+    const created = expecting(watch, "th-codex");
+
+    const outcome = await concludeCreate(created, {
+      answer,
+      waitMs: 0,
+      mayExist,
+      keepArmed,
+    });
+
+    expect({
+      unknown: outcome.unknown,
+      armed: watch.expect("th-codex") === null,
+    }).toEqual(expected);
+  });
+
+  test("names the thread of an answer without waiting for its first turn when told to", async () => {
+    const watch = createDelegationWatch();
+    const created = expecting(watch, "th-codex");
+
+    const outcome = await concludeCreate(created, {
+      answer: { result: NAMING_WORKER },
+      waitMs: null,
+      keepArmed: false,
+    });
+    const later = expecting(watch, "th-codex");
+    watch.observe("th-codex", "th-worker");
+
+    expect(outcome).toMatchObject({
+      firstTurn: null,
+      threadId: "th-worker",
+    });
+    expect(await later.wait(20)).toBeNull();
+  });
+});
+
+describe("firstTurnRefusal", () => {
+  test.each([
+    { name: "no first turn", turn: null, expected: null },
+    { name: "an accepted first turn", turn: firstTurn(), expected: null },
+    {
+      name: "a first turn on other settings",
+      turn: firstTurn({ refused: true, actual: MISMATCH }),
+      expected: {
+        kind: "settings",
+        threadId: "th-worker",
+        expected: EXPECTED,
+        actual: MISMATCH,
+        difference: "asked for model gpt-other instead of gpt-worker",
+      },
+    },
+    {
+      name: "a first turn the bridge refused",
+      turn: firstTurn({ refusal: "directory_unknown" }),
+      expected: {
+        kind: "bridge",
+        threadId: "th-worker",
+        reason: "directory_unknown",
+      },
+    },
+  ])("reads $name", ({ turn, expected }) => {
+    expect(firstTurnRefusal(turn)).toEqual(expected);
+  });
+});
+
 describe("answeredThreadId", () => {
   test.each([
     {
@@ -331,6 +477,17 @@ test.each([
   },
 ])("refusalOf names $name", ({ actual, text }) => {
   expect(refusalOf(EXPECTED, actual)).toBe(text);
+});
+
+const NAMING_WORKER = { structuredContent: { threadId: "th-worker" } };
+
+const firstTurn = (overrides: Partial<FirstTurn> = {}): FirstTurn => ({
+  threadId: "th-worker",
+  expected: EXPECTED,
+  actual: EXPECTED,
+  refused: false,
+  refusal: null,
+  ...overrides,
 });
 
 const EXPECTED = { model: "gpt-worker", effort: "low" };

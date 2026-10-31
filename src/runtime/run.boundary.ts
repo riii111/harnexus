@@ -1,15 +1,14 @@
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { Result, TaggedError } from "better-result";
-import { isObject } from "../../runtime/object.ts";
+import { isObject } from "./object.ts";
 
-export class ClaudeRunFailed extends TaggedError("ClaudeRunFailed")<{
+export class ProcessRunFailed extends TaggedError("ProcessRunFailed")<{
   // Whether the process may have reached the model; false when it never started.
   started: boolean;
   message: string;
 }> {}
 
-export type ClaudeRun = {
+export type ProcessRun = {
   status: number;
   stdout: string;
   stderr: string;
@@ -19,7 +18,7 @@ export type ClaudeRun = {
 
 const OUTPUT_LIMIT = 16 * 1024 * 1024;
 
-const alive = (pid: number) => {
+export const processAlive = (pid: number) => {
   try {
     process.kill(pid, 0);
     return true;
@@ -27,8 +26,6 @@ const alive = (pid: number) => {
     return isObject(cause) && cause.code === "EPERM";
   }
 };
-
-export const processAlive = alive;
 
 // The group is signalled, so a child the wrapper started does not outlive it.
 const signalGroup = (pid: number, signal: NodeJS.Signals) => {
@@ -41,7 +38,7 @@ const signalGroup = (pid: number, signal: NodeJS.Signals) => {
 
 // The prompt goes in through stdin, so it never shows in the process list.
 // The promise settles only once the process has exited: a timeout sends SIGTERM, then SIGKILL after the grace, and fails if it still lives.
-export const runClaude = (
+export const runProcess = (
   file: string,
   args: readonly string[],
   input: string,
@@ -55,7 +52,7 @@ export const runClaude = (
   let started = false;
   return Result.tryPromise({
     try: () =>
-      new Promise<ClaudeRun>((resolve, reject) => {
+      new Promise<ProcessRun>((resolve, reject) => {
         const child = spawn(file, [...args], {
           cwd: options.cwd,
           env: options.env,
@@ -65,7 +62,7 @@ export const runClaude = (
         let stdout = "";
         let stderr = "";
         let size = 0;
-        let ended: ClaudeRun["ended"] = "exit";
+        let ended: ProcessRun["ended"] = "exit";
         let exited = false;
         let escalation: ReturnType<typeof setTimeout> | undefined;
         let giveUp: ReturnType<typeof setTimeout> | undefined;
@@ -114,25 +111,11 @@ export const runClaude = (
         });
       }),
     catch: (cause) =>
-      new ClaudeRunFailed({
+      new ProcessRunFailed({
         started,
         message: `${file} did not finish: ${
           cause instanceof Error ? cause.message : String(cause)
         }`,
       }),
   });
-};
-
-// The SDK ships a claude binary per platform, which the bridge already runs signed in; it is found the way the package manager installed it.
-export const bundledClaude = (
-  resolve: (specifier: string) => string = (specifier) =>
-    import.meta.resolve(specifier),
-): string | null => {
-  const found = Result.try(() =>
-    resolve(
-      `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/package.json`,
-    ),
-  );
-  if (found.isErr()) return null;
-  return fileURLToPath(new URL("claude", found.value));
 };

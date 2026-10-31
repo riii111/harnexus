@@ -1,14 +1,9 @@
 import { join } from "node:path";
 import { Result, TaggedError } from "better-result";
-import { parseCloudSessionId } from "../../infra/claude/cloud.ts";
-import type { CallOutcome } from "../../infra/codex/call-gateway.ts";
-import {
-  dryRun,
-  release,
-  status,
-  watchForever,
-} from "../../prwatch/commands.ts";
-import { createGitHub } from "../../prwatch/github.ts";
+import { parseCloudSessionId } from "../infra/claude/cloud.ts";
+import type { CallOutcome } from "../infra/codex/call-gateway.ts";
+import { dryRun, release, status, watchForever } from "../prwatch/commands.ts";
+import { createGitHub } from "../prwatch/github.ts";
 import {
   githubPr,
   linkedChat,
@@ -16,24 +11,26 @@ import {
   loadSender,
   recordLink,
   recordSender,
-} from "../../prwatch/store.ts";
-import type { WatchPaths } from "../../prwatch/watcher.ts";
-import { isObject } from "../../runtime/object.ts";
-import { runCommand } from "../../runtime/process.boundary.ts";
-import { type OptionTypes, parseOptions } from "./args.boundary.ts";
-import {
-  type ClaudeArgs,
-  claudeSession,
-  PERMISSION_MODES,
-  RECOVERIES,
-} from "./cloud.ts";
+} from "../prwatch/store.ts";
+import type { WatchPaths } from "../prwatch/watcher.ts";
+import { type OptionTypes, parseOptions } from "../runtime/args.boundary.ts";
+import { type Fields, isObject } from "../runtime/object.ts";
+import { runCommand } from "../runtime/process.boundary.ts";
+import { type ClaudeArgs, claudeSession, PERMISSION_MODES } from "./cloud.ts";
 import { cloudReview } from "./cloud-review.ts";
 import {
   declaredEnvironment,
   detectEnvironment,
   refuseInCloud,
 } from "./environment.ts";
-import { asText, type Fields, fail, jsonEqual, truthy } from "./format.ts";
+import { asText, fail, jsonEqual, truthy } from "./format.ts";
+import {
+  RECOVERIES,
+  type Recovery,
+  type SaveJson,
+  saveJson,
+  stateRoot,
+} from "./records.ts";
 import {
   callerId,
   candidate,
@@ -58,9 +55,6 @@ import {
   listState,
   reviewProject,
   reviewSession,
-  type SaveJson,
-  saveJson,
-  stateRoot,
 } from "./session.ts";
 import { taskPrompt } from "./templates.ts";
 import { programWatch } from "./watch-program.ts";
@@ -84,30 +78,53 @@ export const TASK_DEPS = {
   },
 } satisfies Omit<TaskDeps, "env">;
 
-type Args = {
-  command: Command;
-  request?: string;
-  model?: string;
-  thinking?: string;
+type LaunchArgs = {
+  request: string;
+  model: string | undefined;
+  thinking: string | undefined;
+};
+
+type ReviewArgs = LaunchArgs & {
   updateBase: boolean;
+  recover: "discard" | undefined;
+};
+
+type StateArgs = { request: string | undefined };
+
+type ResolveArgs = {
+  request: string;
   sent: boolean;
-  threadId?: string;
-  pr?: string;
-  prs: string[];
+  threadId: string | undefined;
+};
+
+type NameArgs = { pr: string };
+
+type WatchArgs = {
   dryRun: boolean;
-  release?: string;
+  prs: string[];
+  release: string | undefined;
   status: boolean;
   sender: boolean;
-  link?: string;
-  session?: string;
-  promptFile?: string;
+  link: string | undefined;
+};
+
+type CloudArgs = {
+  link: string;
+  project: string;
+  title: string | undefined;
+  model: string | undefined;
+  thinking: string | undefined;
+};
+
+type ClaudeCommandArgs = {
+  session: string;
   start: boolean;
   resume: boolean;
-  cwd?: string;
-  permissionMode?: string;
-  recover?: string;
-  project?: string;
-  title?: string;
+  promptFile: string | undefined;
+  cwd: string | undefined;
+  permissionMode: (typeof PERMISSION_MODES)[number] | undefined;
+  recover: Recovery | undefined;
+  model: string | undefined;
 };
 
 const worktreeTarget = (project: unknown) => ({
@@ -127,10 +144,10 @@ const withoutName = ({ displayName: _, ...rest }: Fields) => rest;
 const sameTask = (recorded: unknown, data: Fields) =>
   isObject(recorded) && jsonEqual(withoutName(recorded), withoutName(data));
 
-const launch = (args: Args, deps: TaskDeps) =>
+const launch = (args: LaunchArgs, deps: TaskDeps) =>
   Result.gen(async function* () {
     yield* refuseInCloud(deps.env, "launch");
-    const data = yield* Result.await(launchRequest(args.request ?? ""));
+    const data = yield* Result.await(launchRequest(args.request));
     const session = yield* Result.await(launchSession(data, deps));
     if (session.state !== null) {
       if (!sameTask(session.state.request, data))
@@ -165,13 +182,13 @@ const launch = (args: Args, deps: TaskDeps) =>
     });
   });
 
-const review = (args: Args, deps: TaskDeps) =>
+const review = (args: ReviewArgs, deps: TaskDeps) =>
   Result.gen(async function* () {
     const declared = yield* declaredEnvironment(deps.env);
     if (declared?.environment === "cloud" && declared.host === "claude")
       return await cloudReview(
         {
-          request: args.request ?? "",
+          request: args.request,
           updateBase: args.updateBase,
           ...(args.model === undefined ? {} : { model: args.model }),
           ...(args.thinking === undefined ? {} : { thinking: args.thinking }),
@@ -189,9 +206,7 @@ const review = (args: Args, deps: TaskDeps) =>
         "--recover applies to review only in a Claude Code cloud session",
       );
     const git = gitIn(deps.runGit, deps.env);
-    let data = yield* Result.await(
-      reviewRequest(args.request ?? "", deps.env, git),
-    );
+    let data = yield* Result.await(reviewRequest(args.request, deps.env, git));
     const worker = yield* callerId(deps.env);
     if (!Object.hasOwn(data, "workerChatId")) data.workerChatId = worker;
     if (data.workerChatId !== worker)
@@ -265,7 +280,7 @@ const requestedSession = (path: string, deps: TaskDeps) =>
     return await reviewSession(data, deps);
   });
 
-const state = (args: Args, deps: TaskDeps) =>
+const state = (args: StateArgs, deps: TaskDeps) =>
   Result.gen(async function* () {
     if (args.request === undefined) return await listState(deps.env);
     yield* refuseInCloud(deps.env, "state --request");
@@ -273,15 +288,13 @@ const state = (args: Args, deps: TaskDeps) =>
     return await session.show();
   });
 
-const resolve = (args: Args, deps: TaskDeps) =>
+const resolve = (args: ResolveArgs, deps: TaskDeps) =>
   Result.gen(async function* () {
     yield* refuseInCloud(deps.env, "resolve");
     const thread = args.threadId
       ? yield* chatId(args.threadId, "--thread-id")
       : null;
-    const session = yield* Result.await(
-      requestedSession(args.request ?? "", deps),
-    );
+    const session = yield* Result.await(requestedSession(args.request, deps));
     return await session.resolve(args.sent, thread);
   });
 
@@ -290,17 +303,17 @@ const PR_NUMBER =
   /^(?:#?([1-9][0-9]*)|https:\/\/\S+\/pull\/([1-9][0-9]*)(?:[/?#]\S*)?)$/;
 
 // The number goes last so the title still reads as the task, while a search for the PR finds the worker.
-const name = (args: Args, deps: TaskDeps) =>
+const name = (args: NameArgs, deps: TaskDeps) =>
   Result.gen(async function* () {
     yield* refuseInCloud(deps.env, "name");
-    const matched = PR_NUMBER.exec(args.pr ?? "");
+    const matched = PR_NUMBER.exec(args.pr);
     const number = matched?.[1] ?? matched?.[2];
     if (number === undefined)
       return fail("--pr must be a pull request URL or number");
     const worker = yield* callerId(deps.env);
     // Linked first and for any chat, so a worker the owner started by hand is still watched.
     // A worker naming its PR takes it over, as the latest worker on a PR is the one doing it.
-    const watched = yield* Result.await(linkPr(deps, args.pr ?? "", worker));
+    const watched = yield* Result.await(linkPr(deps, args.pr, worker));
     const request = yield* Result.await(launchOfThread(deps.env, worker));
     // Only a launched worker has a title to extend; another chat keeps its own.
     const title =
@@ -374,7 +387,7 @@ export const watchPaths = (env: Env): WatchPaths => ({
   state: join(stateRoot(env), "watch"),
 });
 
-const watch = async (args: Args, deps: TaskDeps) => {
+const watch = async (args: WatchArgs, deps: TaskDeps) => {
   const refused = refuseInCloud(deps.env, "watch");
   if (refused.isErr()) return Result.err(refused.error);
   const paths = watchPaths(deps.env);
@@ -447,10 +460,10 @@ const linkOnly = (deps: TaskDeps, value: string) =>
   });
 
 // A chat that shows a Cloud session is a new Claude chat whose first message is /cloud, which links it as if the user had typed it.
-const cloud = (args: Args, deps: TaskDeps) =>
+const cloud = (args: CloudArgs, deps: TaskDeps) =>
   Result.gen(async function* () {
     yield* refuseInCloud(deps.env, "cloud");
-    const sessionId = parseCloudSessionId(args.link ?? "");
+    const sessionId = parseCloudSessionId(args.link);
     if (sessionId === null)
       return fail(
         "--link must be a Cloud session id or its claude.ai/code URL",
@@ -478,14 +491,14 @@ const cloud = (args: Args, deps: TaskDeps) =>
     });
   });
 
-const environment = async (_args: Args, deps: TaskDeps) =>
+const environment = async (deps: TaskDeps) =>
   (await detectEnvironment(deps.env)).map((found): Fields => ({ ...found }));
 
-const claude = (args: Args, deps: TaskDeps) => {
+const claude = (args: ClaudeCommandArgs, deps: TaskDeps) => {
   const mode = args.start ? "start" : args.resume ? "resume" : "state";
   const given: ClaudeArgs = {
     mode,
-    session: args.session ?? "",
+    session: args.session,
   };
   if (args.permissionMode !== undefined)
     given.permissionMode = args.permissionMode;
@@ -500,17 +513,250 @@ const claude = (args: Args, deps: TaskDeps) => {
   });
 };
 
-const COMMANDS = {
-  launch,
-  review,
-  state,
-  resolve,
-  name,
-  watch,
-  environment,
-  claude,
-  cloud,
+type Outcome = Result<unknown, { message: string }>;
+
+type Subcommand = {
+  usage: string;
+  options: OptionTypes;
+  prepare: (
+    values: Values,
+  ) => Result<(deps: TaskDeps) => Promise<TaskRun>, UsageInvalid>;
 };
+
+type Values = Record<string, unknown>;
+
+const subcommand = <Args>(definition: {
+  usage: string;
+  options: OptionTypes;
+  args: (values: Values) => Result<Args, UsageInvalid>;
+  run: (args: Args, deps: TaskDeps) => Outcome | Promise<Outcome>;
+}): Subcommand => ({
+  usage: definition.usage,
+  options: definition.options,
+  prepare: (values) =>
+    definition.args(values).map((args) => async (deps) => {
+      const result = await definition.run(args, deps);
+      return result.isOk()
+        ? { code: 0, stdout: `${JSON.stringify(result.value)}\n`, stderr: "" }
+        : { code: 1, stdout: "", stderr: `${NAME}: ${result.error.message}\n` };
+    }),
+});
+
+class UsageInvalid extends TaggedError("UsageInvalid")<{
+  message: string;
+}> {}
+
+const invalid = (message: string) => Result.err(new UsageInvalid({ message }));
+
+const text = (values: Values, key: string) => {
+  const value = values[key];
+  return typeof value === "string" ? value : undefined;
+};
+
+const required = (values: Values, key: string) => {
+  const value = text(values, key);
+  return value === undefined
+    ? invalid(`--${key} is required`)
+    : Result.ok(value);
+};
+
+const oneOf = <T extends string>(
+  values: Values,
+  key: string,
+  allowed: readonly T[],
+) => {
+  const value = text(values, key);
+  if (value === undefined) return Result.ok(undefined);
+  const chosen = allowed.find((each) => each === value);
+  return chosen === undefined
+    ? invalid(`--${key} must be one of ${allowed.join(", ")}`)
+    : Result.ok(chosen);
+};
+
+const MODEL_OPTIONS = {
+  model: { type: "string" },
+  thinking: { type: "string" },
+} as const;
+
+// The Python taskctl's subcommands and options, which callers and permission rules already match.
+const COMMANDS = {
+  launch: subcommand({
+    usage: "launch --request REQUEST [--model MODEL] [--thinking THINKING]",
+    options: { request: { type: "string" }, ...MODEL_OPTIONS },
+    args: (values) =>
+      Result.gen(function* () {
+        return Result.ok<LaunchArgs>({
+          request: yield* required(values, "request"),
+          model: text(values, "model"),
+          thinking: text(values, "thinking"),
+        });
+      }),
+    run: launch,
+  }),
+  review: subcommand({
+    usage:
+      "review --request REQUEST [--model MODEL] [--thinking THINKING] [--update-base] [--recover discard]",
+    options: {
+      request: { type: "string" },
+      ...MODEL_OPTIONS,
+      "update-base": { type: "boolean" },
+      recover: { type: "string" },
+    },
+    args: (values) =>
+      Result.gen(function* () {
+        return Result.ok<ReviewArgs>({
+          request: yield* required(values, "request"),
+          recover: yield* oneOf(values, "recover", ["discard"]),
+          model: text(values, "model"),
+          thinking: text(values, "thinking"),
+          updateBase: values["update-base"] === true,
+        });
+      }),
+    run: review,
+  }),
+  state: subcommand({
+    usage: "state [--request REQUEST]",
+    options: { request: { type: "string" } },
+    args: (values) =>
+      Result.ok<StateArgs>({ request: text(values, "request") }),
+    run: state,
+  }),
+  resolve: subcommand({
+    usage:
+      "resolve --request REQUEST (--sent | --not-sent) [--thread-id THREAD_ID]",
+    options: {
+      request: { type: "string" },
+      sent: { type: "boolean" },
+      "not-sent": { type: "boolean" },
+      "thread-id": { type: "string" },
+    },
+    args: (values) =>
+      Result.gen(function* () {
+        const request = yield* required(values, "request");
+        if (values.sent === values["not-sent"])
+          return invalid("exactly one of --sent and --not-sent is required");
+        return Result.ok<ResolveArgs>({
+          request,
+          sent: values.sent === true,
+          threadId: text(values, "thread-id"),
+        });
+      }),
+    run: resolve,
+  }),
+  name: subcommand({
+    usage: "name --pr PR",
+    options: { pr: { type: "string" } },
+    args: (values) =>
+      Result.gen(function* () {
+        return Result.ok<NameArgs>({ pr: yield* required(values, "pr") });
+      }),
+    run: name,
+  }),
+  watch: subcommand({
+    usage:
+      "watch [--dry-run [--pr PR]... | --release PR | --status | --sender | --link PR]",
+    options: {
+      "dry-run": { type: "boolean" },
+      pr: { type: "string", multiple: true },
+      release: { type: "string" },
+      status: { type: "boolean" },
+      sender: { type: "boolean" },
+      link: { type: "string" },
+    },
+    args: (values) => {
+      const args: WatchArgs = {
+        dryRun: values["dry-run"] === true,
+        prs: Array.isArray(values.pr) ? values.pr : [],
+        release: text(values, "release"),
+        status: values.status === true,
+        sender: values.sender === true,
+        link: text(values, "link"),
+      };
+      if (args.prs.length > 0 && !args.dryRun)
+        return invalid("--pr is only for --dry-run");
+      const modes = [
+        args.release !== undefined,
+        args.dryRun,
+        args.status,
+        args.sender,
+        args.link !== undefined,
+      ];
+      if (modes.filter(Boolean).length > 1)
+        return invalid(
+          "use only one of --dry-run, --release, --status, --sender and --link",
+        );
+      return Result.ok(args);
+    },
+    run: watch,
+  }),
+  environment: subcommand({
+    usage: "environment",
+    options: {},
+    args: () => Result.ok({}),
+    run: (_args, deps) => environment(deps),
+  }),
+  cloud: subcommand({
+    usage:
+      "cloud --link SESSION_OR_URL --project PROJECT_ID [--title TITLE] [--model MODEL] [--thinking THINKING]",
+    options: {
+      link: { type: "string" },
+      project: { type: "string" },
+      title: { type: "string" },
+      ...MODEL_OPTIONS,
+    },
+    args: (values) =>
+      Result.gen(function* () {
+        return Result.ok<CloudArgs>({
+          link: yield* required(values, "link"),
+          project: yield* required(values, "project"),
+          title: text(values, "title"),
+          model: text(values, "model"),
+          thinking: text(values, "thinking"),
+        });
+      }),
+    run: cloud,
+  }),
+  claude: subcommand({
+    usage:
+      "claude --session NAME [--start | --resume] [--prompt-file FILE] [--model MODEL] [--cwd DIR] [--permission-mode auto|plan] [--recover adopt|discard]",
+    options: {
+      session: { type: "string" },
+      "prompt-file": { type: "string" },
+      start: { type: "boolean" },
+      resume: { type: "boolean" },
+      model: { type: "string" },
+      cwd: { type: "string" },
+      "permission-mode": { type: "string" },
+      recover: { type: "string" },
+    },
+    args: (values) =>
+      Result.gen(function* () {
+        const session = yield* required(values, "session");
+        const start = values.start === true;
+        const resume = values.resume === true;
+        if (start && resume)
+          return invalid("use only one of --start and --resume");
+        const promptFile = text(values, "prompt-file");
+        if (promptFile === undefined && (start || resume))
+          return invalid("--prompt-file is required with --start and --resume");
+        return Result.ok<ClaudeCommandArgs>({
+          session,
+          start,
+          resume,
+          promptFile,
+          cwd: text(values, "cwd"),
+          permissionMode: yield* oneOf(
+            values,
+            "permission-mode",
+            PERMISSION_MODES,
+          ),
+          recover: yield* oneOf(values, "recover", RECOVERIES),
+          model: text(values, "model"),
+        });
+      }),
+    run: claude,
+  }),
+} satisfies Record<string, Subcommand>;
 
 type Command = keyof typeof COMMANDS;
 
@@ -531,10 +777,7 @@ export const runTask = async (
       ? { code, stdout: `${usage}${FEEDBACK_HINT}\n`, stderr: "" }
       : { code, stdout: "", stderr: `${usage}${NAME}: ${message}\n` };
   }
-  const result = await COMMANDS[parsed.value.command](parsed.value, deps);
-  return result.isOk()
-    ? { code: 0, stdout: `${JSON.stringify(result.value)}\n`, stderr: "" }
-    : { code: 1, stdout: "", stderr: `${NAME}: ${result.error.message}\n` };
+  return await parsed.value(deps);
 };
 
 class UsageShown extends TaggedError("UsageShown")<{
@@ -543,80 +786,15 @@ class UsageShown extends TaggedError("UsageShown")<{
   code: number;
 }> {}
 
-const MODEL_OPTIONS = {
-  request: { type: "string" },
-  model: { type: "string" },
-  thinking: { type: "string" },
-} as const;
-
-// The Python taskctl's subcommands and options, which callers and permission rules already match.
-const OPTIONS: Record<Command, OptionTypes> = {
-  launch: MODEL_OPTIONS,
-  review: {
-    ...MODEL_OPTIONS,
-    "update-base": { type: "boolean" },
-    recover: { type: "string" },
-  },
-  state: { request: { type: "string" } },
-  resolve: {
-    request: { type: "string" },
-    sent: { type: "boolean" },
-    "not-sent": { type: "boolean" },
-    "thread-id": { type: "string" },
-  },
-  name: { pr: { type: "string" } },
-  watch: {
-    "dry-run": { type: "boolean" },
-    pr: { type: "string", multiple: true },
-    release: { type: "string" },
-    status: { type: "boolean" },
-    sender: { type: "boolean" },
-    link: { type: "string" },
-  },
-  environment: {},
-  cloud: {
-    link: { type: "string" },
-    project: { type: "string" },
-    title: { type: "string" },
-    model: { type: "string" },
-    thinking: { type: "string" },
-  },
-  claude: {
-    session: { type: "string" },
-    "prompt-file": { type: "string" },
-    start: { type: "boolean" },
-    resume: { type: "boolean" },
-    model: { type: "string" },
-    cwd: { type: "string" },
-    "permission-mode": { type: "string" },
-    recover: { type: "string" },
-  },
-};
-
-const USAGE = {
-  launch: "launch --request REQUEST [--model MODEL] [--thinking THINKING]",
-  review:
-    "review --request REQUEST [--model MODEL] [--thinking THINKING] [--update-base] [--recover discard]",
-  state: "state [--request REQUEST]",
-  resolve:
-    "resolve --request REQUEST (--sent | --not-sent) [--thread-id THREAD_ID]",
-  name: "name --pr PR",
-  watch:
-    "watch [--dry-run [--pr PR]... | --release PR | --status | --sender | --link PR]",
-  environment: "environment",
-  cloud:
-    "cloud --link SESSION_OR_URL --project PROJECT_ID [--title TITLE] [--model MODEL] [--thinking THINKING]",
-  claude:
-    "claude --session NAME [--start | --resume] [--prompt-file FILE] [--model MODEL] [--cwd DIR] [--permission-mode auto|plan] [--recover adopt|discard]",
-} satisfies Record<Command, string>;
-
 const usageOf = (commands: readonly Command[]) =>
-  `usage:\n${commands.map((command) => `  ${NAME} ${USAGE[command]}\n`).join("")}`;
+  `usage:\n${commands.map((command) => `  ${NAME} ${COMMANDS[command].usage}\n`).join("")}`;
 
 const isCommand = (value: string | undefined): value is Command =>
   value !== undefined && Object.hasOwn(COMMANDS, value);
 
-const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
+const parseCommand = (
+  argv: readonly string[],
+): Result<(deps: TaskDeps) => Promise<TaskRun>, UsageShown> => {
   const [command, ...rest] = argv;
   const all = Object.keys(COMMANDS) as Command[];
   if (!isCommand(command)) {
@@ -632,99 +810,13 @@ const parseCommand = (argv: readonly string[]): Result<Args, UsageShown> => {
   const usage = usageOf([command]);
   const shown = (message: string, code = 2) =>
     Result.err(new UsageShown({ message, usage, code }));
+  const { options, prepare } = COMMANDS[command];
   const parsed = parseOptions(rest, {
-    ...OPTIONS[command],
+    ...options,
     help: { type: "boolean", short: "h" },
   });
   if (parsed.isErr()) return shown(parsed.error.message);
-  const values = parsed.value;
-  if (values.help === true) return shown("", 0);
-  const text = (key: string) => {
-    const value = values[key];
-    return typeof value === "string" ? value : undefined;
-  };
-  const args: Args = {
-    command,
-    updateBase: values["update-base"] === true,
-    sent: values.sent === true,
-    dryRun: values["dry-run"] === true,
-    status: values.status === true,
-    start: values.start === true,
-    resume: values.resume === true,
-    sender: values.sender === true,
-    prs: command === "watch" && Array.isArray(values.pr) ? values.pr : [],
-  };
-  const request = text("request");
-  if (request !== undefined) args.request = request;
-  else if (
-    !["state", "name", "watch", "environment", "claude", "cloud"].includes(
-      command,
-    )
-  )
-    return shown("--request is required");
-  const pr = text("pr");
-  if (pr !== undefined) args.pr = pr;
-  else if (command === "name") return shown("--pr is required");
-  const released = text("release");
-  if (released !== undefined) args.release = released;
-  const link = text("link");
-  if (link !== undefined) args.link = link;
-  if (command === "cloud") {
-    if (link === undefined) return shown("--link is required");
-    const project = text("project");
-    if (project === undefined) return shown("--project is required");
-    args.project = project;
-    const title = text("title");
-    if (title !== undefined) args.title = title;
-  }
-  if (args.prs.length > 0 && !args.dryRun)
-    return shown("--pr is only for --dry-run");
-  if (
-    [
-      released !== undefined,
-      args.dryRun,
-      args.status,
-      args.sender,
-      link !== undefined,
-    ].filter(Boolean).length > 1
-  )
-    return shown(
-      "use only one of --dry-run, --release, --status, --sender and --link",
-    );
-  if (command === "resolve" && values.sent === values["not-sent"])
-    return shown("exactly one of --sent and --not-sent is required");
-  if (command === "claude") {
-    const session = text("session");
-    if (session === undefined) return shown("--session is required");
-    args.session = session;
-    if (args.start && args.resume)
-      return shown("use only one of --start and --resume");
-    const promptFile = text("prompt-file");
-    if (promptFile !== undefined) args.promptFile = promptFile;
-    else if (args.start || args.resume)
-      return shown("--prompt-file is required with --start and --resume");
-    const cwd = text("cwd");
-    if (cwd !== undefined) args.cwd = cwd;
-    const mode = text("permission-mode");
-    if (mode !== undefined) {
-      if (!(PERMISSION_MODES as readonly string[]).includes(mode))
-        return shown(
-          `--permission-mode must be one of ${PERMISSION_MODES.join(", ")}`,
-        );
-      args.permissionMode = mode;
-    }
-  }
-  const recover = text("recover");
-  if (recover !== undefined) {
-    if (!(RECOVERIES as readonly string[]).includes(recover))
-      return shown(`--recover must be one of ${RECOVERIES.join(", ")}`);
-    args.recover = recover;
-  }
-  const model = text("model");
-  if (model !== undefined) args.model = model;
-  const thinking = text("thinking");
-  if (thinking !== undefined) args.thinking = thinking;
-  const threadId = text("thread-id");
-  if (threadId !== undefined) args.threadId = threadId;
-  return Result.ok(args);
+  if (parsed.value.help === true) return shown("", 0);
+  const prepared = prepare(parsed.value);
+  return prepared.isErr() ? shown(prepared.error.message) : prepared;
 };

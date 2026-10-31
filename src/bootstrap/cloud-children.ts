@@ -3,7 +3,7 @@ import type { CloudChild } from "../conversation/claude/cloud-children.ts";
 import { realPathOrSelf } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
-import { projectsIn } from "./task/session.ts";
+import { projectsIn } from "../task/session.ts";
 
 type Call = (line: string) => Promise<string>;
 

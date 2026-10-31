@@ -1,4 +1,5 @@
 import { parseJson } from "../../runtime/json.boundary.ts";
+import { isObject } from "../../runtime/object.ts";
 import { createLineSplitter } from "./line-splitter.ts";
 import type { Direction } from "./relay.ts";
 import { type ShapePath, shapeKey, shapeOf } from "./shape.ts";
@@ -494,9 +495,6 @@ const identifier = (value: string) =>
 
 const opposite = (direction: Direction): Direction =>
   direction === "app_to_server" ? "server_to_app" : "app_to_server";
-
-const isObject = (value: Json | undefined): value is JsonObject =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const asObject = (value: Json | undefined) => (isObject(value) ? value : null);
 

@@ -23,10 +23,10 @@ import {
 } from "./doctor-report.ts";
 import { registrationChecks } from "./launchd-plan.ts";
 import { registeredEnvironment } from "./open-app-plan.ts";
+import { REPO } from "./repo.ts";
 import type { SetupFacts } from "./setup-facts.ts";
 
 // The checks change nothing but create the store's marker directory when it is missing, as the bridge does, so the command is safe while the app runs; nothing it prints holds conversation text or credentials.
-const REPO = join(import.meta.dir, "..", "..");
 const LOG_TAIL_BYTES = 2 * 1024 * 1024;
 
 // The setup is this shell's for doctor, and the one the app was opened with for a feedback report.

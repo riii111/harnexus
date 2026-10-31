@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { runCommand } from "../../runtime/process.boundary.ts";
+import { runCommand } from "../runtime/process.boundary.ts";
 
-const SCRIPT = join(import.meta.dir, "../../../scripts/install-cloud-task.sh");
+const SCRIPT = join(import.meta.dir, "../../scripts/install-cloud-task.sh");
 
 const run = async (args: string[], path = "/usr/bin:/bin") => {
   const ran = await runCommand("bash", [SCRIPT, ...args], { PATH: path });

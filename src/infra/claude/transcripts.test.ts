@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listClaudeConversations, readLastRecordUuid } from "./transcripts.ts";
+import {
+  findSessionFile,
+  listClaudeConversations,
+  readLastRecordUuid,
+} from "./transcripts.ts";
 
 let dir: string;
 
@@ -262,6 +266,56 @@ describe("readLastRecordUuid", () => {
     const last = await readLastRecordUuid("se-missing", dir);
 
     expect(last.isOk() && last.value).toBeNull();
+  });
+});
+
+describe("findSessionFile", () => {
+  test("finds the record among many project folders", async () => {
+    for (let folder = 0; folder < 40; folder += 1) {
+      await writeRecord(`-work-other-${folder}`, `se-${folder}`, [
+        assistantRecord("a-1"),
+      ]);
+    }
+
+    const found = await findSessionFile("se-39", dir);
+
+    expect(found.isOk() && found.value).toBe(
+      join(dir, "projects", "-work-other-39", "se-39.jsonl"),
+    );
+  });
+
+  test("finds nothing for a record Claude has none of", async () => {
+    await writeRecord(PROJECT_FOLDER, "se-1", conversation("ask"));
+
+    const missing = await findSessionFile("se-missing", dir);
+
+    expect(missing.isOk() && missing.value).toBeNull();
+  });
+
+  test("finds nothing once a found record is deleted", async () => {
+    await writeRecord(PROJECT_FOLDER, "se-1", conversation("ask"));
+    const first = await findSessionFile("se-1", dir);
+    await rm(join(dir, "projects", PROJECT_FOLDER, "se-1.jsonl"));
+
+    const after = await findSessionFile("se-1", dir);
+
+    expect(first.isOk() && first.value).toBe(
+      join(dir, "projects", PROJECT_FOLDER, "se-1.jsonl"),
+    );
+    expect(after.isOk() && after.value).toBeNull();
+  });
+
+  test("follows a found record that moves to another folder", async () => {
+    await writeRecord(PROJECT_FOLDER, "se-1", conversation("ask"));
+    await findSessionFile("se-1", dir);
+    await rm(join(dir, "projects", PROJECT_FOLDER, "se-1.jsonl"));
+    await writeRecord("-work-moved", "se-1", conversation("ask"));
+
+    const found = await findSessionFile("se-1", dir);
+
+    expect(found.isOk() && found.value).toBe(
+      join(dir, "projects", "-work-moved", "se-1.jsonl"),
+    );
   });
 });
 

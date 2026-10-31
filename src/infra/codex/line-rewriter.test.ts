@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { createLineRewriter } from "./line-rewriter.ts";
 
 describe("createLineRewriter", () => {
@@ -15,6 +15,27 @@ describe("createLineRewriter", () => {
     rewriter.end(" part");
 
     expect(await output).toBe("KEEP\nlast part");
+  });
+
+  test("joins a line spread over many chunks without copying earlier chunks again", async () => {
+    const chunk = Buffer.alloc(1024, "a");
+    const chunkCount = 512;
+    const joined = spyOn(Buffer, "concat");
+    const rewriter = createLineRewriter((line) => line);
+    const output = collect(rewriter);
+
+    for (let sent = 0; sent < chunkCount; sent += 1) rewriter.write(chunk);
+    rewriter.end("\n");
+    const text = await output;
+
+    const copied = joined.mock.calls.reduce(
+      (total, [pieces]) =>
+        total + pieces.reduce((sum, piece) => sum + piece.length, 0),
+      0,
+    );
+    joined.mockRestore();
+    expect(text).toBe(`${"a".repeat(chunk.length * chunkCount)}\n`);
+    expect(copied).toBeLessThan(4 * chunk.length * chunkCount);
   });
 
   test("holds later lines back until a pending rewrite settles", async () => {

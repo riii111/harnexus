@@ -5,6 +5,8 @@ export type DelegationWatch = ReturnType<typeof createDelegationWatch>;
 
 export type TurnSettings = { model: string | null; effort: string | null };
 
+export type CreatedThread = NonNullable<ReturnType<DelegationWatch["expect"]>>;
+
 export type FirstTurn = {
   threadId: string;
   expected: TurnSettings;
@@ -13,6 +15,24 @@ export type FirstTurn = {
   // Why the bridge refused a turn it runs itself after the settings check passed, such as directory_unknown.
   refusal: string | null;
 };
+
+// unknown: the thread may exist although its first turn was not seen, so the create must not be repeated.
+export type CreateOutcome = {
+  result: unknown;
+  firstTurn: FirstTurn | null;
+  threadId: string | null;
+  unknown: boolean;
+};
+
+export type FirstTurnRefusal =
+  | {
+      kind: "settings";
+      threadId: string;
+      expected: TurnSettings;
+      actual: TurnSettings;
+      difference: string;
+    }
+  | { kind: "bridge"; threadId: string; reason: string };
 
 // The app answers create_thread with a provisional id only; the real id first appears in the new thread's turn/start, whose tool output names the calling thread.
 export const createDelegationWatch = ({
@@ -128,6 +148,60 @@ export const createDelegationWatch = ({
   };
 
   return { observe, started, expect };
+};
+
+// answer is null when the app gave none, and mayExist then says whether the call may still have made the thread.
+// waitMs is null for a caller that needs no more than the id the answer names, and keepArmed false for one that never reports a late first turn.
+export const concludeCreate = async (
+  created: CreatedThread,
+  {
+    answer,
+    waitMs,
+    mayExist = false,
+    keepArmed = true,
+  }: {
+    answer: { result: unknown } | null;
+    waitMs: number | null;
+    mayExist?: boolean;
+    keepArmed?: boolean;
+  },
+): Promise<CreateOutcome> => {
+  const result = answer?.result ?? null;
+  const failed = isObject(result) && result.isError === true;
+  // An error answer can still name the thread it made, whose first turn must then never answer another create.
+  const named = answeredThreadId(result);
+  if (named !== null) created.claim(named);
+  // The app may answer with an error because the first turn was refused, so a turn already seen is still reported.
+  const firstTurn =
+    waitMs === null ? null : await created.wait(failed ? 0 : waitMs);
+  const exists = named !== null || mayExist || (answer !== null && !failed);
+  // A thread that may exist keeps its check armed, so a late turn on the wrong model is still refused.
+  if (firstTurn === null && !(keepArmed && exists)) created.cancel();
+  return {
+    result,
+    firstTurn,
+    threadId: firstTurn?.threadId ?? named,
+    unknown: firstTurn === null && exists,
+  };
+};
+
+// A turn refused on its settings is never run by the bridge, so it has no refusal of its own.
+export const firstTurnRefusal = (
+  turn: FirstTurn | null,
+): FirstTurnRefusal | null => {
+  if (turn === null) return null;
+  if (turn.refused) {
+    return {
+      kind: "settings",
+      threadId: turn.threadId,
+      expected: turn.expected,
+      actual: turn.actual,
+      difference: refusalOf(turn.expected, turn.actual),
+    };
+  }
+  return turn.refusal === null
+    ? null
+    : { kind: "bridge", threadId: turn.threadId, reason: turn.refusal };
 };
 
 type Waiter = {

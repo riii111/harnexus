@@ -1,6 +1,7 @@
 import { isShapePath } from "../infra/codex/shape.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
+import { VERSION } from "./checkout.ts";
 import type { RecordedShape } from "./feedback-protocol.ts";
 
 export type LogLine = {
@@ -306,7 +307,6 @@ const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 const WORD = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const METHOD =
   /^[A-Za-z][A-Za-z0-9_]{0,40}(?:\/[A-Za-z][A-Za-z0-9_]{0,40}){0,5}$/;
-const VERSION = /^\d+\.\d+\.\d+[A-Za-z0-9.+-]{0,40}$/;
 const MODEL = /^[a-z0-9][a-z0-9.-]{0,63}(?:\[[a-z0-9]{1,8}\])?$/;
 const COMMIT = /^[0-9a-f]{7,40}$/;
 // A thread's head, or a turn, item or cursor id with harnexus's own ids shortened to their kind and head.

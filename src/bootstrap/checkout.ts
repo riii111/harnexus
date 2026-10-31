@@ -107,6 +107,6 @@ const headMovedAt = async (gitDir: string) => {
   return seconds === undefined ? null : Number(seconds) * 1000;
 };
 
-const VERSION = /^\d+\.\d+\.\d+[a-zA-Z0-9.+-]{0,40}$/;
+export const VERSION = /^\d+\.\d+\.\d+[a-zA-Z0-9.+-]{0,40}$/;
 
 const REFLOG_TAIL_BYTES = 4096;

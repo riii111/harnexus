@@ -1,19 +1,26 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { Result } from "better-result";
-import { printAnswer, UUID } from "../../infra/claude/print.ts";
-import { processAlive, runClaude } from "../../infra/claude/run.boundary.ts";
+import { printAnswer, UUID } from "../infra/claude/print.ts";
 import {
   checkAccess,
   isDirectory,
   prepareDirectory,
   removeFile,
   writeFileExclusive,
-} from "../../runtime/fs.boundary.ts";
-import { isObject } from "../../runtime/object.ts";
-import { asText, type Fields, fail, isBlank } from "./format.ts";
-import { type Env, ioFailed, readText, singleLine } from "./request.ts";
-import { load, type SaveJson, stateRoot } from "./session.ts";
+} from "../runtime/fs.boundary.ts";
+import { type Fields, isObject } from "../runtime/object.ts";
+import { processAlive, runProcess } from "../runtime/run.boundary.ts";
+import { asText, detail, fail, isBlank } from "./format.ts";
+import {
+  load,
+  type Recovery,
+  readRecords,
+  type SaveJson,
+  settlePending,
+  stateDirectory,
+} from "./records.ts";
+import { type Env, io, readText, singleLine } from "./request.ts";
 
 export const CLOUD_CLAUDE_BIN = "/workspace/.cloud-setup/bin/claude-cloud";
 const DEFAULT_TIMEOUT_MS = 60 * 60_000;
@@ -22,7 +29,6 @@ const KEY = /^[\p{L}\p{N}_][\p{L}\p{N}_.:/-]{0,127}$/u;
 const NETWORK_EXIT = 75;
 
 export const PERMISSION_MODES = ["auto", "plan"] as const;
-export const RECOVERIES = ["adopt", "discard"] as const;
 
 export type ClaudeArgs = {
   mode: "start" | "resume" | "state";
@@ -32,25 +38,20 @@ export type ClaudeArgs = {
   cwd?: string;
   // Absent on a resume keeps the mode the session has; absent on a start means auto.
   permissionMode?: string;
-  recover?: string;
+  recover?: Recovery;
 };
 
 export type CloudDeps = { env: Env; saveJson: SaveJson; cwd?: string };
 
 const directory = (env: Env, key: string) =>
-  join(
-    stateRoot(env),
-    "cloud-claude",
-    createHash("sha256").update(key).digest("hex").slice(0, 16),
-  );
+  stateDirectory(env, "cloud-claude", key);
 
-const binary = (env: Env) => {
-  const configured = env.HARNEXUS_CLAUDE_CLOUD_BIN;
-  if (configured === undefined || configured === "")
-    return Result.ok(CLOUD_CLAUDE_BIN);
+export const configuredBinary = (env: Env, name: string, fallback: string) => {
+  const configured = env[name];
+  if (configured === undefined || configured === "") return Result.ok(fallback);
   return configured.startsWith("/")
     ? Result.ok(configured)
-    : fail("HARNEXUS_CLAUDE_CLOUD_BIN must be an absolute path");
+    : fail(`${name} must be an absolute path`);
 };
 
 export const milliseconds = (env: Env, name: string, fallback: number) => {
@@ -74,23 +75,17 @@ const reap = (lock: string, observed: string) =>
   Result.gen(async function* () {
     const guard = `${lock}.reap`;
     const made = yield* Result.await(
-      writeFileExclusive(guard, JSON.stringify({ pid: process.pid })).then(
-        (r) => r.mapError(ioFailed),
-      ),
+      io(writeFileExclusive(guard, JSON.stringify({ pid: process.pid }))),
     );
     if (!made) {
       // A reaper that died leaves its guard behind; that alone is cleared.
-      if (dead(await heldBy(guard)))
-        yield* Result.await(
-          removeFile(guard).then((r) => r.mapError(ioFailed)),
-        );
+      if (dead(await heldBy(guard))) yield* Result.await(io(removeFile(guard)));
       return Result.ok(false);
     }
     const now = await heldBy(lock);
     const same = now !== null && now.token === observed && dead(now);
-    if (same)
-      yield* Result.await(removeFile(lock).then((r) => r.mapError(ioFailed)));
-    yield* Result.await(removeFile(guard).then((r) => r.mapError(ioFailed)));
+    if (same) yield* Result.await(io(removeFile(lock)));
+    yield* Result.await(io(removeFile(guard)));
     return Result.ok(same);
   });
 
@@ -100,14 +95,16 @@ export const acquire = (lock: string, holder = "claude run") =>
     const token = randomUUID();
     for (let attempt = 0; attempt < 2; attempt++) {
       const created = yield* Result.await(
-        writeFileExclusive(
-          lock,
-          JSON.stringify({
-            pid: process.pid,
-            token,
-            startedAt: new Date().toISOString(),
-          }),
-        ).then((made) => made.mapError(ioFailed)),
+        io(
+          writeFileExclusive(
+            lock,
+            JSON.stringify({
+              pid: process.pid,
+              token,
+              startedAt: new Date().toISOString(),
+            }),
+          ),
+        ),
       );
       if (created) return Result.ok(token);
       const held = await heldBy(lock);
@@ -141,8 +138,6 @@ const outcomeOf = (stdout: string): Outcome | null => {
   };
 };
 
-const detail = (text: string) => text.trim().slice(0, 500);
-
 const recoveryHint = (session: string) =>
   `its result is unknown, so it is never rerun on its own. Check the work it may have done, then rerun with --recover adopt (continue that session) or --recover discard (it did nothing); \`harnexus-task claude --session ${session}\` shows it`;
 
@@ -154,48 +149,38 @@ const locked = (
   prompt: string,
 ) =>
   Result.gen(async function* () {
-    const statePath = join(dir, "state.json");
-    const pendingPath = join(dir, "pending.json");
-    const loaded = yield* Result.await(load(statePath));
-    let state = isObject(loaded) ? loaded : null;
-    const pendingLoaded = yield* Result.await(load(pendingPath));
-    let pending = isObject(pendingLoaded) ? pendingLoaded : null;
+    const records = yield* Result.await(readRecords(dir));
+    const { statePath, pendingPath } = records;
+    let { state } = records;
     // The record of an adopted lost turn; a run that sends nothing puts it back.
     let adopted: Fields | null = null;
 
-    if (pending !== null) {
-      if (args.recover === undefined)
-        return fail(
+    const lost = yield* Result.await(
+      settlePending(records, args.recover, {
+        blocked: (pending) =>
           `a ${asText(pending.mode)} turn of session ${args.session} (${asText(pending.sessionId)}) did not report back: ${recoveryHint(args.session)}`,
+        nothingPending: "--recover applies only when a turn is pending",
+      }),
+    );
+    if (lost !== null) {
+      if (args.mode !== "resume")
+        return fail(
+          "--recover adopt continues the session, so use it with --resume",
         );
-      if (args.recover === "discard") {
-        yield* Result.await(
-          removeFile(pendingPath).then((r) => r.mapError(ioFailed)),
-        );
-        pending = null;
-      } else {
-        if (args.mode !== "resume")
-          return fail(
-            "--recover adopt continues the session, so use it with --resume",
-          );
-        // The session the lost turn used becomes the one to resume.
-        state = {
-          ...(state ?? {}),
-          sessionId: pending.sessionId,
-          cwd: pending.cwd,
-          model: pending.model ?? null,
-          permissionMode: pending.permissionMode,
-          turns: Number(state?.turns ?? 0),
-          history: Array.isArray(state?.history) ? state.history : [],
-        };
-        // Keep the recovery record until the next turn has passed validation
-        // and its pending record is saved. A bad cwd or unavailable binary
-        // must not erase the only durable reference to the lost session.
-        adopted = pending;
-        pending = null;
-      }
-    } else if (args.recover !== undefined) {
-      return fail("--recover applies only when a turn is pending");
+      // The session the lost turn used becomes the one to resume.
+      state = {
+        ...(state ?? {}),
+        sessionId: lost.sessionId,
+        cwd: lost.cwd,
+        model: lost.model ?? null,
+        permissionMode: lost.permissionMode,
+        turns: Number(state?.turns ?? 0),
+        history: Array.isArray(state?.history) ? state.history : [],
+      };
+      // Keep the recovery record until the next turn has passed validation
+      // and its pending record is saved. A bad cwd or unavailable binary
+      // must not erase the only durable reference to the lost session.
+      adopted = lost;
     }
 
     const resuming = args.mode === "resume";
@@ -225,7 +210,11 @@ const locked = (
       return fail(
         `working directory ${cwd} is not an existing absolute directory`,
       );
-    const bin = yield* binary(deps.env);
+    const bin = yield* configuredBinary(
+      deps.env,
+      "HARNEXUS_CLAUDE_CLOUD_BIN",
+      CLOUD_CLAUDE_BIN,
+    );
     if ((await checkAccess(bin, "execute")).isErr())
       return fail(
         `${bin} is not runnable; run /workspace/.cloud-setup/install.sh in the Cloud task first`,
@@ -275,9 +264,9 @@ const locked = (
     // Nothing was sent: release this run's record, or restore the adopted one.
     const unsent = async () =>
       adopted === null
-        ? removeFile(pendingPath).then((r) => r.mapError(ioFailed))
+        ? io(removeFile(pendingPath))
         : deps.saveJson(pendingPath, adopted, { exclusive: false });
-    const ran = await runClaude(bin, argv, prompt, {
+    const ran = await runProcess(bin, argv, prompt, {
       cwd,
       env: deps.env,
       timeoutMs,
@@ -327,9 +316,7 @@ const locked = (
     // The pending record stays, so a lost state is recovered rather than started over.
     if (saved.isErr())
       return fail(`${saved.error.message}; ${recoveryHint(args.session)}`);
-    yield* Result.await(
-      removeFile(pendingPath).then((r) => r.mapError(ioFailed)),
-    );
+    yield* Result.await(io(removeFile(pendingPath)));
     if (status !== 0 || outcome === null || outcome.isError)
       return fail(
         `claude did not finish the turn (exit ${status}): ${detail(outcome?.text ?? stderr)}; session ${recorded} is recorded, resume it`,
@@ -354,23 +341,22 @@ export const claudeSession = (args: ClaudeArgs, deps: CloudDeps) =>
       );
     const dir = directory(deps.env, args.session);
     if (args.mode === "state") {
-      const loaded = yield* Result.await(load(join(dir, "state.json")));
-      const pending = yield* Result.await(load(join(dir, "pending.json")));
+      const { statePath, state, pending } = yield* Result.await(
+        readRecords(dir),
+      );
       return Result.ok<Fields>({
         session: args.session,
-        sessionId: isObject(loaded) ? loaded.sessionId : null,
-        ...(isObject(loaded) ? loaded : {}),
-        pending: isObject(pending) ? pending : null,
-        state: join(dir, "state.json"),
+        sessionId: state === null ? null : state.sessionId,
+        ...state,
+        pending,
+        state: statePath,
       });
     }
     if (args.promptFile === undefined)
       return fail("--prompt-file is required with --start and --resume");
     const prompt = yield* Result.await(readText(args.promptFile));
     if (isBlank(prompt)) return fail("the prompt file is empty");
-    yield* Result.await(
-      prepareDirectory(dir).then((made) => made.mapError(ioFailed)),
-    );
+    yield* Result.await(io(prepareDirectory(dir)));
     const lock = join(dir, "lock.json");
     const token = yield* Result.await(acquire(lock));
     const done = await locked(args, deps, dir, prompt);

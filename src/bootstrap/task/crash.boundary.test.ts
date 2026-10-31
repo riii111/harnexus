@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Result } from "better-result";
-import { FEEDBACK_HINT } from "./cli.ts";
+import { FEEDBACK_HINT } from "../../task/cli.ts";
 import { reportCrash } from "./crash.boundary.ts";
 
 describe("reportCrash", () => {

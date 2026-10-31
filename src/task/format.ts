@@ -1,5 +1,5 @@
 import { Result, TaggedError } from "better-result";
-import { isObject } from "../../runtime/object.ts";
+import { isObject } from "../runtime/object.ts";
 
 export class TaskFailed extends TaggedError("TaskFailed")<{
   message: string;
@@ -7,8 +7,6 @@ export class TaskFailed extends TaggedError("TaskFailed")<{
 
 export const fail = (message: string) =>
   Result.err(new TaskFailed({ message }));
-
-export type Fields = Record<string, unknown>;
 
 // Python's str.isspace() set, so requests the Python taskctl accepted are accepted alike.
 export const SPACE_CHARS =
@@ -34,6 +32,9 @@ export const jsonEqual = (a: unknown, b: unknown) => Bun.deepEquals(a, b, true);
 
 export const asText = (value: unknown) =>
   typeof value === "string" ? value : JSON.stringify(value ?? null);
+
+// A child's output is repeated in an error only as far as it names the cause.
+export const detail = (text: string) => text.trim().slice(0, 500);
 
 // Named fields only, and an unknown field or stray brace is an error, so a changed template never sends a half-filled prompt.
 // refuse names what is wrong with a value at that place, or returns null to accept it.

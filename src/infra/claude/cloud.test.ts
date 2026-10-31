@@ -12,6 +12,11 @@ import { join } from "node:path";
 import { Result } from "better-result";
 import { runCommand } from "../../runtime/process.boundary.ts";
 import {
+  type ProcessRun,
+  ProcessRunFailed,
+} from "../../runtime/run.boundary.ts";
+import { bundledClaude } from "./bundled-claude.boundary.ts";
+import {
   type CloudCli,
   claudeCliFile,
   copyCloudSession,
@@ -21,11 +26,6 @@ import {
   sweepCloudLogs,
 } from "./cloud.ts";
 import { createCloudCheckouts } from "./cloud-checkouts.ts";
-import {
-  bundledClaude,
-  type ClaudeRun,
-  ClaudeRunFailed,
-} from "./run.boundary.ts";
 
 const COPY = "467614f6-4ec9-44b7-a282-e2c79981140d";
 
@@ -37,7 +37,7 @@ type Call = {
 };
 
 const cliAnswering = (
-  answer: Result<ClaudeRun, ClaudeRunFailed>,
+  answer: Result<ProcessRun, ProcessRunFailed>,
   calls: Call[] = [],
 ): CloudCli => ({
   file: "/usr/local/bin/claude",
@@ -48,7 +48,7 @@ const cliAnswering = (
   },
 });
 
-const exited = (stdout: string, status = 0, stderr = ""): ClaudeRun => ({
+const exited = (stdout: string, status = 0, stderr = ""): ProcessRun => ({
   status,
   stdout,
   stderr,
@@ -191,7 +191,10 @@ describe("sendToCloud", () => {
     {
       name: "a CLI that never started",
       run: Result.err(
-        new ClaudeRunFailed({ started: false, message: "spawn claude ENOENT" }),
+        new ProcessRunFailed({
+          started: false,
+          message: "spawn claude ENOENT",
+        }),
       ),
       message: "spawn claude ENOENT",
     },
@@ -209,7 +212,7 @@ describe("sendToCloud", () => {
   test.each([
     {
       name: "a timeout",
-      run: Result.ok<ClaudeRun, ClaudeRunFailed>({
+      run: Result.ok<ProcessRun, ProcessRunFailed>({
         status: 143,
         stdout: "",
         stderr: "",
@@ -218,8 +221,8 @@ describe("sendToCloud", () => {
     },
     {
       name: "a process lost after it started",
-      run: Result.err<ClaudeRun, ClaudeRunFailed>(
-        new ClaudeRunFailed({ started: true, message: "pid 9 did not exit" }),
+      run: Result.err<ProcessRun, ProcessRunFailed>(
+        new ProcessRunFailed({ started: true, message: "pid 9 did not exit" }),
       ),
     },
     { name: "an exit without a result", run: Result.ok(exited("Sent.\n")) },
