@@ -103,10 +103,9 @@ export const createSubagents = ({
     const opened = openSubagentTurn(child, { cwd, prompt }, at);
     running.set(id, opened.turn);
     runs.set(toolUseId, {
-      agentId: id,
       threadId: parent?.id ?? threadId,
       turnId: startedIn,
-      ownTurnId: opened.turn.turn.id,
+      parentCall: parent?.toolUseId ?? null,
       edits: [],
     });
     sendActivity(child, "started", at);
@@ -159,13 +158,7 @@ export const createSubagents = ({
       sendAll(notifications);
       keepInTurn(run.threadId, run.turnId, notifications);
     }
-    const parentCall = [...runs].find(
-      ([, other]) =>
-        run.turnId !== null &&
-        other.agentId === run.threadId &&
-        other.ownTurnId === run.turnId,
-    )?.[0];
-    if (parentCall !== undefined) delegateEdit(parentCall, edit, at);
+    if (run.parentCall !== null) delegateEdit(run.parentCall, edit, at);
   };
 
   // The prompt asking about an agent's call does not say which agent made it, and only the agent that did holds the call.
@@ -270,10 +263,9 @@ export const createSubagents = ({
       for (const call of thread.calls) {
         if (runs.has(call)) continue;
         runs.set(call, {
-          agentId: thread.id,
           threadId: thread.parentThreadId,
           turnId: null,
-          ownTurnId: null,
+          parentCall: null,
           edits: [...(edits.get(call) ?? [])],
         });
       }
@@ -358,11 +350,11 @@ export const createSubagents = ({
 export type Subagents = ReturnType<typeof createSubagents>;
 
 // One run per call that started or resumed an agent; threadId is the caller, which for a resume may differ from the agent's parent.
+// parentCall is the call that started the agent which made this one, taken when the run starts so an edit passes up without a search.
 type Run = {
-  agentId: string;
   threadId: string;
   turnId: string | null;
-  ownTurnId: string | null;
+  parentCall: string | null;
   edits: FileChangeItem[];
 };
 
