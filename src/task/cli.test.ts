@@ -12,7 +12,7 @@ import {
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { listLinks } from "../../prwatch/store.ts";
+import { listLinks } from "../prwatch/store.ts";
 import {
   FEEDBACK_HINT,
   runTask,
@@ -22,8 +22,8 @@ import {
 } from "./cli.ts";
 import { callApp, type SaveJson, saveJson } from "./session.ts";
 
-const SKILLS = join(import.meta.dir, "../../../test/fixtures/task-skills");
-const README = join(import.meta.dir, "../../../README.md");
+const SKILLS = join(import.meta.dir, "../../test/fixtures/task-skills");
+const README = join(import.meta.dir, "../../README.md");
 
 // A connection closed without an answer, as when the bridge stops mid-call.
 const DROP = "drop";

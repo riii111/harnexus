@@ -1,4 +1,4 @@
-import { fileIdentity } from "../../runtime/fs.boundary.ts";
+import { fileIdentity } from "../runtime/fs.boundary.ts";
 import { jsonEqual } from "./format.ts";
 
 // install:task swaps the file at the program's path, so a different file there means a newer harnexus-task is installed.

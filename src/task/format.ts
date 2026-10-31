@@ -1,5 +1,5 @@
 import { Result, TaggedError } from "better-result";
-import { isObject } from "../../runtime/object.ts";
+import { isObject } from "../runtime/object.ts";
 
 export class TaskFailed extends TaggedError("TaskFailed")<{
   message: string;

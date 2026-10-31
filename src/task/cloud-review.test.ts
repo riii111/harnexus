@@ -13,8 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTask, TASK_DEPS } from "./cli.ts";
 
-const SKILLS = join(import.meta.dir, "../../../test/fixtures/task-skills");
-const README = join(import.meta.dir, "../../../README.md");
+const SKILLS = join(import.meta.dir, "../../test/fixtures/task-skills");
+const README = join(import.meta.dir, "../../README.md");
 const REVIEWER = "01a18d52-e03a-74c1-a50e-4e697b47172b";
 const OTHER = "01a18d52-e03a-74c1-a50e-4e697b47172c";
 

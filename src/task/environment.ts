@@ -1,6 +1,6 @@
 import { Result } from "better-result";
-import { loadCallerSocketPath } from "../../runtime/config.ts";
-import { requestLine } from "../../runtime/socket.boundary.ts";
+import { loadCallerSocketPath } from "../runtime/config.ts";
+import { requestLine } from "../runtime/socket.boundary.ts";
 import { fail, type TaskFailed } from "./format.ts";
 import { type Env, homeOf } from "./request.ts";
 

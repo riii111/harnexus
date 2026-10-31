@@ -29,6 +29,8 @@ export const load = () => import("../infra/thread-store.ts");`,
         "conversation/a.ts": `export const a = 1;
 export type M = typeof import("../bootstrap/main.ts");`,
         "infra/thread-store.ts": "export const s = 1;",
+        "task/t.ts": `import { a } from "../conversation/a.ts";
+export const t = a;`,
         "bootstrap/main.ts": "export const m = 1;",
       }),
     );
@@ -41,6 +43,7 @@ export type M = typeof import("../bootstrap/main.ts");`,
       "infra/codex/c.ts -> conversation/a.ts: infra/ may not reference conversation/",
       "presentation/p.ts -> infra/thread-store.ts: presentation/ may not reference infra/",
       "runtime/r.ts -> presentation/p.ts: runtime/ may not reference presentation/",
+      "task/t.ts -> conversation/a.ts: task/ may not reference conversation/",
     ]);
   });
 
@@ -195,6 +198,7 @@ type Area =
   | "conversation"
   | "presentation"
   | "prwatch"
+  | "task"
   | "infra"
   | "runtime";
 
@@ -209,6 +213,7 @@ const ALLOWED: Record<Area, readonly Area[]> = {
     "conversation",
     "presentation",
     "prwatch",
+    "task",
     "infra",
     "runtime",
   ],
@@ -216,6 +221,8 @@ const ALLOWED: Record<Area, readonly Area[]> = {
   presentation: ["presentation", "runtime"],
   // The PR watch stands apart from the conversation and is told how to reach workers, so it may be moved out whole.
   prwatch: ["prwatch", "infra", "runtime"],
+  // harnexus-task drives the PR watch and the Claude and Codex CLIs, but knows nothing of the bridge's conversations.
+  task: ["task", "prwatch", "infra", "runtime"],
   infra: ["infra", "runtime"],
   runtime: ["runtime"],
 };

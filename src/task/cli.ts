@@ -1,14 +1,9 @@
 import { join } from "node:path";
 import { Result, TaggedError } from "better-result";
-import { parseCloudSessionId } from "../../infra/claude/cloud.ts";
-import type { CallOutcome } from "../../infra/codex/call-gateway.ts";
-import {
-  dryRun,
-  release,
-  status,
-  watchForever,
-} from "../../prwatch/commands.ts";
-import { createGitHub } from "../../prwatch/github.ts";
+import { parseCloudSessionId } from "../infra/claude/cloud.ts";
+import type { CallOutcome } from "../infra/codex/call-gateway.ts";
+import { dryRun, release, status, watchForever } from "../prwatch/commands.ts";
+import { createGitHub } from "../prwatch/github.ts";
 import {
   githubPr,
   linkedChat,
@@ -16,10 +11,10 @@ import {
   loadSender,
   recordLink,
   recordSender,
-} from "../../prwatch/store.ts";
-import type { WatchPaths } from "../../prwatch/watcher.ts";
-import { isObject } from "../../runtime/object.ts";
-import { runCommand } from "../../runtime/process.boundary.ts";
+} from "../prwatch/store.ts";
+import type { WatchPaths } from "../prwatch/watcher.ts";
+import { isObject } from "../runtime/object.ts";
+import { runCommand } from "../runtime/process.boundary.ts";
 import { type OptionTypes, parseOptions } from "./args.boundary.ts";
 import {
   type ClaudeArgs,

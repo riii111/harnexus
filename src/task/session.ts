@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { Result } from "better-result";
-import type { CallOutcome } from "../../infra/codex/call-gateway.ts";
-import { refusalOf, type TurnSettings } from "../../infra/codex/delegations.ts";
-import { loadCallerSocketPath } from "../../runtime/config.ts";
+import type { CallOutcome } from "../infra/codex/call-gateway.ts";
+import { refusalOf, type TurnSettings } from "../infra/codex/delegations.ts";
+import { loadCallerSocketPath } from "../runtime/config.ts";
 import {
   entryExists,
   isDirectory,
@@ -15,10 +15,10 @@ import {
   removeFile,
   writeFileAtomic,
   writeFileExclusive,
-} from "../../runtime/fs.boundary.ts";
-import { parseJson } from "../../runtime/json.boundary.ts";
-import { isObject } from "../../runtime/object.ts";
-import { requestLine } from "../../runtime/socket.boundary.ts";
+} from "../runtime/fs.boundary.ts";
+import { parseJson } from "../runtime/json.boundary.ts";
+import { isObject } from "../runtime/object.ts";
+import { requestLine } from "../runtime/socket.boundary.ts";
 import {
   asText,
   type Fields,

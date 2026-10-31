@@ -1,7 +1,7 @@
 import type { Result } from "better-result";
-import type { Answer, Workers } from "../../prwatch/worker.ts";
-import { parseJson } from "../../runtime/json.boundary.ts";
-import { isObject } from "../../runtime/object.ts";
+import type { Answer, Workers } from "../prwatch/worker.ts";
+import { parseJson } from "../runtime/json.boundary.ts";
+import { isObject } from "../runtime/object.ts";
 import type { Fields } from "./format.ts";
 
 // The PR watch's workers are Codex chats linked to a PR; the watch reaches them through the app.

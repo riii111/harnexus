@@ -1,5 +1,5 @@
-import { FEEDBACK_HINT, type TaskRun } from "./cli.ts";
-import { NAME } from "./request.ts";
+import { FEEDBACK_HINT, type TaskRun } from "../../task/cli.ts";
+import { NAME } from "../../task/request.ts";
 
 // An exception nothing expected, such as a Bun API an older runtime lacks, is a Panic wrapping it once per Result.gen it left, and Bun prints each layer; only the innermost is shown, with where to report it.
 export const reportCrash = async (
