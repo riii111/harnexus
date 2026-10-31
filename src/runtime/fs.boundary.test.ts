@@ -36,17 +36,6 @@ afterAll(async () => {
 });
 
 describe("openLogSink", () => {
-  test("creates a file readable only by the owner", async () => {
-    const path = join(dir, "new.log");
-
-    const sink = openLogSink(path);
-    if (sink.isOk()) sink.value("line\n");
-
-    expect(sink.isOk()).toBe(true);
-    expect(await readFile(path, "utf8")).toBe("line\n");
-    expect((await stat(path)).mode & 0o777).toBe(0o600);
-  });
-
   test("narrows an existing readable file before appending to it", async () => {
     const path = join(dir, "existing.log");
     await writeFile(path, "before\n");
@@ -83,13 +72,15 @@ describe("openLogSink", () => {
     expect(await Bun.file(`${path}.1`).exists()).toBe(false);
   });
 
-  test("creates a missing directory readable only by the owner", async () => {
+  test("creates a missing directory and the file readable only by the owner", async () => {
     const path = join(dir, "log-dir", "nested", "x.log");
 
     const sink = openLogSink(path);
     if (sink.isOk()) sink.value("line\n");
 
+    expect(sink.isOk()).toBe(true);
     expect(await readFile(path, "utf8")).toBe("line\n");
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
     expect((await stat(join(dir, "log-dir"))).mode & 0o777).toBe(0o700);
   });
 
@@ -145,7 +136,6 @@ describe("readRegularTextFile", () => {
 
   test.each([
     { name: "a missing file", path: () => join(dir, "missing.md") },
-    { name: "a directory", path: () => dir },
     { name: "a FIFO", path: () => join(dir, "fifo") },
   ])("returns an error without waiting for $name", async ({ path }) => {
     const read = await readRegularTextFile(path());

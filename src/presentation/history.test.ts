@@ -8,6 +8,7 @@ import {
   prompt,
   reply,
   text,
+  thinking,
   toolResult,
   toolUse,
 } from "./testing/session-record.ts";
@@ -145,11 +146,24 @@ describe("buildHistory", () => {
   });
 
   test("replays the items a live turn shows, in the order Claude produced them", () => {
-    const [first] = build(conversation());
+    const [first] = build([
+      prompt("u1", "list the files"),
+      reply("a1", "m1", thinking("look first"), "tool_use"),
+      reply("a2", "m1", text("checking"), "tool_use"),
+      reply(
+        "a3",
+        "m1",
+        toolUse("tool-1", "Bash", { command: "ls" }),
+        "tool_use",
+      ),
+      toolResult("r1", "tool-1", "a.txt"),
+      reply("a4", "m2", text("one file"), "end_turn"),
+    ]);
 
     expect(first?.items.map(({ item }) => item.type)).toEqual([
       "userMessage",
       "reasoning",
+      "agentMessage",
       "commandExecution",
       "agentMessage",
     ]);
@@ -157,35 +171,18 @@ describe("buildHistory", () => {
       content: [{ type: "text", text: "list the files", text_elements: [] }],
     });
     expect(first?.items[2]?.item).toMatchObject({
+      text: "checking",
+      phase: "commentary",
+    });
+    expect(first?.items[3]?.item).toMatchObject({
       command: "ls",
       status: "completed",
       aggregatedOutput: "a.txt",
     });
-    expect(first?.items[3]?.item).toMatchObject({
+    expect(first?.items[4]?.item).toMatchObject({
       text: "one file",
       phase: "final_answer",
     });
-  });
-
-  test("marks text before a tool call as commentary", () => {
-    const [turn] = build([
-      prompt("u1", "go"),
-      reply("a1", "m1", text("checking"), "tool_use"),
-      reply(
-        "a2",
-        "m1",
-        toolUse("tool-1", "Bash", { command: "ls" }),
-        "tool_use",
-      ),
-      toolResult("r1", "tool-1", "a.txt"),
-      reply("a3", "m2", text("done"), "end_turn"),
-    ]);
-
-    const phases = turn?.items
-      .map(({ item }) => item)
-      .filter((item) => item.type === "agentMessage")
-      .map((item) => item.phase);
-    expect(phases).toEqual(["commentary", "final_answer"]);
   });
 
   test("dates turns and items from the record's timestamps", () => {
