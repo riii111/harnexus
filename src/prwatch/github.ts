@@ -95,11 +95,11 @@ type Post = (
   variables: Record<string, unknown>,
 ) => Promise<Result<GraphqlAnswer, { message: string }>>;
 
-// The token is kept in memory for a few minutes only, so a token the owner rotates is picked up and it never reaches the state or the log.
-// Reading it starts gh, which on macOS starts the keychain tool too, so it is not read for every request.
 const rejected = (message: string) =>
   Result.err(new GithubRejected({ message }));
 
+// The token is kept in memory for a few minutes only, so a token the owner rotates is picked up and it never reaches the state or the log.
+// Reading it starts gh, which on macOS starts the keychain tool too, so it is not read for every request.
 export const createGitHub = (
   runCommand: RunCommand,
   env: Env,

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Result, TaggedError } from "better-result";
+import { matchError, Result, TaggedError } from "better-result";
 import type { ImageSource } from "../infra/claude/images.ts";
 import { createAppRequests } from "../infra/codex/app-requests.ts";
 import { delegatedMessage } from "../infra/codex/delegations.ts";
@@ -558,23 +558,29 @@ export const createTurnController = <Tag extends string>({
       () => request.allowRecovery && !closed && !request.stopped,
     );
     if (ran.isOk()) return;
-    if (ran.error._tag === "TurnOutcomeUnknown") {
-      log({ event: "claude_turn", step: "outcome_unknown" });
-      return;
-    }
-    if (!responded) {
-      forgetMessage(threadId, messageId);
-      if (ran.error._tag === "PreviousWriteUnsettled") {
-        refuseTurn(request, queued, "outcome_unknown", ran.error);
+    const notRun = (error: { _tag: StoreTag; message: string }) => {
+      if (responded) {
+        log({
+          event: "claude_turn",
+          step: "run_state_not_saved",
+          error: error._tag,
+        });
         return;
       }
-      refuseTurn(request, queued, "thread_busy", ran.error, ran.error.message);
-      return;
-    }
-    log({
-      event: "claude_turn",
-      step: "run_state_not_saved",
-      error: ran.error._tag,
+      forgetMessage(threadId, messageId);
+      refuseTurn(request, queued, "thread_busy", error, error.message);
+    };
+    matchError(ran.error, {
+      TurnOutcomeUnknown: () =>
+        log({ event: "claude_turn", step: "outcome_unknown" }),
+      PreviousWriteUnsettled: (error) => {
+        if (responded) return notRun(error);
+        forgetMessage(threadId, messageId);
+        refuseTurn(request, queued, "outcome_unknown", error);
+      },
+      ThreadNotFound: notRun,
+      WriteNotStarted: notRun,
+      RunStateNotSaved: notRun,
     });
   };
 

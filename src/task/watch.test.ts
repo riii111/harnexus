@@ -402,6 +402,18 @@ describe("runCycle", () => {
     expect((await state()).seen).toContain("inline:1");
   });
 
+  test("logs a failed read of a PR's detail by its tag, without the message that names the cause", async () => {
+    const { world, logs, cycle } = await fixture({}, { firstRead: true });
+    world.detailFails = true;
+
+    await cycle();
+
+    expect(logs.filter((log) => log.event === "detail_failed")).toMatchObject([
+      { error: "GithubUnreachable" },
+    ]);
+    expect(JSON.stringify(logs)).not.toContain("GitHub is down");
+  });
+
   test("never sends an event again and checks the answer before the next message", async () => {
     const { world, calls, cycle, state, later } = await fixture();
     world.comments = [comment({})];

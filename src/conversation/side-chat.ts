@@ -106,39 +106,38 @@ export const createSideChats = ({
   };
 
   // Read as the app reads a main thread for a cloud side chat: its newest turns, and its oldest one when there are more, with no further pages. The newest page sets what is handed over, so a turn added after it is left out; an oldest page with no turn though more were said to exist fails the read rather than hand over a mix.
-  const referenceOf = async (parentId: string) => {
-    const newest = await readPage(parentId, NEWEST);
-    if (newest.isErr()) return Result.err(newest.error);
-    const recent = [...newest.value.turns].reverse();
-    if (!newest.value.more) {
+  const referenceOf = (parentId: string) =>
+    Result.gen(async function* () {
+      const newest = yield* Result.await(readPage(parentId, NEWEST));
+      const recent = [...newest.turns].reverse();
+      if (!newest.more) {
+        return Result.ok(
+          sideChatReference(recent, { agent: "Codex", model: null }),
+        );
+      }
+      const oldest = yield* Result.await(readPage(parentId, OLDEST));
+      const first = oldest.turns[0];
+      if (first === undefined) {
+        return Result.err(
+          new MainThreadUnreadable({
+            message: "the pages of the main thread disagree on where it starts",
+          }),
+        );
+      }
+      // A turn both pages hold is taken from the newest page, which then reaches the oldest turn and leaves nothing unread.
+      if (recent.some(({ id }) => id === first.id)) {
+        return Result.ok(
+          sideChatReference(recent, { agent: "Codex", model: null }),
+        );
+      }
       return Result.ok(
-        sideChatReference(recent, { agent: "Codex", model: null }),
-      );
-    }
-    const oldest = await readPage(parentId, OLDEST);
-    if (oldest.isErr()) return Result.err(oldest.error);
-    const first = oldest.value.turns[0];
-    if (first === undefined) {
-      return Result.err(
-        new MainThreadUnreadable({
-          message: "the pages of the main thread disagree on where it starts",
+        sideChatReference([first, ...recent], {
+          agent: "Codex",
+          model: null,
+          unreadAfterFirst: true,
         }),
       );
-    }
-    // A turn both pages hold is taken from the newest page, which then reaches the oldest turn and leaves nothing unread.
-    if (recent.some(({ id }) => id === first.id)) {
-      return Result.ok(
-        sideChatReference(recent, { agent: "Codex", model: null }),
-      );
-    }
-    return Result.ok(
-      sideChatReference([first, ...recent], {
-        agent: "Codex",
-        model: null,
-        unreadAfterFirst: true,
-      }),
-    );
-  };
+    });
 
   const readPage = async (
     threadId: string,
