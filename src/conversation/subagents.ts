@@ -103,7 +103,6 @@ export const createSubagents = ({
     const opened = openSubagentTurn(child, { cwd, prompt }, at);
     running.set(id, opened.turn);
     runs.set(toolUseId, {
-      agentId: id,
       threadId: parent?.id ?? threadId,
       turnId: startedIn,
       parentCall: parent?.toolUseId ?? null,
@@ -264,7 +263,6 @@ export const createSubagents = ({
       for (const call of thread.calls) {
         if (runs.has(call)) continue;
         runs.set(call, {
-          agentId: thread.id,
           threadId: thread.parentThreadId,
           turnId: null,
           parentCall: null,
@@ -354,7 +352,6 @@ export type Subagents = ReturnType<typeof createSubagents>;
 // One run per call that started or resumed an agent; threadId is the caller, which for a resume may differ from the agent's parent.
 // parentCall is the call that started the agent which made this one, taken when the run starts so an edit passes up without a search.
 type Run = {
-  agentId: string;
   threadId: string;
   turnId: string | null;
   parentCall: string | null;
