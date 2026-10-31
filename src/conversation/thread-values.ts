@@ -3,7 +3,7 @@ import type { Result } from "better-result";
 import { type EffortRule, isClaudeEffort } from "../infra/claude/models.ts";
 import type { CloudLink, ThreadStore } from "../infra/thread-store.ts";
 import type { Mode, Thread } from "./thread-request.ts";
-import type { ErrorTag } from "./turn-runtime.ts";
+import type { ErrorTag, ThreadEnd } from "./turn-runtime.ts";
 
 export type ThreadValues = ReturnType<typeof createThreadValues>;
 
@@ -131,6 +131,29 @@ export const createThreadValues = (
     adopted.delete(threadId);
     forkSources.delete(threadId);
     modes.delete(threadId);
+  };
+
+  // An archived thread can return, so only an override the store already holds goes; a model, effort or session id the store lacks still applies, and what the app picked or gave the thread stays.
+  // A deleted thread cannot return, so nothing of it is kept.
+  const forgetThread = (threadId: string, ended: ThreadEnd) => {
+    const record = store.get(threadId);
+    if (ended === "deleted") {
+      for (const held of [models, efforts, sessionIds, sideChats, modes]) {
+        held.delete(threadId);
+      }
+      picked.delete(threadId);
+      forgetFork(threadId);
+      return;
+    }
+    if (record === undefined) return;
+    if (models.get(threadId) === record.model) models.delete(threadId);
+    if (efforts.get(threadId) === record.effort) efforts.delete(threadId);
+    if (
+      sessionIds.has(threadId) &&
+      sessionIds.get(threadId) === record.sessionId
+    ) {
+      sessionIds.delete(threadId);
+    }
   };
 
   const forkSourceOf = (threadId: string) =>
@@ -280,6 +303,7 @@ export const createThreadValues = (
     adopt,
     adoptFork,
     forgetFork,
+    forgetThread,
     noteSideChat,
     instructionsOf,
     referenceOf,

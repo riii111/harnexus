@@ -49,11 +49,16 @@ export type TurnRuntime<Tag extends string> = {
   noteFork: (threadId: string) => Promise<void>;
   // Called when a fork is handed back to Codex, which ends what noteFork pinned.
   dropFork: (threadId: string) => void;
+  // Called once the server answered that it archived or deleted the thread; a thread with work in progress keeps its state.
+  forgetThread: (threadId: string, ended: ThreadEnd) => void;
   threadBusy: (threadId: string) => void;
   threadIdle: (threadId: string) => void;
   listen: (startOwnTurn: (threadId: string) => boolean) => void;
   closeAll: () => void;
 };
+
+// An archived thread can be unarchived, a deleted one cannot.
+export type ThreadEnd = "archived" | "deleted";
 
 export type TurnLink = Pick<
   ReturnType<typeof createCodexLink>,

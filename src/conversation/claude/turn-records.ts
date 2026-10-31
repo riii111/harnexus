@@ -1,4 +1,4 @@
-// Kept while the bridge runs, since a revert or a history page may name any turn the app was shown and the app never says a thread is finished.
+// Kept while the bridge runs, since a revert or a history page may name any turn the app was shown; only a thread the server archived or deleted lets them go.
 export const createTurnRecords = () => {
   const records = new Map<string, Map<string, string>>();
 
@@ -11,5 +11,9 @@ export const createTurnRecords = () => {
   const recordOf = (threadId: string, turnId: string) =>
     records.get(threadId)?.get(turnId) ?? null;
 
-  return { note, recordOf };
+  return {
+    note,
+    recordOf,
+    forget: (threadId: string) => records.delete(threadId),
+  };
 };
