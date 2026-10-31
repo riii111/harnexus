@@ -14,7 +14,6 @@ import {
 import {
   access,
   link,
-  lstat,
   mkdir,
   open,
   readdir,
@@ -260,13 +259,6 @@ export const isDirectory = async (path: string) =>
 
 export const pathExists = async (path: string) =>
   (await stat(path).catch(() => null)) !== null;
-
-// Inspects the entry itself, so a dangling symlink still counts.
-export const entryExists = async (path: string) =>
-  (await lstat(path).catch(() => null)) !== null;
-
-export const isSymlink = async (path: string) =>
-  (await lstat(path).catch(() => null))?.isSymbolicLink() ?? false;
 
 export const realPathOrSelf = (path: string) =>
   realpath(resolve(path)).catch(() => resolve(path));

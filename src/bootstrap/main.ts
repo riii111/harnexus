@@ -40,6 +40,7 @@ import {
   readCommandOutput,
 } from "../runtime/process.boundary.ts";
 import { serveLinesWhenFree } from "../runtime/socket.boundary.ts";
+import { codexHome } from "../task/request.ts";
 import { readBridgeIdentity } from "./bridge-identity.ts";
 import { connectClaudeThreads } from "./claude-threads.ts";
 import { reportCompatibilityFailure } from "./compatibility.boundary.ts";
@@ -49,7 +50,6 @@ import {
   signalWithLog,
   stopLingeringServer,
 } from "./supervise.ts";
-import { codexHome } from "./task/request.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
 

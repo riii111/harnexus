@@ -6,13 +6,13 @@ import {
   pathExists,
   readRegularTextFile,
   realPathOrSelf,
-} from "../../runtime/fs.boundary.ts";
-import { parseJson } from "../../runtime/json.boundary.ts";
-import { isObject } from "../../runtime/object.ts";
+} from "../runtime/fs.boundary.ts";
+import { parseJson } from "../runtime/json.boundary.ts";
+import { isObject } from "../runtime/object.ts";
 import type {
   CommandFailed,
   CommandOutput,
-} from "../../runtime/process.boundary.ts";
+} from "../runtime/process.boundary.ts";
 import {
   type Fields,
   fail,
@@ -50,7 +50,7 @@ export const configHome = (env: Env) =>
     "harnexus",
   );
 
-export const ioFailed = (error: { message: string; cause?: unknown }) => {
+const ioFailed = (error: { message: string; cause?: unknown }) => {
   const { cause } = error;
   const code =
     isObject(cause) && typeof cause.code === "string" ? cause.code : null;
@@ -59,8 +59,11 @@ export const ioFailed = (error: { message: string; cause?: unknown }) => {
   });
 };
 
-export const readText = (path: string) =>
-  readRegularTextFile(path).then((read) => read.mapError(ioFailed));
+export const io = async <T>(
+  pending: Promise<Result<T, { message: string; cause?: unknown }>>,
+): Promise<Result<T, TaskFailed>> => (await pending).mapError(ioFailed);
+
+export const readText = (path: string) => io(readRegularTextFile(path));
 
 export const readJson = (path: string) =>
   Result.gen(async function* () {
@@ -338,20 +341,8 @@ export const candidate = (
     return Result.ok(data);
   });
 
-// reviewctl's field names, so a session it recorded is still checked field by field.
-const OLD_NAMES: Record<string, string> = {
-  taskId: "identifier",
-  workerAI: "worker",
-  workerChatId: "workerId",
-};
-
 export const sessionValue = async (data: Fields, key: string) => {
-  const old = OLD_NAMES[key];
-  const value = Object.hasOwn(data, key)
-    ? data[key]
-    : old === undefined
-      ? null
-      : data[old];
+  const value = data[key];
   return key === "checkout" && truthy(value)
     ? realPathOrSelf(String(value))
     : (value ?? null);

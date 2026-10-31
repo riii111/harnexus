@@ -1,4 +1,4 @@
-import { runTask, TASK_DEPS } from "./cli.ts";
+import { runTask, TASK_DEPS } from "../../task/cli.ts";
 import { reportCrash } from "./crash.boundary.ts";
 
 const run = await reportCrash(() =>
