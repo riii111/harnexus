@@ -557,15 +557,21 @@ export const createCloudRuntime = <Tag extends string>(
 
   // A session a linked one started after the app was last shown gets a chat of its own, once; one started before was the user's to link, and one already linked has its chat.
   const noticeChildren = (threadId: string, all: readonly SessionMessage[]) => {
-    if (openChild === undefined) return;
-    const after = indexAfter(all, threads.cloudOf(threadId)?.shown ?? null);
+    // A copy made while a chat is being linked, or one whose link failed, opens nothing.
+    const cloud = threads.cloudOf(threadId);
+    if (openChild === undefined || cloud === null) return;
+    const after = indexAfter(all, cloud.shown);
     for (const child of childSessionsIn(all.slice(after))) {
       if (openedChildren.has(child.sessionId)) continue;
       if (threads.cloudOwner(child.sessionId) !== undefined) continue;
       openedChildren.add(child.sessionId);
-      void openChild(threadId, child).then((outcome) =>
-        log({ event: "claude_cloud", step: "child", outcome }),
-      );
+      // A chat the app did not open is tried again by a later copy.
+      void openChild(threadId, child)
+        .catch(() => "threw")
+        .then((outcome) => {
+          if (outcome !== "done") openedChildren.delete(child.sessionId);
+          log({ event: "claude_cloud", step: "child", outcome });
+        });
     }
   };
 

@@ -3,7 +3,6 @@ import {
   type CloudLogEvent,
   createCloudRuntime,
 } from "../conversation/claude/cloud.ts";
-import type { CloudChild } from "../conversation/claude/cloud-children.ts";
 import {
   type ClaudeLogEvent,
   createClaudeRuntime,
@@ -32,8 +31,7 @@ import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
 import { buildHistory, replayHistory } from "../presentation/history.ts";
 import { resizeImage } from "../runtime/image.boundary.ts";
-import { parseJson } from "../runtime/json.boundary.ts";
-import { isObject } from "../runtime/object.ts";
+import { openCloudChild } from "./cloud-children.ts";
 
 type Runtime = Parameters<typeof createClaudeRuntime>[0];
 
@@ -134,7 +132,12 @@ export const connectClaudeThreads = ({
     subagents,
     resizeImage,
   });
-  let callGateway: ReturnType<typeof createCallGateway> | undefined;
+  const callGateway = createCallGateway({
+    isClaudeThread: (threadId) => store.get(threadId) !== undefined,
+    openLink,
+    request,
+    delegations,
+  });
   const runtime = createCloudRuntime(claude, {
     threads,
     sendToCloud: (cloudSessionId, text, cwd) =>
@@ -156,8 +159,17 @@ export const connectClaudeThreads = ({
     replayHistory: readHistory,
     send,
     log,
-    openChild: (parentThreadId, child) =>
-      openCloudChild(callGateway, store, parentThreadId, child),
+    openChild: (parentThreadId, child) => {
+      const parent = store.get(parentThreadId);
+      return parent === undefined
+        ? Promise.resolve("no_parent")
+        : openCloudChild(
+            (call) => callGateway.handle(call),
+            parentThreadId,
+            parent.worktree,
+            child,
+          );
+    },
   });
   const turns = createTurnController({
     store,
@@ -232,98 +244,8 @@ export const connectClaudeThreads = ({
     }),
     sideChats,
   });
-  // The Cloud runtime opens chats through the gateway, which needs the router and turns made after it.
-  callGateway = createCallGateway({
-    isClaudeThread: (threadId) => store.get(threadId) !== undefined,
-    openLink,
-    request,
-    delegations,
-  });
   return { router, closeAll: turns.closeAll, callGateway };
 };
-
-// A chat for a session a linked Cloud session started is opened in the parent chat's project, as if the parent had created it, with /cloud as its first message.
-const openCloudChild = async (
-  gateway: ReturnType<typeof createCallGateway> | undefined,
-  store: ThreadStore,
-  parentThreadId: string,
-  child: CloudChild,
-) => {
-  const parent = store.get(parentThreadId);
-  if (gateway === undefined || parent === undefined) return "no_parent";
-  const listed = await answerOf(
-    gateway,
-    JSON.stringify({
-      threadId: parentThreadId,
-      tool: "list_projects",
-      arguments: {},
-    }),
-  );
-  const projectId =
-    listed.outcome === "done"
-      ? projectOf(listed.result, parent.worktree)
-      : null;
-  if (projectId === null) return "no_project";
-  const created = await answerOf(
-    gateway,
-    JSON.stringify({
-      threadId: parentThreadId,
-      tool: "create_thread",
-      arguments: {
-        prompt: `/cloud ${child.sessionId}`,
-        target: { type: "project", projectId, environment: { type: "local" } },
-        title: `Cloud｜${child.title ?? child.sessionId}`,
-        model: CLOUD_CHAT_MODEL,
-      },
-    }),
-  );
-  return typeof created.outcome === "string" ? created.outcome : "unknown";
-};
-
-const answerOf = async (
-  gateway: ReturnType<typeof createCallGateway>,
-  call: string,
-): Promise<{ outcome?: unknown; result?: unknown }> => {
-  const parsed = parseJson(await gateway.handle(call));
-  return parsed.isOk() && isObject(parsed.value) ? parsed.value : {};
-};
-
-// The project whose folder holds the parent chat's folder, the deepest when several do.
-const projectOf = (result: unknown, folder: string) => {
-  let found: { projectId: string; path: string } | null = null;
-  for (const project of projectsIn(result)) {
-    const inside =
-      folder === project.path || folder.startsWith(`${project.path}/`);
-    if (inside && (found === null || project.path.length > found.path.length))
-      found = project;
-  }
-  return found?.projectId ?? null;
-};
-
-const projectsIn = (result: unknown) => {
-  const content =
-    typeof result === "object" && result !== null && "content" in result
-      ? (result as { content: unknown }).content
-      : null;
-  const projects: { projectId: string; path: string }[] = [];
-  for (const item of Array.isArray(content) ? content : []) {
-    if (typeof item?.text !== "string") continue;
-    const parsed = parseJson(item.text);
-    const listed =
-      parsed.isOk() && isObject(parsed.value) ? parsed.value.projects : null;
-    for (const project of Array.isArray(listed) ? listed : []) {
-      if (
-        isObject(project) &&
-        typeof project.projectId === "string" &&
-        typeof project.path === "string"
-      )
-        projects.push({ projectId: project.projectId, path: project.path });
-    }
-  }
-  return projects;
-};
-
-const CLOUD_CHAT_MODEL = "claude-sonnet-5-5";
 
 // The server writes a thread to disk only once it holds some history, and Claude turns never reach it, so without this item the app cannot reopen a Claude thread after a restart; the note carries no conversation text.
 const THREAD_NOTE = {

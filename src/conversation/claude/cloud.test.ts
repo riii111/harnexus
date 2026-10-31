@@ -64,6 +64,62 @@ describe("createCloudRuntime child sessions", () => {
     ]);
   });
 
+  test("opens nothing for the sessions a session started before /cloud linked it", async () => {
+    const env = setup({
+      copies: [
+        [
+          reply(
+            "a1",
+            "m1",
+            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+            "tool_use",
+          ),
+          toolResult("u1", "t1", started(CHILD)),
+          endReply("a2", "started"),
+        ],
+      ],
+    });
+    const turn = env.turn(`/cloud ${CLOUD_ID}`);
+
+    await env.runtime.run(turn.running);
+    await env.tick();
+
+    expect(env.links).toHaveLength(1);
+    expect(env.children).toEqual([]);
+  });
+
+  test("tries a chat the app did not open again on a later copy", async () => {
+    const env = linked({
+      copies: [
+        [
+          prompt("p0", "earlier"),
+          endReply("r0", "ok"),
+          reply(
+            "a1",
+            "m1",
+            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+            "tool_use",
+          ),
+          toolResult("u1", "t1", started(CHILD)),
+          endReply("a2", "started"),
+        ],
+      ],
+      shown: "r0",
+    });
+    env.childOutcomes.push("not_sent");
+    env.runtime.listen(() => true);
+
+    await env.tick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await env.tick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(env.children.map((opened) => opened.child.sessionId)).toEqual([
+      CHILD,
+      CHILD,
+    ]);
+  });
+
   test("leaves a session started before the app was shown to the user", async () => {
     const env = linked({
       copies: [
@@ -936,6 +992,7 @@ const setup = ({
     innerRuns,
     ownStarts,
     copyCalls: 0,
+    childOutcomes: [] as string[],
     children: [] as {
       parent: string;
       child: { sessionId: string; title: string | null };
@@ -1078,7 +1135,7 @@ const setup = ({
     replayHistory: async (_threadId, copy) => [{ replayOf: copy }],
     openChild: async (parent, child) => {
       env.children.push({ parent, child });
-      return "done";
+      return env.childOutcomes.shift() ?? "done";
     },
     send: (message) => sent.push(message),
     log: (event) => events.push(event),
