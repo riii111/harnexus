@@ -121,7 +121,7 @@ export const twoWorkers = async (
   options: Parameters<typeof harness>[1] = {},
 ) => {
   const started = await harness(fakes, options);
-  started.turns.adopt(OTHER_THREAD, { model: MODEL, cwd: OTHER_DIR });
+  started.threads.adopt(OTHER_THREAD, { model: MODEL, cwd: OTHER_DIR });
   started.turns.startTurn(turnStart(10, "hello"), undefined);
   await until(() => fakes[0]?.started() === true);
   started.turns.startTurn(turnStart(11, "hello", OTHER_THREAD), undefined);
@@ -253,7 +253,7 @@ export const harness = async (
     onSend(message);
   };
   const log = (event: ClaudeLogEvent) => events.push(event);
-  const threads = createThreadValues(store, log);
+  const threads = createThreadValues(store, log, effortRule);
   const subagents = createSubagents({ send, now });
   const runtime = createClaudeRuntime({
     threads,
@@ -344,12 +344,12 @@ export const harness = async (
     log,
     now,
     newTurnId: () => `turn-${++turnCount}`,
-    effortRule,
   });
-  if (adopt) turns.adopt(THREAD, { model, cwd: dir });
+  if (adopt) threads.adopt(THREAD, { model, cwd: dir });
   turnRuns.set(turns, runs);
   return {
     turns,
+    threads,
     sent,
     events,
     store,

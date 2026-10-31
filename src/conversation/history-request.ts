@@ -2,7 +2,6 @@ import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { type InferErr, Result } from "better-result";
 import { ClaudeRecordUnreadable } from "../infra/claude/sdk.boundary.ts";
 import type { readClaudeSession } from "../infra/claude/session.ts";
-import type { RewindPoint } from "../infra/thread-store.ts";
 import {
   type AgentRef,
   buildHistory,
@@ -22,7 +21,8 @@ import {
   viewTurn,
 } from "../presentation/history-page.ts";
 import { isObject } from "../runtime/object.ts";
-import type { AppRequest, Thread } from "./thread-request.ts";
+import type { AppRequest } from "./thread-request.ts";
+import type { ThreadValues } from "./thread-values.ts";
 
 export type HistoryEvent =
   | {
@@ -42,15 +42,6 @@ export type HistoryEvent =
 
 export type HistoryMethod = (typeof HISTORY_METHODS)[number];
 
-type Threads = {
-  threadOf: (threadId: string) => Thread | undefined;
-  sessionIdOf: (threadId: string) => string | null;
-  takePicked: (threadId: string) => boolean;
-  rewindOf?: (threadId: string) => RewindPoint | undefined;
-  liveTurnOf?: (threadId: string) => LiveTurn | null;
-  recordOf?: (threadId: string, turnId: string) => string | null;
-};
-
 type ReadSession = (sessionId: string) => ReturnType<typeof readClaudeSession>;
 
 type Loaded = Result<HistoryTurn[], InferErr<Awaited<ReturnType<ReadSession>>>>;
@@ -59,25 +50,29 @@ type Loaded = Result<HistoryTurn[], InferErr<Awaited<ReturnType<ReadSession>>>>;
 // A subagent's thread has no record the app can name, so its history comes from what the bridge kept of it; a Claude thread's agents are read back before its history is built, so the history shows where each started.
 export const createHistoryRequests = ({
   threads,
+  liveTurnOf,
+  recordOf,
   readSession,
   send,
   log,
-  subagentHistory = () => undefined,
-  subagents = NO_SUBAGENTS,
+  subagentHistory,
+  subagents,
 }: {
-  threads: Threads;
+  threads: Pick<ThreadValues, "threadOf" | "sessionIdOf" | "rewindOf">;
+  liveTurnOf: (threadId: string) => LiveTurn | null;
+  recordOf: (threadId: string, turnId: string) => string | null;
   readSession: ReadSession;
   send: (message: object) => void;
   log: (event: HistoryEvent) => void;
-  subagentHistory?: (threadId: string) => HistoryTurn[] | undefined;
-  subagents?: SubagentsOfThread;
+  subagentHistory: (threadId: string) => HistoryTurn[] | undefined;
+  subagents: SubagentsOfThread;
 }) => {
   // The app asks for a turn page and then each turn's items at once, so requests arriving while a read runs share it.
   const reading = new Map<string, { key: string; loaded: Promise<Loaded> }>();
   const keyOf = (threadId: string) =>
     JSON.stringify([
       threads.sessionIdOf(threadId),
-      threads.rewindOf?.(threadId) ?? null,
+      threads.rewindOf(threadId) ?? null,
     ]);
 
   const load = (threadId: string): Promise<Loaded> => {
@@ -91,7 +86,7 @@ export const createHistoryRequests = ({
     if (thread === undefined || sessionId === null) {
       return Promise.resolve(Result.ok([]));
     }
-    const rewind = threads.rewindOf?.(threadId);
+    const rewind = threads.rewindOf(threadId);
     const loaded = readSession(sessionId).then(async (original) => {
       if (keyOf(threadId) !== key) return load(threadId);
       const read = original.andThen((messages) => {
@@ -128,7 +123,7 @@ export const createHistoryRequests = ({
     const threadId = String(request.params.threadId);
     const loaded = await load(threadId);
     // Asked once the record is read, so a turn that ended meanwhile is not shown running.
-    const live = threads.liveTurnOf?.(threadId) ?? null;
+    const live = liveTurnOf(threadId);
     const history = loaded.map((turns) => withLiveTurn(turns, live));
     if (history.isErr()) {
       send({
@@ -140,9 +135,7 @@ export const createHistoryRequests = ({
     // A live turn's id leaves the history once the turn ends, so a cursor or turn naming it then names the recorded turn its prompt opened.
     const known = new Set(history.value.map((entry) => entry.turn.id));
     const resolve = (turnId: string) => {
-      const record = known.has(turnId)
-        ? null
-        : (threads.recordOf?.(threadId, turnId) ?? null);
+      const record = known.has(turnId) ? null : recordOf(threadId, turnId);
       return record === null ? turnId : historyTurnId(record);
     };
     const { cursor, turnId } = request.params;
@@ -179,7 +172,7 @@ export const createHistoryRequests = ({
     );
   };
 
-  return { load, answer, takePicked: threads.takePicked };
+  return { load, answer };
 };
 
 type SubagentsOfThread = {
@@ -190,11 +183,6 @@ type SubagentsOfThread = {
     messages: readonly SessionMessage[],
   ) => Promise<void>;
   agentRefOf: (threadId: string) => (toolUseId: string) => AgentRef | undefined;
-};
-
-const NO_SUBAGENTS: SubagentsOfThread = {
-  restore: async () => {},
-  agentRefOf: () => () => undefined,
 };
 
 // A record missing the message it was cut at is no longer the conversation that was kept.
@@ -323,7 +311,7 @@ const viewOf = (value: unknown): TurnsView =>
 
 const TURN_CURSOR = /^(at:|after:)(.+)$/s;
 
-const HISTORY_METHODS = [
+export const HISTORY_METHODS = [
   "thread/turns/list",
   "thread/items/list",
   "thread/timeline/list",
