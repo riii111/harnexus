@@ -139,10 +139,12 @@ describe("createCloudRuntime child sessions", () => {
   });
 
   test.each([
-    "first_turn_refused",
-    "model_mismatch",
-    "unknown",
-  ])("never opens a chat again after %s, since one may exist", async (outcome) => {
+    { outcome: "first_turn_refused" },
+    { outcome: "model_mismatch" },
+    { outcome: "unknown" },
+  ])("never opens a chat again after $outcome, since one may exist", async ({
+    outcome,
+  }) => {
     const env = linked({
       copies: [
         [
