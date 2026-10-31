@@ -128,47 +128,72 @@ describe("redactPaths", () => {
 });
 
 describe("formatFeedback", () => {
-  test("reports a running bridge as stale when the checkout changed after it started", () => {
-    const report = formatFeedback(
-      facts({
+  test.each<{
+    name: string;
+    overrides: () => Partial<FeedbackFacts>;
+    expected: string;
+  }>([
+    {
+      name: "stale when the checkout changed after it started",
+      overrides: () => ({
         codeChangedAtMs: NOW - 60_000,
         bridges: {
           mine: [{ pid: 7, startedAtMs: NOW - 3_600_000 }],
           others: 0,
         },
       }),
-    );
-
-    expect(report).toContain(
-      "warn Running bridges: pid 7 since 2026-10-24T09:00:00Z; 1 run code older than this checkout",
-    );
-  });
-
-  test("reports a running bridge as stale when its start line names another commit or SDK", () => {
-    const report = formatFeedback(
-      facts({
+      expected:
+        "warn Running bridges: pid 7 since 2026-10-24T09:00:00Z; 1 run code older than this checkout",
+    },
+    {
+      name: "stale when its start line names another commit or SDK",
+      overrides: () => ({
         bridges: { mine: [{ pid: 7, startedAtMs: NOW - 60_000 }], others: 0 },
         loggedStarts: [
           { pid: 7, commit: "0000000000aa", sdk: "0.3.304", codex: null },
         ],
       }),
-    );
-
-    expect(report).toContain("on 0000000000aa; 1 run code older");
-  });
-
-  test("keeps a bridge current that started after the last change on the same commit", () => {
-    const report = formatFeedback(
-      facts({
+      expected: "on 0000000000aa; 1 run code older",
+    },
+    {
+      name: "current when it started after the last change on the same commit",
+      overrides: () => ({
         codeChangedAtMs: NOW - 7_200_000,
-        bridges: { mine: [{ pid: 7, startedAtMs: NOW - 60_000 }], others: 1 },
+        bridges: { mine: [{ pid: 7, startedAtMs: NOW - 60_000 }], others: 0 },
         loggedStarts: [
           { pid: 7, commit: COMMIT.slice(0, 12), sdk: "0.3.304", codex: null },
         ],
       }),
-    );
+      expected: "ok   Running bridges: pid 7 since",
+    },
+    {
+      name: "current when HEAD moved but its start line names the same commit",
+      overrides: () => ({
+        head: { commit: COMMIT, branch: "main", movedAtMs: NOW - 1000 },
+        bridges: { mine: [{ pid: 7, startedAtMs: NOW - 60_000 }], others: 0 },
+        loggedStarts: [
+          { pid: 7, commit: COMMIT.slice(0, 12), sdk: "0.3.304", codex: null },
+        ],
+      }),
+      expected: "ok   Running bridges",
+    },
+    {
+      name: "stale when HEAD moved after it started and it logged no start",
+      overrides: () => ({
+        head: { commit: COMMIT, branch: "main", movedAtMs: NOW - 1000 },
+        bridges: { mine: [{ pid: 7, startedAtMs: NOW - 60_000 }], others: 0 },
+      }),
+      expected: "warn Running bridges",
+    },
+  ])("reports a running bridge as $name", ({ overrides, expected }) => {
+    const report = formatFeedback(facts(overrides()));
 
-    expect(report).toContain("ok   Running bridges: pid 7 since");
+    expect(report).toContain(expected);
+  });
+
+  test("warns about bridges running from another harnexus checkout", () => {
+    const report = formatFeedback(facts({ bridges: { mine: [], others: 1 } }));
+
     expect(report).toContain(
       "warn Other bridges: 1 running from another harnexus checkout",
     );
@@ -233,31 +258,6 @@ describe("formatFeedback", () => {
 
     expect(unread).toContain("launchd could not be read");
     expect(none).toContain("nothing registered with launchd");
-  });
-
-  test("does not take a commit on HEAD for older code when the bridge logged the same commit", () => {
-    const report = formatFeedback(
-      facts({
-        head: { commit: COMMIT, branch: "main", movedAtMs: NOW - 1000 },
-        bridges: { mine: [{ pid: 7, startedAtMs: NOW - 60_000 }], others: 0 },
-        loggedStarts: [
-          { pid: 7, commit: COMMIT.slice(0, 12), sdk: "0.3.304", codex: null },
-        ],
-      }),
-    );
-
-    expect(report).toContain("ok   Running bridges");
-  });
-
-  test("takes HEAD's move after a bridge that logged no start for older code", () => {
-    const report = formatFeedback(
-      facts({
-        head: { commit: COMMIT, branch: "main", movedAtMs: NOW - 1000 },
-        bridges: { mine: [{ pid: 7, startedAtMs: NOW - 60_000 }], others: 0 },
-      }),
-    );
-
-    expect(report).toContain("warn Running bridges");
   });
 
   test("tells a log that starts after the window from one read only in part", () => {
