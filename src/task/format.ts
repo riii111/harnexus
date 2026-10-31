@@ -37,7 +37,6 @@ export const detail = (text: string) =>
   // A child's output is repeated in an error only as far as it names the cause.
   text.trim().slice(0, 500);
 
-// Fills a template's named fields.
 export const formatTemplate = (
   template: string,
   fields: Record<string, string>,

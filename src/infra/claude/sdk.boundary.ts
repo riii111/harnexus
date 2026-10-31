@@ -283,8 +283,9 @@ export const readSubagentMessages = (
 export const closeQuery = (query: ClaudeQuery) => {
   try {
     query.close();
+  } catch {
     // Closing kills the Claude process, and a failure there leaves nothing the caller can do.
-  } catch {}
+  }
 };
 
 const withinTime = async <T>(pending: Promise<T>, timeoutMs: number) => {

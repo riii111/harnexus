@@ -81,7 +81,6 @@ const prepareCheckout = async (
   return Result.ok();
 };
 
-// Returns the checkout to its last commit.
 const cleanCheckout = async (
   dir: string,
   env: Record<string, string | undefined>,

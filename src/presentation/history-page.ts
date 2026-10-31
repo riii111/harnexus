@@ -190,6 +190,7 @@ const startOf = <T>(
 ) => {
   const inclusive = cursor.startsWith(AT);
   if (!inclusive && !cursor.startsWith(AFTER)) return null;
+  // An id stays put as the conversation grows, so turn and item cursors name ids rather than positions.
   const id = cursor.slice(inclusive ? AT.length : AFTER.length);
   const index = entries.findIndex((entry) => idOf(entry) === id);
   if (index === -1) return null;
@@ -203,7 +204,6 @@ const pageSize = (limit: number | null, available: number) =>
   // Without a limit the whole rest is one page, as the history is already in memory.
   limit === null ? available : Math.max(1, Math.floor(limit));
 
-// Cursors name a turn or item id, which stays put as the conversation grows, rather than a position.
 const AT = "at:";
 const AFTER = "after:";
 const BEFORE = "before:";
