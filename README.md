@@ -112,6 +112,7 @@ Start a new Claude chat and send:
 ```
 
 The session id or its `claude.ai/code/...` URL both work.
+When a linked session starts another one with `create_session`, such as a worker, the bridge opens a chat for it in the same project, titled `Cloud｜<its title>`, the first time a copy shows the call's result; a session started before the chat was linked is left to you, and one already linked keeps its chat.
 An agent in another chat can open such a chat for you with `harnexus-task cloud --link <id or URL> --project <projectId> [--title T]`, which starts a new Claude chat in that project whose first message is `/cloud <id>`, and prints its `threadId`.
 The chat then shows the session's conversation; what you send there goes to the session, and its replies appear as they are copied.
 

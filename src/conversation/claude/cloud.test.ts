@@ -30,6 +30,66 @@ import {
 
 const CLOUD_ID = "session_01NfjPqrX1AK5RmKyV182VYD";
 
+describe("createCloudRuntime child sessions", () => {
+  const CHILD = "session_01NfjPqs5GNSgknfAaJ3mdYA";
+  const started = (id: string) =>
+    JSON.stringify({ ccr: { id, title: "worker" } });
+
+  test("opens a chat for a session the linked one started after the app was shown, once", async () => {
+    const env = linked({
+      copies: [
+        [
+          prompt("p0", "earlier"),
+          endReply("r0", "ok"),
+          prompt("p1", "start a worker"),
+          reply(
+            "a1",
+            "m1",
+            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+            "tool_use",
+          ),
+          toolResult("u1", "t1", started(CHILD)),
+          endReply("a2", "started"),
+        ],
+      ],
+      shown: "r0",
+    });
+    const turn = env.turn("start a worker");
+
+    await env.runtime.run(turn.running);
+    await env.tick();
+
+    expect(env.children).toEqual([
+      { parent: "thread-1", child: { sessionId: CHILD, title: "worker" } },
+    ]);
+  });
+
+  test("leaves a session started before the app was shown to the user", async () => {
+    const env = linked({
+      copies: [
+        [
+          reply(
+            "a1",
+            "m1",
+            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+            "tool_use",
+          ),
+          toolResult("u1", "t1", started(CHILD)),
+          endReply("a2", "started"),
+          prompt("p1", "hi"),
+          endReply("a3", "hello"),
+        ],
+      ],
+      shown: "a2",
+    });
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+
+    expect(env.children).toEqual([]);
+  });
+});
+
 describe("createCloudRuntime /cloud", () => {
   test("links an empty thread to the session, then replays its conversation after the reply", async () => {
     const env = setup({
@@ -876,6 +936,10 @@ const setup = ({
     innerRuns,
     ownStarts,
     copyCalls: 0,
+    children: [] as {
+      parent: string;
+      child: { sessionId: string; title: string | null };
+    }[],
     // The clock moves by the waits between copies, which are kept in order, and by each copy.
     clock: 1_000,
     waits: [] as number[],
@@ -1012,6 +1076,10 @@ const setup = ({
       discarded.push(copy);
     },
     replayHistory: async (_threadId, copy) => [{ replayOf: copy }],
+    openChild: async (parent, child) => {
+      env.children.push({ parent, child });
+      return "done";
+    },
     send: (message) => sent.push(message),
     log: (event) => events.push(event),
     now: () => env.clock,
