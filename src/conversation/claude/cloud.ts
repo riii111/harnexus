@@ -579,11 +579,11 @@ export const createCloudRuntime = <Tag extends string>(
       }
       openingChildren.add(child.sessionId);
       unopenedChildren.delete(child.sessionId);
-      // A chat the app did not open is kept apart, since the record it came from may already be behind what was shown, and a later copy of the same parent tries it again.
+      // A chat the app surely did not open is kept apart, since the record it came from may already be behind what was shown, and a later copy of the same parent tries it again.
       void openChild(threadId, child)
         .catch(() => "threw")
         .then((outcome) => {
-          if (outcome !== "done") {
+          if (NOT_OPENED.has(outcome)) {
             openingChildren.delete(child.sessionId);
             unopenedChildren.set(child.sessionId, { parent: threadId, child });
           }
@@ -880,6 +880,15 @@ const COPY_STOPPED =
   "copies of this chat stopped because one may have run a model turn; restart harnexus after checking bun run doctor";
 
 const COPY_UNREADABLE = "the copy of the Cloud session could not be read";
+
+// Outcomes that mean no chat was made; any other, such as a chat whose first turn was refused or an unknown one, is never made again.
+const NOT_OPENED = new Set([
+  "not_sent",
+  "rejected",
+  "invalid",
+  "no_project",
+  "no_parent",
+]);
 
 const BACK_TO_BACK_FOR_MS = 20_000;
 

@@ -138,6 +138,39 @@ describe("createCloudRuntime child sessions", () => {
     ]);
   });
 
+  test.each([
+    "first_turn_refused",
+    "model_mismatch",
+    "unknown",
+  ])("never opens a chat again after %s, since one may exist", async (outcome) => {
+    const env = linked({
+      copies: [
+        [
+          prompt("p0", "earlier"),
+          endReply("r0", "ok"),
+          prompt("p1", "start a worker"),
+          reply(
+            "a1",
+            "m1",
+            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+            "tool_use",
+          ),
+          toolResult("u1", "t1", started(CHILD)),
+          endReply("a2", "started"),
+        ],
+      ],
+      shown: "r0",
+    });
+    env.childOutcomes.push(outcome);
+    await env.runtime.run(env.turn("start a worker").running);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await env.runtime.run(env.turn("again").running);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(env.children).toHaveLength(1);
+  });
+
   test("leaves a session started before the app was shown to the user", async () => {
     const env = linked({
       copies: [
