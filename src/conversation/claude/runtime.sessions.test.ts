@@ -485,6 +485,33 @@ describe("session ids", () => {
       at: "kept-record",
     });
   });
+
+  test("resumes from the session id Claude reported when the turn failed and saving it failed", async () => {
+    const first = fakeClaude(SUBSCRIPTION);
+    const second = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings, events } = await harness([first, second], {
+      files: {
+        writeState: async (target, content) =>
+          content.includes('"se-1"')
+            ? diskFull(target)
+            : writeFileAtomic(target, content),
+      },
+    });
+
+    turns.startTurn(turnStart(10, "hello"), undefined);
+    await until(() => first.prompted());
+    first.emit(sdk(answer("msg-1", "partial")));
+    first.fail(new Error("socket closed"));
+    await until(() => turnCompleted(sent) !== undefined);
+    await completeTurn(turns, sent, second, 11);
+
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "session_not_saved",
+      error: "StatePersistFailed",
+    });
+    expect(settings[1]).toMatchObject({ resume: "se-1" });
+  });
 });
 
 describe("a fork of a Claude thread", () => {
