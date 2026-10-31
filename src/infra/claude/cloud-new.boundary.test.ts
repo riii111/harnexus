@@ -42,6 +42,33 @@ describe("startCloudSession", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
   });
 
+  test("waits for the whole session id when it is printed in pieces", async () => {
+    const { file, root } = await fakeClaude(
+      `printf 'View: https://claude.ai/code/session_01AbCdEf'; sleep 0.5; printf 'GhIjKl\\r\\n'`,
+    );
+
+    const run = await startCloudSession(file, "summarize it", {
+      cwd: root,
+      env: { PATH: process.env.PATH },
+    });
+
+    expect(run.unwrap().sessionId).toBe("session_01AbCdEfGhIjKl");
+  });
+
+  test("fails without terminal colors when claude prints no session in time", async () => {
+    const { file, root } = await fakeClaude(
+      `printf '\\033[31mStill starting\\033[0m\\n'`,
+    );
+
+    const run = await startCloudSession(file, "summarize it", {
+      cwd: root,
+      env: { PATH: process.env.PATH },
+      timeoutMs: 1_000,
+    });
+
+    expect(run.isErr() && run.error.message).toBe("Still starting");
+  });
+
   test("says when claude asks to trust the folder", async () => {
     const { file, root } = await fakeClaude(
       `printf 'Quick safety check: Is this a project you created or one you trust?\\n'`,

@@ -34,7 +34,12 @@ export const startCloudSession = (
             : ["-q", "-e", "-c", command.map(quote).join(" "), "/dev/null"];
         const child = spawn("script", args, {
           cwd,
-          env: { ...env, TERM: env.TERM ?? "xterm-256color" },
+          env: {
+            ...env,
+            TERM: env.TERM ?? "xterm-256color",
+            // util-linux script runs the command line with $SHELL, which the quoting is written for.
+            ...(platform === "darwin" ? {} : { SHELL: "/bin/sh" }),
+          },
           stdio: ["pipe", "pipe", "pipe"],
           detached: true,
         });
@@ -52,7 +57,7 @@ export const startCloudSession = (
             finish(() =>
               reject(
                 new Error(
-                  lastLine(seen) ??
+                  lastLine(withoutEscapes(seen)) ??
                     "claude --cloud printed no session before the timeout",
                 ),
               ),
@@ -81,7 +86,7 @@ export const startCloudSession = (
         child.stdout.on("data", read);
         child.stderr.on("data", read);
         child.on("error", (error) => finish(() => reject(error)));
-        child.on("exit", () =>
+        child.on("close", () =>
           finish(() =>
             reject(
               new Error(
@@ -132,7 +137,7 @@ const lastLine = (text: string) =>
     .at(-1) ?? null;
 
 const VIEW =
-  /View:\s*https:\/\/claude\.ai\/code\/((?:session|cse)_[A-Za-z0-9]{8,64})/;
+  /View:\s*https:\/\/claude\.ai\/code\/((?:session|cse)_[A-Za-z0-9]{8,64})(?=[^A-Za-z0-9])/;
 const CREATED = /Created cloud session:\s*([^\n]*)/;
 const TRUST_PROMPT = /Is this a project you created or one you trust\?/;
 const OUTPUT_KEPT = 64 * 1024;
