@@ -28,28 +28,14 @@ describe("detectEnvironment", () => {
   test.each([
     { name: "explicit cloud", env: { HARNEXUS_EXECUTION_ENV: "cloud" } },
     { name: "explicit local", env: { HARNEXUS_EXECUTION_ENV: "local" } },
+    {
+      name: "explicit local over the Cloud hint",
+      env: { HARNEXUS_EXECUTION_ENV: "local", CODEX_ENVIRONMENT_ID: "env_1" },
+    },
   ])("takes $name", async ({ env }) => {
     const found = (await detectEnvironment(env)).unwrap();
     expect(found.environment).toBe(env.HARNEXUS_EXECUTION_ENV as "cloud");
     expect(found.source).toBe("explicit");
-  });
-
-  test("lets the explicit value win over the Cloud hint", async () => {
-    const found = (
-      await detectEnvironment({
-        HARNEXUS_EXECUTION_ENV: "local",
-        CODEX_ENVIRONMENT_ID: "env_1",
-      })
-    ).unwrap();
-    expect(found.environment).toBe("local");
-  });
-
-  test("rejects an unknown explicit value", async () => {
-    const found = await detectEnvironment({ HARNEXUS_EXECUTION_ENV: "Cloud" });
-    expect(found.isErr()).toBe(true);
-    expect(found.isErr() && found.error.message).toContain(
-      "must be cloud or local",
-    );
   });
 
   test("reads a nonempty CODEX_ENVIRONMENT_ID as Cloud and names it a guess without printing it", async () => {
@@ -89,18 +75,24 @@ describe("detectEnvironment", () => {
   });
 
   test.each([
-    { value: "false" },
-    { value: "" },
-  ])("does not read CLAUDE_CODE_REMOTE=$value as Cloud", async ({ value }) => {
+    { name: "no variable and no socket", env: {} },
+    { name: "CLAUDE_CODE_REMOTE=false", env: { CLAUDE_CODE_REMOTE: "false" } },
+    { name: "an empty CLAUDE_CODE_REMOTE", env: { CLAUDE_CODE_REMOTE: "" } },
+    {
+      name: "an empty CODEX_ENVIRONMENT_ID",
+      env: { CODEX_ENVIRONMENT_ID: "" },
+    },
+  ])("is unknown, not Cloud or local, with $name", async ({ env }) => {
     const root = await scratch();
     const found = (
       await detectEnvironment({
-        CLAUDE_CODE_REMOTE: value,
+        ...env,
         HARNEXUS_CALL_SOCKET: join(root, "none.sock"),
       })
     ).unwrap();
 
     expect(found.environment).toBe("unknown");
+    expect(found.note).toContain("HARNEXUS_EXECUTION_ENV");
   });
 
   test("names the Cloud an explicit cloud runs on", async () => {
@@ -112,28 +104,6 @@ describe("detectEnvironment", () => {
     ).unwrap();
 
     expect(found).toMatchObject({ source: "explicit", host: "claude" });
-  });
-
-  test("does not read an empty CODEX_ENVIRONMENT_ID as Cloud", async () => {
-    const root = await scratch();
-    const found = (
-      await detectEnvironment({
-        CODEX_ENVIRONMENT_ID: "",
-        HARNEXUS_CALL_SOCKET: join(root, "none.sock"),
-      })
-    ).unwrap();
-    expect(found.environment).toBe("unknown");
-  });
-
-  test("is unknown, not local, when no variable and no socket exist", async () => {
-    const root = await scratch();
-    const found = (
-      await detectEnvironment({
-        HARNEXUS_CALL_SOCKET: join(root, "none.sock"),
-      })
-    ).unwrap();
-    expect(found.environment).toBe("unknown");
-    expect(found.note).toContain("HARNEXUS_EXECUTION_ENV");
   });
 
   test("is local once the harnexus socket accepts a connection", async () => {
@@ -164,7 +134,7 @@ describe("harnexus-task environment", () => {
   test("fails on an invalid explicit value", async () => {
     const run = await runTask(["environment"], {
       ...TASK_DEPS,
-      env: { HARNEXUS_EXECUTION_ENV: "both" },
+      env: { HARNEXUS_EXECUTION_ENV: "Cloud" },
     });
     expect(run.code).toBe(1);
     expect(run.stderr).toContain(

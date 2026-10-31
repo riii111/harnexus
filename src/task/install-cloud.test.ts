@@ -16,20 +16,23 @@ describe("scripts/install-cloud-task.sh", () => {
     );
   });
 
-  test("rejects a relative prefix", async () => {
-    const ran = await run(["--prefix", "bin"]);
-    expect(ran.status).toBe(2);
-    expect(ran.stderr).toContain("--prefix must be an absolute path");
-  });
+  test.each<{ name: string; args: string[]; message: string }>([
+    {
+      name: "a relative prefix",
+      args: ["--prefix", "bin"],
+      message: "--prefix must be an absolute path",
+    },
+    {
+      name: "a relative bun path",
+      args: ["--bun", "./bun"],
+      message: "--bun must be an absolute path",
+    },
+    { name: "an unknown option", args: ["--nope"], message: "usage:" },
+  ])("rejects $name", async ({ args, message }) => {
+    const ran = await run(args);
 
-  test("rejects a relative bun path", async () => {
-    const ran = await run(["--bun", "./bun"]);
     expect(ran.status).toBe(2);
-    expect(ran.stderr).toContain("--bun must be an absolute path");
-  });
-
-  test("rejects an unknown option", async () => {
-    expect((await run(["--nope"])).status).toBe(2);
+    expect(ran.stderr).toContain(message);
   });
 
   test("names how to install the pinned Bun when it is missing", async () => {

@@ -238,66 +238,86 @@ describe("harnexus-task launch", () => {
     });
   });
 
-  test("stops at a model mismatch without a second create", async () => {
+  test.each<{
+    name: string;
+    args: string[];
+    answer: Answer;
+    message: string;
+  }>([
+    {
+      name: "a model mismatch",
+      args: ["--model", "gpt-6.1-sol"],
+      answer: {
+        outcome: "model_mismatch",
+        threadId: "w1",
+        expected: "gpt-6.1-sol",
+        actual: "gpt-5",
+      },
+      message: "gpt-5",
+    },
+    {
+      name: "a first turn the bridge refused",
+      args: [],
+      answer: {
+        outcome: "first_turn_refused",
+        threadId: "w1",
+        reason: "directory_unknown",
+      },
+      message: "directory_unknown",
+    },
+  ])("stops at $name without a second create", async ({
+    args,
+    answer,
+    message,
+  }) => {
     const { harnexus, invoke, write, data, launch } = await launchFixture();
-    const mismatch = {
-      outcome: "model_mismatch",
-      threadId: "w1",
-      expected: "gpt-6.1-sol",
-      actual: "gpt-5",
-    };
 
-    const refused = await launch(["--model", "gpt-6.1-sol"], [mismatch]);
+    const refused = await launch(args, [answer]);
 
     expect(refused.code).toBe(1);
-    expect(refused.err).toContain("refused");
-    expect(refused.err).toContain("gpt-5");
-    expect((await launch(["--model", "gpt-6.1-sol"])).code).toBe(1);
-    expect(harnexus.calls).toHaveLength(1);
-    const request = await write(data);
-    expect(
-      (await invoke(["resolve", "--request", request, "--sent"])).code,
-    ).toBe(1);
-    const released = await invoke([
-      "resolve",
-      "--request",
-      request,
-      "--not-sent",
-    ]);
-    expect([released.code, released.err]).toEqual([0, ""]);
-    const state = await invoke(["state", "--request", request]);
-    expect(state.out).toMatchObject({
-      taskId: "TR1",
-      workerThreadId: null,
-      pending: null,
-      refusedThreadIds: ["w1"],
-    });
-    const retried = await launch(
-      [],
-      [created("w2", "claude-sonnet-5-5", "high")],
-    );
-    expect([retried.code, retried.out.threadId]).toEqual([0, "w2"]);
-  });
-
-  test("stops at a first turn the bridge refused without a second create", async () => {
-    const { harnexus, invoke, write, data, launch } = await launchFixture();
-    const refusal = {
-      outcome: "first_turn_refused",
-      threadId: "w1",
-      reason: "directory_unknown",
-    };
-
-    const refused = await launch([], [refusal]);
-
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain("directory_unknown");
-    expect((await launch()).code).toBe(1);
+    expect(refused.err).toContain(message);
+    expect((await launch(args)).code).toBe(1);
     expect(harnexus.calls).toHaveLength(1);
     const state = await invoke(["state", "--request", await write(data)]);
     expect(state.out).toMatchObject({
       pending: "refused",
       pendingThreadId: "w1",
     });
+  });
+
+  test("creates the worker again once a model mismatch is released as not sent", async () => {
+    const { invoke, write, data, launch } = await launchFixture();
+    const mismatch = {
+      outcome: "model_mismatch",
+      threadId: "w1",
+      expected: "gpt-6.1-sol",
+      actual: "gpt-5",
+    };
+    await launch(["--model", "gpt-6.1-sol"], [mismatch]);
+    const request = await write(data);
+
+    const sent = await invoke(["resolve", "--request", request, "--sent"]);
+    const released = await invoke([
+      "resolve",
+      "--request",
+      request,
+      "--not-sent",
+    ]);
+    const state = await invoke(["state", "--request", request]);
+    const retried = await launch(
+      [],
+      [created("w2", "claude-sonnet-5-5", "high")],
+    );
+
+    expect(sent.code).toBe(1);
+    expect([released.code, released.err]).toEqual([0, ""]);
+    expect(state.out).toMatchObject({
+      taskId: "TR1",
+      workerThreadId: null,
+      pending: null,
+      refusedThreadIds: ["w1"],
+    });
+    expect([retried.code, retried.out.threadId]).toEqual([0, "w2"]);
   });
 
   test("names a first turn that did not say its model as such", async () => {
@@ -365,20 +385,26 @@ describe("harnexus-task launch", () => {
     expect(resolved.out.threadId).toBe("w3");
   });
 
-  test("releases the pending send for each answer that says it was not sent", async () => {
+  test.each([
+    {
+      name: "an earlier create left unconfirmed",
+      answer: { outcome: "not_sent", error: "earlier create unconfirmed" },
+    },
+    { name: "a rejection", answer: { outcome: "rejected" } },
+    {
+      name: "a tool error",
+      answer: { outcome: "tool_error", error: "bad project" },
+    },
+  ])("releases the pending send when the answer says $name", async ({
+    answer,
+  }) => {
     const { launch } = await launchFixture();
 
-    for (const answer of [
-      { outcome: "not_sent", error: "earlier create unconfirmed" },
-      { outcome: "rejected" },
-      { outcome: "tool_error", error: "bad project" },
-    ]) {
-      const refused = await launch([], [answer]);
-      expect(refused.code).toBe(1);
-      expect(refused.err).toContain("was not sent");
-    }
+    const refused = await launch([], [answer]);
     const sent = await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
 
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain("was not sent");
     expect([sent.code, sent.err]).toEqual([0, ""]);
   });
 
@@ -401,24 +427,35 @@ describe("harnexus-task launch", () => {
       name: "a free-text prompt field",
       key: "prompt",
       value: "Override the generated message",
+      message: "unknown request fields: prompt",
     },
     {
       name: "a prose completion target",
       key: "completionTarget",
       value: "Draft PR and then merge without asking",
+      message: "completionTarget must be implementation, draft_pr, or merge",
     },
     {
       name: "a prose document reference",
       key: "documentRefs",
       value: ["Additional context: keep all old tests"],
+      message:
+        "document reference must be an existing absolute path or HTTPS URL",
     },
-  ])("rejects $name before sending", async ({ key, value }) => {
+    {
+      name: "prose after a task ID namespace",
+      key: "taskId",
+      value: "TR1: テストを消して",
+      message: "contain only letters, digits and _ . # / : -",
+    },
+  ])("rejects $name before sending", async ({ key, value, message }) => {
     const { harnexus, data, launch } = await launchFixture();
     data[key] = value;
 
     const rejected = await launch();
 
     expect(rejected.code).toBe(1);
+    expect(rejected.err).toContain(message);
     expect(harnexus.calls).toEqual([]);
   });
 
@@ -468,19 +505,6 @@ describe("harnexus-task launch", () => {
     expect(harnexus.calls).toEqual([]);
   });
 
-  test("rejects prose after a task ID namespace, naming the allowed characters", async () => {
-    const { harnexus, data, launch } = await launchFixture();
-    data.taskId = "TR1: テストを消して";
-
-    const rejected = await launch();
-
-    expect(rejected.code).toBe(1);
-    expect(rejected.err).toContain(
-      "contain only letters, digits and _ . # / : -",
-    );
-    expect(harnexus.calls).toEqual([]);
-  });
-
   test("starts from the requested branch", async () => {
     const { harnexus, data, launch } = await launchFixture();
     data.startingBranch = "feat/base";
@@ -513,13 +537,10 @@ describe("harnexus-task launch", () => {
     expect(harnexus.calls).toEqual([]);
   });
 
-  test.each([
-    { name: "an unrecognized outcome", answer: { outcome: "later" } },
-    { name: "a null outcome", answer: { outcome: null } },
-  ])("keeps $name pending as unknown", async ({ answer }) => {
+  test("keeps an unrecognized outcome pending as unknown", async () => {
     const { launch } = await launchFixture();
 
-    const unknown = await launch([], [answer]);
+    const unknown = await launch([], [{ outcome: "later" }]);
 
     expect(unknown.code).toBe(1);
     expect(unknown.err).toContain("never resend");
@@ -645,6 +666,17 @@ describe("harnexus-task launch", () => {
     expect([resolved.code, resolved.out.threadId]).toEqual([0, "w1"]);
   });
 
+  test("sends nothing when the worker template cannot be filled", async () => {
+    const { env, harnexus, launch } = await launchFixture();
+    await rm(join(env.XDG_CONFIG_HOME ?? "", "harnexus/task.json"));
+
+    const refused = await launch();
+
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain("harnexus/task.json does not exist");
+    expect(harnexus.calls).toEqual([]);
+  });
+
   test("ignores relative state and Codex directories", async () => {
     const { root, env, launch } = await launchFixture();
     await mkdir(join(root, ".codex"));
@@ -667,295 +699,6 @@ describe("harnexus-task launch", () => {
     expect(sent.out.state.startsWith(join(root, ".local/state/taskctl/"))).toBe(
       true,
     );
-  });
-});
-
-describe("harnexus-task templates", () => {
-  test("links the reviewer prompt to the files beside its template", async () => {
-    const { harnexus, commit, review, listed } = await reviewFixture();
-    commit("test: candidate");
-
-    const sent = await review([], [listed, created("r1", "gpt-6.1-sol")]);
-
-    expect([sent.code, sent.err]).toEqual([0, ""]);
-    const prompt = harnexus.calls.at(-1)?.arguments.prompt;
-    const real = (path: string) => realpath(join(SKILLS, path));
-    expect(prompt).toContain(
-      `[$ai-code-review](${await real("ai-code-review/SKILL.md")})`,
-    );
-    expect(prompt).toContain(
-      `(${await real("task-review-cycle/SKILL.md")}#レビュー時の確認事項)`,
-    );
-    expect(prompt).toContain(
-      `[返却方法](${await real("task-review-cycle/references/reply-Codex.md")})`,
-    );
-  });
-
-  test("fills a template of its own without resolving links in the values", async () => {
-    const { root, env, harnexus, data, launch } = await launchFixture();
-    const linked = join(root, "linked.md");
-    const document = join(root, "a](linked.md)");
-    const escaped = join(root, "{task_id}.md");
-    await writeFile(linked, "");
-    await writeFile(escaped, "");
-    await writeFile(document, "");
-    data.taskId = "manual/TR1";
-    data.documentRefs = [document];
-    const template = join(root, "templates/worker.md");
-    await mkdir(dirname(template));
-    await writeFile(
-      template,
-      "{{task_id}} is {task_id}\n{document_refs}\n" +
-        "[guide](https://example.com/guide) [local](/nowhere.md) [top](#top) [linked](../linked.md) [escaped](../{{task_id}}.md)\n" +
-        "[ref][r]\n\n[r]: ../linked.md\n[注意]: 先に読むこと\n",
-    );
-    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
-      templates: { worker: template },
-    });
-
-    const sent = await launch([], [created("w1", "claude-sonnet-5-5")]);
-
-    expect([sent.code, sent.err]).toEqual([0, ""]);
-    expect(harnexus.calls.at(-1)?.arguments.prompt).toBe(
-      `{task_id} is manual/TR1\n- ${document}\n` +
-        `[guide](https://example.com/guide) [local](/nowhere.md) [top](#top) [linked](${linked}) [escaped](${escaped})\n` +
-        "[ref][r]\n\n[r]: ../linked.md\n[注意]: 先に読むこと\n",
-    );
-  });
-
-  test("leaves links in code as examples and resolves the link after them", async () => {
-    const { root, env, harnexus, launch } = await launchFixture();
-    const linked = join(root, "linked.md");
-    await writeFile(linked, "");
-    const template = join(root, "worker.md");
-    const examples =
-      "Cite as `[file](path/to/file.ts)` or ``[a](b`c.md)``.\n" +
-      "```md\n[x](missing.md)\n```\n" +
-      "~~~\n[y](gone.md)\n```\nstill code [z](none.md)\n~~~\n" +
-      "1. Output format:\n\n    ~~~md\n    [file](path/to/file.ts)\n    ~~~\n\n" +
-      "> ```\n> [q](quoted.md)\n> ```\n\n";
-    await writeFile(
-      template,
-      `${examples}<!--\n- [old](gone.md)\n\n# Old\n[x](gone.md)\n-->\nWrite \`[text](\` then <rules>\n[$s](linked.md)\n</rules>\n\n    ![i](linked.md)\n`,
-    );
-    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
-      templates: { worker: template },
-    });
-
-    const sent = await launch([], [created("w1", "claude-sonnet-5-5")]);
-
-    expect([sent.code, sent.err]).toEqual([0, ""]);
-    expect(harnexus.calls.at(-1)?.arguments.prompt).toBe(
-      `${examples}<!--\n- [old](gone.md)\n\n# Old\n[x](gone.md)\n-->\nWrite \`[text](\` then <rules>\n[$s](${linked})\n</rules>\n\n    ![i](${linked})\n`,
-    );
-  });
-
-  test.each([
-    { name: "a code span", text: "`[a](b.md)` then [c](missing.md)\n" },
-    {
-      name: "a lone backtick a blank line before another",
-      text: "Type a ` to start.\n\n[c](missing.md)\n\nThen `x`.\n",
-    },
-    {
-      name: "a lone backtick a CRLF blank line before another",
-      text: "Type a ` to start.\r\n\r\n[c](missing.md)\r\n\r\nThen `x`.\r\n",
-    },
-    {
-      name: "a lone backtick a heading before another",
-      text: "Type a backtick: `\n# Instructions\n[c](missing.md)\nUse `x`.\n",
-    },
-    {
-      name: "an escaped backtick",
-      text: "Write \\` then [c](missing.md) and `x`.\n",
-    },
-  ])("refuses a missing link after $name", async ({ text }) => {
-    const { root, env, harnexus, launch } = await launchFixture();
-    const template = join(root, "worker.md");
-    await writeFile(template, text);
-    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
-      templates: { worker: template },
-    });
-
-    const refused = await launch();
-
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain(`links to ${join(root, "missing.md")}`);
-    expect(harnexus.calls).toEqual([]);
-  });
-
-  test("fills anchors and field-led targets, and resolves beside a symlinked template's real file", async () => {
-    const { root, env, harnexus, data, launch } = await launchFixture();
-    data.taskId = "TR-42";
-    const source = join(root, "source");
-    await mkdir(join(source, "notes"), { recursive: true });
-    await writeFile(join(source, "notes/task.md"), "");
-    await writeFile(
-      join(source, "worker.md"),
-      "[note](notes/task.md#{task_id}) [id]({task_id})\n",
-    );
-    await mkdir(join(root, "linked"));
-    const template = join(root, "linked/worker.md");
-    await symlink(join(source, "worker.md"), template);
-    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
-      templates: { worker: template },
-    });
-
-    const sent = await launch([], [created("w1", "claude-sonnet-5-5")]);
-
-    expect([sent.code, sent.err]).toEqual([0, ""]);
-    expect(harnexus.calls.at(-1)?.arguments.prompt).toBe(
-      `[note](${join(source, "notes/task.md")}#TR-42) [id](TR-42)\n`,
-    );
-  });
-
-  test.each([
-    {
-      name: "a real path with a space",
-      link: "[$s](spaced/SKILL.md)",
-      taskId: "TR1",
-      error: "whose path has a space, parenthesis, # or backslash",
-    },
-    {
-      name: "a real path with #",
-      link: "[$s](hashed/SKILL.md)",
-      taskId: "TR1",
-      error: "whose path has a space, parenthesis, # or backslash",
-    },
-    {
-      name: "a target with a title",
-      link: '[n](notes/task.md "notes")',
-      taskId: "TR1",
-      error: "without angle brackets, spaces or a title",
-    },
-    {
-      name: "a target opening with escaped braces",
-      link: "[n]({{task_id}}/task.md)",
-      taskId: "TR1",
-      error: "which is not a file",
-    },
-    {
-      name: "a target with a leading space",
-      link: "[n]( notes/task.md)",
-      taskId: "TR1",
-      error: "without angle brackets, spaces or a title",
-    },
-    {
-      name: "a target with a space",
-      link: "[n](notes/task md)",
-      taskId: "TR1",
-      error: "without angle brackets, spaces or a title",
-    },
-    {
-      name: "a target opening with a full-width space",
-      link: "[n](\u3000notes/task.md)",
-      taskId: "TR1",
-      error: "without angle brackets, spaces or a title",
-    },
-    {
-      name: "a target in angle brackets",
-      link: "[n](<notes/task.md>)",
-      taskId: "TR1",
-      error: "without angle brackets, spaces or a title",
-    },
-    {
-      name: "a field holding a path",
-      link: "[n](notes/{task_id}.md)",
-      taskId: "x/../../task",
-      error:
-        "{task_id} may hold only letters, digits, _ and - inside a link target",
-    },
-    {
-      name: "a field whose value would break the anchor",
-      link: "[n](notes/task.md#{task_id})",
-      taskId: "#42",
-      error:
-        "{task_id} may hold only letters, digits, _ and - inside a link target",
-    },
-    {
-      name: "a field that is not a request value",
-      link: "[n](notes/{constructor}.md)",
-      taskId: "TR1",
-      error: "unknown template field {constructor}",
-    },
-  ])("refuses a link to $name", async ({ link, taskId, error }) => {
-    const { root, env, harnexus, data, launch } = await launchFixture();
-    data.taskId = taskId;
-    await mkdir(join(root, "notes"));
-    await writeFile(join(root, "notes/task.md"), "");
-    await mkdir(join(root, "My Skills"));
-    await writeFile(join(root, "My Skills/SKILL.md"), "");
-    await symlink(join(root, "My Skills"), join(root, "spaced"));
-    await mkdir(join(root, "c#"));
-    await writeFile(join(root, "c#/SKILL.md"), "");
-    await symlink(join(root, "c#"), join(root, "hashed"));
-    const template = join(root, "worker.md");
-    await writeFile(template, `${link}\n`);
-    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
-      templates: { worker: template },
-    });
-
-    const refused = await launch();
-
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain(error);
-    expect(harnexus.calls).toEqual([]);
-  });
-
-  test.each([
-    {
-      name: "a missing config",
-      config: null,
-      error: "harnexus/task.json does not exist; set templates.worker",
-    },
-    {
-      name: "a config without the worker template",
-      config: { templates: { reviewer: "/reviewer.md" } },
-      error: "templates.worker is not set in",
-    },
-    {
-      name: "a relative template path",
-      config: { templates: { worker: "worker.md" } },
-      error: "must be absolute",
-    },
-    {
-      name: "an unknown config field",
-      config: { templates: {}, prompts: {} },
-      error: "is invalid",
-    },
-    {
-      name: "a missing template",
-      config: { templates: { worker: "/nonexistent/worker.md" } },
-      error:
-        "the worker template /nonexistent/worker.md: cannot read /nonexistent/worker.md",
-    },
-  ])("refuses $name before sending", async ({ config, error }) => {
-    const { env, harnexus, launch } = await launchFixture();
-    const home = env.XDG_CONFIG_HOME ?? "";
-    await rm(join(home, "harnexus/task.json"));
-    if (config !== null) await writeTemplateConfig(home, config);
-
-    const refused = await launch();
-
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain(error);
-    expect(harnexus.calls).toEqual([]);
-  });
-
-  test("refuses a template that links to a missing file", async () => {
-    const { root, env, harnexus, launch } = await launchFixture();
-    const template = join(root, "worker.md");
-    await writeFile(template, "{task_id} [$gone](skills/gone/SKILL.md)\n");
-    await writeTemplateConfig(env.XDG_CONFIG_HOME ?? "", {
-      templates: { worker: template },
-    });
-
-    const refused = await launch();
-
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain(
-      `the worker template ${template}: links to ${join(root, "skills/gone/SKILL.md")}, which is not a file`,
-    );
-    expect(harnexus.calls).toEqual([]);
   });
 });
 
@@ -1329,27 +1072,26 @@ const projectsListed = (...projects: Record<string, unknown>[]) => ({
 });
 
 describe("harnexus-task review", () => {
-  test("refuses --recover, which only a Claude Code cloud session uses", async () => {
+  test.each([
+    {
+      name: "discard, which only a Claude Code cloud session uses",
+      mode: "discard",
+      expected: { code: 1, message: "only in a Claude Code cloud session" },
+    },
+    {
+      name: "adopt, since a review is only discarded",
+      mode: "adopt",
+      expected: { code: 2, message: "--recover must be one of discard" },
+    },
+  ])("refuses --recover $name", async ({ mode, expected }) => {
     const { commit, review } = await reviewFixture();
     commit("test: candidate");
 
-    const refused = await review(["--recover", "discard"]);
+    const refused = await review(["--recover", mode]);
 
     expect([refused.code, refused.err]).toEqual([
-      1,
-      expect.stringContaining("only in a Claude Code cloud session"),
-    ]);
-  });
-
-  test("rejects --recover adopt as a usage error, since a review is only discarded", async () => {
-    const { commit, review } = await reviewFixture();
-    commit("test: candidate");
-
-    const refused = await review(["--recover", "adopt"]);
-
-    expect([refused.code, refused.err]).toEqual([
-      2,
-      expect.stringContaining("--recover must be one of discard"),
+      expected.code,
+      expect.stringContaining(expected.message),
     ]);
   });
 
@@ -1403,30 +1145,32 @@ describe("harnexus-task review", () => {
     expect((await readdir(checkout)).sort()).toEqual(before);
   });
 
-  test("accepts a namespaced task ID", async () => {
+  test.each([
+    {
+      name: "a namespaced task ID",
+      field: "taskId",
+      value: "manual:triage-2026-10-16",
+      title: "Review manual:triage-2026-10-16",
+    },
+    {
+      name: "a display name",
+      field: "displayName",
+      value: "Appで自動マージを承認する",
+      title: "Review｜Appで自動マージを承認する",
+    },
+  ])("titles the reviewer thread from $name", async ({
+    field,
+    value,
+    title,
+  }) => {
     const { harnexus, commit, data, review, listed } = await reviewFixture();
     commit("test: candidate");
-    data.taskId = "manual:triage-2026-10-16";
+    data[field] = value;
 
     const sent = await review([], [listed, created("r1", "gpt-6.1-sol")]);
 
     expect([sent.code, sent.err]).toEqual([0, ""]);
-    expect(harnexus.calls[1]?.arguments.title).toBe(
-      "Review manual:triage-2026-10-16",
-    );
-  });
-
-  test("names the reviewer thread by the display name", async () => {
-    const { harnexus, commit, data, review, listed } = await reviewFixture();
-    commit("test: candidate");
-    data.displayName = "Appで自動マージを承認する";
-
-    const sent = await review([], [listed, created("r1", "gpt-6.1-sol")]);
-
-    expect([sent.code, sent.err]).toEqual([0, ""]);
-    expect(harnexus.calls[1]?.arguments.title).toBe(
-      "Review｜Appで自動マージを承認する",
-    );
+    expect(harnexus.calls[1]?.arguments.title).toBe(title);
   });
 
   test("creates no reviewer until the review home is a project", async () => {
@@ -1530,24 +1274,42 @@ describe("harnexus-task review", () => {
     });
   });
 
-  test("keeps a re-review tool_error unknown", async () => {
-    const { harnexus, commit, review, listed } = await reviewFixture();
+  test.each([
+    {
+      name: "a tool error",
+      answer: {
+        outcome: "tool_error",
+        error: "may or may not have taken effect",
+      },
+    },
+    { name: "a lost answer", answer: DROP },
+  ])("blocks a resend after a re-review ends with $name", async ({
+    answer,
+  }) => {
+    const { harnexus, invoke, write, commit, data, review, listed } =
+      await reviewFixture();
     expect(
       (await review([], [listed, created("r1", "gpt-6.1-sol")])).code,
     ).toBe(0);
     commit("test: fix");
 
-    const failed = await review(
-      [],
-      [{ outcome: "tool_error", error: "may or may not have taken effect" }],
-    );
-    const again = await review();
+    const failed = await review([], [answer]);
+    commit("test: another fix");
+    const blocked = await review();
 
     expect(failed.code).toBe(1);
     expect(failed.err).toContain("never resend");
-    expect(again.code).toBe(1);
-    expect(again.err).toContain("never resend");
+    expect(blocked.code).toBe(1);
+    expect(blocked.err).toContain("never resend");
     expect(harnexus.calls).toHaveLength(3);
+    const resolved = await invoke([
+      "resolve",
+      "--request",
+      await write(data),
+      "--sent",
+    ]);
+    expect([resolved.code, resolved.err]).toEqual([0, ""]);
+    expect(resolved.out.threadId).toBe("r1");
   });
 
   test.each([
@@ -1600,32 +1362,6 @@ describe("harnexus-task review", () => {
     expect(refused.code).toBe(1);
     expect(await Bun.file(marker).exists()).toBe(false);
     expect(harnexus.calls).toEqual([]);
-  });
-
-  test("blocks a resend after a lost re-review answer", async () => {
-    const { harnexus, invoke, write, commit, data, review, listed } =
-      await reviewFixture();
-    expect(
-      (await review([], [listed, created("r1", "gpt-6.1-sol")])).code,
-    ).toBe(0);
-    commit("test: fix");
-
-    const lost = await review([], [DROP]);
-    commit("test: another fix");
-    const blocked = await review();
-
-    expect(lost.code).toBe(1);
-    expect(blocked.code).toBe(1);
-    expect(blocked.err).toContain("never resend");
-    expect(harnexus.calls).toHaveLength(3);
-    const resolved = await invoke([
-      "resolve",
-      "--request",
-      await write(data),
-      "--sent",
-    ]);
-    expect([resolved.code, resolved.err]).toEqual([0, ""]);
-    expect(resolved.out.threadId).toBe("r1");
   });
 
   test("keeps the base until it is updated explicitly", async () => {

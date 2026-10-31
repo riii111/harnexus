@@ -599,8 +599,9 @@ describe("keeping the thread on the server's disk", () => {
 describe("releaseThread", () => {
   test("forgets the record a finished turn named but keeps the session once the thread is archived", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, events, runtime } = await harness([claude]);
+    const { turns, sent, events, runtime, idled } = await harness([claude]);
     await completeTurn(turns, sent, claude, 10);
+    await until(() => idled.includes(THREAD));
     expect(runtime.recordOf(THREAD, "turn-1")).not.toBeNull();
 
     turns.releaseThread(THREAD, "archived");
@@ -617,8 +618,9 @@ describe("releaseThread", () => {
 
   test("forgets the record and closes the session once the thread is deleted", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, runtime } = await harness([claude]);
+    const { turns, sent, runtime, idled } = await harness([claude]);
     await completeTurn(turns, sent, claude, 10);
+    await until(() => idled.includes(THREAD));
 
     turns.releaseThread(THREAD, "deleted");
 
