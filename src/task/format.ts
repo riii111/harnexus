@@ -33,14 +33,15 @@ export const jsonEqual = (a: unknown, b: unknown) => Bun.deepEquals(a, b, true);
 export const asText = (value: unknown) =>
   typeof value === "string" ? value : JSON.stringify(value ?? null);
 
-// A child's output is repeated in an error only as far as it names the cause.
-export const detail = (text: string) => text.trim().slice(0, 500);
+export const detail = (text: string) =>
+  // A child's output is repeated in an error only as far as it names the cause.
+  text.trim().slice(0, 500);
 
-// Named fields only, and an unknown field or stray brace is an error, so a changed template never sends a half-filled prompt.
-// refuse names what is wrong with a value at that place, or returns null to accept it.
+// Fills a template's named fields.
 export const formatTemplate = (
   template: string,
   fields: Record<string, string>,
+  // Names what is wrong with a value at that place, or returns null to accept it.
   refuse: (value: string) => string | null = () => null,
 ): Result<string, TaskFailed> => {
   let problem: string | null = null;
@@ -62,5 +63,6 @@ export const formatTemplate = (
       return value ?? match;
     },
   );
+  // An unknown field or a stray brace is an error, so a changed template never sends a half-filled prompt.
   return problem === null ? Result.ok(text) : fail(problem);
 };

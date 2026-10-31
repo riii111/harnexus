@@ -99,12 +99,6 @@ const EXISTING: string[] = [
   "presentation/turn.ts#steeredTurn",
   "prwatch/store.ts#botKey",
   "prwatch/store.ts#recordSender",
-  "task/cli.ts#withoutName",
-  "task/cloud-review.ts#directory",
-  "task/format.ts#detail",
-  "task/request.ts#absoluteOr",
-  "task/templates.ts#templateConfigPath",
-  "task/watch-worker.ts#isPromptOf",
 ];
 
 const findCommentedShortFunctions = async (root: string) => {

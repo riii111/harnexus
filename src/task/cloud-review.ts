@@ -44,8 +44,8 @@ type CloudReviewArgs = {
 
 type CloudReviewDeps = { env: Env; saveJson: SaveJson; git: Git };
 
-// One reviewer per task and checkout, as in the app.
 const directory = (env: Env, checkout: string, taskId: string) =>
+  // One reviewer per task and checkout, as in the app.
   stateDirectory(env, "cloud-review", `${checkout}\0${taskId}`);
 
 type Reply = {
@@ -54,9 +54,9 @@ type Reply = {
   failure: string | null;
 };
 
-// codex exec --json prints one event per line: the thread it runs, each item, and how the turn ended.
 const replyOf = (stdout: string): Reply => {
   const reply: Reply = { threadId: null, answer: null, failure: null };
+  // codex exec --json prints one event per line: the thread it runs, each item, and how the turn ended.
   for (const line of stdout.split("\n")) {
     const parsed = parseJson(line);
     if (parsed.isErr() || !isObject(parsed.value)) continue;
@@ -267,7 +267,7 @@ const locked = (
     });
   });
 
-// In a Claude Code cloud session the reviewer is a Codex CLI run beside the worker, so review answers with its result instead of a chat in the app.
+// Reviews in a Claude Code cloud session with a Codex CLI run beside the worker, answering with its result instead of a chat in the app.
 export const cloudReview = (args: CloudReviewArgs, deps: CloudReviewDeps) =>
   Result.gen(async function* () {
     const data = yield* Result.await(

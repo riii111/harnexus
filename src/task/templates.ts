@@ -7,8 +7,9 @@ import { configHome, type Env, readJson, readText } from "./request.ts";
 
 type TemplateKind = "worker" | "reviewer";
 
-// Beside harnexus's other config, never in the repository or the working directory, so a sandboxed agent cannot pick the prompt a new chat receives.
-const templateConfigPath = (env: Env) => join(configHome(env), "task.json");
+const templateConfigPath = (env: Env) =>
+  // Beside harnexus's other config, never in the repository or the working directory, so a sandboxed agent cannot pick the prompt a new chat receives.
+  join(configHome(env), "task.json");
 
 const TEMPLATE_PATH = z
   .string()
@@ -48,11 +49,10 @@ const targets = (template: string) =>
       : [{ raw: match[1] ?? "", start: span[0], end: span[1] }];
   });
 
-// The candidates in a place Markdown reads as a link or image, so examples in code or comments and text that a block such as a heading splits are left alone.
-// Each whole target is swapped for a bare marker, so a target with spaces or brackets still counts here and is refused by the caller rather than slipping through.
-// Prompts wrap sections in tags and indent prose, so tags and indentation are read as text, where a link stays a link.
+// The link and image targets of a template, as Markdown reads them, so examples in code or comments and text that a block such as a heading splits are left alone.
 const links = (template: string) => {
   const candidates = targets(template);
+  // Each whole target is swapped for a bare marker, so a target with spaces or brackets still counts here and is refused by the caller rather than slipping through.
   const nonce = crypto.randomUUID().replaceAll("-", "");
   const markerOf = (index: number) => `hx${nonce}n${index}x`;
   let marked = "";
@@ -77,28 +77,28 @@ const links = (template: string) => {
       link: (children, { href }) => see(children, href),
       image: (children, { src }) => see(children, src),
     },
+    // Prompts wrap sections in tags and indent prose, so tags and indentation are read as text, where a link stays a link.
     { noHtmlBlocks: true, noIndentedCodeBlocks: true },
   );
   return candidates.filter((_, index) => seen.has(markerOf(index)));
 };
 
-// A value inside a target is a name, never a path, so none can lead the link to another folder or break it.
 const targetValue = (value: string) =>
+  // A value inside a target is a name, never a path, so none can lead the link to another folder or break it.
   /^[\p{L}\p{N}_-]+$/u.test(value)
     ? null
     : "may hold only letters, digits, _ and - inside a link target";
 
-// A target opening with a field is the value's to decide, as with {pr_url} or {checkout}.
 const isRelative = (path: string) =>
   path !== "" &&
   !path.startsWith("/") &&
+  // A target opening with a field is the value's to decide, as with {pr_url} or {checkout}.
   !(path.startsWith("{") && !path.startsWith("{{")) &&
   !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(path);
 
 const escapeBraces = (text: string) =>
   text.replaceAll("{", "{{").replaceAll("}", "}}");
 
-// Links are found before the request's values go into the text, so no value can add one.
 const resolveLinks = (
   template: string,
   path: string,
@@ -109,6 +109,7 @@ const resolveLinks = (
     const folder = dirname(await realPathOrSelf(path));
     let text = "";
     let last = 0;
+    // Links are found before the request's values go into the text, so no value can add one.
     for (const { raw, start, end } of links(template)) {
       const hash = raw.indexOf("#");
       const rawPath = hash === -1 ? raw : raw.slice(0, hash);
