@@ -27,24 +27,23 @@ type SavedAutomation = {
 };
 
 // The app's automation_update answers never say whose thread an automation wakes, so the file the app saves for it is the only record; null when it is missing.
-export const readAutomation = async (codexHome: string, id: string) => {
+export const readAutomation = (codexHome: string, id: string) => {
   const path = join(codexHome, "automations", id, "automation.toml");
-  const read = await readTextFileIfExists(path);
-  if (read.isErr()) return read;
-  const text = read.value;
-  if (text === null) return Result.ok(null);
-  return Result.try({
-    try: () => Bun.TOML.parse(text),
-    catch: (cause) =>
-      new AutomationUnparsable({ message: `cannot parse ${path}`, cause }),
-  }).map(
-    (parsed): SavedAutomation => ({
+  return Result.gen(async function* () {
+    const text = yield* Result.await(readTextFileIfExists(path));
+    if (text === null) return Result.ok<SavedAutomation | null>(null);
+    const parsed = yield* Result.try({
+      try: () => Bun.TOML.parse(text),
+      catch: (cause) =>
+        new AutomationUnparsable({ message: `cannot parse ${path}`, cause }),
+    });
+    return Result.ok<SavedAutomation | null>({
       kind: stringField(parsed, "kind"),
       targetThreadId: stringField(parsed, "target_thread_id"),
       name: stringField(parsed, "name"),
       prompt: stringField(parsed, "prompt"),
-    }),
-  );
+    });
+  });
 };
 
 export const listAutomationIds = async (codexHome: string) =>
@@ -61,44 +60,45 @@ export type CronRecord = ReturnType<typeof openCronRecord>;
 export const openCronRecord = (path: string) => {
   const queue = createSerialQueue();
 
-  const read = async () => {
-    const text = await readTextFileIfExists(path);
-    if (text.isErr()) return Result.err(text.error);
-    if (text.value === null) return Result.ok<string[]>([]);
-    const parsed = parseJson(text.value);
-    const ids =
-      parsed.isOk() &&
-      isObject(parsed.value) &&
-      parsed.value.version === CRON_RECORD_VERSION &&
-      Array.isArray(parsed.value.ids) &&
-      parsed.value.ids.every((id) => typeof id === "string")
-        ? (parsed.value.ids as string[])
-        : null;
-    return ids === null
-      ? Result.err(
-          new CronRecordCorrupt({
-            path,
-            message: `${path} does not match the cron record format`,
-          }),
-        )
-      : Result.ok(ids);
-  };
-
-  const change = (next: (ids: string[]) => string[]) =>
-    queue.run(path, async () => {
-      const ids = await read();
-      if (ids.isErr()) return ids;
-      return writeFileAtomic(
-        path,
-        `${JSON.stringify({ version: CRON_RECORD_VERSION, ids: next(ids.value) }, null, 2)}\n`,
-      );
+  const read = () =>
+    Result.gen(async function* () {
+      const text = yield* Result.await(readTextFileIfExists(path));
+      if (text === null) return Result.ok<string[]>([]);
+      const parsed = parseJson(text);
+      const ids =
+        parsed.isOk() &&
+        isObject(parsed.value) &&
+        parsed.value.version === CRON_RECORD_VERSION &&
+        Array.isArray(parsed.value.ids) &&
+        parsed.value.ids.every((id) => typeof id === "string")
+          ? (parsed.value.ids as string[])
+          : null;
+      return ids === null
+        ? Result.err(
+            new CronRecordCorrupt({
+              path,
+              message: `${path} does not match the cron record format`,
+            }),
+          )
+        : Result.ok(ids);
     });
 
+  const change = (next: (ids: string[]) => string[]) =>
+    queue.run(path, () =>
+      Result.gen(async function* () {
+        const ids = yield* Result.await(read());
+        yield* Result.await(
+          writeFileAtomic(
+            path,
+            `${JSON.stringify({ version: CRON_RECORD_VERSION, ids: next(ids) }, null, 2)}\n`,
+          ),
+        );
+        return Result.ok();
+      }),
+    );
+
   return {
-    has: async (id: string) => {
-      const ids = await read();
-      return ids.isErr() ? ids : Result.ok(ids.value.includes(id));
-    },
+    has: async (id: string) => (await read()).map((ids) => ids.includes(id)),
     add: (id: string) =>
       change((ids) => (ids.includes(id) ? ids : [...ids, id])),
     remove: (id: string) => change((ids) => ids.filter((kept) => kept !== id)),

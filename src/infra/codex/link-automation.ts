@@ -1,3 +1,4 @@
+import { matchError, Result, TaggedError } from "better-result";
 import { z } from "zod";
 import {
   type CronRecord,
@@ -6,6 +7,31 @@ import {
 } from "./automations.boundary.ts";
 import type { AppToolCalls } from "./link-calls.ts";
 import { defineTool, failure, withNote } from "./link-results.ts";
+
+class AutomationUnreadable extends TaggedError("AutomationUnreadable")<{
+  id: string;
+  cause: { message: string };
+  message: string;
+}> {}
+
+class CronRecordUnreadable extends TaggedError("CronRecordUnreadable")<{
+  cause: { message: string };
+  message: string;
+}> {}
+
+class AutomationNotReachable extends TaggedError("AutomationNotReachable")<{
+  id: string;
+  message: string;
+}> {}
+
+class AutomationsUnlistable extends TaggedError("AutomationsUnlistable")<{
+  cause: { message: string };
+  message: string;
+}> {}
+
+class CronNotIdentified extends TaggedError("CronNotIdentified")<{
+  message: string;
+}> {}
 
 // A heartbeat is reachable only when it wakes this thread and a cron only when a Claude thread created it here, since the app changes whatever automation an id names and these calls skip its approval.
 export const createAutomationTool = ({
@@ -65,8 +91,9 @@ export const createAutomationTool = ({
         `mode=${mode} needs the id of a heartbeat of this thread or of a cron automation created from a Claude thread.`,
       );
     }
-    const reached = await reachAutomation(id);
-    if ("refusal" in reached) return failure(reached.refusal);
+    const reachable = await reachAutomation(id);
+    if (reachable.isErr()) return failure(unreachableText(reachable.error));
+    const reached = reachable.value;
     if (kind !== undefined && kind !== reached.kind) {
       return failure(
         `Automation ${id} is a ${reached.kind}, and an existing automation keeps its kind; nothing was sent.`,
@@ -137,13 +164,14 @@ export const createAutomationTool = ({
         },
         onSuccess: async (result) => {
           const created = await findCreatedCron(existing, fields);
-          const recorded =
-            created === null ? null : await cronRecord.add(created);
+          const recorded = created.isOk()
+            ? await cronRecord.add(created.value)
+            : null;
           return withNote(
             result,
-            created !== null && recorded?.isOk() === true
-              ? `Created cron automation ${created}. Claude threads can view, update or delete it with this id.`
-              : `The cron automation was created, but ${created === null ? "it could not be told apart from the other automations" : `automation ${created} could not be recorded`}, so it cannot be viewed, updated or deleted from Claude threads. Do not create it again; ask the user to manage it in the app.`,
+            created.isOk() && recorded?.isOk() === true
+              ? `Created cron automation ${created.value}. Claude threads can view, update or delete it with this id.`
+              : `The cron automation was created, but ${created.isErr() ? unidentifiedText(created.error) : `automation ${created.value} could not be recorded`}, so it cannot be viewed, updated or deleted from Claude threads. Do not create it again; ask the user to manage it in the app.`,
           );
         },
       },
@@ -153,9 +181,16 @@ export const createAutomationTool = ({
   const findCreatedCron = async (
     existing: ReadonlySet<string>,
     fields: Record<string, unknown>,
-  ) => {
+  ): Promise<Result<string, AutomationsUnlistable | CronNotIdentified>> => {
     const after = await listAutomationIds(codexHome);
-    if (after.isErr()) return null;
+    if (after.isErr()) {
+      return Result.err(
+        new AutomationsUnlistable({
+          cause: after.error,
+          message: "cannot list the automations",
+        }),
+      );
+    }
     const added = after.value.filter((name) => !existing.has(name));
     const saved = await Promise.all(
       added.map((id) => readAutomation(codexHome, id)),
@@ -169,38 +204,60 @@ export const createAutomationTool = ({
         automation.value.prompt === fields.prompt
       );
     });
-    return matches.length === 1 ? (matches[0] ?? null) : null;
+    const [only] = matches;
+    return matches.length === 1 && only !== undefined
+      ? Result.ok(only)
+      : Result.err(
+          new CronNotIdentified({
+            message: "no single new cron matches the call",
+          }),
+        );
   };
 
   const reachAutomation = async (
     id: string,
-  ): Promise<{ kind: "heartbeat" | "cron" } | { refusal: string }> => {
+  ): Promise<
+    Result<
+      { kind: "heartbeat" | "cron" },
+      AutomationUnreadable | CronRecordUnreadable | AutomationNotReachable
+    >
+  > => {
     const saved = await readAutomation(codexHome, id);
     if (saved.isErr()) {
-      return {
-        refusal: `Cannot read automation ${id} to check what it runs (${saved.error.message}); nothing was sent.`,
-      };
+      return Result.err(
+        new AutomationUnreadable({
+          id,
+          cause: saved.error,
+          message: `cannot read automation ${id}`,
+        }),
+      );
     }
     if (
       saved.value?.kind !== "cron" &&
       saved.value?.targetThreadId === callerThreadId
     ) {
-      return { kind: "heartbeat" };
+      return Result.ok({ kind: "heartbeat" });
     }
     // A recorded id whose automation is gone is dropped, so a later automation the app gives the same id is not taken for it.
     if (saved.value === null) await cronRecord.remove(id);
     if (saved.value?.kind === "cron") {
       const recorded = await cronRecord.has(id);
       if (recorded.isErr()) {
-        return {
-          refusal: `Cannot read the record of cron automations created from Claude threads (${recorded.error.message}); nothing was sent.`,
-        };
+        return Result.err(
+          new CronRecordUnreadable({
+            cause: recorded.error,
+            message: "cannot read the record of crons",
+          }),
+        );
       }
-      if (recorded.value) return { kind: "cron" };
+      if (recorded.value) return Result.ok({ kind: "cron" });
     }
-    return {
-      refusal: `Automation ${id} is neither a heartbeat of this thread nor a cron automation created from a Claude thread. Only those can be viewed, updated or deleted here; others are managed from their own thread or in the app.`,
-    };
+    return Result.err(
+      new AutomationNotReachable({
+        id,
+        message: `automation ${id} is neither a heartbeat of this thread nor a cron created from a Claude thread`,
+      }),
+    );
   };
 
   return defineTool(
@@ -210,6 +267,26 @@ export const createAutomationTool = ({
     (args) => updateAutomation(args),
   );
 };
+
+const unreachableText = (
+  error: AutomationUnreadable | CronRecordUnreadable | AutomationNotReachable,
+) =>
+  matchError(error, {
+    AutomationUnreadable: ({ id, cause }) =>
+      `Cannot read automation ${id} to check what it runs (${cause.message}); nothing was sent.`,
+    CronRecordUnreadable: ({ cause }) =>
+      `Cannot read the record of cron automations created from Claude threads (${cause.message}); nothing was sent.`,
+    AutomationNotReachable: ({ id }) =>
+      `Automation ${id} is neither a heartbeat of this thread nor a cron automation created from a Claude thread. Only those can be viewed, updated or deleted here; others are managed from their own thread or in the app.`,
+  });
+
+const unidentifiedText = (error: AutomationsUnlistable | CronNotIdentified) =>
+  matchError(error, {
+    AutomationsUnlistable: ({ cause }) =>
+      `the automations could not be listed to find it (${cause.message})`,
+    CronNotIdentified: () =>
+      "it could not be told apart from the other automations",
+  });
 
 // A cron never wakes a thread, and the call's own fields are given as arguments, so none of them may come in through runSettings.
 const RESERVED_RUN_SETTINGS = new Set([

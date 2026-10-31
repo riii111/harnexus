@@ -30,7 +30,7 @@ export type StoreTag =
   | ErrorTag<ReturnType<ThreadStore["setModel"]>>
   | ErrorTag<ReturnType<ThreadStore["setEffort"]>>
   | "ThreadNotFound"
-  | "WriteOutcomeUnknown"
+  | "PreviousWriteUnsettled"
   | "WriteNotStarted"
   | "RunStateNotSaved";
 

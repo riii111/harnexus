@@ -77,7 +77,7 @@ class SessionTaken extends TaggedError("SessionTaken")<{
   message: string;
 }> {}
 
-class WriteOutcomeUnknown extends TaggedError("WriteOutcomeUnknown")<{
+class PreviousWriteUnsettled extends TaggedError("PreviousWriteUnsettled")<{
   threadId: string;
   message: string;
 }> {}
@@ -178,24 +178,25 @@ const createThreadStore = (
       current: ReadonlyMap<string, ThreadMapping>,
     ) => Result<ThreadMapping, E>,
   ) =>
-    fileQueue.run(path, async () => {
-      const changed = change(mappings);
-      if (changed.isErr()) return Result.err(changed.error);
-      const threadId = changed.value.threadId;
-      if (!isThreadMapping(changed.value)) {
-        return Result.err(
-          new InvalidThreadRecord({
-            threadId,
-            message: "thread identifiers, model and worktree must not be empty",
-          }),
-        );
-      }
-      const next = new Map(mappings).set(threadId, changed.value);
-      const saved = await save(next);
-      if (saved.isErr()) return Result.err(saved.error);
-      mappings = next;
-      return Result.ok(changed.value);
-    });
+    fileQueue.run(path, () =>
+      Result.gen(async function* () {
+        const changed = yield* change(mappings);
+        const threadId = changed.threadId;
+        if (!isThreadMapping(changed)) {
+          return Result.err(
+            new InvalidThreadRecord({
+              threadId,
+              message:
+                "thread identifiers, model and worktree must not be empty",
+            }),
+          );
+        }
+        const next = new Map(mappings).set(threadId, changed);
+        yield* Result.await(save(next));
+        mappings = next;
+        return Result.ok(changed);
+      }),
+    );
 
   const update = (
     threadId: string,
@@ -373,7 +374,7 @@ const createThreadStore = (
           record.runState === "outcomeUnknown" && continueUnknown();
         if (record.runState !== "idle" && !recovered) {
           return Result.err(
-            new WriteOutcomeUnknown({
+            new PreviousWriteUnsettled({
               threadId,
               message: `the previous write on thread ${threadId} has an unknown outcome`,
             }),

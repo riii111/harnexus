@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result } from "better-result";
-import { fail } from "../prwatch/failure.ts";
+import { GithubUnreachable } from "../prwatch/failure.ts";
 import type {
   GitHub,
   PrComment,
@@ -166,7 +166,11 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
     },
     detail: async () => {
       calls.details += 1;
-      if (world.detailFails) return fail("GitHub is down");
+      if (world.detailFails) {
+        return Result.err(
+          new GithubUnreachable({ cause: null, message: "GitHub is down" }),
+        );
+      }
       return Result.ok(detailOf(world.summary, world.comments, world.extra));
     },
     openPulls: async () => Result.ok([]),
@@ -395,6 +399,18 @@ describe("runCycle", () => {
     expect(calls.details).toBe(2);
     expect(calls.sent).toEqual([]);
     expect((await state()).seen).toContain("inline:1");
+  });
+
+  test("logs a failed read of a PR's detail by its tag, without the message that names the cause", async () => {
+    const { world, logs, cycle } = await fixture({}, { firstRead: true });
+    world.detailFails = true;
+
+    await cycle();
+
+    expect(logs.filter((log) => log.event === "detail_failed")).toMatchObject([
+      { error: "GithubUnreachable" },
+    ]);
+    expect(JSON.stringify(logs)).not.toContain("GitHub is down");
   });
 
   test("never sends an event again and checks the answer before the next message", async () => {

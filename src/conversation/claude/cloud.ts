@@ -1,7 +1,8 @@
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { Result } from "better-result";
+import { matchError, Result, TaggedError } from "better-result";
 import {
-  type CloudSend,
+  type CloudCopyFailure,
+  type CloudSendFailure,
   parseCloudSessionId,
 } from "../../infra/claude/cloud.ts";
 import type { CloudLink } from "../../infra/thread-store.ts";
@@ -51,12 +52,26 @@ type CloudEvent =
   | { event: "claude_cloud"; step: "copied"; records: number; ms: number }
   | { event: "claude_cloud"; step: "copy_failed"; error: string };
 
-// stopped says the copy may have run a model turn, so the chat is not copied again.
-type CopyFailure = {
-  _tag: string;
-  stopped: "ran_model" | "unchecked" | null;
+// The thread has halted after an earlier copy that may have run a model turn, so no further copy is made.
+class CloudCopyStopped extends TaggedError("CloudCopyStopped")<{
   message: string;
-};
+}> {}
+
+class CloudCopyUnreadable extends TaggedError("CloudCopyUnreadable")<{
+  cause: { _tag: string };
+  message: string;
+}> {}
+
+type CopyFailure = CloudCopyFailure | CloudCopyStopped | CloudCopyUnreadable;
+
+// Whether the chat must not be copied again, since the copy may have run a model turn or did not say how many it ran.
+const stoppedBy = (error: CopyFailure) =>
+  matchError(error, {
+    CloudCopyFailed: ({ stopped }) => stopped,
+    CloudCopyStopped: () => "ran_model" as const,
+    CloudOff: () => null,
+    CloudCopyUnreadable: () => null,
+  });
 
 export type CloudDeps = {
   threads: Pick<
@@ -73,8 +88,8 @@ export type CloudDeps = {
     cloudSessionId: string,
     text: string,
     cwd: string,
-  ) => Promise<CloudSend>;
-  copy: (cloudSessionId: string) => Promise<Result<string, CopyFailure>>;
+  ) => Promise<Result<void, CloudSendFailure>>;
+  copy: (cloudSessionId: string) => Promise<Result<string, CloudCopyFailure>>;
   readCopy: (
     copySessionId: string,
   ) => Promise<Result<SessionMessage[], { _tag: string }>>;
@@ -291,18 +306,19 @@ export const createCloudRuntime = <Tag extends string>(
       return;
     }
     const sent = await sendMessage(turn, cloud, turn.input.text);
-    if (sent.kind === "rejected") {
-      turn.fail({
-        _tag: "CloudSendRejected",
-        message: `${refusalMessage("cloud_not_sent")} (${sent.message})`,
-      });
-      return;
-    }
-    if (sent.kind === "unknown") {
-      turn.fail({
-        _tag: "CloudSendUnknown",
-        message: `${refusalMessage("cloud_send_unknown")} (${sent.message})`,
-      });
+    if (sent.isErr()) {
+      turn.fail(
+        matchError(sent.error, {
+          CloudSendRejected: ({ _tag, message }) => ({
+            _tag,
+            message: `${refusalMessage("cloud_not_sent")} (${message})`,
+          }),
+          CloudSendUnknown: ({ _tag, message }) => ({
+            _tag,
+            message: `${refusalMessage("cloud_send_unknown")} (${message})`,
+          }),
+        }),
+      );
       return;
     }
     const follow = newFollow(turn.input.text, cloud.shown);
@@ -318,13 +334,13 @@ export const createCloudRuntime = <Tag extends string>(
   const sendMessage = async (turn: Turn, cloud: CloudLink, text: string) => {
     const startedAt = now();
     const sent = await sendToCloud(cloud.sessionId, text, turn.record.worktree);
-    if (sent.kind === "rejected") {
+    if (sent.isOk()) {
+      log({ event: "claude_cloud", step: "sent", ms: now() - startedAt });
+    } else if (sent.error._tag === "CloudSendRejected") {
       log({ event: "claude_cloud", step: "send_rejected" });
-    } else if (sent.kind === "unknown") {
+    } else {
       log({ event: "claude_cloud", step: "send_unknown" });
       turn.markOutcomeUnknown();
-    } else {
-      log({ event: "claude_cloud", step: "sent", ms: now() - startedAt });
     }
     return sent;
   };
@@ -414,7 +430,7 @@ export const createCloudRuntime = <Tag extends string>(
         if (copied.isErr()) {
           failingSince ??= now();
           if (
-            copied.error.stopped === null &&
+            stoppedBy(copied.error) === null &&
             now() - failingSince < COPY_FAILING_LIMIT_MS
           ) {
             continue;
@@ -540,16 +556,12 @@ export const createCloudRuntime = <Tag extends string>(
     cloudSessionId: string,
   ): Promise<Result<Copied, CopyFailure>> => {
     if (stateOf(threadId).halted) {
-      return Result.err({
-        _tag: "CloudCopyStopped",
-        stopped: "ran_model",
-        message: COPY_STOPPED,
-      });
+      return Result.err(new CloudCopyStopped({ message: COPY_STOPPED }));
     }
     const startedAt = now();
     const copied = await copy(cloudSessionId);
     if (copied.isErr()) {
-      const { stopped } = copied.error;
+      const stopped = stoppedBy(copied.error);
       if (stopped !== null) keep(threadId, { halted: true });
       log(
         stopped === null
@@ -574,11 +586,12 @@ export const createCloudRuntime = <Tag extends string>(
         step: "copy_failed",
         error: read.error._tag,
       });
-      return Result.err({
-        _tag: read.error._tag,
-        stopped: null,
-        message: COPY_UNREADABLE,
-      });
+      return Result.err(
+        new CloudCopyUnreadable({
+          cause: read.error,
+          message: COPY_UNREADABLE,
+        }),
+      );
     }
     const all = mainRecords(read.value);
     log({
@@ -706,10 +719,12 @@ export const createCloudRuntime = <Tag extends string>(
     follow.sending += 1;
     const sent = await sendMessage(turn, cloud, input.text);
     follow.sending -= 1;
-    if (sent.kind !== "sent") forget(follow, input.text);
-    if (sent.kind === "rejected") return "cloud_not_sent";
+    if (sent.isErr()) forget(follow, input.text);
+    if (sent.isErr() && sent.error._tag === "CloudSendRejected") {
+      return "cloud_not_sent";
+    }
     // The message may have reached the session, so it is taken rather than refused, which would run it again as a turn; the thread is left with an unknown outcome to check before going on.
-    if (sent.kind === "unknown") {
+    if (sent.isErr()) {
       turn.apply(
         renderNotice(
           turn.state(),

@@ -4,7 +4,13 @@ import type { Fields } from "../runtime/object.ts";
 import { classify, type Verdict } from "./classify.ts";
 import { loadConfig, type WatchConfig } from "./config.ts";
 import { nextEvents } from "./events.ts";
-import { fail, ioFailed, type WatchFailed } from "./failure.ts";
+import {
+  refuse,
+  type StateUnwritable,
+  stateUnwritable,
+  type WatchRefused,
+  WatchReplaced,
+} from "./failure.ts";
 import type { GitHub, PrDetail, PrRef } from "./github.ts";
 import { messageOf } from "./message.ts";
 import {
@@ -37,13 +43,16 @@ export const watchForever = (
       // Checked before each cycle, so no cycle runs on a program replaced while the watch slept.
       if (await replaced()) {
         deps.log({ event: "replaced" });
-        return fail(
-          "the watch's program was replaced; exiting to be restarted",
+        return Result.err(
+          new WatchReplaced({
+            message:
+              "the watch's program was replaced; exiting to be restarted",
+          }),
         );
       }
       const cycle = await runCycle(cycleDeps);
       if (cycle.isErr())
-        deps.log({ event: "cycle_failed", error: cycle.error.message });
+        deps.log({ event: "cycle_failed", error: cycle.error._tag });
       await sleep(
         cycle.isOk() ? cycle.value.pollIntervalSeconds * 1000 : RETRY_MS,
       );
@@ -53,17 +62,19 @@ export const watchForever = (
 const RETRY_MS = 60_000;
 
 // One watch at a time, so two never send the same event.
-const acquireLock = (root: string): Promise<Result<void, WatchFailed>> =>
+const acquireLock = (
+  root: string,
+): Promise<Result<void, StateUnwritable | WatchRefused>> =>
   Result.gen(async function* () {
     yield* Result.await(prepareDirectory(root).then(io));
 
     const held = yield* io(holdProcessLock(lockPath(root)));
-    return held ? Result.ok() : fail("another PR watch is running");
+    return held ? Result.ok() : refuse("another PR watch is running");
   });
 
 const io = <T>(
   result: Result<T, { message: string; cause?: unknown }>,
-): Result<T, WatchFailed> => result.mapError(ioFailed);
+): Result<T, StateUnwritable> => result.mapError(stateUnwritable);
 
 // Decides from each PR's saved watch state as the watch would, but writes none, so a run before starting shows what the first cycle sends.
 export const dryRun = (
@@ -103,7 +114,7 @@ const dryRunTargets = (
     const refs: PrRef[] = [];
     for (const url of urls) {
       const ref = githubPr(url);
-      if (ref === null) return fail("--pr must be a GitHub pull request URL");
+      if (ref === null) return refuse("--pr must be a GitHub pull request URL");
       refs.push(ref);
     }
     if (urls.length > 0) return Result.ok(refs);
@@ -116,7 +127,7 @@ const dryRunTargets = (
 const accountFor = (config: WatchConfig, repo: string) => {
   const account = config.repositories[repo.toLowerCase()]?.account;
   return account === undefined
-    ? fail(`${repo} is not in the repositories of the watch config`)
+    ? refuse(`${repo} is not in the repositories of the watch config`)
     : Result.ok(account);
 };
 
@@ -176,14 +187,15 @@ export const release = (root: string, url: string) =>
   Result.gen(async function* () {
     const ref = githubPr(url);
     if (ref === null)
-      return fail("--release must be a GitHub pull request URL");
+      return refuse("--release must be a GitHub pull request URL");
 
     const links = yield* Result.await(listLinks(root));
     const link = links.find((each) => samePr(each, ref));
-    if (link === undefined) return fail(`${ref.url} is not linked to a worker`);
+    if (link === undefined)
+      return refuse(`${ref.url} is not linked to a worker`);
 
     const state = yield* Result.await(loadWatchState(root, link));
-    if (state.status !== "halted") return fail(`${ref.url} is not halted`);
+    if (state.status !== "halted") return refuse(`${ref.url} is not halted`);
 
     yield* Result.await(
       saveWatchState(root, link, {

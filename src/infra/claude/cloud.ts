@@ -49,11 +49,16 @@ export const cloudCli = (
   run: runProcess,
 });
 
-// sent: the session queued the message; rejected: it never reached the session; unknown: it may have, so it is not sent again.
-export type CloudSend =
-  | { kind: "sent" }
-  | { kind: "rejected"; message: string }
-  | { kind: "unknown"; message: string };
+// rejected: the message never reached the session; unknown: it may have, so it is not sent again.
+export class CloudSendRejected extends TaggedError("CloudSendRejected")<{
+  message: string;
+}> {}
+
+export class CloudSendUnknown extends TaggedError("CloudSendUnknown")<{
+  message: string;
+}> {}
+
+export type CloudSendFailure = CloudSendRejected | CloudSendUnknown;
 
 // The message goes in through stdin, so it never shows in the process list; the CLI exits once the session has queued it, without waiting for a reply.
 export const sendToCloud = async (
@@ -61,7 +66,7 @@ export const sendToCloud = async (
   cloudSessionId: string,
   text: string,
   cwd: string,
-): Promise<CloudSend> => {
+): Promise<Result<void, CloudSendFailure>> => {
   const ran = await cli.run(
     cli.file,
     ["-p", "--cloud", cloudSessionId, "--output-format", "json"],
@@ -74,43 +79,59 @@ export const sendToCloud = async (
     },
   );
   if (ran.isErr()) {
-    return ran.error.started
-      ? { kind: "unknown", message: ran.error.message }
-      : { kind: "rejected", message: ran.error.message };
+    const { message } = ran.error;
+    return Result.err(
+      ran.error.started
+        ? new CloudSendUnknown({ message })
+        : new CloudSendRejected({ message }),
+    );
   }
   return sendOutcome(ran.value);
 };
 
-const sendOutcome = (run: ProcessRun): CloudSend => {
+const sendOutcome = (run: ProcessRun): Result<void, CloudSendFailure> => {
   if (run.ended !== "exit") {
-    return { kind: "unknown", message: `claude --cloud ended by ${run.ended}` };
+    return Result.err(
+      new CloudSendUnknown({ message: `claude --cloud ended by ${run.ended}` }),
+    );
   }
   const answer = printAnswer(run.stdout);
-  if (answer !== null && answer.ok === true) return { kind: "sent" };
+  if (answer !== null && answer.ok === true) return Result.ok();
   if (answer !== null && answer.ok === false) {
-    return {
-      kind: "rejected",
-      message: textOf(answer.error) ?? "the Cloud session refused the message",
-    };
+    return Result.err(
+      new CloudSendRejected({
+        message:
+          textOf(answer.error) ?? "the Cloud session refused the message",
+      }),
+    );
   }
   // A configuration error, such as a disabled organization policy, is printed to stderr without JSON before anything is sent.
   if (run.status !== 0 && run.stdout.trim() === "") {
-    return {
-      kind: "rejected",
-      message: firstLine(run.stderr) ?? `claude exited with ${run.status}`,
-    };
+    return Result.err(
+      new CloudSendRejected({
+        message: firstLine(run.stderr) ?? `claude exited with ${run.status}`,
+      }),
+    );
   }
-  return {
-    kind: "unknown",
-    message: "claude --cloud answered without a result",
-  };
+  return Result.err(
+    new CloudSendUnknown({
+      message: "claude --cloud answered without a result",
+    }),
+  );
 };
 
 // stopped: the copy may have run a model turn, or did not say how many it ran, so the chat must not be copied again.
-class CloudCopyFailed extends TaggedError("CloudCopyFailed")<{
+export class CloudCopyFailed extends TaggedError("CloudCopyFailed")<{
   stopped: "ran_model" | "unchecked" | null;
   message: string;
 }> {}
+
+// The bridge runs without the Cloud commands, so nothing was copied or sent.
+export class CloudOff extends TaggedError("CloudOff")<{
+  message: string;
+}> {}
+
+export type CloudCopyFailure = CloudCopyFailed | CloudOff;
 
 const copyFailed = (
   message: string,

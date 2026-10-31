@@ -18,6 +18,8 @@ import { createSubagents } from "../conversation/subagents.ts";
 import { createThreadValues } from "../conversation/thread-values.ts";
 import {
   type CloudCli,
+  CloudOff,
+  CloudSendRejected,
   copyCloudSession,
   removeCloudCopy,
   sendToCloud,
@@ -142,14 +144,14 @@ export const connectClaudeThreads = ({
     threads,
     sendToCloud: (cloudSessionId, text, cwd) =>
       cloud === undefined
-        ? Promise.resolve({ kind: "rejected", message: CLOUD_OFF })
+        ? Promise.resolve(
+            Result.err(new CloudSendRejected({ message: CLOUD_OFF })),
+          )
         : sendToCloud(cloud.cli, cloudSessionId, text, cwd),
     // The folder is made on first use, so a bridge that never links a Cloud session leaves nothing behind.
     copy: (cloudSessionId) =>
       cloud === undefined
-        ? Promise.resolve(
-            Result.err({ _tag: "CloudOff", stopped: null, message: CLOUD_OFF }),
-          )
+        ? Promise.resolve(Result.err(new CloudOff({ message: CLOUD_OFF })))
         : copyCloudSession(cloud.cli, cloudSessionId, {
             cwd: cloud.copyDir,
             checkouts: cloud.checkouts,

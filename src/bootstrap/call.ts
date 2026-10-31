@@ -20,11 +20,12 @@ const EXIT = {
 const ANSWER_TIMEOUT_MS = 15 * 60_000;
 
 // The exit status tells a call that never left (2, safe to send again) from one whose effect is unknown (3, never send again).
-const path = loadCallerSocketPath(process.env).unwrapOr(null);
-if (path === null) {
-  process.stderr.write("harnexus call: HARNEXUS_STATE_PATH is invalid\n");
+const socket = loadCallerSocketPath(process.env);
+if (socket.isErr()) {
+  process.stderr.write(`harnexus call: ${socket.error.message}\n`);
   process.exit(EXIT.invalid);
 }
+const path = socket.value;
 const line = (await Bun.stdin.text()).trim().replaceAll("\n", " ");
 const answer = await requestLine(path, line, ANSWER_TIMEOUT_MS);
 if (answer.isErr()) {

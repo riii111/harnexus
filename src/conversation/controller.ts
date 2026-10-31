@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Result, TaggedError } from "better-result";
+import { matchError, Result, TaggedError } from "better-result";
 import type { ImageSource } from "../infra/claude/images.ts";
 import { createAppRequests } from "../infra/codex/app-requests.ts";
 import { delegatedMessage } from "../infra/codex/delegations.ts";
@@ -168,8 +168,8 @@ export const createTurnController = <Tag extends string>({
       threads.threadOf(threadId),
       fallbackCwd,
     );
-    if ("refusal" in checked) {
-      return refuse(id, checked.refusal);
+    if (checked.isErr()) {
+      return refuse(id, checked.error.refusal);
     }
     const delegated = delegatedMessage(params);
     const input = messageInput(params.input, delegated);
@@ -184,7 +184,7 @@ export const createTurnController = <Tag extends string>({
       return refuse(id, "duplicate_message");
     }
     if (messageId !== null) acceptMessage(threadId, messageId);
-    threads.changeModel(threadId, checked.thread.model);
+    threads.changeModel(threadId, checked.value.model);
     const effort = requestedEffort(params);
     if (effort !== undefined) threads.selectEffort(threadId, effort);
     const turn = {
@@ -202,7 +202,7 @@ export const createTurnController = <Tag extends string>({
       messageId === null &&
       (steerableTurn(threadId) !== null || steeringMessages.has(threadId))
     ) {
-      steerMessage(id, threadId, checked.thread, turn);
+      steerMessage(id, threadId, checked.value, turn);
       return null;
     }
     const allowRecovery =
@@ -213,7 +213,7 @@ export const createTurnController = <Tag extends string>({
       acceptTurn(
         id,
         threadId,
-        checked.thread,
+        checked.value,
         turn,
         messageId,
         false,
@@ -230,8 +230,8 @@ export const createTurnController = <Tag extends string>({
       return;
     }
     const checked = checkThread(params, threads.threadOf(threadId), undefined);
-    if ("refusal" in checked) {
-      refuse(id, checked.refusal);
+    if (checked.isErr()) {
+      refuse(id, checked.error.refusal);
       return;
     }
     if (closed) {
@@ -256,7 +256,7 @@ export const createTurnController = <Tag extends string>({
       startedBy: "app" as const,
     };
     afterSteers(threadId, () =>
-      acceptTurn(id, threadId, checked.thread, turn, null, true),
+      acceptTurn(id, threadId, checked.value, turn, null, true),
     );
   };
 
@@ -558,23 +558,29 @@ export const createTurnController = <Tag extends string>({
       () => request.allowRecovery && !closed && !request.stopped,
     );
     if (ran.isOk()) return;
-    if (ran.error._tag === "TurnOutcomeUnknown") {
-      log({ event: "claude_turn", step: "outcome_unknown" });
-      return;
-    }
-    if (!responded) {
-      forgetMessage(threadId, messageId);
-      if (ran.error._tag === "WriteOutcomeUnknown") {
-        refuseTurn(request, queued, "outcome_unknown", ran.error);
+    const notRun = (error: { _tag: StoreTag; message: string }) => {
+      if (responded) {
+        log({
+          event: "claude_turn",
+          step: "run_state_not_saved",
+          error: error._tag,
+        });
         return;
       }
-      refuseTurn(request, queued, "thread_busy", ran.error, ran.error.message);
-      return;
-    }
-    log({
-      event: "claude_turn",
-      step: "run_state_not_saved",
-      error: ran.error._tag,
+      forgetMessage(threadId, messageId);
+      refuseTurn(request, queued, "thread_busy", error, error.message);
+    };
+    matchError(ran.error, {
+      TurnOutcomeUnknown: () =>
+        log({ event: "claude_turn", step: "outcome_unknown" }),
+      PreviousWriteUnsettled: (error) => {
+        if (responded) return notRun(error);
+        forgetMessage(threadId, messageId);
+        refuseTurn(request, queued, "outcome_unknown", error);
+      },
+      ThreadNotFound: notRun,
+      WriteNotStarted: notRun,
+      RunStateNotSaved: notRun,
     });
   };
 

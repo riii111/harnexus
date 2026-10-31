@@ -2,7 +2,12 @@ import { Result } from "better-result";
 import { z } from "zod";
 import { readRegularTextFile } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
-import { fail, ioFailed, type WatchFailed } from "./failure.ts";
+import { compileRegex } from "../runtime/regex.boundary.ts";
+import {
+  ConfigInvalid,
+  type ConfigUnreadable,
+  configUnreadable,
+} from "./failure.ts";
 import { PRESETS, type ReviewBot } from "./reviewers.ts";
 
 export type WatchConfig = Omit<z.infer<typeof CONFIG>, "reviewBots"> & {
@@ -13,18 +18,20 @@ export type IgnoreRule = z.infer<typeof IGNORE_RULE>;
 
 export type ItemKind = (typeof ITEM_KINDS)[number];
 
+const invalid = (message: string) => Result.err(new ConfigInvalid({ message }));
+
 export const loadConfig = (
   path: string,
-): Promise<Result<WatchConfig, WatchFailed>> =>
+): Promise<Result<WatchConfig, ConfigInvalid | ConfigUnreadable>> =>
   Result.gen(async function* () {
     const text = yield* Result.await(
-      readRegularTextFile(path).then((read) => read.mapError(ioFailed)),
+      readRegularTextFile(path).then((read) => read.mapError(configUnreadable)),
     );
     const raw = parseJson(text);
-    if (raw.isErr()) return fail(`${path} is not valid JSON`);
+    if (raw.isErr()) return invalid(`${path} is not valid JSON`);
     const parsed = CONFIG.safeParse(raw.value);
     if (!parsed.success)
-      return fail(`${path} is invalid: ${z.prettifyError(parsed.error)}`);
+      return invalid(`${path} is invalid: ${z.prettifyError(parsed.error)}`);
 
     // Lower-cased once here, since GitHub matches owners and names without case.
     const repositories = Object.fromEntries(
@@ -38,11 +45,11 @@ export const loadConfig = (
     );
     const ids = reviewBots.map((bot) => bot.id);
     if (new Set(ids).size !== ids.length)
-      return fail(`${path} is invalid: reviewBots repeats an id`);
+      return invalid(`${path} is invalid: reviewBots repeats an id`);
     // A comment is credited to one bot by its login, so two bots cannot share one.
     const logins = reviewBots.map((bot) => bot.login.toLowerCase());
     if (new Set(logins).size !== logins.length)
-      return fail(`${path} is invalid: reviewBots repeats a login`);
+      return invalid(`${path} is invalid: reviewBots repeats a login`);
     return Result.ok({ ...parsed.data, repositories, reviewBots });
   });
 
@@ -62,7 +69,7 @@ const CLOCK = z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9]$/);
 const PATTERN = z
   .string()
   .min(1)
-  .refine((source) => Result.try(() => new RegExp(source)).isOk(), {
+  .refine((source) => compileRegex(source).isOk(), {
     message: "is not a regular expression",
   });
 

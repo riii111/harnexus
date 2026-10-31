@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { type InferErr, Result } from "better-result";
 import type { signalProcess } from "../runtime/process.boundary.ts";
 import {
+  exitOnUnhandledRejection,
   type ServerSignalEvent,
   serverFromEnv,
   signalWithLog,
@@ -47,6 +48,45 @@ describe("stopLingeringServer", () => {
     });
 
     expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+});
+
+describe("exitOnUnhandledRejection", () => {
+  test("logs the failure, reports the reason, closes Claude and exits with 1 in that order", () => {
+    const steps: string[] = [];
+    const reason = new Error("broken invariant");
+    const handle = exitOnUnhandledRejection({
+      log: (event) => steps.push(`log ${event.event} ${event.reason}`),
+      report: (reported) =>
+        steps.push(reported === reason ? "report reason" : "report other"),
+      closeAll: () => steps.push("close"),
+      exit: (code) => steps.push(`exit ${code}`),
+    });
+
+    handle(reason);
+
+    expect(steps).toEqual([
+      "log bridge_failed UnhandledRejection",
+      "report reason",
+      "close",
+      "exit 1",
+    ]);
+  });
+
+  test("still exits when closing Claude faults", () => {
+    const exits: number[] = [];
+    const handle = exitOnUnhandledRejection({
+      log: () => {},
+      report: () => {},
+      closeAll: () => {
+        // biome-ignore lint/plugin/no-throw-try-catch: a fault in the bridge throws.
+        throw new Error("close failed");
+      },
+      exit: (code) => exits.push(code),
+    });
+
+    expect(() => handle(new Error("broken invariant"))).toThrow("close failed");
+    expect(exits).toEqual([1]);
   });
 });
 
