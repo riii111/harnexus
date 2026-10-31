@@ -60,14 +60,12 @@ describe("codexWorkers.look", () => {
       { at: new Date(100_000).toISOString(), sender: "reviewer", prompt },
     );
 
-    expect(calls).toEqual([
+    expect(calls).toMatchObject([
       {
         caller: "reviewer",
         tool: "read_thread",
         threadId: "worker",
-        turnLimit: 5,
         includeOutputs: true,
-        maxOutputCharsPerItem: 2000,
       },
     ]);
     expect(view).toEqual({

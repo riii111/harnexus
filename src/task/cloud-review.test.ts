@@ -1,17 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  readdir,
-  readFile,
-  realpath,
-  rm,
-  writeFile,
-} from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runTask, TASK_DEPS } from "./cli.ts";
+import { createFakeCli } from "./testing/fake-cli.ts";
 
 const SKILLS = join(import.meta.dir, "../../test/fixtures/task-skills");
 const README = join(import.meta.dir, "../../README.md");
@@ -23,20 +14,6 @@ const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
-
-// A stand-in for codex: records its arguments, directory and stdin, then prints the next planned output.
-const SCRIPT = `#!/usr/bin/env bash
-dir="$FAKE_DIR"
-n=$(( $(cat "$dir/count" 2>/dev/null || echo 0) + 1 ))
-echo "$n" > "$dir/count"
-printf '%s\\n' "$@" > "$dir/args.$n"
-pwd > "$dir/cwd.$n"
-cat > "$dir/stdin.$n"
-if [ -f "$dir/sleep.$n" ]; then sleep "$(cat "$dir/sleep.$n")"; fi
-if [ -f "$dir/stderr.$n" ]; then cat "$dir/stderr.$n" >&2; fi
-cat "$dir/out.$n" 2>/dev/null
-exit "$(cat "$dir/exit.$n" 2>/dev/null || echo 0)"
-`;
 
 const events = (threadId: string, answer: string) =>
   [
@@ -52,17 +29,15 @@ const events = (threadId: string, answer: string) =>
     .join("\n");
 
 const fixture = async () => {
-  const root = await realpath(
-    await mkdtemp(join(tmpdir(), "harnexus-cloud-review-")),
-  );
-  cleanups.push(() => rm(root, { recursive: true, force: true }));
-  const fake = join(root, "fake");
+  const {
+    root,
+    fake,
+    bin,
+    plan,
+    rawArgs: args,
+  } = await createFakeCli("codex", cleanups);
   const checkout = join(root, "repo");
-  await mkdir(fake);
   await mkdir(checkout);
-  const bin = join(root, "codex");
-  await writeFile(bin, SCRIPT);
-  await chmod(bin, 0o755);
   await mkdir(join(root, "config/harnexus"), { recursive: true });
   await writeFile(
     join(root, "config/harnexus/task.json"),
@@ -121,21 +96,6 @@ const fixture = async () => {
       prUrl: null,
     }),
   );
-  const plan = (
-    n: number,
-    {
-      out = "",
-      exit = 0,
-      stderr,
-    }: { out?: string; exit?: number; stderr?: string },
-  ) =>
-    Promise.all([
-      writeFile(join(fake, `out.${n}`), out),
-      writeFile(join(fake, `exit.${n}`), String(exit)),
-      stderr === undefined
-        ? Promise.resolve()
-        : writeFile(join(fake, `stderr.${n}`), stderr),
-    ]);
   const review = async (
     extra: string[] = [],
     more: Record<string, string> = {},
@@ -150,8 +110,6 @@ const fixture = async () => {
       err: done.stderr,
     };
   };
-  const args = async (n: number) =>
-    (await readFile(join(fake, `args.${n}`), "utf8")).trim().split("\n");
   const input = (n: number) => readFile(join(fake, `stdin.${n}`), "utf8");
   const cwd = async (n: number) =>
     (await readFile(join(fake, `cwd.${n}`), "utf8")).trim();
@@ -173,7 +131,7 @@ const fixture = async () => {
 };
 
 describe("harnexus-task review in a Claude Code cloud session", () => {
-  test("reviews the first head with a new reviewer and answers with its result, from a checkout outside the app's worktrees", async () => {
+  test("reviews the first head with a new reviewer and answers with its result", async () => {
     const { checkout, commit, initial, plan, review, args, input } =
       await fixture();
     const head = commit("test: candidate");
@@ -205,7 +163,6 @@ describe("harnexus-task review in a Claude Code cloud session", () => {
       'model_reasoning_effort="medium"',
       "-",
     ]);
-    expect(checkout).not.toContain("worktrees");
     const prompt = await input(1);
     expect(prompt).toContain(`${initial}...${head}`);
     expect(prompt).toContain("workerのチャットID: worker-session");

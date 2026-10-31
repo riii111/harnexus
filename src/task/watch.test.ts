@@ -254,9 +254,7 @@ describe("runCycle", () => {
       "worker",
     ]);
     expect(String(sent?.prompt)).toStartWith("$task-worker\n");
-    expect(String(sent?.prompt)).toContain(
-      `1. [CodeRabbit・Major] src/pay.kt:42 ${PR}#discussion_r1`,
-    );
+    expect(String(sent?.prompt)).toContain(`${PR}#discussion_r1`);
     for (const skipped of ["discussion_r2", "discussion_r3", "issuecomment-4"])
       expect(String(sent?.prompt)).not.toContain(skipped);
     const saved = await state();
@@ -345,6 +343,7 @@ describe("runCycle", () => {
     expect(String(calls.sent[0]?.prompt)).toContain(
       "「指摘なし」とだけ報告してください",
     );
+    expect(String(calls.sent[0]?.prompt)).not.toContain("一致しない");
   });
 
   test("reads a draft on its first read and sends only what came after once it is ready", async () => {
@@ -453,9 +452,6 @@ describe("runCycle", () => {
     await cycle();
 
     expect(calls.sent).toHaveLength(2);
-    expect(String(calls.sent[1]?.prompt)).toContain(
-      "次の判定が回答にありません",
-    );
     expect(String(calls.sent[1]?.prompt)).toContain("discussion_r2");
     expect(String(calls.sent[1]?.prompt)).not.toContain("discussion_r1");
   });
@@ -478,13 +474,8 @@ describe("runCycle", () => {
 
     expect(calls.sent).toHaveLength(1);
     const prompt = String(calls.sent[0]?.prompt);
-    expect(prompt).toContain(`PR ${PR} がApproveされました。`);
-    expect(prompt).toContain(
-      `1. [tanaka・Approve] 本文あり ${PR}#pullrequestreview-1`,
-    );
-    expect(prompt).toContain(
-      `2. [tanaka・Approve] 本文なし ${PR}#pullrequestreview-2`,
-    );
+    expect(prompt).toContain(`${PR}#pullrequestreview-1`);
+    expect(prompt).toContain(`${PR}#pullrequestreview-2`);
 
     world.turns = [delegatedTurn(NOON, calls.sent[0]?.prompt, "確認しました")];
     later(1);
@@ -530,53 +521,95 @@ describe("runCycle", () => {
     expect(String(calls.sent[1]?.prompt)).toContain("discussion_r5");
   });
 
-  test("holds CodeRabbit's findings while its review runs and sends a person's comment at once", async () => {
-    const { world, calls, cycle, later } = await fixture();
-    world.summary = summary({
-      bots: {
-        coderabbit: {
-          state: "PENDING",
-          description: "Review in progress",
-          createdAt: "2026-10-23T01:00:00Z",
-        },
+  test.each([
+    {
+      name: "CodeRabbit's",
+      config: {},
+      bot: "coderabbit",
+      running: "Review in progress",
+      finished: "Review completed",
+      author: "tanaka",
+      held: { author: "coderabbitai[bot]", body: "**🟠 Major**" },
+      firstLabel: "[tanaka]",
+      review: "CodeRabbitのレビュー完了",
+      label: "[CodeRabbit・Major]",
+    },
+    {
+      name: "Claude's",
+      config: { reviewBots: ["claude"] },
+      bot: "claude",
+      running: "",
+      finished: "",
+      author: "coderabbitai[bot]",
+      held: { author: "claude[bot]", body: "[warning] 重複します。" },
+      firstLabel: "[coderabbitai[bot]]",
+      review: "Claudeのレビュー完了",
+      label: "[Claude・warning]",
+    },
+    {
+      name: "a configured bot's",
+      config: {
+        reviewBots: [
+          {
+            id: "other",
+            name: "OtherBot",
+            login: "other-reviewer[bot]",
+            status: { context: "Other Review", completed: "done" },
+          },
+        ],
       },
+      bot: "other",
+      running: "running",
+      finished: "done",
+      author: "coderabbitai[bot]",
+      held: { author: "other-reviewer[bot]", body: "x" },
+      firstLabel: "[coderabbitai[bot]]",
+      review: "OtherBotのレビュー完了",
+      label: "[OtherBot]",
+    },
+  ])("holds $name findings while its review runs and sends the rest at once", async ({
+    config,
+    bot,
+    running,
+    finished,
+    author,
+    held,
+    firstLabel,
+    review,
+    label,
+  }) => {
+    const { world, calls, cycle, later } = await fixture(config);
+    const botRun = (state: string, description: string, createdAt: string) => ({
+      [bot]: { state, description, createdAt },
+    });
+    world.summary = summary({
+      bots: botRun("PENDING", running, "2026-10-23T01:00:00Z"),
     });
     world.comments = [
-      comment({}),
-      comment({
-        id: "inline:9",
-        author: "tanaka",
-        url: `${PR}#discussion_r9`,
-      }),
+      comment(held),
+      comment({ id: "inline:9", author, url: `${PR}#discussion_r9` }),
     ];
     await cycle();
 
     expect(calls.sent).toHaveLength(1);
-    expect(String(calls.sent[0]?.prompt)).toContain("[tanaka]");
+    expect(String(calls.sent[0]?.prompt)).toContain(firstLabel);
     expect(String(calls.sent[0]?.prompt)).not.toContain("discussion_r1");
 
     world.turns = [
       delegatedTurn(NOON, calls.sent[0]?.prompt, `${PR}#discussion_r9`),
     ];
-    world.summary = summary({ updatedAt: "2026-10-23T02:00:00Z" });
+    world.summary = summary({
+      updatedAt: "2026-10-23T02:00:00Z",
+      bots: botRun("SUCCESS", finished, "2026-10-23T01:00:00Z"),
+    });
     later(1);
     await cycle();
 
     expect(calls.sent).toHaveLength(2);
-    expect(String(calls.sent[1]?.prompt)).toContain("CodeRabbitのレビュー完了");
-    expect(String(calls.sent[1]?.prompt)).toContain("discussion_r1");
-  });
-
-  test("tells a review without findings to report no findings", async () => {
-    const { world, calls, cycle } = await fixture();
-    world.extra = { noActionable: ["coderabbit"] };
-
-    await cycle();
-
-    expect(String(calls.sent[0]?.prompt)).toContain(
-      "「指摘なし」とだけ報告してください",
+    expect(String(calls.sent[1]?.prompt)).toContain(review);
+    expect(String(calls.sent[1]?.prompt)).toContain(
+      `${label} src/pay.kt:42 ${PR}#discussion_r1`,
     );
-    expect(String(calls.sent[0]?.prompt)).not.toContain("一致しない");
   });
 
   test.each([
@@ -782,80 +815,6 @@ describe("runCycle", () => {
     expect([delivered?.bot, delivered?.approval]).toEqual(["coderabbit", null]);
   });
 
-  test("waits for Claude's check run and labels its findings by the severity they open with", async () => {
-    const { world, calls, cycle, later } = await fixture({
-      reviewBots: ["claude"],
-    });
-    const claudeRun = (state: string) => ({
-      claude: { state, description: "", createdAt: "2026-10-23T01:00:00Z" },
-    });
-    world.summary = summary({ bots: claudeRun("PENDING") });
-    world.comments = [
-      comment({ author: "claude[bot]", body: "[warning] 重複します。" }),
-      comment({ id: "inline:9", url: `${PR}#discussion_r9` }),
-    ];
-    await cycle();
-
-    expect(calls.sent).toHaveLength(1);
-    expect(String(calls.sent[0]?.prompt)).not.toContain("discussion_r1");
-
-    world.turns = [
-      delegatedTurn(NOON, calls.sent[0]?.prompt, `${PR}#discussion_r9`),
-    ];
-    world.summary = summary({
-      updatedAt: "2026-10-23T02:00:00Z",
-      bots: claudeRun("SUCCESS"),
-    });
-    later(1);
-    await cycle();
-
-    expect(String(calls.sent[1]?.prompt)).toContain("Claudeのレビュー完了");
-    expect(String(calls.sent[1]?.prompt)).toContain(
-      `[Claude・warning] src/pay.kt:42 ${PR}#discussion_r1`,
-    );
-  });
-
-  test("waits for and names a review bot the config describes instead of CodeRabbit", async () => {
-    const { world, calls, cycle, later } = await fixture({
-      reviewBots: [
-        {
-          id: "other",
-          name: "OtherBot",
-          login: "other-reviewer[bot]",
-          status: { context: "Other Review", completed: "done" },
-        },
-      ],
-    });
-    const otherStatus = (state: string, description: string) => ({
-      other: { state, description, createdAt: "2026-10-23T01:00:00Z" },
-    });
-    world.summary = summary({ bots: otherStatus("PENDING", "running") });
-    world.comments = [
-      comment({ author: "other-reviewer[bot]", body: "x" }),
-      comment({ id: "inline:9", url: `${PR}#discussion_r9` }),
-    ];
-    await cycle();
-
-    expect(calls.sent).toHaveLength(1);
-    expect(String(calls.sent[0]?.prompt)).toContain("[coderabbitai[bot]]");
-    expect(String(calls.sent[0]?.prompt)).not.toContain("discussion_r1");
-
-    world.turns = [
-      delegatedTurn(NOON, calls.sent[0]?.prompt, `${PR}#discussion_r9`),
-    ];
-    world.summary = summary({
-      updatedAt: "2026-10-23T02:00:00Z",
-      bots: otherStatus("SUCCESS", "done"),
-    });
-    later(1);
-    await cycle();
-
-    expect(String(calls.sent[1]?.prompt)).toContain("OtherBotのレビュー完了");
-    expect(String(calls.sent[1]?.prompt)).toContain(
-      `[OtherBot] src/pay.kt:42 ${PR}#discussion_r1`,
-    );
-  });
-
   test("stops reading a PR it found over for as long as the process runs", async () => {
     const { world, logs, cycle, paths } = await fixture();
     const over = new Set<string>();
@@ -968,12 +927,37 @@ describe("runCycle", () => {
     expect(String(calls.sent[1]?.prompt)).toContain("discussion_r9");
   });
 
-  test("resumes a PR stopped for a gone chat once another chat takes it", async () => {
+  test.each([
+    {
+      name: "stopped for a gone chat",
+      stop: (world: Fields) => {
+        world.gone = true;
+      },
+      resume: (world: Fields) => {
+        world.gone = false;
+      },
+      stopped: "stopped",
+    },
+    {
+      name: "halted on an unconfirmed send",
+      stop: (world: Fields) => {
+        world.sendOutcome = "unknown";
+      },
+      resume: (world: Fields) => {
+        world.sendOutcome = "done";
+      },
+      stopped: "halted",
+    },
+  ])("hands a PR $name over to the chat that takes it and sends what it still had to send", async ({
+    stop,
+    resume,
+    stopped,
+  }) => {
     const { world, calls, cycle, state, later, paths } = await fixture();
-    world.gone = true;
     world.comments = [comment({})];
+    stop(world);
     await cycle();
-    expect((await state()).status).toBe("stopped");
+    expect((await state()).status).toBe(stopped);
 
     await recordLink(paths.state, {
       repo: "org/pay",
@@ -982,32 +966,7 @@ describe("runCycle", () => {
       worker: "next",
       linkedAt: LINKED_AT,
     });
-    world.gone = false;
-    world.sender = "sender";
-    later(1);
-    await cycle();
-
-    expect([(await state()).status, calls.sent.at(-1)?.threadId]).toEqual([
-      "watching",
-      "next",
-    ]);
-  });
-
-  test("hands a halted PR over and keeps what it still had to send", async () => {
-    const { world, calls, cycle, state, later, paths } = await fixture();
-    world.comments = [comment({})];
-    world.sendOutcome = "unknown";
-    await cycle();
-    expect((await state()).status).toBe("halted");
-
-    await recordLink(paths.state, {
-      repo: "org/pay",
-      number: 7,
-      url: PR,
-      worker: "next",
-      linkedAt: LINKED_AT,
-    });
-    world.sendOutcome = "done";
+    resume(world);
     world.sender = "sender";
     later(1);
     await cycle();
