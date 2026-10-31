@@ -20,6 +20,7 @@ import type { createSideChats, Opened } from "./side-chat.ts";
 import type { SubagentRequests } from "./subagent-requests.ts";
 import type { Thread } from "./thread-request.ts";
 import type { ThreadValues } from "./thread-values.ts";
+import type { ThreadEnd } from "./turn-runtime.ts";
 
 type History = ReturnType<typeof createHistoryRequests>;
 
@@ -44,7 +45,8 @@ export type Pending =
       threadId: string;
       history: ReturnType<History["load"]> | null;
     }
-  | { kind: "childList"; params: Record<string, unknown> };
+  | { kind: "childList"; params: Record<string, unknown> }
+  | { kind: "threadEnd"; threadId: string; ended: ThreadEnd };
 
 export type ResponseEvent =
   | { event: "model_id_collision"; model: string }
@@ -67,6 +69,7 @@ type Deps = {
       sourceId: string,
     ) => Promise<void>;
     liveTurnOf: (threadId: string) => LiveTurn | null;
+    releaseThread: (threadId: string, ended: ThreadEnd) => void;
   };
   threads: Pick<
     ThreadValues,
@@ -131,6 +134,9 @@ export const createServerResponses = ({
         return rewriteThreadRead(line, message, result, request);
       case "threadOpen":
         return rewriteThreadOpen(line, message, result, request);
+      case "threadEnd":
+        turns.releaseThread(request.threadId, request.ended);
+        return line;
     }
   };
 

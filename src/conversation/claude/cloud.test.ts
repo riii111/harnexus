@@ -374,6 +374,19 @@ describe("createCloudRuntime turns", () => {
     expect(env.runtime.recordOf("thread-1", "turn-1")).toBe("p1");
   });
 
+  test("forgets the record a finished turn named once the thread is archived", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "continue"), endReply("a1", "done")]],
+      shown: null,
+    });
+    await env.runtime.run(env.turn("continue").running);
+    expect(env.runtime.recordOf("thread-1", "turn-1")).toBe("p1");
+
+    env.runtime.forgetThread("thread-1", "archived");
+
+    expect(env.runtime.recordOf("thread-1", "turn-1")).toBeNull();
+  });
+
   test("waits for a message sent while it runs and shows a prompt typed elsewhere", async () => {
     const env = linked({
       copies: [
@@ -1221,6 +1234,7 @@ const fakeInner = (runs: string[]): TurnRuntime<string> => ({
   dropSession: () => {},
   noteFork: async () => {},
   dropFork: () => {},
+  forgetThread: () => {},
   threadBusy: () => {},
   threadIdle: () => {},
   listen: () => {},
