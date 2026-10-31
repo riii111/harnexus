@@ -358,7 +358,12 @@ describe("createCloudRuntime turns", () => {
     });
     expect(env.sessionIds.get("thread-1")).toBe("copy-3");
     // copy-4 was started before the reply's copy ended and is removed unread.
-    expect(env.discarded).toEqual(["copy-0", "copy-1", "copy-2", "copy-4"]);
+    expect([...env.discarded].sort()).toEqual([
+      "copy-0",
+      "copy-1",
+      "copy-2",
+      "copy-4",
+    ]);
   });
 
   test("finds its prompt only after where the app was shown, so an earlier same text is not taken", async () => {
@@ -466,14 +471,23 @@ describe("createCloudRuntime turns", () => {
     expect(env.sends).toEqual([]);
   });
 
-  test("stops waiting when the turn is stopped and says the session keeps working", async () => {
+  test.each([
+    {
+      name: "the turn is stopped",
+      stop: (env: Env, turn: FakeTurn) =>
+        env.runtime.interrupt(turn.running, false),
+    },
+    { name: "the bridge closes", stop: (env: Env) => env.runtime.closeAll() },
+  ])("stops waiting when $name and says the session keeps working", async ({
+    stop,
+  }) => {
     const env = linked({ copies: [], shown: null });
     env.wait = (woken) => woken;
     const turn = env.turn("hi");
     const running = env.runtime.run(turn.running);
     await env.untilSent(1);
 
-    env.runtime.interrupt(turn.running, false);
+    stop(env, turn);
     await running;
 
     expect(turn.outcome).toEqual({ status: "interrupted" });
@@ -548,7 +562,33 @@ describe("createCloudRuntime turns", () => {
     expect(turn.outcome).toEqual({ status: "completed" });
   });
 
-  test("takes a message that may have reached the session instead of refusing it, and leaves the outcome unknown", async () => {
+  test.each<{
+    name: string;
+    answer: SendAnswer;
+    expected: {
+      refusal: Awaited<ReturnType<Env["runtime"]["steer"]>>;
+      unknown: boolean;
+      texts: string[];
+    };
+  }>([
+    {
+      name: "a message that may have reached the session",
+      answer: Result.err(new CloudSendUnknown({ message: "timeout" })),
+      expected: {
+        refusal: null,
+        unknown: true,
+        texts: [refusalMessage("cloud_send_unknown"), "one"],
+      },
+    },
+    {
+      name: "a message the session refused",
+      answer: Result.err(new CloudSendRejected({ message: "archived" })),
+      expected: { refusal: "cloud_not_sent", unknown: false, texts: ["one"] },
+    },
+  ])("settles $name as its send went and stops waiting for it", async ({
+    answer,
+    expected,
+  }) => {
     const env = linked({
       copies: [[prompt("p1", "first"), endReply("a1", "one")]],
       shown: null,
@@ -558,9 +598,7 @@ describe("createCloudRuntime turns", () => {
     env.wait = () => steered.promise;
     const running = env.runtime.run(turn.running);
     await env.untilSent(1);
-    env.sendQueue.push(
-      Result.err(new CloudSendUnknown({ message: "timeout" })),
-    );
+    env.sendQueue.push(answer);
 
     const refusal = await env.runtime.steer(turn.running, {
       text: "second",
@@ -569,49 +607,12 @@ describe("createCloudRuntime turns", () => {
     steered.open();
     await running;
 
-    expect(refusal).toBeNull();
-    expect(turn.outcomeUnknown).toBe(true);
-    expect(turn.texts()).toContain(refusalMessage("cloud_send_unknown"));
+    expect({
+      refusal,
+      unknown: turn.outcomeUnknown,
+      texts: turn.texts(),
+    }).toEqual(expected);
     expect(turn.outcome).toEqual({ status: "completed" });
-  });
-
-  test("refuses a message the session refused and stops waiting for it", async () => {
-    const env = linked({
-      copies: [[prompt("p1", "first"), endReply("a1", "one")]],
-      shown: null,
-    });
-    const turn = env.turn("first");
-    const steered = createGate();
-    env.wait = () => steered.promise;
-    const running = env.runtime.run(turn.running);
-    await env.untilSent(1);
-    env.sendQueue.push(
-      Result.err(new CloudSendRejected({ message: "archived" })),
-    );
-
-    const refusal = await env.runtime.steer(turn.running, {
-      text: "second",
-      images: [],
-    });
-    steered.open();
-    await running;
-
-    expect(refusal).toBe("cloud_not_sent");
-    expect(turn.outcome).toEqual({ status: "completed" });
-  });
-
-  test("stops waiting when the bridge closes", async () => {
-    const env = linked({ copies: [], shown: null });
-    env.wait = (woken) => woken;
-    const turn = env.turn("hi");
-    const running = env.runtime.run(turn.running);
-    await env.untilSent(1);
-
-    env.runtime.closeAll();
-    await running;
-
-    expect(turn.outcome).toEqual({ status: "interrupted" });
-    expect(env.copyCalls).toBe(0);
   });
 
   test("keeps the previous copy while the new one could not be saved", async () => {
@@ -1017,6 +1018,8 @@ const endReply = (uuid: string, value: string) =>
   reply(uuid, `m-${uuid}`, text(value), "end_turn");
 
 type Env = ReturnType<typeof setup>;
+
+type FakeTurn = ReturnType<typeof fakeTurn>;
 
 const setup = ({
   copies,

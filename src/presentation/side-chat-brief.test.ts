@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { buildHistory } from "./history.ts";
-import { sideChatBrief } from "./side-chat-brief.ts";
+import { listedTurns, sideChatBrief } from "./side-chat-brief.ts";
 import { conversation, prompt, reply, text } from "./testing/session-record.ts";
 
 describe("sideChatBrief", () => {
@@ -21,29 +21,35 @@ describe("sideChatBrief", () => {
     expect(body).not.toContain("left out, so");
   });
 
-  test("keeps the first and newest messages of a long conversation and names the turns left out", () => {
-    const record = turns(40, 2_000);
+  test.each([
+    {
+      name: "a long conversation",
+      count: 40,
+      length: 2_000,
+      omitted: "question 20 ",
+    },
+    {
+      name: "many short messages",
+      count: 1_000,
+      length: 0,
+      omitted: "question 100 ",
+    },
+  ])("keeps the first and newest messages of $name within the budget, labels included, and names the turns left out", ({
+    count,
+    length,
+    omitted,
+  }) => {
+    const record = turns(count, length);
 
     const body = textOf(sideChatBrief(historyOf(record), "claude-fixture"));
 
     expect(body).toContain("[user, turn 1]\nquestion 1 ");
-    expect(body).toContain("[assistant, turn 40]\nanswer 40 ");
-    expect(body).not.toContain("question 20 ");
+    expect(body).toContain(`[assistant, turn ${count}]\nanswer ${count} `);
+    expect(body).not.toContain(omitted);
     expect(body).toMatch(
       /The messages after the first one through turn \d+ are left out, so instructions or constraints given there may be missing; ask the user/,
     );
     expect(body.length).toBeLessThanOrEqual(32_000);
-  });
-
-  test("keeps the whole text within the budget for many short messages, labels included", () => {
-    const record = turns(1_000, 0);
-
-    const body = textOf(sideChatBrief(historyOf(record), "claude-fixture"));
-
-    expect(body.length).toBeLessThanOrEqual(32_000);
-    expect(body).toContain("[user, turn 1]\nquestion 1 ");
-    expect(body).toContain("[assistant, turn 1000]\nanswer 1000 ");
-    expect(body).toMatch(/through turn \d+ are left out/);
   });
 
   test("cuts a huge first message so the newest exchange still fits", () => {
@@ -86,6 +92,54 @@ describe("sideChatBrief", () => {
   });
 });
 
+describe("listedTurns", () => {
+  test("reads the turns of a page, keeping only what the user sent of a turn still running", () => {
+    const items = [USER_MESSAGE, AGENT_MESSAGE];
+
+    const listed = listedTurns({
+      data: [
+        { id: "turn-1", status: "completed", items },
+        { id: "turn-2", status: "inProgress", items },
+      ],
+      nextCursor: "cursor",
+    });
+
+    expect<unknown>(listed).toEqual({
+      turns: [
+        { id: "turn-1", items },
+        { id: "turn-2", items: [USER_MESSAGE] },
+      ],
+      more: true,
+    });
+  });
+
+  test.each([
+    { name: "an answer that is no page", result: {} },
+    {
+      name: "a turn with no items",
+      result: { data: [{ id: "turn-1", status: "completed" }] },
+    },
+    {
+      name: "a user message with no content",
+      result: finished({ type: "userMessage" }),
+    },
+    {
+      name: "a text input with no text",
+      result: finished(userInput({ type: "text" })),
+    },
+    {
+      name: "a text input whose text is no string",
+      result: finished(userInput({ type: "text", text: 123 })),
+    },
+    {
+      name: "an agent message with no text",
+      result: finished({ type: "agentMessage" }),
+    },
+  ])("reads nothing from $name", ({ result }) => {
+    expect(listedTurns(result)).toBeNull();
+  });
+});
+
 const historyOf = (record: SessionMessage[]) =>
   buildHistory(record, { threadId: "th-side", cwd: "/fixture/work" });
 
@@ -105,3 +159,24 @@ const turns = (count: number, length: number) =>
 
 const textOf = (brief: ReturnType<typeof sideChatBrief>) =>
   brief?.content[0]?.text ?? "";
+
+const finished = (...items: object[]) => ({
+  data: [{ id: "turn-1", status: "completed", items }],
+  nextCursor: null,
+});
+
+const userInput = (input: object) => ({
+  type: "userMessage",
+  content: [input],
+});
+
+const USER_MESSAGE = {
+  type: "userMessage",
+  content: [{ type: "text", text: "question" }],
+};
+
+const AGENT_MESSAGE = {
+  type: "agentMessage",
+  text: "answer",
+  phase: "final_answer",
+};

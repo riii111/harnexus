@@ -37,17 +37,21 @@ describe("createSideChats.pointOf", () => {
     expect(brief).not.toContain("second question");
   });
 
-  test("names no point for a main conversation rewound to its start", async () => {
-    const { sideChats, rewinds } = setup();
-    rewinds.set("th-main", { sessionId: "session-main", at: null });
-
-    const point = await sideChats.pointOf("th-main", MAIN);
-
-    expect(point.isOk() && point.value).toBeNull();
-  });
-
-  test("names no point for a main thread with no Claude conversation yet", async () => {
-    const { sideChats } = setup({ sessions: {} });
+  test.each([
+    {
+      name: "a main conversation rewound to its start",
+      env: () => {
+        const env = setup();
+        env.rewinds.set("th-main", { sessionId: "session-main", at: null });
+        return env;
+      },
+    },
+    {
+      name: "a main thread with no Claude conversation yet",
+      env: () => setup({ sessions: {} }),
+    },
+  ])("names no point for $name", async ({ env }) => {
+    const { sideChats } = env();
 
     const point = await sideChats.pointOf("th-main", MAIN);
 
@@ -326,49 +330,6 @@ describe("createSideChats.referenceOf", () => {
       desc: page([RUNNING_TURN], "cursor"),
       asc: page([], null),
     },
-    {
-      name: "a turn with no items",
-      desc: page([{ id: "turn-1", status: "completed" }], null),
-      asc: page([], null),
-    },
-    {
-      name: "a user message with no content",
-      desc: page(
-        [
-          {
-            id: "turn-1",
-            status: "completed",
-            items: [{ type: "userMessage" }],
-          },
-        ],
-        null,
-      ),
-      asc: page([], null),
-    },
-    {
-      name: "a text input with no text",
-      desc: userInputPage({ type: "text" }),
-      asc: page([], null),
-    },
-    {
-      name: "a text input whose text is no string",
-      desc: userInputPage({ type: "text", text: 123 }),
-      asc: page([], null),
-    },
-    {
-      name: "an agent message with no text",
-      desc: page(
-        [
-          {
-            id: "turn-1",
-            status: "completed",
-            items: [{ type: "agentMessage" }],
-          },
-        ],
-        null,
-      ),
-      asc: page([], null),
-    },
   ])("fails rather than hand over an empty or mixed conversation on $name", async ({
     desc,
     asc,
@@ -618,18 +579,6 @@ const RUNNING_TURN = {
     { type: "agentMessage", text: "unfinished reply", phase: "commentary" },
   ],
 };
-
-const userInputPage = (input: object) =>
-  page(
-    [
-      {
-        id: "turn-1",
-        status: "completed",
-        items: [{ type: "userMessage", content: [input] }],
-      },
-    ],
-    null,
-  );
 
 const STALE_REPLY = {
   type: "agentMessage",
