@@ -77,20 +77,14 @@ describe("canceling Claude session startup", () => {
     normalAccountGate.open();
     await normalAccountGate.promise;
     expect(await firstPrompt(second.prompt())).toBe("second");
-    second.emit(sdk(answer("msg-2", "reply")));
-    await until(() => second.drained());
-    second.emit(sdk(success()));
-    await until(() => completedTurnStatuses(sent).length === 2);
+    await answerAndComplete(second, sent, "msg-2", 2);
 
     accountGate.open();
     await accountGate.promise;
     turns.startTurn(turnStart(12, "third"), undefined);
     await until(() => responseTo(sent, 12) !== undefined);
     expect(await firstPrompt(second.prompt())).toBe("third");
-    second.emit(sdk(answer("msg-3", "reply")));
-    await until(() => second.drained());
-    second.emit(sdk(success()));
-    await until(() => completedTurnStatuses(sent).length === 3);
+    await answerAndComplete(second, sent, "msg-3", 3);
 
     expect(settings).toHaveLength(2);
     expect(first.closes()).toBe(1);
@@ -122,10 +116,7 @@ describe("canceling Claude session startup", () => {
     turns.startTurn(turnStart(11, "second"), undefined);
     await until(() => second.started());
     expect(await firstPrompt(second.prompt())).toBe("second");
-    second.emit(sdk(answer("msg-2", "reply")));
-    await until(() => second.drained());
-    second.emit(sdk(success()));
-    await until(() => completedTurnStatuses(sent).length === 2);
+    await answerAndComplete(second, sent, "msg-2", 2);
 
     lateStartGate.open();
     await until(() => first.closes() === 1);
@@ -136,10 +127,7 @@ describe("canceling Claude session startup", () => {
     turns.startTurn(turnStart(12, "reuse second"), undefined);
     await until(() => responseTo(sent, 12) !== undefined);
     expect(await firstPrompt(second.prompt())).toBe("reuse second");
-    second.emit(sdk(answer("msg-3", "reply")));
-    await until(() => second.drained());
-    second.emit(sdk(success()));
-    await until(() => completedTurnStatuses(sent).length === 3);
+    await answerAndComplete(second, sent, "msg-3", 3);
 
     expect(settings).toHaveLength(2);
     turns.closeAll();
@@ -183,10 +171,7 @@ describe("canceling Claude session startup", () => {
     await until(() => responseTo(sent, 12) !== undefined);
     expect(await firstPrompt(first.prompt())).toBe("continue after interrupt");
     expect(gates).toEqual(["accept", "stop", "stop", "accept"]);
-    first.emit(sdk(answer("msg-3", "reply")));
-    await until(() => first.drained());
-    first.emit(sdk(success()));
-    await until(() => completedTurnStatuses(sent).length === 3);
+    await answerAndComplete(first, sent, "msg-3", 3);
 
     advancedGate.open();
     await advancedFinished.promise;
@@ -229,20 +214,14 @@ describe("canceling Claude session startup", () => {
     turns.startTurn(turnStart(12, "new session"), undefined);
     await until(() => second.started());
     expect(await firstPrompt(second.prompt())).toBe("new session");
-    second.emit(sdk(answer("msg-2", "reply")));
-    await until(() => second.drained());
-    second.emit(sdk(success()));
-    await until(() => completedTurnStatuses(sent).length === 3);
+    await answerAndComplete(second, sent, "msg-2", 3);
 
     resumeGate.open();
     await staleLookupFinished.promise;
     turns.startTurn(turnStart(13, "reuse new session"), undefined);
     await until(() => responseTo(sent, 13) !== undefined);
     expect(await firstPrompt(second.prompt())).toBe("reuse new session");
-    second.emit(sdk(answer("msg-3", "reply")));
-    await until(() => second.drained());
-    second.emit(sdk(success()));
-    await until(() => completedTurnStatuses(sent).length === 4);
+    await answerAndComplete(second, sent, "msg-3", 4);
 
     expect(lookups).toBe(2);
     expect(settings).toHaveLength(2);
@@ -1565,3 +1544,15 @@ const subagentEvents = (sent: Sent[]) =>
     }
     return [];
   });
+
+const answerAndComplete = async (
+  claude: FakeClaude,
+  sent: Sent[],
+  messageId: string,
+  completed: number,
+) => {
+  claude.emit(sdk(answer(messageId, "reply")));
+  await until(() => claude.drained());
+  claude.emit(sdk(success()));
+  await until(() => completedTurnStatuses(sent).length === completed);
+};
