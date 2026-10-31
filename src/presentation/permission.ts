@@ -5,6 +5,11 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { isObject } from "../runtime/object.ts";
 import type { ToolItem } from "./protocol.ts";
+import {
+  answerValuesOf,
+  REQUEST_USER_INPUT,
+  userInputParams,
+} from "./user-input.ts";
 
 export type ToolCall = {
   toolName: string;
@@ -321,23 +326,10 @@ const itemParams = (target: PromptTarget) => ({
   startedAtMs: target.now,
 });
 
-const userInputParams = (target: PromptTarget, questions: object[]) => ({
-  threadId: target.threadId,
-  turnId: target.turnId,
-  itemId: target.itemId,
-  questions,
-  isBlocking: true,
-  autoResolutionMs: null,
-});
-
-const answersTo = (answer: unknown, id: string): string[] => {
-  if (!isObject(answer) || !isObject(answer.answers)) return [];
-  const entry = answer.answers[id];
-  if (!isObject(entry) || !Array.isArray(entry.answers)) return [];
-  return entry.answers.filter(
+const answersTo = (answer: unknown, id: string): string[] =>
+  answerValuesOf(answer, id).filter(
     (value): value is string => typeof value === "string" && value !== "",
   );
-};
 
 const askedQuestions = (input: Record<string, unknown>) => {
   const { questions } = input;
@@ -392,7 +384,6 @@ type AskedQuestion = {
 
 const ASK_USER_QUESTION = "AskUserQuestion";
 const EXIT_PLAN_MODE = "ExitPlanMode";
-const REQUEST_USER_INPUT = "item/tool/requestUserInput";
 const PLAN_QUESTION = "plan";
 const APPROVAL_QUESTION = "approval";
 const APPROVE_PLAN = "Approve";

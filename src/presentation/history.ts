@@ -12,6 +12,12 @@ import type {
   Turn,
   UserInput,
 } from "./protocol.ts";
+import {
+  inProgressTurn,
+  itemCompletedAt,
+  itemStartedAt,
+  subagentActivityItem,
+} from "./protocol-values.ts";
 import { RECOVERY_CONTEXT, RECOVERY_NOTICE } from "./recovery.ts";
 import {
   AGENT_TOOLS,
@@ -115,17 +121,7 @@ export const renderRecords = (
       if (prompt === null) {
         add(renderSdkMessage(current, toolResultsOf(message, body), at));
       } else if (opensTurn(prompt)) {
-        add(
-          renderUserInput(
-            current,
-            [
-              { type: "text", text: prompt.text, text_elements: [] },
-              ...prompt.images,
-            ],
-            null,
-            at,
-          ),
-        );
+        add(renderUserInput(current, inputOf(prompt), null, at));
       }
     } else if (isAssistantBody(body)) {
       add(renderSdkMessage(current, assistantOf(message, body), at));
@@ -158,17 +154,7 @@ export const withLiveTurn = (
     return [
       ...history,
       {
-        turn: {
-          id: live.turnId,
-          rootTurnId: live.turnId,
-          items: [],
-          itemsView: "summary",
-          status: "inProgress",
-          error: null,
-          startedAt: Math.floor(live.startedAtMs / 1000),
-          completedAt: null,
-          durationMs: null,
-        },
+        turn: inProgressTurn(live.turnId, live.startedAtMs, "summary"),
         items: [],
       },
     ];
@@ -204,6 +190,7 @@ export const replayHistory = (
     const startedAtMs = turn.startedAt === null ? now : turn.startedAt * 1000;
     const completedAtMs =
       turn.completedAt === null ? now : turn.completedAt * 1000;
+    const ref = { threadId, turnId: turn.id };
     return [
       {
         method: "turn/started",
@@ -226,26 +213,8 @@ export const replayHistory = (
           startedAtMs: itemStarted,
           completedAtMs: itemCompleted,
         }): AppNotification[] => [
-          {
-            method: "item/started",
-            params: {
-              item,
-              threadId,
-              turnId: turn.id,
-              startedAtMs: itemStarted ?? startedAtMs,
-            },
-            emittedAtMs: itemStarted ?? startedAtMs,
-          },
-          {
-            method: "item/completed",
-            params: {
-              item,
-              threadId,
-              turnId: turn.id,
-              completedAtMs: itemCompleted ?? completedAtMs,
-            },
-            emittedAtMs: itemCompleted ?? completedAtMs,
-          },
+          itemStartedAt(item, ref, itemStarted ?? startedAtMs),
+          itemCompletedAt(item, ref, itemCompleted ?? completedAtMs),
         ],
       ),
       {
@@ -296,17 +265,12 @@ const noteAgents = (
     }
     const agent = agentThreadOf(block.id);
     if (agent === undefined) continue;
-    const activity = (kind: "started" | "completed"): ThreadItem => ({
-      type: "subAgentActivity",
-      id: `${agent.threadId}-${kind}-${block.id}`,
-      kind,
-      agentThreadId: agent.threadId,
-      agentPath: agent.path,
-    });
-    const items = [
-      activity("started"),
+    const items: ThreadItem[] = [
+      subagentActivityItem(agent, "started", block.id),
       ...agent.edits.map((edit) => delegatedEditIn(edit, replay.state.turnId)),
-      ...(agent.active ? [] : [activity("completed")]),
+      ...(agent.active
+        ? []
+        : [subagentActivityItem(agent, "completed", block.id)]),
     ];
     for (const item of items) {
       replay.items.set(item.id, {
@@ -442,15 +406,9 @@ const start = (
     opened,
   );
   if (prompt === null) return replay;
-  const input: UserInput[] = [
-    ...(prompt.text === "" && prompt.images.length > 0
-      ? []
-      : [{ type: "text", text: prompt.text, text_elements: [] }]),
-    ...prompt.images,
-  ];
   const shown = collect(
     replay,
-    renderUserInput(replay.state, input, null, at ?? 0),
+    renderUserInput(replay.state, inputOf(prompt), null, at ?? 0),
   );
   return prompt.recovering
     ? collect(
@@ -495,16 +453,21 @@ const close = (replay: Replay): HistoryTurn => {
   };
 };
 
-// A completion replaces the item it closes, since the renderer may complete one item twice to correct a denial.
 const collect = (replay: Replay, rendered: Rendered): Replay => {
-  const items = replay.items;
-  for (const notification of rendered.notifications) {
-    noteItem(items, notification);
-  }
-  return { ...replay, state: rendered.state, items };
+  noteItems(replay.items, rendered.notifications);
+  return { ...replay, state: rendered.state };
 };
 
 // Shared with a subagent's thread, whose turns the bridge keeps as they run.
+export const noteItems = (
+  items: Map<string, HistoryItem>,
+  notifications: readonly AppNotification[],
+) => {
+  for (const notification of notifications) noteItem(items, notification);
+};
+
+// A completion replaces the item it closes, since the renderer may complete one item twice to correct a denial.
+// The app can read a running turn while its text streams, so a started item takes in the text sent so far; its completion then replaces it with the whole text.
 export const noteItem = (
   items: Map<string, HistoryItem>,
   notification: AppNotification,
@@ -524,10 +487,43 @@ export const noteItem = (
       startedAtMs: items.get(item.id)?.startedAtMs ?? completedAtMs,
       completedAtMs,
     });
+  } else if (notification.method === "item/agentMessage/delta") {
+    const { itemId, delta } = notification.params;
+    updateOpenItem(items, itemId, (item) =>
+      item.type === "agentMessage"
+        ? { ...item, text: item.text + delta }
+        : item,
+    );
+  } else if (notification.method === "item/reasoning/textDelta") {
+    const { itemId, delta, contentIndex } = notification.params;
+    updateOpenItem(items, itemId, (item) => {
+      if (item.type !== "reasoning") return item;
+      const content = [...item.content];
+      content[contentIndex] = (content[contentIndex] ?? "") + delta;
+      return { ...item, content };
+    });
   }
 };
 
+const updateOpenItem = (
+  items: Map<string, HistoryItem>,
+  itemId: string,
+  update: (item: ThreadItem) => ThreadItem,
+) => {
+  const entry = items.get(itemId);
+  if (entry === undefined || entry.completedAtMs !== null) return;
+  items.set(itemId, { ...entry, item: update(entry.item) });
+};
+
 type Prompt = { text: string; images: UserInput[]; recovering?: boolean };
+
+// An image sent alone has no text to show beside it.
+const inputOf = (prompt: Prompt): UserInput[] => [
+  ...(prompt.text === "" && prompt.images.length > 0
+    ? []
+    : [{ type: "text", text: prompt.text, text_elements: [] }]),
+  ...prompt.images,
+];
 
 // A user record carrying tool results continues the turn; any other user record is a prompt, whose first text block is what was typed and whose later ones are files the bridge attached.
 // The file an attached image came from may be gone, so the image is shown from the copy Claude recorded.

@@ -4,7 +4,7 @@ import {
   delegatedEditIn,
   type HistoryItem,
   type HistoryTurn,
-  noteItem,
+  noteItems,
 } from "./history.ts";
 import type {
   AppNotification,
@@ -13,6 +13,12 @@ import type {
   ThreadItem,
   Turn,
 } from "./protocol.ts";
+import {
+  itemCompletedAt,
+  itemStartedAt,
+  subagentActivityItem,
+  toSeconds,
+} from "./protocol-values.ts";
 import {
   closeTurn,
   markToolDeclined,
@@ -52,13 +58,11 @@ export const renderSubagentActivity = (
   turnId: string | null = child.turnId,
 ): AppNotification[] => {
   if (turnId === null) return [];
-  const item: SubAgentActivityItem = {
-    type: "subAgentActivity",
-    id: subagentActivityId(child.id, kind, child.toolUseId),
+  const item = subagentActivityItem(
+    { threadId: child.id, path: child.path },
     kind,
-    agentThreadId: child.id,
-    agentPath: child.path,
-  };
+    child.toolUseId,
+  );
   return shownAt(item, { threadId: child.parentThreadId, turnId }, now);
 };
 
@@ -86,16 +90,8 @@ const shownAt = (
   ref: { threadId: string; turnId: string },
   now: number,
 ): AppNotification[] => [
-  {
-    method: "item/started",
-    params: { item, ...ref, startedAtMs: now },
-    emittedAtMs: now,
-  },
-  {
-    method: "item/completed",
-    params: { item, ...ref, completedAtMs: now },
-    emittedAtMs: now,
-  },
+  itemStartedAt(item, ref, now),
+  itemCompletedAt(item, ref, now),
 ];
 
 // The parent's own thread, as the server reports it, gives the fields only the server knows, such as its directory and environment, which the agent shares.
@@ -142,18 +138,10 @@ export const childThreadView = (
 export const threadOfAnswer = (answer: unknown) =>
   isObject(answer) && isObject(answer.thread) ? answer.thread : null;
 
-export const subagentActivityId = (
-  agentThreadId: string,
-  kind: SubAgentActivityItem["kind"],
-  toolUseId: string,
-) => `${agentThreadId}-${kind}-${toolUseId}`;
-
 const statusOf = (child: SubagentThread) =>
   child.active
     ? { type: "active" as const, activeFlags: [] as never[] }
     : { type: "idle" as const };
-
-const toSeconds = (ms: number) => Math.floor(ms / 1000);
 
 // A subagent's thread runs one turn for each time the agent runs, holding what the agent did; Claude sends no prompt of the agent's, so the task's own prompt opens the turn.
 export type SubagentTurn = {
@@ -240,39 +228,10 @@ export const runningSubagentTurn = (turn: SubagentTurn): HistoryTurn => ({
 });
 
 // The turn's items are kept in one map for the turn's life, since an agent's turn can stream many messages.
-// The app can read a running turn while its text streams, so a started item takes in the text sent so far; its completion then replaces it with the whole text.
 const collect = (
   turn: SubagentTurn,
   notifications: readonly AppNotification[],
 ): SubagentTurn => {
-  for (const notification of notifications) {
-    noteItem(turn.items, notification);
-    if (notification.method === "item/agentMessage/delta") {
-      const { itemId, delta } = notification.params;
-      updateOpenItem(turn.items, itemId, (item) =>
-        item.type === "agentMessage"
-          ? { ...item, text: item.text + delta }
-          : item,
-      );
-    } else if (notification.method === "item/reasoning/textDelta") {
-      const { itemId, delta, contentIndex } = notification.params;
-      updateOpenItem(turn.items, itemId, (item) => {
-        if (item.type !== "reasoning") return item;
-        const content = [...item.content];
-        content[contentIndex] = (content[contentIndex] ?? "") + delta;
-        return { ...item, content };
-      });
-    }
-  }
+  noteItems(turn.items, notifications);
   return turn;
-};
-
-const updateOpenItem = (
-  items: Map<string, HistoryItem>,
-  itemId: string,
-  update: (item: ThreadItem) => ThreadItem,
-) => {
-  const entry = items.get(itemId);
-  if (entry === undefined || entry.completedAtMs !== null) return;
-  items.set(itemId, { ...entry, item: update(entry.item) });
 };
