@@ -22,7 +22,7 @@ import {
 } from "./records.ts";
 import { type Env, io, readText, singleLine } from "./request.ts";
 
-export const CLOUD_CLAUDE_BIN = "/workspace/.cloud-setup/bin/claude-cloud";
+const CLOUD_CLAUDE_BIN = "/workspace/.cloud-setup/bin/claude-cloud";
 const DEFAULT_TIMEOUT_MS = 60 * 60_000;
 const DEFAULT_KILL_GRACE_MS = 5_000;
 const KEY = /^[\p{L}\p{N}_][\p{L}\p{N}_.:/-]{0,127}$/u;
@@ -41,7 +41,7 @@ export type ClaudeArgs = {
   recover?: Recovery;
 };
 
-export type CloudDeps = { env: Env; saveJson: SaveJson; cwd?: string };
+type CloudDeps = { env: Env; saveJson: SaveJson; cwd?: string };
 
 const directory = (env: Env, key: string) =>
   stateDirectory(env, "cloud-claude", key);

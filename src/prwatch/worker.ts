@@ -14,9 +14,9 @@ export type Workers = {
   send: (sender: string, worker: string, prompt: string) => Promise<Sending>;
 };
 
-export type Sent = { at: string; sender: string; prompt: string };
+type Sent = { at: string; sender: string; prompt: string };
 
-export type WorkerView =
+type WorkerView =
   | { gone: true }
   | {
       gone: false;
@@ -33,7 +33,7 @@ export type Answer = {
 };
 
 // "unknown" means the message may have reached the worker.
-export type Sending = {
+type Sending = {
   outcome: "done" | "not_sent" | "unknown";
   detail: Fields;
 };

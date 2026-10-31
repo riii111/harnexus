@@ -19,7 +19,7 @@ class CronRecordCorrupt extends TaggedError("CronRecordCorrupt")<{
   message: string;
 }> {}
 
-export type SavedAutomation = {
+type SavedAutomation = {
   kind: string | null;
   targetThreadId: string | null;
   name: string | null;

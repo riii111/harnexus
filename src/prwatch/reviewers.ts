@@ -16,7 +16,7 @@ export type ReviewBot = {
   severity: string | null;
 };
 
-export type BotProgress =
+type BotProgress =
   | { context: string; completed: string }
   | { checkRun: string };
 
@@ -43,8 +43,6 @@ export const PRESETS = {
     severity: String.raw`^\[(critical|warning|suggestion)\]`,
   },
 } as const satisfies Record<string, ReviewBot>;
-
-export type PresetName = keyof typeof PRESETS;
 
 export const botOf = (bots: readonly ReviewBot[], login: string) =>
   bots.find((bot) => bot.login.toLowerCase() === login.toLowerCase()) ?? null;

@@ -8,7 +8,7 @@ export type LinkStore = {
   get: (threadId: string) => object | undefined;
 };
 
-export type AppTool =
+type AppTool =
   | (typeof READ_TOOLS)[number]
   | "create_thread"
   | "send_message_to_thread"

@@ -1,6 +1,6 @@
 import { Result, TaggedError } from "better-result";
 
-export class GitHubUnreachable extends TaggedError("GitHubUnreachable")<{
+class GitHubUnreachable extends TaggedError("GitHubUnreachable")<{
   cause: unknown;
   message: string;
 }> {}

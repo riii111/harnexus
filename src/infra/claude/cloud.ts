@@ -27,7 +27,7 @@ export const parseCloudSessionId = (text: string): string | null => {
   return CLOUD_URL.exec(trimmed)?.[1] ?? null;
 };
 
-export type RunProcess = typeof runProcess;
+type RunProcess = typeof runProcess;
 
 export type CloudCli = {
   file: string;
@@ -262,7 +262,7 @@ class CloudCopyUnstable extends TaggedError("CloudCopyUnstable")<{
 // Each teleport copy gives the records new uuids, which would change the turn ids, pages and cursors the app holds; a record's uuid is rewritten from when it was written, its kind and its content, so every copy names a record the same way.
 // Every occurrence of an old uuid is replaced, so the links between records, such as parentUuid, follow; a record without a time keeps its uuid.
 // teleport ends each copy with records of its own, the note that the session goes on here and the /cost command, timed when the copy ran; they are left out, so every copy ends with the Cloud session's last record. A Cloud record written while the copy ran is left out too and comes with the next copy.
-export const stabilizeCopy = async (
+const stabilizeCopy = async (
   copySessionId: string,
   copiedAt: number,
   configDir: string = claudeConfigDir(process.env),

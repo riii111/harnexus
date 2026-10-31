@@ -24,7 +24,7 @@ export type CreateOutcome = {
   unknown: boolean;
 };
 
-export type FirstTurnRefusal =
+type FirstTurnRefusal =
   | {
       kind: "settings";
       threadId: string;

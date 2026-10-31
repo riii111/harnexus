@@ -335,7 +335,7 @@ const checkAnswer = (
 // An answer never seen in this long is given up on, so one lost turn cannot stop every later message to the worker.
 const ANSWER_WAIT_MS = 24 * 3_600_000;
 
-export const inQuietHours = (now: Date, quiet: WatchConfig["quietHours"]) => {
+const inQuietHours = (now: Date, quiet: WatchConfig["quietHours"]) => {
   if (quiet === null) return false;
 
   const minute = now.getHours() * 60 + now.getMinutes();
