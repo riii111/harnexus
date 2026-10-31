@@ -23,7 +23,6 @@ import type { PrRef, PrSummary } from "./github.ts";
 // Every path below is under the root the caller gives, so the watch never decides where its records live.
 export type PrLink = PrRef & { url: string; worker: string; linkedAt: string };
 
-// The watch reaches GitHub only, so a PR on another host is named but never linked.
 export const githubPr = (value: string) => {
   const matched = GITHUB_PR.exec(value);
   if (matched === null) return null;
@@ -36,14 +35,15 @@ export const githubPr = (value: string) => {
   };
 };
 
+// The watch reaches GitHub only, so a PR on another host is named but never linked.
 const GITHUB_PR =
   /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)(?:[/?#]\S*)?$/;
 
 export const samePr = (a: PrRef, b: PrRef) =>
   a.repo.toLowerCase() === b.repo.toLowerCase() && a.number === b.number;
 
-// Only the link is written here; the running watch is the one writer of a PR's state, and it notices the new chat itself.
 export const recordLink = (root: string, link: PrLink) =>
+  // Only the link is written here; the running watch is the one writer of a PR's state, and it notices the new chat itself.
   saveJson(linkPath(root, link), link);
 
 export const loadLink = async (
@@ -68,7 +68,6 @@ export const linkedChat = (root: string, ref: PrRef) =>
 const linkPath = (root: string, ref: PrRef) =>
   join(root, keyOf(ref), "link.json");
 
-// An unreadable link is skipped, so one broken record cannot stop the watch of every other PR.
 export const listLinks = (root: string, skip: ReadonlySet<string> = EMPTY) =>
   Result.gen(async function* () {
     const names = yield* Result.await(
@@ -82,6 +81,7 @@ export const listLinks = (root: string, skip: ReadonlySet<string> = EMPTY) =>
       if (skip.has(key) || !(await isDirectory(join(root, key)))) continue;
 
       const loaded = await loadJson(join(root, key, "link.json"));
+      // An unreadable link is skipped, so one broken record cannot stop the watch of every other PR.
       const link = linkOf(loaded.isOk() ? loaded.value : null);
       if (link !== null) links.push(link);
     }
@@ -147,9 +147,8 @@ export const freshState = (): WatchState => ({
   halted: null,
 });
 
-// No command brings an ended PR back, so a watch may stop reading it for as long as it runs.
 export const isOver = (state: WatchState) =>
-  // A stopped one is left readable, since naming it from another worker resumes it.
+  // No command brings an ended PR back, so a watch may stop reading it for as long as it runs; a stopped one is left readable, since naming it from another worker resumes it.
   state.status === "ended";
 
 export const loadWatchState = (root: string, ref: PrRef) =>
@@ -162,11 +161,11 @@ export const loadWatchState = (root: string, ref: PrRef) =>
     );
   });
 
-// A state written before review bots were configurable names CodeRabbit in its own fields; it is read as the coderabbit preset.
-// Its CodeRabbit key is taken as the bot already known, so the watch does not read CodeRabbit as newly added.
+// Reads a state written before review bots were configurable, which names CodeRabbit in its own fields, as the coderabbit preset.
 const upgraded = (state: WatchState): WatchState => ({
   ...state,
   summary: state.summary === null ? null : upgradedSummary(state.summary),
+  // Its CodeRabbit key is taken as the bot already known, so the watch does not read CodeRabbit as newly added.
   seen:
     state.summary !== null && !state.seen.some((key) => key.startsWith(BOT_KEY))
       ? [...state.seen, botKey("coderabbit")]
@@ -191,7 +190,7 @@ const upgradedSummary = (summary: PrSummary): PrSummary => {
     : { ...rest, bots: { coderabbit: coderabbit ?? null } };
 };
 
-// Marks a bot whose reviews the watch has taken in, so one added to the config later starts from what it already did.
+// Marks a bot whose reviews the watch has taken in.
 export const botKey = (id: string) => `${BOT_KEY}${id}`;
 
 const BOT_KEY = "bot:";
@@ -212,7 +211,6 @@ const upgradedEvent = (event: WatchEvent): WatchEvent => {
     : old;
 };
 
-// A finding written before approvals were told is never one.
 const upgradedFinding = (finding: Finding): Finding => {
   const { coderabbit, ...rest } = finding as Finding & { coderabbit?: boolean };
   return {
@@ -223,6 +221,7 @@ const upgradedFinding = (finding: Finding): Finding => {
         : coderabbit === true
           ? "coderabbit"
           : null,
+    // A finding written before approvals were told is never one.
     approval: finding.approval ?? null,
   };
 };
@@ -255,8 +254,8 @@ const senderPath = (root: string) => join(root, "sender.json");
 const statePath = (root: string, ref: PrRef) =>
   join(root, keyOf(ref), "state.json");
 
-// Keyed by the PR, so the latest worker to name it is the one told about it.
 export const keyOf = (ref: PrRef) =>
+  // Keyed by the PR, so the latest worker to name it is the one told about it.
   createHash("sha256")
     .update(`${ref.repo.toLowerCase()}#${ref.number}`)
     .digest("hex")
@@ -274,7 +273,6 @@ const loadJson = (path: string) =>
     );
   });
 
-// Indented by one space like the other harnexus-task records, so the files read alike.
 const saveJson = (path: string, data: unknown) =>
   Result.gen(async function* () {
     yield* Result.await(
@@ -283,6 +281,7 @@ const saveJson = (path: string, data: unknown) =>
       ),
     );
     yield* Result.await(
+      // Indented by one space like the other harnexus-task records, so the files read alike.
       writeFileAtomic(path, JSON.stringify(data, null, 1)).then((written) =>
         written.mapError(stateUnwritable),
       ),

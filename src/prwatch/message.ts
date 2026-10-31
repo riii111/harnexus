@@ -1,7 +1,7 @@
 import type { Finding } from "./classify.ts";
 import type { WatchEvent } from "./events.ts";
 
-// One message per PR, so a worker answers everything that happened since the last one in a single turn.
+// The one message a worker gets for everything that happened on a PR since the last one, answered in a single turn.
 export const messageOf = (
   pr: string,
   events: readonly WatchEvent[],
@@ -54,16 +54,16 @@ export const followUpOf = (
   "この指摘だけをGitHubで読んで判定し、リンクを添えて報告してください。\n\n" +
   numbered(missing.map((finding) => findingLine(finding)));
 
-// An approval without a body has nothing to judge, so the answer need not link it.
 export const missingFrom = (answer: string, findings: readonly Finding[]) =>
   findings.filter(
     (finding) =>
+      // An approval without a body has nothing to judge, so the answer need not link it.
       finding.approval !== "without_body" &&
       !answer.includes(anchorOf(finding.url)),
   );
 
-// How to fix and report is the worker's own, so the watch only carries the instructions the config gives it.
 const headerOf = (instructions: string | null) =>
+  // How to fix and report is the worker's own, so the watch only carries the instructions the config gives it.
   instructions === null ? "" : `${instructions}\n`;
 
 const GUIDE =
@@ -133,8 +133,8 @@ const numbered = (lines: readonly string[]) =>
 
 const short = (sha: string) => sha.slice(0, 7);
 
-// The anchor names the comment whatever form of its link the answer quotes.
 const anchorOf = (url: string) => {
+  // The anchor names the comment whatever form of its link the answer quotes.
   const hash = url.indexOf("#");
   return hash === -1 ? url : url.slice(hash + 1);
 };
