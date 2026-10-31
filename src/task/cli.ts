@@ -13,9 +13,9 @@ import {
   recordSender,
 } from "../prwatch/store.ts";
 import type { WatchPaths } from "../prwatch/watcher.ts";
-import { isObject } from "../runtime/object.ts";
+import { type OptionTypes, parseOptions } from "../runtime/args.boundary.ts";
+import { type Fields, isObject } from "../runtime/object.ts";
 import { runCommand } from "../runtime/process.boundary.ts";
-import { type OptionTypes, parseOptions } from "./args.boundary.ts";
 import { type ClaudeArgs, claudeSession, PERMISSION_MODES } from "./cloud.ts";
 import { cloudReview } from "./cloud-review.ts";
 import {
@@ -23,7 +23,7 @@ import {
   detectEnvironment,
   refuseInCloud,
 } from "./environment.ts";
-import { asText, type Fields, fail, jsonEqual, truthy } from "./format.ts";
+import { asText, fail, jsonEqual, truthy } from "./format.ts";
 import {
   RECOVERIES,
   type Recovery,

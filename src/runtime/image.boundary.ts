@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { Result, TaggedError } from "better-result";
+import { captureCommand } from "./process.boundary.ts";
 
 class ImageResizeFailed extends TaggedError("ImageResizeFailed")<{
   cause: unknown;
@@ -23,7 +22,7 @@ export const resizeImage = (
         const input = join(dir, "input");
         const output = join(dir, `output.${format}`);
         await writeFile(input, bytes, { mode: 0o600 });
-        await run(
+        const { error } = await captureCommand(
           SIPS,
           [
             "--resampleHeightWidthMax",
@@ -35,8 +34,9 @@ export const resizeImage = (
             "--out",
             output,
           ],
-          { timeout: RESIZE_TIMEOUT_MS },
+          { timeoutMs: RESIZE_TIMEOUT_MS },
         );
+        if (error !== null) throw error;
         return await readFile(output);
       } finally {
         await rm(dir, { recursive: true, force: true });
@@ -45,8 +45,6 @@ export const resizeImage = (
     catch: (cause) =>
       new ImageResizeFailed({ cause, message: "cannot resize the image" }),
   });
-
-const run = promisify(execFile);
 
 const SIPS = "/usr/bin/sips";
 

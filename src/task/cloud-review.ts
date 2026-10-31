@@ -1,11 +1,11 @@
 import { join } from "node:path";
 import { Result } from "better-result";
-import { runClaude } from "../infra/claude/run.boundary.ts";
 import { prepareDirectory, removeFile } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
-import { isObject } from "../runtime/object.ts";
+import { type Fields, isObject } from "../runtime/object.ts";
+import { runProcess } from "../runtime/run.boundary.ts";
 import { acquire, configuredBinary, milliseconds, release } from "./cloud.ts";
-import { asText, detail, type Fields, fail, jsonEqual } from "./format.ts";
+import { asText, detail, fail, jsonEqual } from "./format.ts";
 import {
   readRecords,
   type SaveJson,
@@ -188,7 +188,7 @@ const locked = (
       ),
     );
     const unsent = () => io(removeFile(pendingPath));
-    const ran = await runClaude(bin, argv, prompt, {
+    const ran = await runProcess(bin, argv, prompt, {
       cwd: checkout,
       env: deps.env,
       timeoutMs,

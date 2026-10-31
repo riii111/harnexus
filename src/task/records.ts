@@ -9,8 +9,8 @@ import {
   writeFileExclusive,
 } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
-import { isObject } from "../runtime/object.ts";
-import { type Fields, fail, TaskFailed, truthy } from "./format.ts";
+import { type Fields, isObject } from "../runtime/object.ts";
+import { fail, TaskFailed, truthy } from "./format.ts";
 import { absoluteOr, type Env, homeOf, io, NAME } from "./request.ts";
 
 export const RECOVERIES = ["adopt", "discard"] as const;

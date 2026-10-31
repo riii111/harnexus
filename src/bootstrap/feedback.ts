@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { parseOptions } from "../runtime/args.boundary.ts";
 import { loadLogPath, loadStatePath } from "../runtime/config.ts";
 import {
   listFilesDeepIfExists,
@@ -49,10 +50,10 @@ import {
   redactPaths,
 } from "./feedback-report.ts";
 import { readLaunchd } from "./launchd.boundary.ts";
+import { REPO } from "./repo.ts";
 import { collectSetupFacts } from "./setup-facts.ts";
 
 // Gathers what a bug report needs into one text to paste; like doctor it changes nothing but the thread store's marker directory, and nothing it prints holds conversation text, code or credentials.
-const REPO = join(import.meta.dir, "..", "..");
 const LAUNCHER = join(REPO, "bin", "harnexus-codex");
 const NEW_ISSUE =
   "https://github.com/riii111/harnexus/issues/new?template=bug-report.yml";
@@ -70,8 +71,11 @@ const PUBLIC_ROOTS = [
 ];
 
 const now = Date.now();
-const args = readArgs(process.argv.slice(2));
-if (args === null) {
+const args = parseOptions(process.argv.slice(2), {
+  since: { type: "string" },
+  until: { type: "string" },
+});
+if (args.isErr()) {
   process.stderr.write(
     "usage: bun run feedback [--since 30m|2h|3d|<time>] [--until <duration or time>]\n",
   );
@@ -79,11 +83,16 @@ if (args === null) {
 }
 const since = parseTimeArgument(
   "--since",
-  args.since,
+  optionText(args.value.since),
   now,
   now - DEFAULT_WINDOW_MS,
 );
-const until = parseTimeArgument("--until", args.until, now, now);
+const until = parseTimeArgument(
+  "--until",
+  optionText(args.value.until),
+  now,
+  now,
+);
 if (since.isErr() || until.isErr() || since.value > until.value) {
   process.stderr.write(
     `harnexus: ${since.isErr() ? since.error.message : until.isErr() ? until.error.message : "--since must come before --until"}\n`,
@@ -181,21 +190,8 @@ process.stderr.write(
 );
 process.exit(0);
 
-function readArgs(argv: readonly string[]) {
-  const values: { since?: string; until?: string } = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index] ?? "";
-    const matched = /^--(since|until)(?:=(.*))?$/.exec(arg);
-    if (matched === null) return null;
-    let value = matched[2];
-    if (value === undefined) {
-      index += 1;
-      value = argv[index];
-    }
-    if (value === undefined || value === "") return null;
-    values[matched[1] as "since" | "until"] = value;
-  }
-  return values;
+function optionText(value: unknown) {
+  return typeof value === "string" ? value : undefined;
 }
 
 // The app runs with what open-app registered with launchd, and a variable launchd lacks takes its default there rather than this shell's value.

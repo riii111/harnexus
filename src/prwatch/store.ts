@@ -9,10 +9,10 @@ import {
   writeFileAtomic,
 } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
-import { isObject } from "../runtime/object.ts";
+import { type Fields, isObject } from "../runtime/object.ts";
 import type { Finding } from "./classify.ts";
 import type { WatchEvent } from "./events.ts";
-import { type Fields, ioFailed, WatchFailed } from "./failure.ts";
+import { ioFailed, WatchFailed } from "./failure.ts";
 import type { PrRef, PrSummary } from "./github.ts";
 
 // Every path below is under the root the caller gives, so the watch never decides where its records live.

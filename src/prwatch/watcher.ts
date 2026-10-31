@@ -1,8 +1,9 @@
 import { Result } from "better-result";
+import type { Fields } from "../runtime/object.ts";
 import type { Finding } from "./classify.ts";
 import { loadConfig, type WatchConfig } from "./config.ts";
 import { nextEvents, type WatchEvent } from "./events.ts";
-import { type Fields, jsonEqual } from "./failure.ts";
+import { jsonEqual } from "./failure.ts";
 import type { GitHub, PrSummary } from "./github.ts";
 import { followUpOf, messageOf, missingFrom } from "./message.ts";
 import {

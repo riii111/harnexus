@@ -14,9 +14,9 @@ import {
   openArguments,
   registeredEnvironment,
 } from "./open-app-plan.ts";
+import { REPO } from "./repo.ts";
 
 // Opens the app with harnexus, or with --standard as the app normally runs; either way the app must be quit first, since it reads its environment only at start.
-const REPO = join(import.meta.dir, "..", "..");
 const APP = resolve(
   process.env.HARNEXUS_APP_PATH || "/Applications/ChatGPT.app",
 );

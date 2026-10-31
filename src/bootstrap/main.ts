@@ -49,13 +49,12 @@ import { readBridgeIdentity } from "./bridge-identity.ts";
 import { connectClaudeThreads } from "./claude-threads.ts";
 import { reportCompatibilityFailure } from "./compatibility.boundary.ts";
 import { createBridgeLogger } from "./logging.ts";
+import { REPO } from "./repo.ts";
 import {
   serverFromEnv,
   signalWithLog,
   stopLingeringServer,
 } from "./supervise.ts";
-
-const REPO = join(import.meta.dir, "..", "..");
 
 const CLOUD_COPY_FOLDER = "cloud-copies";
 

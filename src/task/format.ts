@@ -8,8 +8,6 @@ export class TaskFailed extends TaggedError("TaskFailed")<{
 export const fail = (message: string) =>
   Result.err(new TaskFailed({ message }));
 
-export type Fields = Record<string, unknown>;
-
 // Python's str.isspace() set, so requests the Python taskctl accepted are accepted alike.
 export const SPACE_CHARS =
   "\\t-\\r\\x1c-\\x20\\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
