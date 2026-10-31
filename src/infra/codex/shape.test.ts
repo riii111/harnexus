@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PROTOCOL_FIELDS } from "./protocol-fields.ts";
-import { isShapePath, shapeKey, shapeOf } from "./shape.ts";
+import { isShapePath, shapeOf } from "./shape.ts";
 
 describe("shapeOf", () => {
   test("names each field's path and type and keeps discriminator words", () => {
@@ -165,13 +165,6 @@ describe("isShapePath", () => {
     { name: "an unknown type", path: "x:secret", expected: false },
   ])("tells $name", ({ path, expected }) => {
     expect(isShapePath(path)).toBe(expected);
-  });
-});
-
-describe("shapeKey", () => {
-  test("is the same for the same paths and differs otherwise", () => {
-    expect(shapeKey(["a:string"])).toBe(shapeKey(["a:string"]));
-    expect(shapeKey(["a:string"])).not.toBe(shapeKey(["a:number"]));
   });
 });
 

@@ -329,6 +329,14 @@ describe("answeredThreadId", () => {
       expected: "th-new",
     },
     {
+      name: "a structured threadId before another id in the text",
+      answer: {
+        content: [{ type: "text", text: '{"threadId":"th-other"}' }],
+        structuredContent: { threadId: "th-new" },
+      },
+      expected: "th-new",
+    },
+    {
       name: "a thread.id in text",
       answer: {
         content: [{ type: "text", text: '{"thread":{"id":"th-new"}}' }],

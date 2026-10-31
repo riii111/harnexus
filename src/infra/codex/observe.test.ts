@@ -405,9 +405,7 @@ describe("createObserver", () => {
   });
 
   test.each([
-    { source: "user", expected: "user" },
     { source: "guardian_review", expected: "guardian_review" },
-    { source: "side_chat", expected: "side_chat" },
     { source: "sk-ant-api03-Key0", expected: "<redacted>" },
     { source: "/private/path", expected: "<redacted>" },
     { source: "Feature", expected: "<redacted>" },

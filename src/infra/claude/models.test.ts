@@ -5,20 +5,9 @@ import {
   createModelCatalog,
   type EffortSettings,
   effortRule,
-  isClaudeModel,
   type ModelCatalog,
   modelsFromSdk,
 } from "./models.ts";
-
-describe("isClaudeModel", () => {
-  test.each([
-    { name: "a listed model", model: "claude-opus-5-5", expected: true },
-    { name: "a Codex model", model: "gpt-fixture", expected: false },
-    { name: "a missing model", model: undefined, expected: false },
-  ])("tells $name by its id", ({ model, expected }) => {
-    expect(isClaudeModel(model)).toBe(expected);
-  });
-});
 
 describe("modelsFromSdk", () => {
   test("pins an alias to the model it resolves to and names it with its version", () => {

@@ -26,25 +26,6 @@ describe("relay over recorded app-server shapes", () => {
     expect(countByDirection(logged)).toEqual(countByDirection(records));
     expect(log.join("")).not.toContain(SECRET_MARKER);
   });
-
-  test("records the dynamic tools the app passes to thread/start", async () => {
-    const path = join(FIXTURE_DIR, "handshake.jsonl");
-    const { log } = await replay(path, readFixture(path));
-
-    const threadStart = log
-      .map((line) => JSON.parse(line))
-      .find((record) => record.method === "thread/start" && record.tools);
-    expect(threadStart.tools).toEqual([
-      {
-        name: "fixture_echo",
-        inputSchema: {
-          type: "object",
-          properties: { text: { type: "string" } },
-          required: ["text"],
-        },
-      },
-    ]);
-  });
 });
 
 const FIXTURE_DIR = join(

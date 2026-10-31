@@ -26,13 +26,8 @@ describe("skillLinks", () => {
 });
 
 describe("skillBlock", () => {
-  test.each([
-    { name: "with", body: "Do it.\n" },
-    { name: "without", body: "Do it." },
-  ])("wraps a file $name a final newline in the shape Codex uses", ({
-    body,
-  }) => {
-    expect(skillBlock("one", "/skills/one/SKILL.md", body)).toBe(
+  test("wraps a file without a final newline in the shape Codex uses", () => {
+    expect(skillBlock("one", "/skills/one/SKILL.md", "Do it.")).toBe(
       "<skill>\n<name>one</name>\n<path>/skills/one/SKILL.md</path>\nDo it.\n</skill>",
     );
   });

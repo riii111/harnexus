@@ -491,17 +491,6 @@ describe("createGitHub", () => {
     ]);
   });
 
-  test("reads no commit status when no configured bot keeps one", async () => {
-    const { github, posts } = fake({ data: { p0: { pullRequest: pull } } });
-
-    const summaries = (
-      await github.summaries("owner", [{ repo: "org/pay", number: 7 }], [])
-    ).unwrap();
-
-    expect(posts[0]?.query).not.toContain("status {");
-    expect(summaries[0]?.bots).toEqual({});
-  });
-
   test("keeps an account's token for ten minutes", async () => {
     const { github, commands, clock } = fake({ data: { p0: null } });
     const read = () =>

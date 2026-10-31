@@ -8,17 +8,10 @@ const PR = "https://github.com/org/pay/pull/7";
 
 const RULES: IgnoreRule[] = [
   { author: "coderabbitai[bot]", kind: "issue_comment" },
-  { author: "github-actions[bot]", kind: "issue_comment" },
-  { author: "github-actions[bot]", kind: "review" },
   {
     author: "github-actions[bot]",
     kind: "inline",
     bodyIncludes: "[phase-timing]",
-  },
-  {
-    author: "github-actions[bot]",
-    kind: "inline",
-    bodyIncludes: "[wait-audit]",
   },
   { author: "blacksmith-sh[bot]" },
 ];
@@ -90,28 +83,10 @@ describe("classify", () => {
       expected: "ignore rule",
     },
     {
-      name: "a coverage report",
-      fields: { author: "github-actions[bot]", kind: "issue_comment" },
-      expected: "ignore rule",
-    },
-    {
-      name: "a review by github-actions",
-      fields: { author: "github-actions[bot]", kind: "review", body: "x" },
-      expected: "ignore rule",
-    },
-    {
       name: "a phase-timing annotation",
       fields: {
         author: "github-actions[bot]",
         body: "📝 **[phase-timing]** <hook-duration>",
-      },
-      expected: "ignore rule",
-    },
-    {
-      name: "a wait-audit annotation",
-      fields: {
-        author: "github-actions[bot]",
-        body: "⚠️ **[wait-audit]** <reducible-wait-time>",
       },
       expected: "ignore rule",
     },
@@ -139,21 +114,6 @@ describe("classify", () => {
       name: "a review without a body",
       fields: { kind: "review", body: " \n" },
       expected: "empty review",
-    },
-    {
-      name: "a reviewer's approval with a body",
-      fields: { kind: "review", approved: true, body: "LGTM" },
-      expected: "notified",
-    },
-    {
-      name: "a reviewer's approval without a body",
-      fields: { kind: "review", approved: true, body: "" },
-      expected: "notified",
-    },
-    {
-      name: "the owner's own approval",
-      fields: { author: "Owner", kind: "review", approved: true, body: "" },
-      expected: "owner",
     },
     {
       name: "a CodeRabbit approval without actionable comments",

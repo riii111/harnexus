@@ -5,16 +5,22 @@ describe("withoutApiBilling", () => {
   test("drops API keys and provider switches and keeps the rest", () => {
     const env = withoutApiBilling({
       PATH: "/usr/bin",
+      HOME: "/home/user",
       CLAUDE_CONFIG_DIR: "/home/user/.claude",
+      CLAUDE_CODE_OAUTH_TOKEN: "subscription-token",
       ANTHROPIC_API_KEY: "api-key",
+      ANTHROPIC_AUTH_TOKEN: "bearer",
       ANTHROPIC_BASE_URL: "https://gateway.example",
+      CLAUDE_CODE_USE_BEDROCK: "1",
       CLAUDE_CODE_USE_VERTEX: "1",
       CLAUDE_CODE_USE_GATEWAY: "1",
     });
 
     expect(env).toEqual({
       PATH: "/usr/bin",
+      HOME: "/home/user",
       CLAUDE_CONFIG_DIR: "/home/user/.claude",
+      CLAUDE_CODE_OAUTH_TOKEN: "subscription-token",
     });
   });
 
