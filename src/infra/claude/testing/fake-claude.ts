@@ -1,11 +1,12 @@
-import type {
-  AccountInfo,
-  EffortLevel,
-  ModelInfo,
-  Options,
-  PermissionMode,
-  SDKMessage,
-  SDKUserMessage,
+import {
+  type AccountInfo,
+  createSdkMcpServer,
+  type EffortLevel,
+  type ModelInfo,
+  type Options,
+  type PermissionMode,
+  type SDKMessage,
+  type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { ClaudeQuery, ClaudeSdk } from "../sdk.boundary.ts";
 
@@ -119,6 +120,7 @@ export const fakeClaude = (
     runtime: {
       query: run,
       resolveSettings,
+      createSdkMcpServer,
       env,
     } satisfies ClaudeSdk & { env: Record<string, string | undefined> },
     // True once the consumer has handled every message emitted so far and waits for the next one.

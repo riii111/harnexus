@@ -2,13 +2,12 @@ import { afterEach, beforeEach, expect } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  type AccountInfo,
-  type CanUseTool,
-  createSdkMcpServer,
-  type PermissionUpdate,
-  type SDKMessage,
-  type SDKUserMessage,
+import type {
+  AccountInfo,
+  CanUseTool,
+  PermissionUpdate,
+  SDKMessage,
+  SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
 import type { ResizeImage } from "../../infra/claude/images.ts";
@@ -275,7 +274,7 @@ export const harness = async (
       const link =
         linkRequest === undefined
           ? {
-              server: createSdkMcpServer({ name: "codex_link", tools: [] }),
+              server: { name: "codex_link", tools: [] },
               allowedTools: ALLOWED_TOOLS,
               hasUnsettledWrite: unsettledWrite,
               stopWrites: () => gates.push("stop"),

@@ -98,6 +98,40 @@ describe("startClaudeSession options", () => {
     });
   });
 
+  test("serves the given tools in this process beside the given MCP servers", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const mcpServers = { harnexus: { command: "harnexus-mcp" } };
+
+    await startClaudeSession(
+      { ...SETTINGS, mcpServers, toolServers: { codex_link: [] } },
+      claude.runtime,
+    );
+
+    expect(claude.options().mcpServers).toMatchObject({
+      harnexus: mcpServers.harnexus,
+      codex_link: { type: "sdk", name: "codex_link" },
+    });
+  });
+
+  test("starts no Claude process when a tool server cannot be created", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const runtime = {
+      ...claude.runtime,
+      createSdkMcpServer: () => {
+        // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
+        throw new Error("tool schema rejected");
+      },
+    };
+
+    const started = await startClaudeSession(
+      { ...SETTINGS, toolServers: { codex_link: [] } },
+      runtime,
+    );
+
+    expect(started.isErr() && started.error._tag).toBe("ClaudeStartFailed");
+    expect(claude.started()).toBe(false);
+  });
+
   test("forks the resumed session into a new one up to the given record when asked", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
 

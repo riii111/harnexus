@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AccountInfo } from "@anthropic-ai/claude-agent-sdk";
+import {
+  type AccountInfo,
+  createSdkMcpServer,
+} from "@anthropic-ai/claude-agent-sdk";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Result } from "better-result";
@@ -447,8 +450,9 @@ const connect = (
 };
 
 const linkClient = async (session: ClaudeSessionSettings | undefined) => {
-  const link = session?.mcpServers?.codex_link;
-  if (link?.type !== "sdk") return expect.unreachable("no thread tools");
+  const tools = session?.toolServers?.codex_link;
+  if (tools === undefined) return expect.unreachable("no thread tools");
+  const link = createSdkMcpServer({ name: "codex_link", tools });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   await link.instance.connect(serverTransport);
