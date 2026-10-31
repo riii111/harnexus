@@ -1188,7 +1188,7 @@ export const createClaudeRuntime = ({
   };
 
   // A thread with a turn, an approval, a session on its way or a paused stream keeps everything, since the server answered before that work ended.
-  // An archived thread can come back, so its session and fork point stay for the turns that follow; a deleted one cannot.
+  // An archived thread can come back to the same session, which still uses its plan, usage, agents and fork point, so only the turn records go; a deleted one cannot.
   const forgetThread = (threadId: string, ended: ThreadEnd) => {
     if (
       busyThreads.has(threadId) ||
@@ -1199,9 +1199,9 @@ export const createClaudeRuntime = ({
       return;
     }
     turnRecords.forget(threadId);
+    if (ended === "archived") return;
     display.forget(threadId);
     subagents.forget(threadId);
-    if (ended === "archived") return;
     forkPoints.forget(threadId);
     slots.close(threadId);
   };

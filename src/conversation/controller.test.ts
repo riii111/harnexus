@@ -627,6 +627,33 @@ describe("releaseThread", () => {
   });
 
   test.each([
+    { name: "archived", ended: "archived" as const, left: 1 },
+    { name: "deleted", ended: "deleted" as const, left: 0 },
+  ])("leaves $left finished agents of a $name thread, since an archived one resumes the same session", async ({
+    ended,
+    left,
+  }) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, subagents } = await harness([claude]);
+    subagents.start({
+      threadId: THREAD,
+      turnId: null,
+      toolUseId: "toolu-1",
+      taskId: "task-1",
+      description: "look",
+      agentType: "Explore",
+      cwd: dir,
+      prompt: "look",
+      depth: 1,
+    });
+    subagents.complete(THREAD, "task-1", { status: "completed" });
+
+    turns.releaseThread(THREAD, ended);
+
+    expect(subagents.childrenOf(THREAD)).toHaveLength(left);
+  });
+
+  test.each([
     { name: "archived", ended: "archived" as const },
     { name: "deleted", ended: "deleted" as const },
   ])("keeps the record and the session of a $name thread while its turn runs", async ({
