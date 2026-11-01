@@ -415,27 +415,53 @@ describe("createCloudRuntime /cloud", () => {
     expect(env.links).toEqual([]);
   });
 
-  test.each([
-    {
-      name: "a link that names no session",
-      text: "/cloud https://example.com/x",
-    },
-    {
-      name: "a request another chat sent",
-      text: "/cloud do it",
-      delegated: true,
-    },
-  ])("starts no session for $name", async ({ text, delegated }) => {
+  test("refuses a link that names no session, rather than starting one for it", async () => {
     const env = setup({ copies: [] });
-    const turn = env.turn(
-      text,
-      delegated ? { delegatedBy: "create_thread" } : {},
-    );
+    const turn = env.turn("/cloud https://example.com/x");
 
     await env.runtime.run(turn.running);
 
     expect(env.started).toEqual([]);
     expect(turn.texts().at(-1)).toContain("Send /cloud followed by");
+  });
+
+  test.each([
+    {
+      name: "a request another chat sent",
+      text: "/cloud do it",
+      options: { delegatedBy: "create_thread" as const },
+      held: false,
+    },
+    {
+      name: "a message typed in a chat that holds a conversation",
+      text: "/cloud also update the docs",
+      options: {},
+      held: true,
+    },
+  ])("passes $name on as a message, starting no session", async ({
+    text,
+    options,
+    held,
+  }) => {
+    const env = setup({ copies: [] });
+    if (held) env.sessionIds.set("thread-1", "local-1");
+    const turn = env.turn(text, options);
+
+    await env.runtime.run(turn.running);
+
+    expect(env.started).toEqual([]);
+    expect(env.innerRuns).toEqual(["turn-1"]);
+  });
+
+  test("names the session it started when the chat cannot show it, so it can be linked later", async () => {
+    const env = setup({ copies: [] });
+    env.copyFailure = "teleport failed";
+    const turn = env.turn("/cloud README の誤字を直して");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts().at(-1)).toContain(`/cloud ${CLOUD_ID}`);
+    expect(env.links).toEqual([]);
   });
 
   test("links a chat another chat opened with /cloud as its first message", async () => {

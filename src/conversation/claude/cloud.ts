@@ -265,12 +265,19 @@ export const createCloudRuntime = <Tag extends string>(
         return;
       }
     }
+    const typed = sessionCommandTextOf(turn.input) !== null;
     const command =
       turn.input.startedBy === "app"
         ? cloudCommandOf(commandText(turn.input))
         : null;
-    if (command !== null) {
-      await link(turn, command, sessionCommandTextOf(turn.input) !== null);
+    // A /cloud followed by more than a session is a command only where it can start one: typed in a chat that holds nothing yet. Elsewhere it is a message like any other.
+    const starts =
+      typed &&
+      startCloud !== undefined &&
+      threads.sessionIdOf(turn.threadId) === null &&
+      threads.cloudOf(turn.threadId) === null;
+    if (command !== null && (starts || !/\s/.test(command))) {
+      await link(turn, command, typed);
       return;
     }
     const cloud = threads.cloudOf(turn.threadId);
@@ -341,9 +348,12 @@ export const createCloudRuntime = <Tag extends string>(
       refuse(LINK_TAKEN);
       return;
     }
+    // A session started here keeps running whatever happens next, so a refusal names it for /cloud to link later.
+    const startedNote =
+      request === null ? "" : ` ${STARTED_UNLINKED(cloudSessionId)}`;
     const copied = await copyOf(threadId, cloudSessionId);
     if (copied.isErr()) {
-      refuse(`${LINK_NOT_COPIED}: ${copied.error.message}`);
+      refuse(`${LINK_NOT_COPIED}: ${copied.error.message}.${startedNote}`);
       return;
     }
     const shown = keyOfLast(copied.value.records);
@@ -355,16 +365,24 @@ export const createCloudRuntime = <Tag extends string>(
     if (linked.isErr()) {
       await discardCopy(copied.value.copy);
       refuse(
-        linked.error._tag === "CloudSessionTaken"
-          ? LINK_TAKEN
-          : linked.error._tag === "ThreadHasConversation"
-            ? LINK_HAS_CONVERSATION
-            : LINK_NOT_SAVED,
+        `${
+          linked.error._tag === "CloudSessionTaken"
+            ? LINK_TAKEN
+            : linked.error._tag === "ThreadHasConversation"
+              ? LINK_HAS_CONVERSATION
+              : LINK_NOT_SAVED
+        }${startedNote}`,
       );
       return;
     }
     log({ event: "claude_cloud", step: "linked" });
-    reply(turn, LINKED);
+    // Stopping while a session starts cannot undo it, so the chat still shows the session it started.
+    reply(
+      turn,
+      request !== null && turn.state().interrupting
+        ? `${STOPPED_AFTER_START}\n\n${LINKED}`
+        : LINKED,
+    );
     // A session still running its turn, such as one just started, is copied again soon rather than after the idle wait.
     const last = copied.value.records.at(-1);
     if (last === undefined || !replied(last)) hurry(threadId);
@@ -1254,6 +1272,12 @@ const NOT_A_REQUEST = /^(?:https?:\/\/|session_|cse_)\S*$/;
 const STARTING = "Starting a Cloud session for this request…";
 
 const START_FAILED = "The Cloud session could not be started";
+
+const STARTED_UNLINKED = (sessionId: string) =>
+  `The Cloud session ${sessionId} was started and keeps running; send /cloud ${sessionId} in a new chat to show it.`;
+
+const STOPPED_AFTER_START =
+  "The Cloud session had already started when this turn was stopped, so it keeps running and this chat shows it.";
 
 const LINK_HAS_CONVERSATION =
   "This thread already holds a conversation; open a new Claude thread and send /cloud there.";
