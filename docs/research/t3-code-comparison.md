@@ -72,8 +72,8 @@ T3 Code は独立したクライアント・サーバー型のアプリである
 | --- | --- | --- |
 | エージェント | Codex（Codex App 標準）と Claude | Codex、Claude、Cursor、Grok Build、OpenCode、Antigravity、fx、Pi、Muse、ACP Registry のエージェント |
 | モデル | Codex App のモデル一覧に Claude モデルを加える（`src/infra/claude/models.ts`、`src/conversation/model-list.ts`） | プロバイダごとのモデル一覧（今回は詳細を確認していない） |
-| Claude の認証 | Claude Code でログインした claude.ai のサブスクリプションのみ。APIキーとクラウド事業者のアカウントは非対応（`README.md`）。APIキー系の環境変数を外し、サブスクリプション以外を拒否する（`src/infra/claude/auth.ts`） | 各CLIのログインを使う（`claude auth login` など）。別のプロバイダインスタンスとして APIキーや OpenRouter も使える |
-| Codex の認証 | Codex App のログインをそのまま使う（README に追加手順がないことからの推測） | `codex login` |
+| Claude の認証 | Claude Code でログインした claude.ai のサブスクリプションのみ。APIキーとクラウド事業者のアカウントは非対応（`README.md`）。APIキー系の環境変数を外し、サブスクリプション以外を拒否する（`src/infra/claude/auth.ts`） | Claude Code を入れて `claude auth login` でログインする。別のプロバイダインスタンスとして APIキーや OpenRouter も使える |
+| Codex の認証 | Codex App のログインをそのまま使う（README に追加手順がないことからの推測） | T3 Code の設定から ChatGPT のプランで接続する（Codex の導入は T3 Code が行う）か、既存の Codex CLI で `codex login` する |
 | 複数アカウント | 記述なし | Codex・Claude で別アカウントの併用手順あり |
 
 T3 Code の根拠は [README.md][t3-readme]、[docs/user/faq.md][t3-faq]、[docs/user/providers-claude.md][t3-pclaude]、[docs/user/providers-codex.md][t3-pcodex] である。
@@ -84,9 +84,9 @@ T3 Code は 1Password を秘密情報の提供元として使える（[packages/
 | 機能 | harnexus | T3 Code |
 | --- | --- | --- |
 | 複数エージェントの協調 | Claude のチャットから Codex のスレッドを作成・送信・待機できる（`src/infra/codex/codex-link.ts`）。`harnexus-task` の `launch`・`review` で、worker と独立 reviewer を立てて反復させる（`src/task/cli.ts`） | オーケストレータの MCP サーバー経由で、任意のプロバイダの子スレッドへ作業を委任・待機・中断できる（[docs/orchestration-v2/orchestrator-mcp-server.md][t3-mcp]）。外部のエージェントも `/mcp` から操作できる（[docs/user/outside-agents.md][t3-outside]） |
-| スレッド途中のエージェント切替 | Claude のチャットは Codex に戻せない（`README.md`） | 要約を引き継いでプロバイダを切り替えられる（[docs/user/portable-handoffs.md][t3-handoff]） |
+| スレッド途中のエージェント切替 | Claude のチャットは Codex に戻せない（`README.md`） | 会話の文脈を引き継いでプロバイダを切り替えられる。短い会話は全体を、長い会話は選んだメッセージを本文・順序・役割を保ったまま渡し、エージェントが書く要約ではない（[docs/user/portable-handoffs.md][t3-handoff]） |
 | レビュー | AI レビュー: Claude の固定SHA差分を Codex reviewer に渡し、判定まで反復する（`src/task/cloud-review.ts`、`src/task/cli.ts`） | 人向けのレビュー画面: Diff ペイン、commit 単位の比較、PR のファイル既読（[docs/user/source-control.md][t3-sc]） |
-| PR 連携 | PR のレビュー指摘・CI 失敗などを監視してチャットへ届ける（`src/prwatch/`） | GitHub・GitLab・Forgejo・Bitbucket・Azure DevOps などで clone・公開・PR 作成（[docs/user/source-control.md][t3-sc]） |
+| PR 連携 | PR のレビュー指摘・CI 失敗などを監視してチャットへ届ける（`src/prwatch/`） | GitHub・GitLab・Forgejo・Bitbucket・Azure DevOps などで clone・公開・PR 作成。エージェントが `watch_pull_request` で PR を監視し、CI の失敗・必須チェックの成功・他者のコメントやレビュー・競合で起こされる（[docs/user/source-control.md][t3-sc]） |
 | セッション管理 | 画像添付、サイドチャット、巻き戻し、会話の再開（`README.md`、`src/conversation/side-chat.ts`、`src/conversation/revert-request.ts`） | スレッド一覧、worktree、端末、プランモード、添付（[docs/user/composer.md][t3-composer]、[docs/user/terminal.md][t3-terminal]） |
 | Cloud 連携 | Claude Code の Cloud セッションをチャットに表示して送信でき、`/cloud` で新規作成もできる。子セッションも同じプロジェクトのチャットとして開く（`README.md`、`src/infra/claude/cloud.ts`、`src/infra/claude/cloud-new.boundary.ts`） | 該当する機能は見つからなかった（未確認）。代わりに自分のマシンやVPSで動かすサーバーへ遠隔接続する |
 | 遠隔・モバイル | なし（macOS の Codex App 上で動く） | T3 Connect（Cloudflare トンネル）、LAN、Tailscale、SSH、iOS・Android アプリ（[docs/user/remote-access.md][t3-remote]） |
@@ -103,7 +103,9 @@ checkout と Bun の場所を変えず、更新後は `bun run open-app` をや�
 T3 Code は Windows・macOS・Linux に対応する（Intel Mac は CLI がなくデスクトップアプリのみ）（[docs/user/faq.md][t3-faq]）。
 導入は `curl -fsSL https://t3.codes/install.sh | sh` の後に `t3` を実行するか、`npx t3@latest` で試す（[README.md][t3-readme]）。
 デスクトップアプリは GitHub Releases、winget、scoop、Homebrew、`.deb`、AUR、nixpkgs で配布する（[README.md][t3-readme]）。
-サーバーの Node 要件は `^22.16 || ^23.11 || >=24.10` で（[apps/server/package.json][t3-server-pkg]）、使うエージェントのCLIを入れてログインしておく必要がある（[docs/user/install.md][t3-install]）。
+サーバーの Node 要件は `^22.16 || ^23.11 || >=24.10` で（[apps/server/package.json][t3-server-pkg]）。
+プロバイダの導入と認証は、サーバーを動かすマシンでプロバイダごとに行う（[docs/user/install.md][t3-install]）。
+多くは各CLIを入れてログインするが、ChatGPT で接続した Codex と Antigravity は T3 Code が管理するランタイムを使え、CLIを別に入れる必要はない（同上、[docs/user/providers-codex.md][t3-pcodex]）。
 
 ## 成熟度・ライセンス・開発状況
 
