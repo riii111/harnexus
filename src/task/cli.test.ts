@@ -12,6 +12,7 @@ import {
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { Result } from "better-result";
 import { listLinks } from "../prwatch/store.ts";
 import {
   FEEDBACK_HINT,
@@ -724,6 +725,7 @@ describe("harnexus-task cloud", () => {
     expect(linked.out).toEqual({
       threadId: "cloud-chat",
       cloudSessionId: SESSION,
+      url: `https://claude.ai/code/${SESSION}`,
     });
     expect(harnexus.calls).toEqual([
       {
@@ -742,6 +744,80 @@ describe("harnexus-task cloud", () => {
         },
       },
     ]);
+  });
+
+  test("starts a Cloud session from a prompt in the project's folder, then opens its chat", async () => {
+    const { invoke, harnexus, root } = await fixture();
+    const promptFile = join(root, "prompt.md");
+    await writeFile(promptFile, "README を要約して");
+    const started: { description: string; cwd: string }[] = [];
+
+    const opened = await invoke(
+      ["cloud", "--prompt-file", promptFile, "--project", "project"],
+      [
+        projectsListed({
+          projectId: "project",
+          path: "/Users/me/src/harnexus",
+        }),
+        { outcome: "done", threadId: "cloud-chat" },
+      ],
+      {
+        startCloud: async (description, cwd) => {
+          started.push({ description, cwd });
+          return Result.ok({ sessionId: SESSION, title: "README 要約" });
+        },
+      },
+    );
+
+    expect(started).toEqual([
+      { description: "README を要約して", cwd: "/Users/me/src/harnexus" },
+    ]);
+    expect(opened.out).toEqual({
+      threadId: "cloud-chat",
+      cloudSessionId: SESSION,
+      url: `https://claude.ai/code/${SESSION}`,
+    });
+    expect(harnexus.calls.at(-1)?.arguments).toMatchObject({
+      prompt: `/cloud ${SESSION}`,
+      title: "Cloud｜README 要約",
+    });
+  });
+
+  test("names the session it started when the app does not open the chat", async () => {
+    const { invoke, root } = await fixture();
+    const promptFile = join(root, "prompt.md");
+    await writeFile(promptFile, "go");
+
+    const failed = await invoke(
+      ["cloud", "--prompt-file", promptFile, "--project", "project"],
+      [
+        projectsListed({
+          projectId: "project",
+          path: "/Users/me/src/harnexus",
+        }),
+        { outcome: "rejected", error: "no" },
+      ],
+      {
+        startCloud: async () => Result.ok({ sessionId: SESSION, title: null }),
+      },
+    );
+
+    expect([failed.code, failed.err]).toEqual([
+      1,
+      expect.stringContaining(SESSION),
+    ]);
+  });
+
+  test("takes exactly one of --link and --prompt-file", async () => {
+    const { invoke, harnexus } = await fixture();
+
+    const refused = await invoke(["cloud", "--project", "project"]);
+
+    expect([refused.code, refused.err]).toEqual([
+      2,
+      expect.stringContaining("exactly one of --link and --prompt-file"),
+    ]);
+    expect(harnexus.calls).toEqual([]);
   });
 
   test("refuses a link that names no Cloud session, before calling the app", async () => {
