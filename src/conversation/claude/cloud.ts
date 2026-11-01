@@ -330,6 +330,14 @@ export const createCloudRuntime = <Tag extends string>(
       refuse(LINK_HAS_CONVERSATION);
       return;
     }
+    // A Cloud session takes text only, so a request with images starts nothing rather than one without them.
+    if (request !== null && turn.input.images.length > 0) {
+      turn.fail({
+        _tag: "CloudInputUnsupported",
+        message: refusalMessage("cloud_images"),
+      });
+      return;
+    }
     let cloudSessionId = named;
     let startedTitle: string | null = null;
     if (request !== null && startCloud !== undefined) {

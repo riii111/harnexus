@@ -453,6 +453,18 @@ describe("createCloudRuntime /cloud", () => {
     expect(env.innerRuns).toEqual(["turn-1"]);
   });
 
+  test("starts no session for a request with images, which a Cloud session cannot take", async () => {
+    const env = setup({ copies: [] });
+    const turn = env.turn("/cloud 添付のデザインを実装して", {
+      images: [{ path: "/tmp/design.png" }],
+    });
+
+    await env.runtime.run(turn.running);
+
+    expect(env.started).toEqual([]);
+    expect(turn.failure?._tag).toBe("CloudInputUnsupported");
+  });
+
   test("names the session it started when the chat cannot show it, so it can be linked later", async () => {
     const env = setup({ copies: [] });
     env.copyFailure = "teleport failed";
