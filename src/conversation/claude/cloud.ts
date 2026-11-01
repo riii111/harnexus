@@ -983,7 +983,6 @@ const reviewCommandOf = (text: string | null) =>
 
 const REVIEW_COMMAND = /^\/cloud-review\s+([A-Za-z0-9_-]{1,128})$/;
 
-// What a reviewer's chat shows of a review, live and in its history.
 export const reviewText = (review: CloudReview) =>
   `${review.answer.trim()}\n\n${REVIEW_FOOTER(review)}`;
 
