@@ -566,7 +566,7 @@ export const createCloudRuntime = <Tag extends string>(
     let lastAt = Number.NEGATIVE_INFINITY;
     // Copies overlap only once one has worked, so a copy that runs a model turn is caught before a second one starts.
     let copiedOnce = false;
-    // Whether the last copy showed the session waiting for work it handed off, which takes minutes, so it is copied less often.
+    // Whether the last copy showed the session waiting for a message it scheduled, which takes minutes, so it is copied less often.
     let waiting = false;
     // When the turn last showed something new.
     let movedAt = startedAt;
@@ -689,7 +689,7 @@ export const createCloudRuntime = <Tag extends string>(
           turn.finish({ status: "completed" }, null);
           return;
         }
-        // A session waiting for work it handed off is not done however long it waits; one that shows nothing new for the limit while in its turn is left to the idle copies.
+        // A session waiting for a message it scheduled is not done however long it waits; one that shows nothing new for the limit while in its turn is left to the idle copies.
         if (!waiting && now() - movedAt >= waitLimitMs) {
           park(threadId, follow);
           log({ event: "claude_cloud", step: "wait_limit" });
@@ -771,7 +771,7 @@ export const createCloudRuntime = <Tag extends string>(
       }
     }
     await keepCopy(threadId, copied.value.copy, keyOfLast(all) ?? cloud.shown);
-    // A session still working, or waiting for work it handed off, keeps the turn running until it is done, as a turn sent from the app does.
+    // A session still working, or waiting for a message it scheduled, keeps the turn running until it is done, as a turn sent from the app does.
     const last = keyOfLast(all);
     if (last === null || done(all) || stateOf(threadId).halted) {
       turn.finish({ status: "completed" }, null);
@@ -973,7 +973,7 @@ export const createCloudRuntime = <Tag extends string>(
     if (cloud.shown !== null && at === -1) {
       log({ event: "claude_cloud", step: "compacted" });
     }
-    // A session not done, such as one linked or followed again after a restart while it waits for its workers, is followed by a turn of Claude's own even with nothing new to show.
+    // A session not done, such as one linked or followed again after a restart while it waits for a message it scheduled, is followed by a turn of Claude's own even with nothing new to show.
     const unfinished =
       all.length > 0 && !done(all) && parked.get(threadId) !== keyOfLast(all);
     if ((at === all.length - 1 || all.length === 0) && !unfinished) {
@@ -1260,7 +1260,7 @@ const replied = (message: SessionMessage) =>
       block.type !== "redacted_thinking",
   );
 
-// A session done with what it was asked: its turn ended with a reply, and it waits for no work it handed off.
+// A session done with what it was asked: its turn ended with a reply, and it waits for no message it scheduled.
 const done = (all: readonly SessionMessage[]) => {
   const last = all.at(-1);
   return last !== undefined && replied(last) && !waitingIn(all);

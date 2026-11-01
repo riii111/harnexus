@@ -63,7 +63,6 @@ describe("childSessionsIn", () => {
 });
 
 describe("waitingIn", () => {
-  const ARCHIVE = "mcp__claude-code-remote__archive_session";
   const SEND_LATER = "mcp__claude-code-remote__send_later";
   const DELETE = "mcp__claude-code-remote__delete_trigger";
   const started = [
@@ -87,24 +86,8 @@ describe("waitingIn", () => {
 
   test.each([
     {
-      name: "waits for a session it started and has not archived",
+      name: "does not wait for a session it started, which tells it of its work itself",
       records: started,
-      expected: true,
-    },
-    {
-      name: "stops waiting once it archived the session it started",
-      records: [
-        ...started,
-        prompt("p2", "worker done"),
-        reply(
-          "a3",
-          "m3",
-          toolUse("t2", ARCHIVE, { session_id: CHILD }),
-          "tool_use",
-        ),
-        toolResult("r2", "t2", "archived"),
-        reply("a4", "m4", text("done"), "end_turn"),
-      ],
       expected: false,
     },
     {
