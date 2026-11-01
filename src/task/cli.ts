@@ -21,7 +21,6 @@ import { type OptionTypes, parseOptions } from "../runtime/args.boundary.ts";
 import { removeFile } from "../runtime/fs.boundary.ts";
 import { type Fields, isObject } from "../runtime/object.ts";
 import { runCommand } from "../runtime/process.boundary.ts";
-import { type ClaudeArgs, claudeSession, PERMISSION_MODES } from "./cloud.ts";
 import { cloudReview } from "./cloud-review.ts";
 import {
   declaredEnvironment,
@@ -29,14 +28,7 @@ import {
   refuseInCloud,
 } from "./environment.ts";
 import { asText, fail, isBlank, jsonEqual, truthy } from "./format.ts";
-import {
-  load,
-  RECOVERIES,
-  type Recovery,
-  type SaveJson,
-  saveJson,
-  stateRoot,
-} from "./records.ts";
+import { load, type SaveJson, saveJson, stateRoot } from "./records.ts";
 import {
   callerId,
   candidate,
@@ -73,8 +65,6 @@ export type TaskDeps = {
   env: Env;
   runGit: GitRunner;
   saveJson: SaveJson;
-  // Where a claude turn runs unless --cwd says otherwise; the process's own directory when absent.
-  cwd?: string;
   // Only the watch writes as it runs, since it never returns.
   print: (line: string) => void;
   // Starts a Cloud session from a description in a folder, as claude --cloud does.
@@ -132,17 +122,6 @@ type CloudArgs = {
   title: string | undefined;
   model: string | undefined;
   thinking: string | undefined;
-};
-
-type ClaudeCommandArgs = {
-  session: string;
-  start: boolean;
-  resume: boolean;
-  promptFile: string | undefined;
-  cwd: string | undefined;
-  permissionMode: (typeof PERMISSION_MODES)[number] | undefined;
-  recover: Recovery | undefined;
-  model: string | undefined;
 };
 
 const worktreeTarget = (project: unknown) => ({
@@ -594,25 +573,6 @@ const projectFolder = async (env: Env, caller: string, projectId: string) => {
 const environment = async (deps: TaskDeps) =>
   (await detectEnvironment(deps.env)).map((found): Fields => ({ ...found }));
 
-const claude = (args: ClaudeCommandArgs, deps: TaskDeps) => {
-  const mode = args.start ? "start" : args.resume ? "resume" : "state";
-  const given: ClaudeArgs = {
-    mode,
-    session: args.session,
-  };
-  if (args.permissionMode !== undefined)
-    given.permissionMode = args.permissionMode;
-  if (args.recover !== undefined) given.recover = args.recover;
-  if (args.promptFile !== undefined) given.promptFile = args.promptFile;
-  if (args.model !== undefined) given.model = args.model;
-  if (args.cwd !== undefined) given.cwd = args.cwd;
-  return claudeSession(given, {
-    env: deps.env,
-    saveJson: deps.saveJson,
-    ...(deps.cwd === undefined ? {} : { cwd: deps.cwd }),
-  });
-};
-
 type Outcome = Result<unknown, { message: string }>;
 
 type Subcommand = {
@@ -821,46 +781,6 @@ const COMMANDS = {
         });
       }),
     run: cloud,
-  }),
-  claude: subcommand({
-    usage:
-      "claude --session NAME [--start | --resume] [--prompt-file FILE] [--model MODEL] [--cwd DIR] [--permission-mode auto|plan] [--recover adopt|discard]",
-    options: {
-      session: { type: "string" },
-      "prompt-file": { type: "string" },
-      start: { type: "boolean" },
-      resume: { type: "boolean" },
-      model: { type: "string" },
-      cwd: { type: "string" },
-      "permission-mode": { type: "string" },
-      recover: { type: "string" },
-    },
-    args: (values) =>
-      Result.gen(function* () {
-        const session = yield* required(values, "session");
-        const start = values.start === true;
-        const resume = values.resume === true;
-        if (start && resume)
-          return invalid("use only one of --start and --resume");
-        const promptFile = text(values, "prompt-file");
-        if (promptFile === undefined && (start || resume))
-          return invalid("--prompt-file is required with --start and --resume");
-        return Result.ok<ClaudeCommandArgs>({
-          session,
-          start,
-          resume,
-          promptFile,
-          cwd: text(values, "cwd"),
-          permissionMode: yield* oneOf(
-            values,
-            "permission-mode",
-            PERMISSION_MODES,
-          ),
-          recover: yield* oneOf(values, "recover", RECOVERIES),
-          model: text(values, "model"),
-        });
-      }),
-    run: claude,
   }),
 } satisfies Record<string, Subcommand>;
 

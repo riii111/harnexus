@@ -4,7 +4,6 @@ import { prepareDirectory, removeFile } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { type Fields, isObject } from "../runtime/object.ts";
 import { runProcess } from "../runtime/run.boundary.ts";
-import { acquire, configuredBinary, milliseconds, release } from "./cloud.ts";
 import { asText, detail, fail, jsonEqual } from "./format.ts";
 import {
   readRecords,
@@ -21,6 +20,12 @@ import {
   reviewRequest,
   sessionValue,
 } from "./request.ts";
+import {
+  acquire,
+  configuredBinary,
+  milliseconds,
+  release,
+} from "./run-lock.ts";
 import { taskPrompt } from "./templates.ts";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
