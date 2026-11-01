@@ -55,6 +55,7 @@ export const createHistoryRequests = ({
   log,
   subagentHistory,
   subagents,
+  keptRecords,
 }: {
   threads: Pick<ThreadValues, "threadOf" | "sessionIdOf" | "rewindOf">;
   liveTurnOf: (threadId: string) => LiveTurn | null;
@@ -64,6 +65,8 @@ export const createHistoryRequests = ({
   log: (event: HistoryEvent) => void;
   subagentHistory: (threadId: string) => HistoryTurn[] | undefined;
   subagents: SubagentsOfThread;
+  // The records the bridge kept for a thread that has no Claude record, such as a Cloud reviewer's chat.
+  keptRecords?: (threadId: string) => Promise<readonly SessionMessage[] | null>;
 }) => {
   // The app asks for a turn page and then each turn's items at once, so requests arriving while a read runs share it.
   const reading = new Map<string, { key: string; loaded: Promise<Loaded> }>();
@@ -82,8 +85,16 @@ export const createHistoryRequests = ({
     if (running?.key === key) return running.loaded;
     const thread = threads.threadOf(threadId);
     const sessionId = threads.sessionIdOf(threadId);
-    if (thread === undefined || sessionId === null) {
-      return Promise.resolve(Result.ok([]));
+    if (thread === undefined) return Promise.resolve(Result.ok([]));
+    if (sessionId === null) {
+      if (keptRecords === undefined) return Promise.resolve(Result.ok([]));
+      return keptRecords(threadId).then((records) =>
+        Result.ok(
+          records === null
+            ? []
+            : buildHistory(records, { threadId, cwd: thread.cwd }),
+        ),
+      );
     }
     const rewind = threads.rewindOf(threadId);
     // Rebuilt from Claude's own record on each request rather than stored by the bridge.

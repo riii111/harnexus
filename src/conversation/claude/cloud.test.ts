@@ -31,12 +31,89 @@ import {
   createCloudRuntime,
   serializeCloudEvent,
 } from "./cloud.ts";
+import type { CloudReview } from "./cloud-reviews.ts";
 
 const CLOUD_ID = "session_01NfjPqrX1AK5RmKyV182VYD";
 
 type CloudEvent = Parameters<typeof serializeCloudEvent>[0];
 
 type SendAnswer = Result<void, CloudSendRejected | CloudSendUnknown>;
+
+describe("createCloudRuntime reviews", () => {
+  const output = JSON.stringify({
+    status: "completed",
+    verdict: "LGTM",
+    taskId: "harnexus-1",
+    head: "abc1234def",
+    reviewer: "0199-reviewer",
+    answer: "判定: LGTM",
+  });
+
+  test("hands each review the session read after the app was shown to its chat, once", async () => {
+    const env = linked({
+      copies: [
+        [
+          prompt("p1", "review"),
+          reply("a1", "m1", toolUse("t1", "Bash", {}), "tool_use"),
+          toolResult("u1", "t1", output),
+          endReply("a2", "reviewed"),
+        ],
+      ],
+      shown: null,
+    });
+    const turn = env.turn("review");
+
+    await env.runtime.run(turn.running);
+    await env.tick();
+
+    expect(env.reviews).toEqual([
+      { parent: "thread-1", key: expect.stringMatching(/^[0-9a-f]{32}$/) },
+    ]);
+  });
+
+  test.each([
+    {
+      name: "the first message of the chat it opened",
+      delegatedBy: "create_thread" as const,
+    },
+    {
+      name: "a later message to that chat",
+      delegatedBy: "send_message_to_thread" as const,
+    },
+  ])("shows a review sent as $name, without Claude", async ({
+    delegatedBy,
+  }) => {
+    const env = setup({ copies: [] });
+    env.reviewKept.set("t1", {
+      key: "t1",
+      reviewer: "0199-reviewer",
+      verdict: "LGTM",
+      taskId: "harnexus-1",
+      head: "abc1234def",
+      answer: "判定: LGTM",
+    });
+    const turn = env.turn("/cloud-review t1", { delegatedBy });
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts().at(-1)).toContain("判定: LGTM");
+    expect(turn.texts().at(-1)).toContain("`abc1234`");
+    expect(env.innerRuns).toEqual([]);
+    expect(env.links).toEqual([]);
+  });
+
+  test("says when the review it names is no longer kept", async () => {
+    const env = setup({ copies: [] });
+    const turn = env.turn("/cloud-review gone", {
+      delegatedBy: "send_message_to_thread",
+    });
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts().at(-1)).toContain("no longer kept");
+    expect(env.innerRuns).toEqual([]);
+  });
+});
 
 describe("createCloudRuntime child sessions", () => {
   const CHILD = "session_01NfjPqs5GNSgknfAaJ3mdYA";
@@ -1248,6 +1325,8 @@ const setup = ({
     ownStarts,
     copyCalls: 0,
     childOutcomes: [] as string[],
+    reviews: [] as { parent: string; key: string }[],
+    reviewKept: new Map<string, CloudReview>(),
     // When each idle copy was planned for, in order.
     planned: [] as number[],
     renames: [] as { threadId: string; name: string }[],
@@ -1399,6 +1478,12 @@ const setup = ({
         ? Result.err({ _tag: "AppRequestFailed" })
         : Result.ok(null);
     },
+    openReview: async (parent, review) => {
+      env.reviews.push({ parent, key: review.key });
+      env.reviewKept.set(review.key, review);
+      return "done";
+    },
+    reviewOf: async (key) => env.reviewKept.get(key) ?? null,
     openChild: async (parent, child) => {
       env.children.push({ parent, child });
       return env.childOutcomes.shift() ?? "done";

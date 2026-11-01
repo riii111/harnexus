@@ -21,6 +21,7 @@ import { type Refusal, refusalMessage } from "../thread-request.ts";
 import type { ThreadValues } from "../thread-values.ts";
 import type { RunningTurn, TurnInput, TurnRuntime } from "../turn-runtime.ts";
 import { type CloudChild, childSessionsIn } from "./cloud-children.ts";
+import { type CloudReview, reviewsIn } from "./cloud-reviews.ts";
 import { sessionCommandTextOf } from "./runtime.ts";
 import { createTurnRecords } from "./turn-records.ts";
 
@@ -47,10 +48,12 @@ type CloudEvent =
         | "stopped"
         | "compacted"
         | "copy_ran_model"
-        | "copy_unchecked";
+        | "copy_unchecked"
+        | "review_shown"
+        | "review_missing";
     }
   | { event: "claude_cloud"; step: "sent"; ms: number }
-  | { event: "claude_cloud"; step: "child"; outcome: string }
+  | { event: "claude_cloud"; step: "child" | "review"; outcome: string }
   | { event: "claude_cloud"; step: "copied"; records: number; ms: number }
   | { event: "claude_cloud"; step: "copy_failed"; error: string }
   | { event: "claude_cloud"; step: "thread_not_renamed"; error: string };
@@ -108,6 +111,10 @@ export type CloudDeps = {
   // Opens a chat in the app linked to a session a linked Cloud session started.
   // Answers how the app took it, such as done, for the log.
   openChild?: (parentThreadId: string, child: CloudChild) => Promise<string>;
+  // Shows a review a linked Cloud session read in the reviewer's chat, opening it the first time; answers how the app took it, for the log.
+  openReview?: (parentThreadId: string, review: CloudReview) => Promise<string>;
+  // The review a /cloud-review message names, kept by openReview.
+  reviewOf?: (key: string) => Promise<CloudReview | null>;
   renameThread?: (
     threadId: string,
     name: string,
@@ -166,6 +173,8 @@ export const createCloudRuntime = <Tag extends string>(
     send,
     log,
     openChild,
+    openReview,
+    reviewOf,
     renameThread,
     now = Date.now,
     sleep = defaultSleep,
@@ -178,6 +187,11 @@ export const createCloudRuntime = <Tag extends string>(
   const states = new Map<string, CloudThread>();
   const turnRecords = createTurnRecords();
   const openedChildren = new Set<string>();
+  const openedReviews = new Set<string>();
+  const unsentReviews = new Map<
+    string,
+    { threadId: string; review: CloudReview }
+  >();
   const unsentChildren = new Map<
     string,
     { threadId: string; child: CloudChild }
@@ -210,6 +224,14 @@ export const createCloudRuntime = <Tag extends string>(
   };
 
   const run = async (turn: Turn) => {
+    const reviewKey =
+      turn.input.startedBy === "app"
+        ? reviewCommandOf(reviewCommandText(turn.input))
+        : null;
+    if (reviewKey !== null) {
+      await showReview(turn, reviewKey);
+      return;
+    }
     const command =
       turn.input.startedBy === "app"
         ? cloudCommandOf(commandText(turn.input))
@@ -312,6 +334,16 @@ export const createCloudRuntime = <Tag extends string>(
     if (replayed.length === 0) return;
     for (const notification of replayed) send(notification);
     threads.consumePick(threadId);
+  };
+
+  // Shows a review in the reviewer's chat, answered by the bridge like /cloud.
+  const showReview = async (turn: Turn, key: string) => {
+    const review = reviewOf === undefined ? null : await reviewOf(key);
+    log({
+      event: "claude_cloud",
+      step: review === null ? "review_missing" : "review_shown",
+    });
+    reply(turn, review === null ? REVIEW_MISSING : reviewText(review));
   };
 
   const sendAndFollow = async (turn: Turn, cloud: CloudLink) => {
@@ -632,7 +664,33 @@ export const createCloudRuntime = <Tag extends string>(
       ms: now() - startedAt,
     });
     noticeChildren(threadId, all);
+    noticeReviews(threadId, all);
     return Result.ok({ copy: copied.value, records: all });
+  };
+
+  // Shows each review a linked session read after the app was last shown, once, in its reviewer's chat.
+  const noticeReviews = (threadId: string, all: readonly SessionMessage[]) => {
+    const cloud = threads.cloudOf(threadId);
+    if (openReview === undefined || cloud === null) return;
+    const after = indexAfter(all, cloud.shown);
+    const unsent = [...unsentReviews.values()]
+      .filter((entry) => entry.threadId === threadId)
+      .map((entry) => entry.review);
+    for (const review of [...unsent, ...reviewsIn(all, after)]) {
+      if (openedReviews.has(review.key)) continue;
+      openedReviews.add(review.key);
+      void openReview(threadId, review)
+        .catch(() => "threw")
+        .then((outcome) => {
+          if (UNSENT_OUTCOMES.has(outcome)) {
+            openedReviews.delete(review.key);
+            unsentReviews.set(review.key, { threadId, review });
+          } else {
+            unsentReviews.delete(review.key);
+          }
+          log({ event: "claude_cloud", step: "review", outcome });
+        });
+    }
   };
 
   // Opens a chat, once, for each session a linked one started after the app was last shown.
@@ -877,9 +935,24 @@ const pollMs = (waited: number, failing: boolean) => {
 // The text of a message that may be a session command.
 const commandText = (input: TurnInput) => {
   const typed = sessionCommandTextOf(input);
+  if (typed !== null || input.toolOutput?.name !== "create_thread")
+    return typed;
+  // The first message of a chat another chat opened with create_thread, as harnexus-task cloud does, can link it too.
+  return delegatedTextOf(input);
+};
+
+// A /cloud-review comes from the bridge through the reviewer's chat's parent, as its first message or a later one, or is typed.
+const reviewCommandText = (input: TurnInput) =>
+  sessionCommandTextOf(input) ??
+  (input.toolOutput?.name === "create_thread" ||
+  input.toolOutput?.name === "send_message_to_thread"
+    ? delegatedTextOf(input)
+    : null);
+
+// What another chat sent, which arrives wrapped in its delegation as its <input>, which older apps named <prompt>.
+const delegatedTextOf = (input: TurnInput) => {
   const output = input.toolOutput;
-  if (typed !== null || output?.name !== "create_thread") return typed;
-  // The first message of a chat another chat opened with create_thread, as harnexus-task cloud does, can link it too; it arrives wrapped in its delegation, as its <input>, which older apps named <prompt>.
+  if (output === null) return null;
   const delegation =
     typeof output.output === "string"
       ? output.output
@@ -904,6 +977,20 @@ const cloudCommandOf = (text: string | null) => {
 };
 
 const CLOUD_COMMAND = /^\/cloud(?:\s+(\S+))?\s*$/;
+
+const reviewCommandOf = (text: string | null) =>
+  text === null ? null : (REVIEW_COMMAND.exec(text.trim())?.[1] ?? null);
+
+const REVIEW_COMMAND = /^\/cloud-review\s+([A-Za-z0-9_-]{1,128})$/;
+
+export const reviewText = (review: CloudReview) =>
+  `${review.answer.trim()}\n\n${REVIEW_FOOTER(review)}`;
+
+const REVIEW_FOOTER = (review: CloudReview) =>
+  `_Codex reviewer \`${review.reviewer}\`${review.head === null ? "" : ` on \`${review.head.slice(0, 7)}\``}, run in a Cloud session. Ask for changes in the worker's chat._`;
+
+const REVIEW_MISSING =
+  "This review is no longer kept on this Mac, so it cannot be shown here.";
 
 // The mark that tells a chat showing a Cloud session from other chats in the app's list.
 export const CLOUD_MARK = "☁️";
@@ -990,6 +1077,7 @@ export const serializeCloudEvent = (entry: CloudEvent) => {
     case "sent":
       return { event: entry.event, step: entry.step, ms: entry.ms };
     case "child":
+    case "review":
       return { event: entry.event, step: entry.step, outcome: entry.outcome };
     case "copied":
       return {

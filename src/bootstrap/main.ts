@@ -58,6 +58,7 @@ import {
 } from "./supervise.ts";
 
 const CLOUD_COPY_FOLDER = "cloud-copies";
+const CLOUD_REVIEW_FOLDER = "cloud-reviews";
 
 const CLOUD_CHECKOUT_FOLDER = "checkouts";
 
@@ -230,6 +231,7 @@ async function withClaude(relay: {
     cloud: {
       cli: cloudCli(process.env),
       copyDir: join(dirname(statePath.value), CLOUD_COPY_FOLDER),
+      reviewDir: join(dirname(statePath.value), CLOUD_REVIEW_FOLDER),
       checkouts: createCloudCheckouts(
         join(
           dirname(statePath.value),
