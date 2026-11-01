@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCloudReviews } from "./cloud-reviews.ts";
 
@@ -77,7 +77,7 @@ describe("createCloudReviews", () => {
             projectId: "harnexus",
             environment: { type: "local" },
           },
-          title: "Review｜harnexus-1",
+          title: "☁️ Review｜harnexus-1",
           model: "claude-sonnet-5-5",
         },
       },
@@ -252,6 +252,65 @@ describe("createCloudReviews", () => {
       "assistant",
     ]);
     expect(JSON.stringify(records?.[2])).toContain("B1 は既存の挙動では？");
+  });
+
+  test("opens the chat in the empty review project when there is one, as a reviewer in the app runs", async () => {
+    const { reviews, calls } = await setup([
+      {
+        outcome: "done",
+        result: {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                projects: [
+                  { projectId: "harnexus", path: "/work/harnexus" },
+                  {
+                    projectId: "review-home",
+                    path: join(homedir(), "review-home"),
+                  },
+                ],
+              }),
+            },
+          ],
+        },
+      },
+      { outcome: "done", threadId: "review-chat" },
+    ]);
+
+    await reviews.openReview("parent", "/work/harnexus", review("t1"));
+
+    expect(calls[1]?.arguments).toMatchObject({
+      target: { projectId: "review-home" },
+    });
+  });
+
+  test("opens the chat in the worker's project when the review project is not in the app, even with the home folder as a project", async () => {
+    const { reviews, calls } = await setup([
+      {
+        outcome: "done",
+        result: {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                projects: [
+                  { projectId: "home", path: homedir() },
+                  { projectId: "harnexus", path: "/work/harnexus" },
+                ],
+              }),
+            },
+          ],
+        },
+      },
+      { outcome: "done", threadId: "review-chat" },
+    ]);
+
+    await reviews.openReview("parent", "/work/harnexus", review("t1"));
+
+    expect(calls[1]?.arguments).toMatchObject({
+      target: { projectId: "harnexus" },
+    });
   });
 
   test("names no review it never kept", async () => {
