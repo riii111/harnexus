@@ -820,6 +820,20 @@ describe("harnexus-task cloud", () => {
     expect(harnexus.calls).toEqual([]);
   });
 
+  test("opens one chat per Cloud session, so a chat cannot open chats for it without end", async () => {
+    const { invoke, harnexus } = await fixture();
+    const args = ["cloud", "--link", SESSION, "--project", "project"];
+    await invoke(args, [{ outcome: "done", threadId: "cloud-chat" }]);
+
+    const again = await invoke(args);
+
+    expect([again.code, again.err]).toEqual([
+      1,
+      expect.stringContaining("already opened (threadId cloud-chat)"),
+    ]);
+    expect(harnexus.calls).toHaveLength(1);
+  });
+
   test("refuses a link that names no Cloud session, before calling the app", async () => {
     const { invoke, harnexus } = await fixture();
 

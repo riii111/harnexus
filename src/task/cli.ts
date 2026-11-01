@@ -29,6 +29,7 @@ import {
 } from "./environment.ts";
 import { asText, fail, isBlank, jsonEqual, truthy } from "./format.ts";
 import {
+  load,
   RECOVERIES,
   type Recovery,
   type SaveJson,
@@ -502,6 +503,17 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
       return fail(
         "--link must be a Cloud session id or its claude.ai/code URL",
       );
+    // One chat per session, so a chat that takes its own /cloud as a request cannot open chats without end.
+    const opened = join(
+      stateRoot(deps.env),
+      "cloud-chats",
+      `${sessionId}.json`,
+    );
+    const earlier = yield* Result.await(load(opened));
+    if (isObject(earlier))
+      return fail(
+        `a chat for Cloud session ${sessionId} was already opened (threadId ${asText(earlier.threadId)}); use that chat, or remove ${opened} to open another`,
+      );
     const answer = await callApp(deps.env, caller, "create_thread", {
       prompt: `/cloud ${sessionId}`,
       target: {
@@ -518,6 +530,13 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
       return fail(
         `create_thread ${asText(answer.outcome)} for Cloud session ${sessionId}: ${asText(answer.error ?? answer)}`,
       );
+    yield* Result.await(
+      deps.saveJson(
+        opened,
+        { threadId: answer.threadId, openedAt: new Date().toISOString() },
+        { exclusive: false },
+      ),
+    );
     return Result.ok<Fields>({
       threadId: answer.threadId,
       cloudSessionId: sessionId,

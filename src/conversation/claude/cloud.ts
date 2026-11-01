@@ -841,14 +841,26 @@ const pollMs = (waited: number, failing: boolean) => {
 // The text of a message that may be a session command.
 const commandText = (input: TurnInput) => {
   const typed = sessionCommandTextOf(input);
-  if (typed !== null || input.toolOutput?.name !== "create_thread")
-    return typed;
-  // The first message of a chat another chat opened with create_thread, as harnexus-task cloud does, can link it too; it arrives wrapped in its delegation, as its <prompt>.
-  return DELEGATED_PROMPT.exec(input.text)?.[1] ?? null;
+  const output = input.toolOutput;
+  if (typed !== null || output?.name !== "create_thread") return typed;
+  // The first message of a chat another chat opened with create_thread, as harnexus-task cloud does, can link it too; it arrives wrapped in its delegation, as its <prompt>, and the app may also send the prompt as the message's own text.
+  const delegation =
+    typeof output.output === "string"
+      ? output.output
+      : output.output.map((item) => item.text).join("\n");
+  const prompt = DELEGATED_PROMPT.exec(delegation)?.[1];
+  return prompt === undefined ? null : unescapeXml(prompt);
 };
 
-const DELEGATED_PROMPT =
-  /^\s*<codex_delegation>[\s\S]*?<prompt>([\s\S]*?)<\/prompt>\s*<\/codex_delegation>\s*$/;
+const DELEGATED_PROMPT = /<prompt>([\s\S]*?)<\/prompt>/;
+
+const unescapeXml = (text: string) =>
+  text
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&amp;", "&");
 
 const cloudCommandOf = (text: string | null) => {
   const matched = text === null ? null : CLOUD_COMMAND.exec(text.trim());
