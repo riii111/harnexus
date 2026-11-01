@@ -127,6 +127,27 @@ describe("waitingIn", () => {
       expected: true,
     },
     {
+      name: "keeps waiting past a message taken before it scheduled one a minute later",
+      records: [
+        prompt("p0", "hi", "2026-11-01T00:00:00Z"),
+        reply(
+          "a0",
+          "m0",
+          toolUse("t0", SEND_LATER, { delay_minutes: 1, message: "check" }),
+          "tool_use",
+          "2026-11-01T00:00:00Z",
+        ),
+        toolResult("r0", "t0", '{"trigger_id":"trig_01Abc"}'),
+        reply("a1", "m1", text("will check"), "end_turn"),
+      ],
+      expected: true,
+    },
+    {
+      name: "keeps waiting past another message that came when the scheduled one was due",
+      records: [...scheduled, prompt("p2", "hi", "2026-11-01T00:30:00Z")],
+      expected: true,
+    },
+    {
       name: "stops waiting for a message it cancelled",
       records: [
         ...scheduled,

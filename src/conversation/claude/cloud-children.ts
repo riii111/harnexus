@@ -82,12 +82,23 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
   const archived = new Set<string>();
   const cancelled = new Set<string>();
   const calls = new Map<string, Record<string, unknown>>();
-  const scheduled: { due: number; trigger: string | null }[] = [];
-  const opened: number[] = [];
+  const scheduled: {
+    due: number;
+    trigger: string | null;
+    message: string | null;
+    came: boolean;
+  }[] = [];
   for (const record of records) {
     const at = timeOfRecord(record);
-    if (record.type === "user" && at !== null && opensTurn(record))
-      opened.push(at);
+    const opening = record.type === "user" ? openingTextOf(record) : null;
+    // A message the session takes is the scheduled one when it comes due and holds what was scheduled; one taken before it was scheduled never is.
+    if (opening !== null && at !== null)
+      for (const entry of scheduled)
+        if (
+          at >= entry.due - FIRE_EARLY_MS &&
+          (entry.message === null || opening.includes(entry.message))
+        )
+          entry.came = true;
     for (const block of contentOf(record)) {
       if (
         block.type === "tool_use" &&
@@ -113,6 +124,11 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
       if (SEND_LATER.test(name))
         scheduled.push({
           due: dueOf(input, typeof call?.at === "number" ? call.at : null),
+          message:
+            typeof input.message === "string" && input.message.trim() !== ""
+              ? input.message.trim()
+              : null,
+          came: false,
           trigger:
             TRIGGER_ID.exec(textsOf(block.content).join("\n"))?.[0] ?? null,
         });
@@ -121,9 +137,8 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
   return (
     childSessionsIn(records).some((child) => !archived.has(child.sessionId)) ||
     scheduled.some(
-      ({ due, trigger }) =>
-        (trigger === null || !cancelled.has(trigger)) &&
-        !opened.some((at) => at >= due - FIRE_EARLY_MS),
+      ({ trigger, came }) =>
+        !came && (trigger === null || !cancelled.has(trigger)),
     )
   );
 };
@@ -146,15 +161,18 @@ const timeOfRecord = (record: SessionMessage) => {
   return Number.isNaN(ms) ? null : ms;
 };
 
-// A message that starts a turn of the session, such as one a scheduled message or a session it started delivers, rather than the results of its tools.
-const opensTurn = (record: SessionMessage) => {
+// The text of a message that starts a turn of the session, such as one a scheduled message or a session it started delivers, rather than the results of its tools.
+const openingTextOf = (record: SessionMessage) => {
   const message = isObject(record) ? record.message : null;
   const content = isObject(message) ? message.content : null;
-  return (
-    typeof content === "string" ||
-    (Array.isArray(content) &&
-      content.some((block) => isObject(block) && block.type === "text"))
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  const texts = content.flatMap((block) =>
+    isObject(block) && block.type === "text" && typeof block.text === "string"
+      ? [block.text]
+      : [],
   );
+  return texts.length === 0 ? null : texts.join("\n");
 };
 
 const ARCHIVE_SESSION = /(?:^|__)archive_session$/;

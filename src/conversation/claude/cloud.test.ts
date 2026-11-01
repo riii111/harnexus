@@ -204,6 +204,19 @@ describe("createCloudRuntime child sessions", () => {
   const CHILD = "session_01NfjPqs5GNSgknfAaJ3mdYA";
   const started = (id: string) =>
     JSON.stringify({ ccr: { id, title: "worker" } });
+  // The session archives the worker it started, so it is done and its turn ends.
+  const archived = (id: string) => [
+    reply(
+      "x1",
+      "mx",
+      toolUse("tx", "mcp__claude-code-remote__archive_session", {
+        session_id: id,
+      }),
+      "tool_use",
+    ),
+    toolResult("ux", "tx", "archived"),
+    endReply("x2", "archived"),
+  ];
 
   test("opens a chat for a session the linked one started after the app was shown, once", async () => {
     const env = linked({
@@ -220,6 +233,7 @@ describe("createCloudRuntime child sessions", () => {
           ),
           toolResult("u1", "t1", started(CHILD)),
           endReply("a2", "started"),
+          ...archived(CHILD),
         ],
       ],
       shown: "r0",
@@ -246,6 +260,7 @@ describe("createCloudRuntime child sessions", () => {
           ),
           toolResult("u1", "t1", started(CHILD)),
           endReply("a2", "started"),
+          ...archived(CHILD),
         ],
       ],
     });
@@ -272,6 +287,7 @@ describe("createCloudRuntime child sessions", () => {
           ),
           toolResult("u1", "t1", started(CHILD)),
           endReply("a2", "started"),
+          ...archived(CHILD),
         ],
       ],
       shown: "r0",
@@ -312,6 +328,7 @@ describe("createCloudRuntime child sessions", () => {
           ),
           toolResult("u1", "t1", started(CHILD)),
           endReply("a2", "started"),
+          ...archived(CHILD),
         ],
       ],
       shown: "r0",
@@ -321,7 +338,7 @@ describe("createCloudRuntime child sessions", () => {
 
     await env.runtime.run(env.turn("start a worker").running);
     await settle();
-    expect(env.cloudOf("thread-1")?.shown).toBe("a2");
+    expect(env.cloudOf("thread-1")?.shown).toBe("x2");
     await env.tick();
     await settle();
     await env.tick();
@@ -344,11 +361,12 @@ describe("createCloudRuntime child sessions", () => {
           ),
           toolResult("u1", "t1", started(CHILD)),
           endReply("a2", "started"),
+          ...archived(CHILD),
           prompt("p1", "hi"),
           endReply("a3", "hello"),
         ],
       ],
-      shown: "a2",
+      shown: "x2",
     });
     const turn = env.turn("hi");
 
@@ -1368,7 +1386,10 @@ describe("createCloudRuntime idle copies", () => {
       endReply("a3", "started a worker"),
     ];
     const env = linked({
+      // Waiting for its worker is no reason to stop following it, however long it takes.
+      waitLimitMs: 0,
       copies: [
+        waiting,
         waiting,
         waiting,
         [
@@ -1396,6 +1417,37 @@ describe("createCloudRuntime idle copies", () => {
     expect(turn.userTexts()).toEqual(["the worker finished"]);
     expect(turn.outcome).toEqual({ status: "completed" });
     expect(env.cloudOf("thread-1")?.shown).toBe("a5");
+  });
+
+  test("follows a session linked while it waits for its worker with a turn of Claude's own, and not again once the user stops it", async () => {
+    const CHILD = "session_01NfjPqs5GNSgknfAaJ3mdYA";
+    const waiting = [
+      prompt("p1", "first"),
+      reply(
+        "a2",
+        "m2",
+        toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+        "tool_use",
+      ),
+      toolResult("r1", "t1", JSON.stringify({ ccr: { id: CHILD } })),
+      endReply("a3", "started a worker"),
+    ];
+    const env = linked({ copies: [waiting], shown: "a3" });
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+
+    await env.tick();
+    const turn = env.turn("", { startedBy: "claude" });
+    const running = env.runtime.run(turn.running);
+    await env.untilCopied(2);
+    env.runtime.interrupt(turn.running, false);
+    await running;
+    await env.tick();
+
+    expect(env.ownStarts).toEqual(["thread-1"]);
+    expect(turn.outcome).toEqual({ status: "interrupted" });
   });
 
   test("keeps the copy it reads when nothing is new", async () => {

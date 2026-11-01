@@ -179,6 +179,8 @@ type Follow = {
   stop: boolean;
   wake: () => void;
   woken: Promise<void>;
+  // The record the turn is named by, when not its prompt: a turn of Claude's own is named by the first record it shows, and null until it shows one.
+  name?: string | null;
 };
 
 export const createCloudRuntime = <Tag extends string>(
@@ -226,6 +228,10 @@ export const createCloudRuntime = <Tag extends string>(
   let ticking = false;
   // When each linked thread's next idle copy is due: soon while its session is in the middle of a recent turn, or was just linked, and after the idle wait otherwise.
   const dueAt = new Map<string, number>();
+  // The last record of a session whose unfinished turn the user stopped following, or that showed nothing new for the wait limit, so the idle copies do not follow it again until it moves.
+  const parked = new Map<string, string | null>();
+  const park = (threadId: string, follow: Follow) =>
+    parked.set(threadId, follow.last ?? follow.after);
   let soon = false;
   let closed = false;
 
@@ -562,6 +568,8 @@ export const createCloudRuntime = <Tag extends string>(
     let copiedOnce = false;
     // Whether the last copy showed the session waiting for work it handed off, which takes minutes, so it is copied less often.
     let waiting = false;
+    // When the turn last showed something new.
+    let movedAt = startedAt;
     const overlapping = () =>
       copiedOnce &&
       failingSince === null &&
@@ -595,6 +603,7 @@ export const createCloudRuntime = <Tag extends string>(
           );
         }
         if (follow.stop || closed || turn.state().interrupting) {
+          park(threadId, follow);
           log({ event: "claude_cloud", step: "stopped" });
           turn.apply(
             renderNotice(turn.state(), STOPPED_WAITING, "commentary", now()),
@@ -650,11 +659,19 @@ export const createCloudRuntime = <Tag extends string>(
         const progress = advance(follow, copied.value.records);
         waiting = progress.waiting && !progress.ended;
         if (progress.shown.length > 0) {
+          movedAt = now();
           turn.apply(renderRecords(turn.state(), progress.shown, now()));
         }
         // The history the app reads is built from the latest copy, so the turn names its prompt by that copy's uuid.
+        if (follow.name === null && progress.shown[0] !== undefined)
+          follow.name = progress.shown[0].uuid;
         const prompt =
-          copied.value.records[indexOf(copied.value.records, follow.record)];
+          copied.value.records[
+            indexOf(
+              copied.value.records,
+              follow.name === undefined ? follow.record : follow.name,
+            )
+          ];
         if (prompt !== undefined) {
           turnRecords.note(threadId, turn.turnId, prompt.uuid);
         }
@@ -672,7 +689,9 @@ export const createCloudRuntime = <Tag extends string>(
           turn.finish({ status: "completed" }, null);
           return;
         }
-        if (now() - startedAt >= waitLimitMs) {
+        // A session waiting for work it handed off is not done however long it waits; one that shows nothing new for the limit while in its turn is left to the idle copies.
+        if (!waiting && now() - movedAt >= waitLimitMs) {
+          park(threadId, follow);
           log({ event: "claude_cloud", step: "wait_limit" });
           turn.apply(
             renderNotice(turn.state(), WAIT_LIMIT_REACHED, "commentary", now()),
@@ -753,14 +772,16 @@ export const createCloudRuntime = <Tag extends string>(
     }
     await keepCopy(threadId, copied.value.copy, keyOfLast(all) ?? cloud.shown);
     // A session still working, or waiting for work it handed off, keeps the turn running until it is done, as a turn sent from the app does.
-    const first = shown[0];
-    if (first === undefined || done(all) || stateOf(threadId).halted) {
+    const last = keyOfLast(all);
+    if (last === null || done(all) || stateOf(threadId).halted) {
       turn.finish({ status: "completed" }, null);
       return;
     }
-    const follow = newFollow(null, keyOfLast(all));
-    follow.record = first.uuid;
-    follow.last = keyOfLast(all);
+    const follow = newFollow(null, last);
+    // Only what comes after the last record ends the turn.
+    follow.record = last;
+    follow.last = last;
+    follow.name = shown[0]?.uuid ?? null;
     keep(threadId, { follow });
     try {
       await waitForReply(turn, follow, cloud.sessionId);
@@ -907,7 +928,9 @@ export const createCloudRuntime = <Tag extends string>(
   const tick = async () => {
     const linked = threads.cloudThreadIds();
     for (const threadId of dueAt.keys()) {
-      if (!linked.includes(threadId)) dueAt.delete(threadId);
+      if (linked.includes(threadId)) continue;
+      dueAt.delete(threadId);
+      parked.delete(threadId);
     }
     for (const threadId of linked) {
       if (closed) return;
@@ -950,7 +973,10 @@ export const createCloudRuntime = <Tag extends string>(
     if (cloud.shown !== null && at === -1) {
       log({ event: "claude_cloud", step: "compacted" });
     }
-    if (at === all.length - 1 || all.length === 0) {
+    // A session not done, such as one linked or followed again after a restart while it waits for its workers, is followed by a turn of Claude's own even with nothing new to show.
+    const unfinished =
+      all.length > 0 && !done(all) && parked.get(threadId) !== keyOfLast(all);
+    if ((at === all.length - 1 || all.length === 0) && !unfinished) {
       await discardCopy(copied.value.copy);
     } else {
       keep(threadId, { pendingOwn: copied.value });
