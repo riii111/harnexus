@@ -20,7 +20,11 @@ import type { TurnEvent } from "../controller.ts";
 import { type Refusal, refusalMessage } from "../thread-request.ts";
 import type { ThreadValues } from "../thread-values.ts";
 import type { RunningTurn, TurnInput, TurnRuntime } from "../turn-runtime.ts";
-import { type CloudChild, childSessionsIn } from "./cloud-children.ts";
+import {
+  type CloudChild,
+  childSessionsIn,
+  waitingIn,
+} from "./cloud-children.ts";
 import { type CloudReview, reviewsIn } from "./cloud-reviews.ts";
 import { sessionCommandTextOf } from "./runtime.ts";
 import { createTurnRecords } from "./turn-records.ts";
@@ -556,6 +560,8 @@ export const createCloudRuntime = <Tag extends string>(
     let lastAt = Number.NEGATIVE_INFINITY;
     // Copies overlap only once one has worked, so a copy that runs a model turn is caught before a second one starts.
     let copiedOnce = false;
+    // Whether the last copy showed the session waiting for work it handed off, which takes minutes, so it is copied less often.
+    let waiting = false;
     const overlapping = () =>
       copiedOnce &&
       failingSince === null &&
@@ -580,7 +586,9 @@ export const createCloudRuntime = <Tag extends string>(
         if (running.length === 0) {
           await sleep(
             Math.max(
-              pollMs(now() - startedAt, failingSince !== null),
+              waiting
+                ? WAITING_POLL_MS
+                : pollMs(now() - startedAt, failingSince !== null),
               lastAt + OVERLAP_MS - now(),
             ),
             follow.woken,
@@ -640,6 +648,7 @@ export const createCloudRuntime = <Tag extends string>(
         copiedOnce = true;
         shownAt = ended.started.at;
         const progress = advance(follow, copied.value.records);
+        waiting = progress.waiting && !progress.ended;
         if (progress.shown.length > 0) {
           turn.apply(renderRecords(turn.state(), progress.shown, now()));
         }
@@ -691,7 +700,7 @@ export const createCloudRuntime = <Tag extends string>(
           break;
         }
       }
-      if (found === -1) return { shown: [], ended: false };
+      if (found === -1) return { shown: [], ended: false, waiting: false };
       // What the session did before the message that the app was not shown, such as a reply still running when the chat was linked.
       shown.push(...all.slice(from, found));
       follow.record = keyOf(all[found]);
@@ -713,10 +722,11 @@ export const createCloudRuntime = <Tag extends string>(
       }
       follow.last = message.uuid;
     }
+    const ended = done(all) && all.length - 1 > lastPrompt;
     const last = all.at(-1);
-    const ended =
-      last !== undefined && replied(last) && all.length - 1 > lastPrompt;
-    return { shown, ended };
+    // Only a session that ended its turn waits; one in its turn is followed closely.
+    const waiting = last !== undefined && replied(last) && waitingIn(all);
+    return { shown, ended, waiting };
   };
 
   const showOwn = async (turn: Turn, cloud: CloudLink) => {
@@ -742,7 +752,22 @@ export const createCloudRuntime = <Tag extends string>(
       }
     }
     await keepCopy(threadId, copied.value.copy, keyOfLast(all) ?? cloud.shown);
-    turn.finish({ status: "completed" }, null);
+    // A session still working, or waiting for work it handed off, keeps the turn running until it is done, as a turn sent from the app does.
+    const first = shown[0];
+    if (first === undefined || done(all) || stateOf(threadId).halted) {
+      turn.finish({ status: "completed" }, null);
+      return;
+    }
+    const follow = newFollow(null, keyOfLast(all));
+    follow.record = first.uuid;
+    follow.last = keyOfLast(all);
+    keep(threadId, { follow });
+    try {
+      await waitForReply(turn, follow, cloud.sessionId);
+    } finally {
+      if (stateOf(threadId).follow === follow) keep(threadId, { follow: null });
+    }
+    if (!stateOf(threadId).halted) hurry(threadId);
   };
 
   const copyOf = (threadId: string, cloudSessionId: string) =>
@@ -1077,13 +1102,13 @@ export const createCloudRuntime = <Tag extends string>(
   };
 };
 
-const newFollow = (text: string, after: string | null): Follow => {
+const newFollow = (text: string | null, after: string | null): Follow => {
   let wake = () => {};
   const woken = new Promise<void>((resolve) => {
     wake = resolve;
   });
   return {
-    texts: [text],
+    texts: text === null ? [] : [text],
     matched: 0,
     sending: 0,
     record: null,
@@ -1209,6 +1234,12 @@ const replied = (message: SessionMessage) =>
       block.type !== "redacted_thinking",
   );
 
+// A session done with what it was asked: its turn ended with a reply, and it waits for no work it handed off.
+const done = (all: readonly SessionMessage[]) => {
+  const last = all.at(-1);
+  return last !== undefined && replied(last) && !waitingIn(all);
+};
+
 const UNSENT_OUTCOMES = new Set(["not_sent", "no_project", "no_parent"]);
 
 // Stops waiting for a message whose send failed.
@@ -1330,6 +1361,8 @@ const FAST_POLL_MS = 3_000;
 const FAST_POLL_FOR_MS = 60_000;
 
 const POLL_MS = 10_000;
+
+const WAITING_POLL_MS = 30_000;
 
 const IDLE_MS = 5 * 60_000;
 // How recent the last record of a session still in its turn must be for the idle copies to come at POLL_MS.

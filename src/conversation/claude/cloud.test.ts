@@ -1356,6 +1356,48 @@ describe("createCloudRuntime idle copies", () => {
     expect(env.copyCalls).toBe(1);
   });
 
+  test("keeps Claude's own turn running while the session waits for a session it started, until it archives it", async () => {
+    const CREATE = "mcp__claude-code-remote__create_session";
+    const ARCHIVE = "mcp__claude-code-remote__archive_session";
+    const CHILD = "session_01NfjPqs5GNSgknfAaJ3mdYA";
+    const waiting = [
+      prompt("p1", "first"),
+      endReply("a1", "one"),
+      reply("a2", "m2", toolUse("t1", CREATE, { prompt: "go" }), "tool_use"),
+      toolResult("r1", "t1", JSON.stringify({ ccr: { id: CHILD } })),
+      endReply("a3", "started a worker"),
+    ];
+    const env = linked({
+      copies: [
+        waiting,
+        waiting,
+        [
+          ...waiting,
+          prompt("p2", "the worker finished"),
+          reply(
+            "a4",
+            "m4",
+            toolUse("t2", ARCHIVE, { session_id: CHILD }),
+            "tool_use",
+          ),
+          toolResult("r2", "t2", "archived"),
+          endReply("a5", "all done"),
+        ],
+      ],
+      shown: "a1",
+    });
+    env.runtime.listen(() => true);
+
+    await env.tick();
+    const turn = env.turn("", { startedBy: "claude" });
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts()).toEqual(["started a worker", "all done"]);
+    expect(turn.userTexts()).toEqual(["the worker finished"]);
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(env.cloudOf("thread-1")?.shown).toBe("a5");
+  });
+
   test("keeps the copy it reads when nothing is new", async () => {
     const env = linked({
       copies: [[prompt("p1", "first"), endReply("a1", "one")]],
