@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startCloudSession } from "./cloud-new.boundary.ts";
@@ -67,6 +74,53 @@ describe("startCloudSession", () => {
     });
 
     expect(run.isErr() && run.error.message).toBe("Still starting");
+  });
+
+  test("gives BSD script a pipe as its input, as on macOS", async () => {
+    const { file, root } = await fakeClaude(
+      `printf 'View: https://claude.ai/code/session_01NfjPqrHtNPEcDZP4SkBFGT\\n'`,
+    );
+    // Like macOS script, it fails unless its input is a pipe, and runs the command after the file.
+    const bin = join(root, "bin");
+    await mkdir(bin);
+    await writeFile(
+      join(bin, "script"),
+      `#!/bin/sh\n[ -p /dev/stdin ] || { echo 'script: tcgetattr/ioctl: Operation not supported on socket'; exit 1; }\nshift 2\nexec "$@"\n`,
+    );
+    await chmod(join(bin, "script"), 0o755);
+
+    const run = await startCloudSession(file, "it's a \\ test", {
+      cwd: root,
+      env: { PATH: `${bin}:${process.env.PATH}` },
+      platform: "darwin",
+    });
+
+    expect(run.unwrap().sessionId).toBe("session_01NfjPqrHtNPEcDZP4SkBFGT");
+    expect(await readFile(join(root, "args"), "utf8")).toBe(
+      "--cloud it's a \\ test\n",
+    );
+  });
+
+  test("fails at once when BSD script ends without a session", async () => {
+    const { root } = await fakeClaude("");
+    const bin = join(root, "bin");
+    await mkdir(bin);
+    await writeFile(
+      join(bin, "script"),
+      "#!/bin/sh\necho 'Not logged in'\nexit 1\n",
+    );
+    await chmod(join(bin, "script"), 0o755);
+    const started = Date.now();
+
+    const run = await startCloudSession(join(root, "claude"), "go", {
+      cwd: root,
+      env: { PATH: `${bin}:${process.env.PATH}` },
+      platform: "darwin",
+      timeoutMs: 10_000,
+    });
+
+    expect(run.isErr() && run.error.message).toContain("Not logged in");
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 
   test("says when claude asks to trust the folder", async () => {
