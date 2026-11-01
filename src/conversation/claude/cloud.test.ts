@@ -12,6 +12,7 @@ import {
   prompt,
   reply,
   text,
+  thinking,
   toolResult,
   toolUse,
 } from "../../presentation/testing/session-record.ts";
@@ -498,6 +499,46 @@ describe("createCloudRuntime turns", () => {
     env.runtime.forgetThread("thread-1", "archived");
 
     expect(env.runtime.recordOf("thread-1", "turn-1")).toBeNull();
+  });
+
+  test("shows what the session did since the app was last shown, such as a reply running when the chat was linked", async () => {
+    const env = linked({
+      copies: [
+        [
+          prompt("p0", "summarize"),
+          endReply("a0", "summary"),
+          prompt("p1", "how is it"),
+          endReply("a1", "fine"),
+        ],
+      ],
+      shown: null,
+    });
+    const turn = env.turn("how is it");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.userTexts()).toEqual(["summarize"]);
+    expect(turn.texts()).toEqual(["summary", "fine"]);
+  });
+
+  test("waits for the reply's text when a copy marks its thinking as the end of the turn", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "hi"), reply("a1", "m1", thinking("hmm"), "end_turn")],
+        [
+          prompt("p1", "hi"),
+          reply("a1", "m1", thinking("hmm"), "end_turn"),
+          endReply("a2", "hello"),
+        ],
+      ],
+      shown: null,
+    });
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts()).toEqual(["hello"]);
+    expect(turn.outcome).toEqual({ status: "completed" });
   });
 
   test("waits for a message sent while it runs and shows a prompt typed elsewhere", async () => {
@@ -1038,6 +1079,47 @@ describe("createCloudRuntime idle copies", () => {
     expect(env.discarded).toEqual(["copy-1"]);
   });
 
+  test("copies a session soon after linking it while its first turn runs, then again while it keeps working", async () => {
+    const now = Date.parse("2026-11-01T00:00:00Z");
+    const env = setup({
+      copies: [
+        [],
+        [
+          prompt("p1", "summarize", "2026-11-01T00:00:00Z"),
+          reply(
+            "a1",
+            "m1",
+            thinking("hmm"),
+            "end_turn",
+            "2026-11-01T00:00:01Z",
+          ),
+        ],
+        [
+          prompt("p1", "summarize", "2026-11-01T00:00:00Z"),
+          reply(
+            "a1",
+            "m1",
+            thinking("hmm"),
+            "end_turn",
+            "2026-11-01T00:00:01Z",
+          ),
+          endReply("a2", "summary"),
+        ],
+      ],
+    });
+    env.clock = now;
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+
+    await env.runtime.run(env.turn(`/cloud ${CLOUD_ID}`).running);
+    await env.tick();
+    await env.tick();
+
+    expect(env.planned).toEqual([15_000, 10_000, 10_000, 300_000]);
+  });
+
   test("drops an idle copy made while a turn ran and ended", async () => {
     const env = linked({
       copies: [
@@ -1071,7 +1153,8 @@ describe("createCloudRuntime idle copies", () => {
     release();
     await idle;
 
-    expect(turn.texts()).toEqual(["two"]);
+    // The reply the idle copy held is shown by the turn, ahead of its own.
+    expect(turn.texts()).toEqual(["bg", "two"]);
     expect(env.ownStarts).toEqual([]);
     expect(env.sessionIds.get("thread-1")).toBe("copy-2");
     expect(env.cloudOf("thread-1")?.shown).toBe("a2");
@@ -1165,6 +1248,8 @@ const setup = ({
     ownStarts,
     copyCalls: 0,
     childOutcomes: [] as string[],
+    // When each idle copy was planned for, in order.
+    planned: [] as number[],
     renames: [] as { threadId: string; name: string }[],
     renameFails: false,
     children: [] as {
@@ -1329,9 +1414,13 @@ const setup = ({
         env.clock = Math.max(env.clock, due);
       });
     },
-    schedule: (run) => {
+    schedule: (run, ms) => {
       ticks.push(run);
-      return () => {};
+      env.planned.push(ms);
+      return () => {
+        const at = ticks.indexOf(run);
+        if (at !== -1) ticks.splice(at, 1);
+      };
     },
     ...(waitLimitMs === undefined ? {} : { waitLimitMs }),
   };

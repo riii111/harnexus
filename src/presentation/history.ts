@@ -620,7 +620,7 @@ export const startOfRecord = (messages: readonly SessionMessage[]) => {
   return null;
 };
 
-const timeOf = (message: SessionMessage) => {
+export const timeOf = (message: SessionMessage) => {
   const stamp = (message as { timestamp?: unknown }).timestamp;
   const ms = typeof stamp === "string" ? Date.parse(stamp) : Number.NaN;
   return Number.isNaN(ms) ? null : ms;
