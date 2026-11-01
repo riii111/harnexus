@@ -81,11 +81,10 @@ describe("openCloudChild", () => {
       {
         sessionId: "session_01NfjPqs5GNSgknfAaJ3mdYA",
         title: "worker",
-        toolUseId: "t1",
       },
     );
 
-    expect(outcome).toEqual({ outcome: "done", threadId: "child-chat" });
+    expect(outcome).toBe("done");
     expect(calls[1]).toEqual({
       threadId: "parent",
       tool: "create_thread",
@@ -111,14 +110,10 @@ describe("openCloudChild", () => {
       },
       "parent",
       "/nowhere",
-      {
-        sessionId: "session_01NfjPqs5GNSgknfAaJ3mdYA",
-        title: null,
-        toolUseId: "t1",
-      },
+      { sessionId: "session_01NfjPqs5GNSgknfAaJ3mdYA", title: null },
     );
 
-    expect(outcome).toEqual({ outcome: "no_project", threadId: null });
+    expect(outcome).toBe("no_project");
     expect(calls).toHaveLength(1);
   });
 });
