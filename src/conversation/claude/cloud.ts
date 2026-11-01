@@ -50,7 +50,8 @@ type CloudEvent =
   | { event: "claude_cloud"; step: "sent"; ms: number }
   | { event: "claude_cloud"; step: "child"; outcome: string }
   | { event: "claude_cloud"; step: "copied"; records: number; ms: number }
-  | { event: "claude_cloud"; step: "copy_failed"; error: string };
+  | { event: "claude_cloud"; step: "copy_failed"; error: string }
+  | { event: "claude_cloud"; step: "thread_not_renamed"; error: string };
 
 // The thread has halted after an earlier copy that may have run a model turn, so no further copy is made.
 class CloudCopyStopped extends TaggedError("CloudCopyStopped")<{
@@ -105,6 +106,10 @@ export type CloudDeps = {
   // Opens a chat in the app linked to a session a linked Cloud session started.
   // Answers how the app took it, such as done, for the log.
   openChild?: (parentThreadId: string, child: CloudChild) => Promise<string>;
+  renameThread?: (
+    threadId: string,
+    name: string,
+  ) => Promise<Result<unknown, { _tag: string }>>;
   now?: () => number;
   // Waits the time, or less once woken; a turn being stopped wakes its wait.
   sleep?: (ms: number, woken: Promise<void>) => Promise<void>;
@@ -159,6 +164,7 @@ export const createCloudRuntime = <Tag extends string>(
     send,
     log,
     openChild,
+    renameThread,
     now = Date.now,
     sleep = defaultSleep,
     schedule = defaultSchedule,
@@ -203,7 +209,7 @@ export const createCloudRuntime = <Tag extends string>(
         ? cloudCommandOf(commandText(turn.input))
         : null;
     if (command !== null) {
-      await link(turn, command);
+      await link(turn, command, sessionCommandTextOf(turn.input) !== null);
       return;
     }
     const cloud = threads.cloudOf(turn.threadId);
@@ -229,7 +235,7 @@ export const createCloudRuntime = <Tag extends string>(
   };
 
   // Links the thread to a Cloud session, answered by the bridge like /resume.
-  const link = async (turn: Turn, argument: string) => {
+  const link = async (turn: Turn, argument: string, typed: boolean) => {
     const { threadId } = turn;
     const refuse = (text: string) => {
       log({ event: "claude_cloud", step: "link_refused" });
@@ -275,6 +281,19 @@ export const createCloudRuntime = <Tag extends string>(
     }
     log({ event: "claude_cloud", step: "linked" });
     reply(turn, LINKED);
+    // A chat another chat opened has the name it was given; a failed rename leaves the name as it was.
+    if (typed && renameThread !== undefined)
+      void renameThread(
+        threadId,
+        cloudChatName(copied.value.records, cloudSessionId),
+      ).then((renamed) => {
+        if (renamed.isErr())
+          log({
+            event: "claude_cloud",
+            step: "thread_not_renamed",
+            error: renamed.error._tag,
+          });
+      });
     // Sent after the command's own turn ends, so the earlier turns follow it rather than interleave with it.
     const replayed = await replayHistory(
       threadId,
@@ -838,6 +857,34 @@ const cloudCommandOf = (text: string | null) => {
 
 const CLOUD_COMMAND = /^\/cloud(?:\s+(\S+))?\s*$/;
 
+// The mark that tells a chat showing a Cloud session from other chats in the app's list.
+export const CLOUD_MARK = "☁️";
+
+// The session's first prompt on one line, after the mark, the way a chat is named after its first message.
+const cloudChatName = (
+  records: readonly SessionMessage[],
+  sessionId: string,
+) => {
+  const first = records
+    .map((record) => turnOpeningTextOf(record)?.replace(/\s+/g, " ").trim())
+    .find((text) => text !== undefined && text !== "");
+  // Cut by what reads as one character, so an emoji is never split.
+  const characters =
+    first === undefined
+      ? []
+      : [...GRAPHEMES.segment(first)].map((part) => part.segment);
+  const name =
+    first === undefined
+      ? sessionId
+      : characters.length > NAME_LENGTH
+        ? `${characters.slice(0, NAME_LENGTH - 1).join("")}…`
+        : first;
+  return `${CLOUD_MARK} ${name}`;
+};
+
+const NAME_LENGTH = 60;
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 const UNSENT_OUTCOMES = new Set(["not_sent", "no_project", "no_parent"]);
 
 // Stops waiting for a message whose send failed.
@@ -892,6 +939,7 @@ export const serializeCloudEvent = (entry: CloudEvent) => {
         ms: entry.ms,
       };
     case "copy_failed":
+    case "thread_not_renamed":
       return { event: entry.event, step: entry.step, error: entry.error };
     default:
       return { event: entry.event, step: entry.step };

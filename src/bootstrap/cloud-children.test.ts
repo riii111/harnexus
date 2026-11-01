@@ -94,7 +94,7 @@ describe("openCloudChild", () => {
           projectId: "p",
           environment: { type: "local" },
         },
-        title: "Cloud｜worker",
+        title: "☁️ worker",
         model: "claude-sonnet-5-5",
       },
     });

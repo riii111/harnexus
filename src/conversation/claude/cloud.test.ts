@@ -233,6 +233,65 @@ describe("createCloudRuntime /cloud", () => {
 
     expect(env.links.map((link) => link.cloud.sessionId)).toEqual([CLOUD_ID]);
     expect(env.innerRuns).toEqual([]);
+    expect(env.renames).toEqual([]);
+  });
+
+  test("marks a chat linked by a typed /cloud as Cloud, named after the session's first prompt", async () => {
+    const env = setup({
+      copies: [[prompt("p1", "README を\n  要約して"), endReply("r1", "hi")]],
+    });
+
+    await env.runtime.run(env.turn(`/cloud ${CLOUD_ID}`).running);
+    await settle();
+
+    expect(env.renames).toEqual([
+      { threadId: "thread-1", name: "☁️ README を 要約して" },
+    ]);
+  });
+
+  test.each([
+    {
+      name: "a long first prompt is cut",
+      copy: [prompt("p1", "x".repeat(80)), endReply("r1", "hi")],
+      expected: `☁️ ${"x".repeat(59)}…`,
+    },
+    {
+      name: "an emoji sits where a long first prompt is cut",
+      copy: [
+        prompt("p1", `${"x".repeat(58)}👨‍👩‍👧${"y".repeat(20)}`),
+        endReply("r1", "hi"),
+      ],
+      expected: `☁️ ${"x".repeat(58)}👨‍👩‍👧…`,
+    },
+    {
+      name: "a session with no prompt yet is named by its id",
+      copy: [],
+      expected: `☁️ ${CLOUD_ID}`,
+    },
+  ])("names a marked chat when $name", async ({ copy, expected }) => {
+    const env = setup({ copies: [[...copy]] });
+
+    await env.runtime.run(env.turn(`/cloud ${CLOUD_ID}`).running);
+    await settle();
+
+    expect(env.renames.map((renamed) => renamed.name)).toEqual([expected]);
+  });
+
+  test("keeps the link and logs when the app does not rename the chat", async () => {
+    const env = setup({
+      copies: [[prompt("p1", "hello"), endReply("r1", "hi")]],
+    });
+    env.renameFails = true;
+
+    await env.runtime.run(env.turn(`/cloud ${CLOUD_ID}`).running);
+    await settle();
+
+    expect(env.links.map((link) => link.cloud.sessionId)).toEqual([CLOUD_ID]);
+    expect(env.events).toContainEqual({
+      event: "claude_cloud",
+      step: "thread_not_renamed",
+      error: "AppRequestFailed",
+    });
   });
 
   test("passes a /cloud another chat sent to an open chat to Claude", async () => {
@@ -1064,6 +1123,8 @@ const setup = ({
     ownStarts,
     copyCalls: 0,
     childOutcomes: [] as string[],
+    renames: [] as { threadId: string; name: string }[],
+    renameFails: false,
     children: [] as {
       parent: string;
       child: { sessionId: string; title: string | null };
@@ -1205,6 +1266,12 @@ const setup = ({
       discarded.push(copy);
     },
     replayHistory: async (_threadId, copy) => [{ replayOf: copy }],
+    renameThread: async (threadId, name) => {
+      env.renames.push({ threadId, name });
+      return env.renameFails
+        ? Result.err({ _tag: "AppRequestFailed" })
+        : Result.ok(null);
+    },
     openChild: async (parent, child) => {
       env.children.push({ parent, child });
       return env.childOutcomes.shift() ?? "done";
