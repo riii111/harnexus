@@ -25,6 +25,7 @@ import {
   sendToCloud,
 } from "../infra/claude/cloud.ts";
 import type { CloudCheckouts } from "../infra/claude/cloud-checkouts.ts";
+import { startCloudSession } from "../infra/claude/cloud-new.boundary.ts";
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
 import { createCallGateway } from "../infra/codex/call-gateway.ts";
 import { createCodexLink } from "../infra/codex/codex-link.ts";
@@ -193,6 +194,15 @@ export const connectClaudeThreads = ({
           reviewOf: reviews.reviewOf,
           reviewChatOf: reviews.chatOf,
           noteReviewAsk: reviews.noteAsk,
+        }),
+    ...(cloud === undefined
+      ? {}
+      : {
+          startCloud: (request, cwd) =>
+            startCloudSession(cloud.cli.file, request, {
+              cwd,
+              env: cloud.cli.env,
+            }),
         }),
     openChild: (parentThreadId, child) => {
       const parent = store.get(parentThreadId);
