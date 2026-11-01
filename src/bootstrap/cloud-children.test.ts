@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { projectOf } from "../task/session.ts";
-import { openCloudChild } from "./cloud-children.ts";
+import { childChatName, openCloudChild } from "./cloud-children.ts";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -115,5 +115,20 @@ describe("openCloudChild", () => {
 
     expect(outcome).toBe("no_project");
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("childChatName", () => {
+  test.each([
+    {
+      title: "Harnexus vs T3 Code 調査 [riii111/harnexus#t3-code]",
+      expected: "☁️ Impl｜Harnexus vs T3 Code 調査",
+    },
+    { title: "[riii111/harnexus#t3-code]", expected: "☁️ Impl t3-code" },
+    { title: "worker", expected: "☁️ worker" },
+  ])("names a session titled $title", ({ title, expected }) => {
+    expect(
+      childChatName({ sessionId: "session_01NfjPqs5GNSgknfAaJ3mdYA", title }),
+    ).toBe(expected);
   });
 });

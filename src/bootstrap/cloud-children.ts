@@ -20,11 +20,24 @@ export const openCloudChild = async (
   const created = await answerOf(call, parentThreadId, "create_thread", {
     prompt: `/cloud ${child.sessionId}`,
     target: { type: "project", projectId, environment: { type: "local" } },
-    title: `${CLOUD_MARK} ${child.title ?? child.sessionId}`,
+    title: childChatName(child),
     model: CLOUD_CHAT_MODEL,
   });
   return typeof created.outcome === "string" ? created.outcome : "unknown";
 };
+
+// A worker the task skills started is named as a local worker's chat is, after the mark: its session is titled "<displayName> [<owner>/<repo>#<taskId>]".
+export const childChatName = (child: CloudChild) => {
+  const title = child.title ?? child.sessionId;
+  const task = TASK_TITLE.exec(title);
+  if (task === null) return `${CLOUD_MARK} ${title}`;
+  const name = task[1]?.trim() ?? "";
+  return name === ""
+    ? `${CLOUD_MARK} Impl ${task[2]}`
+    : `${CLOUD_MARK} Impl｜${name}`;
+};
+
+const TASK_TITLE = /^(.*?)\s*\[[^\]#]+#([^\]]+)\]$/;
 
 const answerOf = async (
   call: Call,
