@@ -360,6 +360,50 @@ describe("createCloudRuntime child sessions", () => {
     expect(kinds).toEqual(["completed"]);
   });
 
+  test("shows a followed worker completing in the parent's turn that started it, before the parent shows another", async () => {
+    const parentRecords = [
+      prompt("p1", "start a worker"),
+      reply(
+        "a1",
+        "m1",
+        toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+        "tool_use",
+      ),
+      toolResult("u1", "t1", started(CHILD)),
+      endReply("a2", "started"),
+    ];
+    const env = linked({
+      copies: [parentRecords, [prompt("w1", "work"), endReply("w3", "done")]],
+      shown: "a2",
+    });
+    const chat = `chat-${CHILD}`;
+    env.clouds.set(chat, { sessionId: CHILD, shown: null });
+    env.owners.set(CHILD, chat);
+    env.sessionIds.set(chat, "copy-w");
+    env.runtime.listen(() => true);
+
+    await env.tick();
+
+    const activity = env.sent.flatMap((message) => {
+      const notification = message as {
+        method?: string;
+        params?: { turnId?: string; item?: { type?: string; kind?: string } };
+      };
+      return notification.method === "item/completed" &&
+        notification.params?.item?.type === "subAgentActivity"
+        ? [
+            {
+              kind: notification.params.item.kind,
+              turnId: notification.params.turnId,
+            },
+          ]
+        : [];
+    });
+    expect(activity).toEqual([
+      { kind: "completed", turnId: "harnexus-history-p1" },
+    ]);
+  });
+
   test("opens nothing for the sessions a session started before /cloud linked it", async () => {
     const env = setup({
       copies: [

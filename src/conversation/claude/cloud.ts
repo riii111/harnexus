@@ -9,6 +9,7 @@ import type { CloudLink } from "../../infra/thread-store.ts";
 import {
   type AgentRef,
   endsTurn,
+  historyTurnId,
   mainRecords,
   renderRecords,
   timeOf,
@@ -150,11 +151,32 @@ export type CloudDeps = {
 
 type Copied = { copy: string; records: SessionMessage[] };
 
+// The parent's history turn each call sits in, named by the prompt that opened it, as the history names its turns.
+const turnsOfCalls = (records: readonly SessionMessage[]) => {
+  const turns = new Map<string, string>();
+  let opened: string | null = null;
+  for (const record of records) {
+    if (turnOpeningTextOf(record) !== null) opened = record.uuid;
+    const message = isObject(record) ? record.message : null;
+    const content = isObject(message) ? message.content : null;
+    if (opened === null || !Array.isArray(content)) continue;
+    for (const block of content)
+      if (
+        isObject(block) &&
+        block.type === "tool_use" &&
+        typeof block.id === "string"
+      )
+        turns.set(block.id, historyTurnId(opened));
+  }
+  return turns;
+};
+
 const workerOf = (parent: string, child: CloudChild, chat: string): Worker => ({
   parent,
   chat,
   path: `${CLOUD_MARK} ${child.title ?? child.sessionId}`,
   key: child.toolUseId,
+  turnId: null,
   runs: 0,
   running: true,
 });
@@ -165,6 +187,8 @@ type Worker = {
   chat: string;
   path: string;
   key: string;
+  // The parent's turn that started it, for a worker followed again after a restart; null when not known.
+  turnId: string | null;
   // How many times it started working again after it ended a turn, which names each activity.
   runs: number;
   running: boolean;
@@ -880,11 +904,19 @@ export const createCloudRuntime = <Tag extends string>(
 
   // A worker whose chat was opened before, such as by a bridge that has since restarted, is followed again without showing it started anew.
   const followWorkers = (parent: string, all: readonly SessionMessage[]) => {
-    for (const child of childSessionsIn(all)) {
-      if (workers.has(child.sessionId)) continue;
+    const children = childSessionsIn(all).filter(
+      (child) => !workers.has(child.sessionId),
+    );
+    if (children.length === 0) return;
+    const turns = turnsOfCalls(all);
+    for (const child of children) {
       const chat = threads.cloudOwner(child.sessionId);
-      if (chat !== undefined)
-        workers.set(child.sessionId, workerOf(parent, child, chat));
+      if (chat === undefined) continue;
+      // Its activity shows in the parent's turn that started it, as the parent's history shows it, until the parent shows another turn.
+      workers.set(child.sessionId, {
+        ...workerOf(parent, child, chat),
+        turnId: turns.get(child.toolUseId) ?? null,
+      });
     }
   };
 
@@ -915,11 +947,16 @@ export const createCloudRuntime = <Tag extends string>(
 
   // An activity shows in a turn of the parent's chat, the one running or the last it showed; with none yet, it waits for the next.
   const flushActivity = (parent: string) => {
-    const turnId = shownTurns.get(parent);
     const pending = pendingActivity.get(parent);
-    if (turnId === undefined || pending === undefined) return;
-    pendingActivity.delete(parent);
-    for (const { worker, kind, run } of pending) {
+    if (pending === undefined) return;
+    const waiting: typeof pending = [];
+    for (const entry of pending) {
+      const { worker, kind, run } = entry;
+      const turnId = shownTurns.get(parent) ?? worker.turnId;
+      if (turnId === undefined || turnId === null) {
+        waiting.push(entry);
+        continue;
+      }
       for (const notification of renderWorkerActivity(
         { threadId: worker.chat, path: worker.path },
         kind,
@@ -930,6 +967,8 @@ export const createCloudRuntime = <Tag extends string>(
       ))
         send(notification);
     }
+    if (waiting.length > 0) pendingActivity.set(parent, waiting);
+    else pendingActivity.delete(parent);
   };
 
   // Opens a chat, once, for each session a linked one started after the app was last shown.
