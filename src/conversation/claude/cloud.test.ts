@@ -313,6 +313,29 @@ describe("createCloudRuntime /cloud", () => {
     expect(env.innerRuns).toEqual([]);
   });
 
+  test("links a chat another chat opened when its prompt arrives as <prompt>", async () => {
+    const env = setup({
+      copies: [[prompt("p1", "hello"), endReply("r1", "hi")]],
+    });
+    const turn = env.turn(`/cloud ${CLOUD_ID}`, {
+      delegatedBy: "create_thread",
+    });
+    const wrapped = `<codex_delegation>\n  <source_thread_id>th-codex</source_thread_id>\n  <prompt>/cloud ${CLOUD_ID}</prompt>\n</codex_delegation>`;
+    turn.running.input = {
+      ...turn.running.input,
+      toolOutput: {
+        name: "create_thread",
+        namespace: "codex_app",
+        output: wrapped,
+      },
+      text: wrapped,
+    };
+
+    await env.runtime.run(turn.running);
+
+    expect(env.links.map((link) => link.cloud.sessionId)).toEqual([CLOUD_ID]);
+  });
+
   test("passes a /cloud another chat sent to an open chat to Claude", async () => {
     const env = setup({ copies: [] });
     const turn = env.turn(`/cloud ${CLOUD_ID}`, {
@@ -1364,7 +1387,7 @@ const fakeTurn = (
     images?: readonly { path: string }[];
     compaction?: boolean;
     startedBy?: "app" | "claude";
-    // A message another chat sent with this tool, wrapped as the app delivers it: a create_thread's as its <prompt>, a send_message_to_thread's as its <input>.
+    // A message another chat sent with this tool, wrapped as the app delivers it, as its <input>.
     delegatedBy?: "create_thread" | "send_message_to_thread" | null;
   },
 ) => {
@@ -1378,9 +1401,7 @@ const fakeTurn = (
   const delegated =
     delegatedBy === null
       ? null
-      : delegatedBy === "create_thread"
-        ? `<codex_delegation>\n  <source_thread_id>th-codex</source_thread_id>\n  <prompt>${typed}</prompt>\n</codex_delegation>`
-        : `<codex_delegation>\n  <source_thread_id>th-codex</source_thread_id>\n  <input>${typed}</input>\n</codex_delegation>`;
+      : `<codex_delegation>\n  <source_thread_id>th-codex</source_thread_id>\n  <input>${typed}</input>\n</codex_delegation>`;
   const input: TurnInput = {
     items:
       typed === "" || delegated !== null ? [] : [{ type: "text", text: typed }],

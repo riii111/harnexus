@@ -843,16 +843,16 @@ const commandText = (input: TurnInput) => {
   const typed = sessionCommandTextOf(input);
   const output = input.toolOutput;
   if (typed !== null || output?.name !== "create_thread") return typed;
-  // The first message of a chat another chat opened with create_thread, as harnexus-task cloud does, can link it too; it arrives wrapped in its delegation, as its <prompt>, and the app may also send the prompt as the message's own text.
+  // The first message of a chat another chat opened with create_thread, as harnexus-task cloud does, can link it too; it arrives wrapped in its delegation, as its <input>, which older apps named <prompt>.
   const delegation =
     typeof output.output === "string"
       ? output.output
       : output.output.map((item) => item.text).join("\n");
-  const prompt = DELEGATED_PROMPT.exec(delegation)?.[1];
+  const prompt = DELEGATED_PROMPT.exec(delegation)?.[2];
   return prompt === undefined ? null : unescapeXml(prompt);
 };
 
-const DELEGATED_PROMPT = /<prompt>([\s\S]*?)<\/prompt>/;
+const DELEGATED_PROMPT = /<(input|prompt)>([\s\S]*?)<\/\1>/;
 
 const unescapeXml = (text: string) =>
   text
