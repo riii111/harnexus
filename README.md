@@ -53,7 +53,7 @@ Running `bun run open-app` again without an option clears that option.
 
 ## Claude Cloud sessions
 
-To follow a [Claude Code cloud session](https://code.claude.com/docs/en/claude-code-on-the-web), start a new Claude chat and send its session ID or URL:
+To follow a [Claude Code Cloud session](https://code.claude.com/docs/en/claude-code-on-the-web), start a new Claude chat and send its session ID or URL:
 
 ```text
 /cloud https://claude.ai/code/session_01AbC...
