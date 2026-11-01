@@ -102,8 +102,11 @@ describe("createCloudRuntime reviews", () => {
     expect(env.links).toEqual([]);
   });
 
-  test("sends a message typed in a reviewer's chat to the session that ran the reviewer, without Claude", async () => {
+  test("sends a message typed in a reviewer's chat to the session that ran the reviewer, without Claude, and copies the worker's chat soon", async () => {
     const env = setup({ copies: [] });
+    env.clouds.set("worker-chat", { sessionId: CLOUD_ID, shown: null });
+    env.owners.set(CLOUD_ID, "worker-chat");
+    env.runtime.listen(() => true);
     env.reviewChats.set("thread-1", {
       reviewer: "0199-reviewer",
       session: CLOUD_ID,
@@ -125,6 +128,21 @@ describe("createCloudRuntime reviews", () => {
     ]);
     expect(turn.texts().at(-1)).toContain("Sent to the worker");
     expect(env.innerRuns).toEqual([]);
+    expect(env.planned.at(-1)).toBe(10_000);
+  });
+
+  test("sends nothing when no chat here shows the session that ran the reviewer, since the answer could not come back", async () => {
+    const env = setup({ copies: [] });
+    env.reviewChats.set("thread-1", {
+      reviewer: "0199-reviewer",
+      session: CLOUD_ID,
+    });
+    const turn = env.turn("hello");
+
+    await env.runtime.run(turn.running);
+
+    expect(env.sends).toEqual([]);
+    expect(turn.texts().at(-1)).toContain("not sent");
   });
 
   test("leaves a message in an ordinary chat to Claude", async () => {

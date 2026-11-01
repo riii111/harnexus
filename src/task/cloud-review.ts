@@ -339,6 +339,8 @@ const asked = (
     return Result.ok<Fields>({
       status: "completed",
       kind: "reply",
+      // Tells this reply from another of the same text, such as the same answer to a question asked again.
+      askedAt: new Date().toISOString(),
       verdict: VERDICT.exec(reply.answer)?.[1] ?? null,
       taskId: requested.taskId,
       head: reviewed?.head ?? null,

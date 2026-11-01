@@ -5,7 +5,7 @@ import { isObject } from "../../runtime/object.ts";
 
 // A review harnexus-task review finished in a Cloud session, as its output names it.
 export type CloudReview = {
-  // Names the review by its reviewer, head and answer, so a review read twice, such as from the file it was written to, is taken once.
+  // Names the review by its reviewer, head, answer and, for a reply to a question, when it was asked, so a review read twice, such as from the file it was written to, is taken once.
   key: string;
   reviewer: string;
   verdict: string | null;
@@ -69,7 +69,9 @@ const reviewOf = (text: string): CloudReview | null => {
   const head = textOrNull(output.head);
   return {
     key: createHash("sha256")
-      .update(`${output.reviewer}\0${head ?? ""}\0${output.answer}`)
+      .update(
+        `${output.reviewer}\0${head ?? ""}\0${textOrNull(output.askedAt) ?? ""}\0${output.answer}`,
+      )
       .digest("hex")
       .slice(0, 32),
     reviewer: output.reviewer,

@@ -674,11 +674,17 @@ const COMMANDS = {
     args: (values) =>
       Result.gen(function* () {
         const ask = text(values, "ask");
+        // The reviewer keeps the model it was started with, so a question takes no model either.
         if (
           ask !== undefined &&
-          (values["update-base"] === true || values.recover !== undefined)
+          (values["update-base"] === true ||
+            values.recover !== undefined ||
+            values.model !== undefined ||
+            values.thinking !== undefined)
         )
-          return invalid("--ask takes neither --update-base nor --recover");
+          return invalid(
+            "--ask takes none of --update-base, --recover, --model and --thinking",
+          );
         return Result.ok<ReviewArgs>({
           ask,
           request: yield* required(values, "request"),

@@ -382,7 +382,10 @@ export const createCloudRuntime = <Tag extends string>(
       });
       return;
     }
-    if (chat.session === null) {
+    // The answer comes back only through a chat linked to that session, so without one nothing is sent.
+    const owner =
+      chat.session === null ? undefined : threads.cloudOwner(chat.session);
+    if (chat.session === null || owner === undefined) {
       reply(turn, REVIEW_ASK_UNROUTED);
       return;
     }
@@ -410,6 +413,8 @@ export const createCloudRuntime = <Tag extends string>(
     log({ event: "claude_cloud", step: "review_asked" });
     await noteReviewAsk?.(turn.threadId, text);
     reply(turn, REVIEW_ASK_SENT);
+    // The worker's chat is copied soon, so the answer is not left for the idle wait.
+    hurry(owner);
   };
 
   const sendAndFollow = async (turn: Turn, cloud: CloudLink) => {
@@ -1095,7 +1100,7 @@ export const REVIEW_ASK_SENT =
   "Sent to the worker running this reviewer, which passes it on; the reviewer's answer appears here once the worker's session is copied.";
 
 const REVIEW_ASK_UNROUTED =
-  "This chat does not know which Cloud session ran its reviewer, so the message was not sent. Ask in the worker's chat instead.";
+  "The Cloud session that ran this reviewer is not shown in a chat here, so its answer could not come back and the message was not sent. Link the worker's session with /cloud, or ask in the worker's chat.";
 
 const REVIEW_MISSING =
   "This review is no longer kept on this Mac, so it cannot be shown here.";

@@ -294,6 +294,7 @@ describe("harnexus-task review in a Claude Code cloud session", () => {
     expect(done.out).toEqual({
       status: "completed",
       kind: "reply",
+      askedAt: expect.any(String),
       verdict: null,
       taskId: "example",
       head,
