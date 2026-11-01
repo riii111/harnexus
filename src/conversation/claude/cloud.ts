@@ -51,7 +51,8 @@ type CloudEvent =
         | "copy_unchecked"
         | "review_shown"
         | "review_missing"
-        | "review_asked";
+        | "review_asked"
+        | "started";
     }
   | { event: "claude_cloud"; step: "sent"; ms: number }
   | { event: "claude_cloud"; step: "child" | "review"; outcome: string }
@@ -123,6 +124,13 @@ export type CloudDeps = {
   ) => Promise<{ reviewer: string; session: string | null } | null>;
   // Keeps a message sent from a reviewer's chat, for the chat's history.
   noteReviewAsk?: (threadId: string, text: string) => Promise<void>;
+  // Starts a Cloud session from a request in a folder, as claude --cloud does.
+  startCloud?: (
+    request: string,
+    cwd: string,
+  ) => Promise<
+    Result<{ sessionId: string; title: string | null }, { message: string }>
+  >;
   renameThread?: (
     threadId: string,
     name: string,
@@ -186,6 +194,7 @@ export const createCloudRuntime = <Tag extends string>(
     reviewChatOf,
     noteReviewAsk,
     renameThread,
+    startCloud,
     now = Date.now,
     sleep = defaultSleep,
     schedule = defaultSchedule,
@@ -293,8 +302,17 @@ export const createCloudRuntime = <Tag extends string>(
       log({ event: "claude_cloud", step: "link_refused" });
       reply(turn, text);
     };
-    const cloudSessionId = parseCloudSessionId(argument);
-    if (cloudSessionId === null) {
+    const named = parseCloudSessionId(argument);
+    // Typed with a request rather than a session, /cloud starts a new session for it.
+    const request =
+      named === null &&
+      typed &&
+      startCloud !== undefined &&
+      argument !== "" &&
+      !NOT_A_REQUEST.test(argument)
+        ? argument
+        : null;
+    if (named === null && request === null) {
       refuse(LINK_USAGE);
       return;
     }
@@ -305,6 +323,20 @@ export const createCloudRuntime = <Tag extends string>(
       refuse(LINK_HAS_CONVERSATION);
       return;
     }
+    let cloudSessionId = named;
+    let startedTitle: string | null = null;
+    if (request !== null && startCloud !== undefined) {
+      turn.apply(renderNotice(turn.state(), STARTING, "commentary", now()));
+      const started = await startCloud(request, turn.record.worktree);
+      if (started.isErr()) {
+        refuse(`${START_FAILED}: ${started.error.message}`);
+        return;
+      }
+      log({ event: "claude_cloud", step: "started" });
+      cloudSessionId = started.value.sessionId;
+      startedTitle = started.value.title;
+    }
+    if (cloudSessionId === null) return;
     if (threads.cloudOwner(cloudSessionId) !== undefined) {
       refuse(LINK_TAKEN);
       return;
@@ -340,7 +372,10 @@ export const createCloudRuntime = <Tag extends string>(
     if (typed && renameThread !== undefined)
       void renameThread(
         threadId,
-        cloudChatName(copied.value.records, cloudSessionId),
+        cloudChatName(
+          copied.value.records,
+          startedTitle ?? request ?? cloudSessionId,
+        ),
       ).then((renamed) => {
         if (renamed.isErr())
           log({
@@ -1086,7 +1121,7 @@ const cloudCommandOf = (text: string | null) => {
   return matched === null ? null : (matched[1] ?? "");
 };
 
-const CLOUD_COMMAND = /^\/cloud(?:\s+(\S+))?\s*$/;
+const CLOUD_COMMAND = /^\/cloud(?:\s+([\s\S]+?))?\s*$/;
 
 const reviewCommandOf = (text: string | null) =>
   text === null ? null : (REVIEW_COMMAND.exec(text.trim())?.[1] ?? null);
@@ -1117,22 +1152,19 @@ export const CLOUD_MARK = "☁️";
 // The session's first prompt on one line, after the mark, the way a chat is named after its first message.
 const cloudChatName = (
   records: readonly SessionMessage[],
-  sessionId: string,
+  fallback: string,
 ) => {
-  const first = records
-    .map((record) => turnOpeningTextOf(record)?.replace(/\s+/g, " ").trim())
-    .find((text) => text !== undefined && text !== "");
+  const first =
+    records
+      .map((record) => turnOpeningTextOf(record)?.replace(/\s+/g, " ").trim())
+      .find((text) => text !== undefined && text !== "") ??
+    fallback.replace(/\s+/g, " ").trim();
   // Cut by what reads as one character, so an emoji is never split.
-  const characters =
-    first === undefined
-      ? []
-      : [...GRAPHEMES.segment(first)].map((part) => part.segment);
+  const characters = [...GRAPHEMES.segment(first)].map((part) => part.segment);
   const name =
-    first === undefined
-      ? sessionId
-      : characters.length > NAME_LENGTH
-        ? `${characters.slice(0, NAME_LENGTH - 1).join("")}…`
-        : first;
+    characters.length > NAME_LENGTH
+      ? `${characters.slice(0, NAME_LENGTH - 1).join("")}…`
+      : first;
   return `${CLOUD_MARK} ${name}`;
 };
 
@@ -1214,7 +1246,14 @@ export const serializeCloudEvent = (entry: CloudEvent) => {
 };
 
 const LINK_USAGE =
-  "Send /cloud followed by a Cloud session id or its claude.ai/code URL, such as /cloud session_01AbC…, to show that session in this thread.";
+  "Send /cloud followed by a Cloud session id or its claude.ai/code URL, such as /cloud session_01AbC…, to show that session in this thread, or by a request to start a new Cloud session for it.";
+
+// What looks like a session id or a link that is not one, which is refused rather than taken as a request.
+const NOT_A_REQUEST = /^(?:https?:\/\/|session_|cse_)\S*$/;
+
+const STARTING = "Starting a Cloud session for this request…";
+
+const START_FAILED = "The Cloud session could not be started";
 
 const LINK_HAS_CONVERSATION =
   "This thread already holds a conversation; open a new Claude thread and send /cloud there.";

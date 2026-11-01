@@ -384,6 +384,60 @@ describe("createCloudRuntime /cloud", () => {
     });
   });
 
+  test("starts a Cloud session for a request typed after /cloud in the chat's folder, then links the chat to it", async () => {
+    const env = setup({ copies: [[]] });
+    const turn = env.turn("/cloud README の誤字を直して\nPR は作らない");
+
+    await env.runtime.run(turn.running);
+    await settle();
+
+    expect(env.started).toEqual([
+      { request: "README の誤字を直して\nPR は作らない", cwd: "/work/tree" },
+    ]);
+    expect(env.links.map((link) => link.cloud.sessionId)).toEqual([CLOUD_ID]);
+    expect(env.renames.map((renamed) => renamed.name)).toEqual([
+      "☁️ README の誤字",
+    ]);
+    expect(turn.texts().at(-1)).toContain("now shows the Cloud session");
+    expect(env.innerRuns).toEqual([]);
+  });
+
+  test("says when the Cloud session for a request could not start", async () => {
+    const env = setup({ copies: [] });
+    env.startAnswer = Result.err({ message: "Not logged in" });
+    const turn = env.turn("/cloud README の誤字を直して");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts().at(-1)).toContain(
+      "could not be started: Not logged in",
+    );
+    expect(env.links).toEqual([]);
+  });
+
+  test.each([
+    {
+      name: "a link that names no session",
+      text: "/cloud https://example.com/x",
+    },
+    {
+      name: "a request another chat sent",
+      text: "/cloud do it",
+      delegated: true,
+    },
+  ])("starts no session for $name", async ({ text, delegated }) => {
+    const env = setup({ copies: [] });
+    const turn = env.turn(
+      text,
+      delegated ? { delegatedBy: "create_thread" } : {},
+    );
+
+    await env.runtime.run(turn.running);
+
+    expect(env.started).toEqual([]);
+    expect(turn.texts().at(-1)).toContain("Send /cloud followed by");
+  });
+
   test("links a chat another chat opened with /cloud as its first message", async () => {
     const env = setup({
       copies: [[prompt("p1", "hello"), endReply("r1", "hi")]],
@@ -513,8 +567,8 @@ describe("createCloudRuntime /cloud", () => {
 
   test.each([
     {
-      name: "a text that is no session id",
-      text: "/cloud nope",
+      name: "a session id that is malformed",
+      text: "/cloud session_nope",
       prepare: () => {},
       expected: "Send /cloud followed by",
     },
@@ -1483,6 +1537,15 @@ const setup = ({
     // When each idle copy was planned for, in order.
     planned: [] as number[],
     renames: [] as { threadId: string; name: string }[],
+    // The requests a /cloud started a session for, and the session each started, or a failure.
+    started: [] as { request: string; cwd: string }[],
+    startAnswer: Result.ok({
+      sessionId: CLOUD_ID,
+      title: "README の誤字" as string | null,
+    }) as Result<
+      { sessionId: string; title: string | null },
+      { message: string }
+    >,
     renameFails: false,
     children: [] as {
       parent: string;
@@ -1638,6 +1701,10 @@ const setup = ({
       discarded.push(copy);
     },
     replayHistory: async (_threadId, copy) => [{ replayOf: copy }],
+    startCloud: async (request, cwd) => {
+      env.started.push({ request, cwd });
+      return env.startAnswer;
+    },
     renameThread: async (threadId, name) => {
       env.renames.push({ threadId, name });
       return env.renameFails
