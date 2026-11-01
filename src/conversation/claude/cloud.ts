@@ -202,8 +202,8 @@ export const createCloudRuntime = <Tag extends string>(
   let startOwnTurn = (_threadId: string) => false;
   let cancelTick: (() => void) | null = null;
   let ticking = false;
-  // Whether a linked session was in the middle of a recent turn, or one was just linked, so the next idle copy comes soon.
-  let working = false;
+  // When each linked thread's next idle copy is due: soon while its session is in the middle of a recent turn, or was just linked, and after the idle wait otherwise.
+  const dueAt = new Map<string, number>();
   let soon = false;
   let closed = false;
 
@@ -312,7 +312,7 @@ export const createCloudRuntime = <Tag extends string>(
     reply(turn, LINKED);
     // A session still running its turn, such as one just started, is copied again soon rather than after the idle wait.
     const last = copied.value.records.at(-1);
-    if (last === undefined || !replied(last)) hurry();
+    if (last === undefined || !replied(last)) hurry(threadId);
     // A chat another chat opened has the name it was given; a failed rename leaves the name as it was.
     if (typed && renameThread !== undefined)
       void renameThread(
@@ -745,51 +745,72 @@ export const createCloudRuntime = <Tag extends string>(
     }
   };
 
-  // Copies each linked thread with no turn running, and opens a turn of Claude's own for what it shows past where the app was shown.
+  // Copies each linked thread with no turn running whose idle copy is due, and opens a turn of Claude's own for what it shows past where the app was shown.
   const tick = async () => {
-    working = false;
-    for (const threadId of threads.cloudThreadIds()) {
+    const linked = threads.cloudThreadIds();
+    for (const threadId of dueAt.keys()) {
+      if (!linked.includes(threadId)) dueAt.delete(threadId);
+    }
+    for (const threadId of linked) {
       if (closed) return;
-      const { busy, halted } = stateOf(threadId);
-      if (busy || halted) continue;
-      const cloud = threads.cloudOf(threadId);
-      if (cloud === null) continue;
-      const reading = threads.sessionIdOf(threadId);
-      const copied = await copyOf(threadId, cloud.sessionId);
-      // A turn that ran while this copy was made saved a newer one, which this copy may be older than.
-      if (
-        copied.isErr() ||
-        stateOf(threadId).busy ||
-        threads.sessionIdOf(threadId) !== reading
-      ) {
-        if (copied.isOk()) await discardCopy(copied.value.copy);
-        continue;
-      }
-      const all = copied.value.records;
-      const last = all.at(-1);
-      const recordAt = last === undefined ? null : timeOf(last);
-      if (
-        last !== undefined &&
-        !replied(last) &&
-        recordAt !== null &&
-        now() - recordAt < WORKING_FOR_MS
-      )
-        working = true;
-      const at = indexOf(all, cloud.shown);
-      // Claude compacted the session past the record the app was shown, so everything the copy holds came after it and is shown.
-      if (cloud.shown !== null && at === -1) {
-        log({ event: "claude_cloud", step: "compacted" });
-      }
-      if (at === all.length - 1 || all.length === 0) {
-        await discardCopy(copied.value.copy);
-        continue;
-      }
+      if ((dueAt.get(threadId) ?? 0) > now()) continue;
+      const copied = await copyIdle(threadId);
+      if (copied === "skipped") continue;
+      dueAt.set(threadId, now() + (copied === "working" ? POLL_MS : IDLE_MS));
+    }
+  };
+
+  // Whether the session was in the middle of a recent turn, or skipped when the thread is busy or no longer linked; a halted thread counts as idle.
+  const copyIdle = async (
+    threadId: string,
+  ): Promise<"working" | "idle" | "skipped"> => {
+    const { busy, halted } = stateOf(threadId);
+    // A halted thread is never copied again, so it waits like an idle one rather than waking the copies every POLL_MS.
+    if (halted) return "idle";
+    if (busy) return "skipped";
+    const cloud = threads.cloudOf(threadId);
+    if (cloud === null) return "skipped";
+    const reading = threads.sessionIdOf(threadId);
+    const copied = await copyOf(threadId, cloud.sessionId);
+    if (copied.isErr()) return "idle";
+    // A turn that ran while this copy was made saved a newer one, which this copy may be older than.
+    if (stateOf(threadId).busy || threads.sessionIdOf(threadId) !== reading) {
+      await discardCopy(copied.value.copy);
+      return "skipped";
+    }
+    const all = copied.value.records;
+    const last = all.at(-1);
+    const recordAt = last === undefined ? null : timeOf(last);
+    const working =
+      last !== undefined &&
+      !replied(last) &&
+      recordAt !== null &&
+      now() - recordAt < WORKING_FOR_MS;
+    const at = indexOf(all, cloud.shown);
+    // Claude compacted the session past the record the app was shown, so everything the copy holds came after it and is shown.
+    if (cloud.shown !== null && at === -1) {
+      log({ event: "claude_cloud", step: "compacted" });
+    }
+    if (at === all.length - 1 || all.length === 0) {
+      await discardCopy(copied.value.copy);
+    } else {
       keep(threadId, { pendingOwn: copied.value });
       if (!startOwnTurn(threadId)) {
         keep(threadId, { pendingOwn: null });
         await keepCopy(threadId, copied.value.copy, cloud.shown);
       }
     }
+    return working ? "working" : "idle";
+  };
+
+  // The wait until the earliest idle copy is due, kept between POLL_MS and IDLE_MS.
+  const nextWait = () => {
+    if (soon) return POLL_MS;
+    let wait = IDLE_MS;
+    for (const threadId of threads.cloudThreadIds()) {
+      wait = Math.min(wait, (dueAt.get(threadId) ?? 0) - now());
+    }
+    return Math.max(POLL_MS, wait);
   };
 
   const plan = (ms: number) => {
@@ -798,14 +819,15 @@ export const createCloudRuntime = <Tag extends string>(
       ticking = true;
       await tick();
       ticking = false;
-      const next = working || soon ? POLL_MS : IDLE_MS;
+      const next = nextWait();
       soon = false;
       plan(next);
     }, ms);
   };
 
-  // Brings the next idle copy forward; a copy already running plans the next one itself.
-  const hurry = () => {
+  // Brings a thread's idle copy forward; a copy already running plans the next one itself.
+  const hurry = (threadId: string) => {
+    dueAt.set(threadId, 0);
     soon = true;
     if (ticking || closed) return;
     cancelTick?.();

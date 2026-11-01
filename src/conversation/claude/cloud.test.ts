@@ -1105,6 +1105,19 @@ describe("createCloudRuntime turns", () => {
     expect(env.events).toContainEqual({ event: "claude_cloud", step });
   });
 
+  test("waits the idle wait, without copying, once a thread is halted", async () => {
+    const env = linked({ copies: [[prompt("p1", "hi")]], shown: null });
+    env.copyStop = "ran_model";
+    env.runtime.listen(() => true);
+    await env.runtime.run(env.turn("hi").running);
+
+    await env.tick();
+    await env.tick();
+
+    expect(env.copyCalls).toBe(1);
+    expect(env.planned).toEqual([15_000, 300_000, 300_000]);
+  });
+
   test("waits for a message sent while the finished reply's copy was saved", async () => {
     const env = linked({
       copies: [
@@ -1230,6 +1243,27 @@ describe("createCloudRuntime idle copies", () => {
     expect(env.planned).toEqual([15_000, 10_000, 10_000, 300_000]);
   });
 
+  test("copies soon only the thread whose session is working, and the others after the idle wait", async () => {
+    const at = "2026-11-01T00:00:00Z";
+    const working = [
+      prompt("p1", "summarize", at),
+      reply("a1", "m1", thinking("hmm"), "end_turn", at),
+    ];
+    const idle = [prompt("p2", "hi", at), endReply("r2", "ok")];
+    const env = linked({ copies: [working, idle, working], shown: "a1" });
+    env.clouds.set("thread-2", { sessionId: "session_01Other", shown: "r2" });
+    env.sessionIds.set("thread-2", "copy-0b");
+    env.clock = Date.parse(at);
+    env.runtime.listen(() => true);
+
+    await env.tick();
+    await env.tick();
+
+    // Both are copied first, then only the working one 10 seconds later.
+    expect(env.copyCalls).toBe(3);
+    expect(env.planned).toEqual([15_000, 10_000, 10_000]);
+  });
+
   test("drops an idle copy made while a turn ran and ended", async () => {
     const env = linked({
       copies: [
@@ -1336,7 +1370,8 @@ const setup = ({
   const innerRuns: string[] = [];
   const ownStarts: string[] = [];
   const contents = new Map<string, SessionMessage[]>();
-  const ticks: (() => Promise<void>)[] = [];
+  // Each idle copy planned, with the wait it was planned after.
+  const ticks: { run: () => Promise<void>; ms: number }[] = [];
   let sendWaiters: (() => boolean)[] = [];
   let copyWaiters: (() => boolean)[] = [];
   let turns = 0;
@@ -1348,6 +1383,7 @@ const setup = ({
   const env = {
     sessionIds,
     owners,
+    clouds,
     links,
     picked,
     sends,
@@ -1420,7 +1456,13 @@ const setup = ({
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
     },
-    tick: () => ticks.shift()?.() ?? Promise.resolve(),
+    // Runs the next idle copy once its wait has passed on the clock.
+    tick: () => {
+      const next = ticks.shift();
+      if (next === undefined) return Promise.resolve();
+      env.clock += next.ms;
+      return next.run();
+    },
     turn: (
       typed: string,
       options: {
@@ -1540,10 +1582,10 @@ const setup = ({
       });
     },
     schedule: (run, ms) => {
-      ticks.push(run);
+      ticks.push({ run, ms });
       env.planned.push(ms);
       return () => {
-        const at = ticks.indexOf(run);
+        const at = ticks.findIndex((planned) => planned.run === run);
         if (at !== -1) ticks.splice(at, 1);
       };
     },
