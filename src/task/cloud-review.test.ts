@@ -329,6 +329,21 @@ describe("harnexus-task review in a Claude Code cloud session", () => {
     expect(await calls()).toBe(0);
   });
 
+  test("takes a request without projectId, which a Cloud review does not use", async () => {
+    const { root, commit, plan, review } = await fixture();
+    commit("test: candidate");
+    const request = JSON.parse(
+      await readFile(join(root, "request.json"), "utf8"),
+    );
+    delete request.projectId;
+    await writeFile(join(root, "request.json"), JSON.stringify(request));
+    await plan(1, { out: events(REVIEWER, "判定: LGTM") });
+
+    const done = await review();
+
+    expect(done.out?.verdict).toBe("LGTM");
+  });
+
   test("refuses a head it already reviewed", async () => {
     const { commit, plan, review, calls } = await fixture();
     const head = commit("test: candidate");
