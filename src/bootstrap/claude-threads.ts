@@ -183,9 +183,16 @@ export const connectClaudeThreads = ({
             const parent = store.get(parentThreadId);
             return parent === undefined
               ? Promise.resolve("no_parent")
-              : reviews.openReview(parentThreadId, parent.worktree, review);
+              : reviews.openReview(
+                  parentThreadId,
+                  parent.worktree,
+                  review,
+                  parent.cloud?.sessionId ?? null,
+                );
           },
           reviewOf: reviews.reviewOf,
+          reviewChatOf: reviews.chatOf,
+          noteReviewAsk: reviews.noteAsk,
         }),
     openChild: (parentThreadId, child) => {
       const parent = store.get(parentThreadId);

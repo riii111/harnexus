@@ -102,6 +102,40 @@ describe("createCloudRuntime reviews", () => {
     expect(env.links).toEqual([]);
   });
 
+  test("sends a message typed in a reviewer's chat to the session that ran the reviewer, without Claude", async () => {
+    const env = setup({ copies: [] });
+    env.reviewChats.set("thread-1", {
+      reviewer: "0199-reviewer",
+      session: CLOUD_ID,
+    });
+    const turn = env.turn("B1 は既存の挙動では？");
+
+    await env.runtime.run(turn.running);
+
+    expect(env.sends).toEqual([
+      {
+        cloud: CLOUD_ID,
+        text: expect.stringContaining("B1 は既存の挙動では？"),
+      },
+    ]);
+    expect(env.sends[0]?.text).toContain("--ask");
+    expect(env.sends[0]?.text).toContain("0199-reviewer");
+    expect(env.reviewAsks).toEqual([
+      { threadId: "thread-1", text: "B1 は既存の挙動では？" },
+    ]);
+    expect(turn.texts().at(-1)).toContain("Sent to the worker");
+    expect(env.innerRuns).toEqual([]);
+  });
+
+  test("leaves a message in an ordinary chat to Claude", async () => {
+    const env = setup({ copies: [] });
+
+    await env.runtime.run(env.turn("hello").running);
+
+    expect(env.sends).toEqual([]);
+    expect(env.innerRuns).toEqual(["turn-1"]);
+  });
+
   test("says when the review it names is no longer kept", async () => {
     const env = setup({ copies: [] });
     const turn = env.turn("/cloud-review gone", {
@@ -1396,6 +1430,11 @@ const setup = ({
     childOutcomes: [] as string[],
     reviews: [] as { parent: string; key: string }[],
     reviewKept: new Map<string, CloudReview>(),
+    reviewChats: new Map<
+      string,
+      { reviewer: string; session: string | null }
+    >(),
+    reviewAsks: [] as { threadId: string; text: string }[],
     // When each idle copy was planned for, in order.
     planned: [] as number[],
     renames: [] as { threadId: string; name: string }[],
@@ -1566,6 +1605,10 @@ const setup = ({
       return "done";
     },
     reviewOf: async (key) => env.reviewKept.get(key) ?? null,
+    reviewChatOf: async (threadId) => env.reviewChats.get(threadId) ?? null,
+    noteReviewAsk: async (threadId, text) => {
+      env.reviewAsks.push({ threadId, text });
+    },
     openChild: async (parent, child) => {
       env.children.push({ parent, child });
       return env.childOutcomes.shift() ?? "done";

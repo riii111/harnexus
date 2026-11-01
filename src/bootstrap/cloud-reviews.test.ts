@@ -225,6 +225,35 @@ describe("createCloudReviews", () => {
     expect(await reviews.recordsOf("other-chat")).toBeNull();
   });
 
+  test("knows the reviewer a chat shows and the session that ran it, and keeps what was asked there in its history", async () => {
+    const { reviews } = await setup([
+      projects,
+      { outcome: "done", threadId: "review-chat" },
+    ]);
+    await reviews.openReview(
+      "parent",
+      "/work/harnexus",
+      review("t1"),
+      "session_01Worker",
+    );
+
+    await reviews.noteAsk("review-chat", "B1 は既存の挙動では？");
+    const records = await reviews.recordsOf("review-chat");
+
+    expect(await reviews.chatOf("review-chat")).toEqual({
+      reviewer: "0199-reviewer",
+      session: "session_01Worker",
+    });
+    expect(await reviews.chatOf("other-chat")).toBeNull();
+    expect(records?.map((record) => record.type)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    expect(JSON.stringify(records?.[2])).toContain("B1 は既存の挙動では？");
+  });
+
   test("names no review it never kept", async () => {
     const { reviews } = await setup([]);
 
