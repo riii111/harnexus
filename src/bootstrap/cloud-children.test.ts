@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openCloudChild, projectOf } from "./cloud-children.ts";
+import { projectOf } from "../task/session.ts";
+import { openCloudChild } from "./cloud-children.ts";
 
 const roots: string[] = [];
 afterEach(async () => {

@@ -1,10 +1,8 @@
-import { basename } from "node:path";
 import { CLOUD_MARK } from "../conversation/claude/cloud.ts";
 import type { CloudChild } from "../conversation/claude/cloud-children.ts";
-import { realPathOrSelf } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
-import { projectsIn } from "../task/session.ts";
+import { projectOf } from "../task/session.ts";
 
 type Call = (line: string) => Promise<string>;
 
@@ -38,32 +36,6 @@ const answerOf = async (
     await call(JSON.stringify({ threadId, tool, arguments: args })),
   );
   return parsed.isOk() && isObject(parsed.value) ? parsed.value : {};
-};
-
-// The project whose folder holds the parent chat's folder, the deepest when several do.
-export const projectOf = async (result: unknown, folder: string) => {
-  const real = await realPathOrSelf(folder);
-  const projects: { projectId: string; path: string }[] = [];
-  for (const project of projectsIn(result)) {
-    if (
-      isObject(project) &&
-      typeof project.projectId === "string" &&
-      typeof project.path === "string"
-    )
-      projects.push({
-        projectId: project.projectId,
-        path: await realPathOrSelf(project.path),
-      });
-  }
-  const holding = projects
-    .filter(({ path }) => real === path || real.startsWith(`${path}/`))
-    .sort((a, b) => b.path.length - a.path.length);
-  if (holding[0] !== undefined) return holding[0].projectId;
-  // A chat in a worktree of its own sits outside every project, so it takes the one project of the same folder name.
-  const named = projects.filter(
-    ({ path }) => basename(path) === basename(real),
-  );
-  return named.length === 1 ? (named[0]?.projectId ?? null) : null;
 };
 
 const CLOUD_CHAT_MODEL = "claude-sonnet-5-5";

@@ -53,6 +53,7 @@ import {
   launchOfThread,
   launchSession,
   listState,
+  projectOf,
   projectsIn,
   reviewProject,
   reviewSession,
@@ -65,6 +66,8 @@ export type TaskDeps = {
   env: Env;
   runGit: GitRunner;
   saveJson: SaveJson;
+  // The folder the command runs in, whose project is used when none is named; the process's own when absent.
+  cwd?: string;
   // Only the watch writes as it runs, since it never returns.
   print: (line: string) => void;
   // Starts a Cloud session from a description in a folder, as claude --cloud does.
@@ -120,7 +123,7 @@ type WatchArgs = {
 type CloudArgs = {
   link: string | undefined;
   promptFile: string | undefined;
-  project: string;
+  project: string | undefined;
   title: string | undefined;
   model: string | undefined;
   thinking: string | undefined;
@@ -469,16 +472,31 @@ const linkOnly = (deps: TaskDeps, value: string) =>
 const cloud = (args: CloudArgs, deps: TaskDeps) =>
   Result.gen(async function* () {
     yield* refuseInCloud(deps.env, "cloud");
-    yield* singleLine(args.project, "--project");
+    if (args.project !== undefined)
+      yield* singleLine(args.project, "--project");
     const caller = yield* callerId(deps.env);
     let sessionId = parseCloudSessionId(args.link ?? "");
     let title = args.title || null;
-    if (args.promptFile !== undefined) {
-      const description = yield* Result.await(readText(args.promptFile));
-      if (isBlank(description)) return fail("the prompt file is empty");
-      const folder = yield* Result.await(
-        projectFolder(deps.env, caller, args.project),
-      );
+    const description =
+      args.promptFile === undefined
+        ? null
+        : yield* Result.await(readText(args.promptFile));
+    if (description !== null && isBlank(description))
+      return fail("the prompt file is empty");
+    // The project is looked up only when it is not named or its folder is needed to start a session.
+    const where =
+      args.project !== undefined && description === null
+        ? { projectId: args.project, folder: null }
+        : yield* Result.await(
+            projectWhere(
+              deps.env,
+              caller,
+              args.project,
+              deps.cwd ?? process.cwd(),
+            ),
+          );
+    if (description !== null) {
+      const folder = String(where.folder);
       const start = deps.startCloud ?? TASK_DEPS.startCloud;
       const started = await start(description, folder, deps.env);
       if (started.isErr())
@@ -530,7 +548,7 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
       prompt: `/cloud ${sessionId}`,
       target: {
         type: "project",
-        projectId: args.project,
+        projectId: where.projectId,
         environment: { type: "local" },
       },
       title: `☁️ ${title ?? sessionId}`,
@@ -562,18 +580,26 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
 
 const UNOPENED = new Set(["not_sent", "rejected", "invalid"]);
 
-// The folder of a project in the app.
-const projectFolder = async (env: Env, caller: string, projectId: string) => {
+// The project named, or else the one holding the folder the command runs in, with its folder.
+const projectWhere = async (
+  env: Env,
+  caller: string,
+  named: string | undefined,
+  cwd: string,
+) => {
   const answer = await callApp(env, caller, "list_projects", {});
   if (answer.outcome !== "done")
     return fail(`list_projects failed: ${JSON.stringify(answer)}`);
+  const projectId = named ?? (await projectOf(answer.result, cwd));
+  if (projectId === null)
+    return fail(`no project in the app holds ${cwd}; name one with --project`);
   for (const project of projectsIn(answer.result)) {
     if (
       isObject(project) &&
       project.projectId === projectId &&
       typeof project.path === "string"
     )
-      return Result.ok(project.path);
+      return Result.ok({ projectId, folder: project.path });
   }
   return fail(`no project ${projectId} in the app`);
 };
@@ -779,7 +805,7 @@ const COMMANDS = {
   }),
   cloud: subcommand({
     usage:
-      "cloud (--link SESSION_OR_URL | --prompt-file FILE) --project PROJECT_ID [--title TITLE] [--model MODEL] [--thinking THINKING]",
+      "cloud (--link SESSION_OR_URL | --prompt-file FILE) [--project PROJECT_ID] [--title TITLE] [--model MODEL] [--thinking THINKING]",
     options: {
       link: { type: "string" },
       "prompt-file": { type: "string" },
@@ -796,7 +822,7 @@ const COMMANDS = {
         return Result.ok<CloudArgs>({
           link,
           promptFile,
-          project: yield* required(values, "project"),
+          project: text(values, "project"),
           title: text(values, "title"),
           model: text(values, "model"),
           thinking: text(values, "thinking"),
