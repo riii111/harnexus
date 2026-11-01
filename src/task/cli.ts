@@ -813,21 +813,20 @@ const COMMANDS = {
       title: { type: "string" },
       ...MODEL_OPTIONS,
     },
-    args: (values) =>
-      Result.gen(function* () {
-        const link = text(values, "link");
-        const promptFile = text(values, "prompt-file");
-        if ((link === undefined) === (promptFile === undefined))
-          return invalid("exactly one of --link and --prompt-file is required");
-        return Result.ok<CloudArgs>({
-          link,
-          promptFile,
-          project: text(values, "project"),
-          title: text(values, "title"),
-          model: text(values, "model"),
-          thinking: text(values, "thinking"),
-        });
-      }),
+    args: (values) => {
+      const link = text(values, "link");
+      const promptFile = text(values, "prompt-file");
+      if ((link === undefined) === (promptFile === undefined))
+        return invalid("exactly one of --link and --prompt-file is required");
+      return Result.ok<CloudArgs>({
+        link,
+        promptFile,
+        project: text(values, "project"),
+        title: text(values, "title"),
+        model: text(values, "model"),
+        thinking: text(values, "thinking"),
+      });
+    },
     run: cloud,
   }),
 } satisfies Record<string, Subcommand>;
