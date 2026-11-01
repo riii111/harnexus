@@ -34,7 +34,8 @@ export const startCloudSession = (
                 "/bin/sh",
                 [
                   "-c",
-                  'sleep 86400 | script -q /dev/null "$@"',
+                  // Once script ends, the group goes too, so the pipe's writer does not keep it running.
+                  'sleep 86400 | { script -q /dev/null "$@"; kill 0; }',
                   "sh",
                   ...command,
                 ],
@@ -116,7 +117,7 @@ export const startCloudSession = (
 
 const stopGroup = (pid: number) => {
   try {
-    process.kill(-pid, "SIGINT");
+    process.kill(-pid, "SIGTERM");
   } catch {
     return;
   }

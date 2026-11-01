@@ -101,6 +101,28 @@ describe("startCloudSession", () => {
     );
   });
 
+  test("fails at once when BSD script ends without a session", async () => {
+    const { root } = await fakeClaude("");
+    const bin = join(root, "bin");
+    await mkdir(bin);
+    await writeFile(
+      join(bin, "script"),
+      "#!/bin/sh\necho 'Not logged in'\nexit 1\n",
+    );
+    await chmod(join(bin, "script"), 0o755);
+    const started = Date.now();
+
+    const run = await startCloudSession(join(root, "claude"), "go", {
+      cwd: root,
+      env: { PATH: `${bin}:${process.env.PATH}` },
+      platform: "darwin",
+      timeoutMs: 10_000,
+    });
+
+    expect(run.isErr() && run.error.message).toContain("Not logged in");
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
   test("says when claude asks to trust the folder", async () => {
     const { file, root } = await fakeClaude(
       `printf 'Quick safety check: Is this a project you created or one you trust?\\n'`,
