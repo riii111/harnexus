@@ -168,6 +168,34 @@ describe("createCallGateway", () => {
   });
 
   test.each([
+    {
+      name: "a linked session",
+      sessionId: "session_01Linked",
+      threadId: "linked-chat",
+    },
+    { name: "one no chat shows", sessionId: "session_01Free", threadId: null },
+  ])("answers which chat shows $name, without the app", async ({
+    sessionId,
+    threadId,
+  }) => {
+    const { gateway, requests, linkCalls } = setup({ claude: [CLAUDE] });
+
+    const answer = await gateway.handle(
+      JSON.stringify({
+        threadId: CLAUDE,
+        tool: "cloud_chat",
+        arguments: { sessionId },
+      }),
+    );
+
+    expect(JSON.parse(answer)).toEqual({
+      outcome: "done",
+      result: { threadId },
+    });
+    expect([requests, linkCalls]).toEqual([[], []]);
+  });
+
+  test.each([
     { kind: "Codex", threadId: CODEX },
     { kind: "Claude", threadId: CLAUDE },
   ])("names the calling $kind thread through the app server", async ({
@@ -553,6 +581,8 @@ const setup = ({
     },
     request,
     delegations: watch,
+    cloudOwner: (sessionId) =>
+      sessionId === "session_01Linked" ? "linked-chat" : undefined,
     firstTurnWaitMs: 50,
   });
   return { gateway, requests, linkCalls, opened, watch };

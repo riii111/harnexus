@@ -59,6 +59,8 @@ const fakeHarnexus = async (path: string) => {
   const calls: Call[] = [];
   const answers: Answer[] = [];
   const unplanned: Call[] = [];
+  // The chat the bridge holds for each linked Cloud session, which it answers cloud_chat from on its own.
+  const linkedChats = new Map<string, string>();
   const server = createServer((socket) => {
     let data = "";
     socket.setEncoding("utf8");
@@ -66,6 +68,14 @@ const fakeHarnexus = async (path: string) => {
       data += chunk;
       if (!data.endsWith("\n")) return;
       const call: Call = JSON.parse(data);
+      if (call.tool === "cloud_chat") {
+        const sessionId = (call.arguments as { sessionId?: string }).sessionId;
+        const threadId = linkedChats.get(sessionId ?? "") ?? null;
+        socket.end(
+          `${JSON.stringify({ outcome: "done", result: { threadId } })}\n`,
+        );
+        return;
+      }
       calls.push(call);
       const answer = answers.shift();
       if (answer === undefined) unplanned.push(call);
@@ -78,7 +88,7 @@ const fakeHarnexus = async (path: string) => {
   });
   await new Promise<void>((resolve) => server.listen(path, resolve));
   cleanups.push(() => new Promise((resolve) => server.close(resolve)));
-  return { calls, answers, unplanned };
+  return { calls, answers, unplanned, linkedChats };
 };
 
 const writeTemplateConfig = async (configHome: string, config: unknown) => {
@@ -859,6 +869,27 @@ describe("harnexus-task cloud", () => {
       expect.stringContaining("is being opened"),
     ]);
     expect(harnexus.calls).toHaveLength(1);
+  });
+
+  test("answers the chat a session is already linked to, such as by a typed /cloud, instead of opening one", async () => {
+    const { invoke, harnexus } = await fixture();
+    harnexus.linkedChats.set(SESSION, "typed-chat");
+
+    const linked = await invoke([
+      "cloud",
+      "--link",
+      SESSION,
+      "--project",
+      "project",
+    ]);
+
+    expect(linked.out).toEqual({
+      threadId: "typed-chat",
+      cloudSessionId: SESSION,
+      url: `https://claude.ai/code/${SESSION}`,
+      alreadyLinked: true,
+    });
+    expect(harnexus.calls).toEqual([]);
   });
 
   test("refuses a link that names no Cloud session, before calling the app", async () => {
