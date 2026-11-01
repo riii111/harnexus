@@ -148,6 +148,35 @@ describe("waitingIn", () => {
       expected: true,
     },
     {
+      name: "keeps waiting past a message the user typed that only mentions what was scheduled",
+      records: [
+        ...scheduled,
+        prompt("p2", "I will check with Alex", "2026-11-01T00:30:00Z"),
+      ],
+      expected: true,
+    },
+    {
+      name: "stops waiting once the session read the scheduled message among its notifications",
+      records: [
+        ...scheduled,
+        reply(
+          "a3",
+          "m3",
+          toolUse("t2", "ReadNotifications", {}),
+          "tool_use",
+          "2026-11-01T00:30:00Z",
+        ),
+        toolResult(
+          "r2",
+          "t2",
+          "--- Notification 1 of 1 · origin: scheduled trigger ---\ncheck",
+          false,
+          "2026-11-01T00:30:01Z",
+        ),
+      ],
+      expected: false,
+    },
+    {
       name: "stops waiting for a message it cancelled",
       records: [
         ...scheduled,

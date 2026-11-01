@@ -90,15 +90,10 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
   }[] = [];
   for (const record of records) {
     const at = timeOfRecord(record);
+    // A scheduled message comes as a prompt of its own; one the user typed counts only when it is that message and nothing else.
     const opening = record.type === "user" ? openingTextOf(record) : null;
-    // A message the session takes is the scheduled one when it comes due and holds what was scheduled; one taken before it was scheduled never is.
-    if (opening !== null && at !== null)
-      for (const entry of scheduled)
-        if (
-          at >= entry.due - FIRE_EARLY_MS &&
-          (entry.message === null || opening.includes(entry.message))
-        )
-          entry.came = true;
+    if (opening !== null)
+      arrive(scheduled, at, (message) => opening.trim() === message);
     for (const block of contentOf(record)) {
       if (
         block.type === "tool_use" &&
@@ -117,6 +112,11 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
       const call = calls.get(block.tool_use_id);
       const name = typeof call?.name === "string" ? call.name : "";
       const input = isObject(call?.input) ? call.input : {};
+      // Or among the notifications the session reads, which the harness writes.
+      if (READ_NOTIFICATIONS.test(name)) {
+        const read = textsOf(block.content).join("\n");
+        arrive(scheduled, at, (message) => read.includes(message));
+      }
       if (ARCHIVE_SESSION.test(name) && typeof input.session_id === "string")
         archived.add(input.session_id);
       if (DELETE_TRIGGER.test(name) && typeof input.trigger_id === "string")
@@ -141,6 +141,21 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
         !came && (trigger === null || !cancelled.has(trigger)),
     )
   );
+};
+
+// Marks the scheduled messages that came with a message taken at a time: one taken before it was scheduled never is, since only the messages scheduled before it are looked at.
+const arrive = (
+  scheduled: { due: number; message: string | null; came: boolean }[],
+  at: number | null,
+  holds: (message: string) => boolean,
+) => {
+  if (at === null) return;
+  for (const entry of scheduled)
+    if (
+      at >= entry.due - FIRE_EARLY_MS &&
+      (entry.message === null || holds(entry.message))
+    )
+      entry.came = true;
 };
 
 // When a scheduled message is due; one whose time cannot be read counts as due at once, so the next message the session takes ends its wait.
@@ -178,6 +193,7 @@ const openingTextOf = (record: SessionMessage) => {
 const ARCHIVE_SESSION = /(?:^|__)archive_session$/;
 const SEND_LATER = /(?:^|__)send_later$/;
 const DELETE_TRIGGER = /(?:^|__)delete_trigger$/;
+const READ_NOTIFICATIONS = /(?:^|__)ReadNotifications$/;
 const TRIGGER_ID = /trig_[A-Za-z0-9]+/;
 // The scheduler fires by the minute, so a message may come up to a minute before its time.
 const FIRE_EARLY_MS = 60_000;
