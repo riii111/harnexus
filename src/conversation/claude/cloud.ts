@@ -50,7 +50,8 @@ type CloudEvent =
         | "copy_ran_model"
         | "copy_unchecked"
         | "review_shown"
-        | "review_missing";
+        | "review_missing"
+        | "review_asked";
     }
   | { event: "claude_cloud"; step: "sent"; ms: number }
   | { event: "claude_cloud"; step: "child" | "review"; outcome: string }
@@ -116,6 +117,12 @@ export type CloudDeps = {
   openReview?: (parentThreadId: string, review: CloudReview) => Promise<string>;
   // The review a /cloud-review message names, kept by openReview.
   reviewOf?: (key: string) => Promise<CloudReview | null>;
+  // The reviewer a chat openReview opened shows, and the Cloud session that ran it, which the chat's messages go to.
+  reviewChatOf?: (
+    threadId: string,
+  ) => Promise<{ reviewer: string; session: string | null } | null>;
+  // Keeps a message sent from a reviewer's chat, for the chat's history.
+  noteReviewAsk?: (threadId: string, text: string) => Promise<void>;
   renameThread?: (
     threadId: string,
     name: string,
@@ -176,6 +183,8 @@ export const createCloudRuntime = <Tag extends string>(
     openChild,
     openReview,
     reviewOf,
+    reviewChatOf,
+    noteReviewAsk,
     renameThread,
     now = Date.now,
     sleep = defaultSleep,
@@ -232,6 +241,20 @@ export const createCloudRuntime = <Tag extends string>(
     if (reviewKey !== null) {
       await showReview(turn, reviewKey);
       return;
+    }
+    // A message typed in a reviewer's chat, which holds no conversation of Claude's, goes to that reviewer.
+    if (
+      turn.input.startedBy === "app" &&
+      turn.input.toolOutput === null &&
+      reviewChatOf !== undefined &&
+      threads.sessionIdOf(turn.threadId) === null &&
+      threads.cloudOf(turn.threadId) === null
+    ) {
+      const chat = await reviewChatOf(turn.threadId);
+      if (chat !== null) {
+        await askReviewer(turn, chat);
+        return;
+      }
     }
     const command =
       turn.input.startedBy === "app"
@@ -345,6 +368,53 @@ export const createCloudRuntime = <Tag extends string>(
       step: review === null ? "review_missing" : "review_shown",
     });
     reply(turn, review === null ? REVIEW_MISSING : reviewText(review));
+  };
+
+  // Sends the message to the session that ran the reviewer, asking it to pass the message on; the reviewer's answer comes back to this chat as a review does.
+  const askReviewer = async (
+    turn: Turn,
+    chat: { reviewer: string; session: string | null },
+  ) => {
+    if (turn.input.images.length > 0) {
+      turn.fail({
+        _tag: "CloudInputUnsupported",
+        message: refusalMessage("cloud_images"),
+      });
+      return;
+    }
+    // The answer comes back only through a chat linked to that session, so without one nothing is sent.
+    const owner =
+      chat.session === null ? undefined : threads.cloudOwner(chat.session);
+    if (chat.session === null || owner === undefined) {
+      reply(turn, REVIEW_ASK_UNROUTED);
+      return;
+    }
+    const text = turn.input.text;
+    const sent = await sendToCloud(
+      chat.session,
+      reviewerAsk(chat.reviewer, text),
+      turn.record.worktree,
+    );
+    if (sent.isErr()) {
+      turn.fail(
+        matchError(sent.error, {
+          CloudSendRejected: ({ _tag, message }) => ({
+            _tag,
+            message: `${refusalMessage("cloud_not_sent")} (${message})`,
+          }),
+          CloudSendUnknown: ({ _tag, message }) => ({
+            _tag,
+            message: `${refusalMessage("cloud_send_unknown")} (${message})`,
+          }),
+        }),
+      );
+      return;
+    }
+    log({ event: "claude_cloud", step: "review_asked" });
+    await noteReviewAsk?.(turn.threadId, text);
+    reply(turn, REVIEW_ASK_SENT);
+    // The worker's chat is copied soon, so the answer is not left for the idle wait.
+    hurry(owner);
   };
 
   const sendAndFollow = async (turn: Turn, cloud: CloudLink) => {
@@ -1022,6 +1092,15 @@ export const reviewText = (review: CloudReview) =>
 
 const REVIEW_FOOTER = (review: CloudReview) =>
   `_Codex reviewer \`${review.reviewer}\`${review.head === null ? "" : ` on \`${review.head.slice(0, 7)}\``}, run in a Cloud session. Ask for changes in the worker's chat._`;
+
+const reviewerAsk = (reviewer: string, text: string) =>
+  `The user sent this to your Codex reviewer \`${reviewer}\` from its Review chat in the Codex App:\n\n${text}\n\nPass it to the same reviewer: write it to a file and run \`harnexus-task review --request <your review request file> --ask <that file>\`, then reply with the reviewer's answer as it is.`;
+
+export const REVIEW_ASK_SENT =
+  "Sent to the worker running this reviewer, which passes it on; the reviewer's answer appears here once the worker's session is copied.";
+
+const REVIEW_ASK_UNROUTED =
+  "The Cloud session that ran this reviewer is not shown in a chat here, so its answer could not come back and the message was not sent. Link the worker's session with /cloud, or ask in the worker's chat.";
 
 const REVIEW_MISSING =
   "This review is no longer kept on this Mac, so it cannot be shown here.";

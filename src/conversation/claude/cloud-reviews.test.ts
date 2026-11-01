@@ -84,6 +84,37 @@ describe("reviewsIn", () => {
     expect(reviewsIn(ran("t1", content, isError))).toEqual([]);
   });
 
+  test("tells apart replies of the same text to questions asked at different times", () => {
+    const records = [
+      ...ran(
+        "t1",
+        output({
+          kind: "reply",
+          askedAt: "2026-11-01T00:00:00Z",
+          answer: "はい",
+        }),
+      ),
+      ...ran(
+        "t2",
+        output({
+          kind: "reply",
+          askedAt: "2026-11-01T00:05:00Z",
+          answer: "はい",
+        }),
+      ),
+      ...ran(
+        "t3",
+        output({
+          kind: "reply",
+          askedAt: "2026-11-01T00:05:00Z",
+          answer: "はい",
+        }),
+      ),
+    ];
+
+    expect(reviewsIn(records)).toHaveLength(2);
+  });
+
   test("takes only the reviews read at or after the given record", () => {
     const records = [
       ...ran("t1", output({})),

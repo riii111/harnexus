@@ -278,6 +278,57 @@ describe("harnexus-task review in a Claude Code cloud session", () => {
     ]);
   });
 
+  test("passes a question to the same reviewer at the reviewed head, and answers with its reply", async () => {
+    const { root, commit, plan, review, args, input } = await fixture();
+    const head = commit("test: candidate");
+    await plan(1, { out: events(REVIEWER, "判定: 修正必要\n- B1") });
+    await review();
+    const question = join(root, "ask.md");
+    await writeFile(question, "B1 は既存の挙動では？");
+    await plan(2, {
+      out: events(REVIEWER, "既存の挙動ですが、今回の変更で悪化します。"),
+    });
+
+    const done = await review(["--ask", question]);
+
+    expect(done.out).toEqual({
+      status: "completed",
+      kind: "reply",
+      askedAt: expect.any(String),
+      verdict: null,
+      taskId: "example",
+      head,
+      reviewer: REVIEWER,
+      answer: "既存の挙動ですが、今回の変更で悪化します。",
+    });
+    expect(await args(2)).toEqual([
+      "exec",
+      "resume",
+      REVIEWER,
+      "--json",
+      "-c",
+      'sandbox_mode="read-only"',
+      "-",
+    ]);
+    expect(await input(2)).toBe("B1 は既存の挙動では？");
+    // The question changes nothing the next review checks.
+    expect((await review()).err).toContain(`head ${head} was already reviewed`);
+  });
+
+  test("refuses a question before the task has a reviewer", async () => {
+    const { root, review, calls } = await fixture();
+    const question = join(root, "ask.md");
+    await writeFile(question, "hello");
+
+    const done = await review(["--ask", question]);
+
+    expect([done.code, done.err]).toEqual([
+      1,
+      expect.stringContaining("no reviewer yet"),
+    ]);
+    expect(await calls()).toBe(0);
+  });
+
   test("refuses a head it already reviewed", async () => {
     const { commit, plan, review, calls } = await fixture();
     const head = commit("test: candidate");

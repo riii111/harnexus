@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { reviewText } from "../conversation/claude/cloud.ts";
+import { REVIEW_ASK_SENT, reviewText } from "../conversation/claude/cloud.ts";
 import type { CloudReview } from "../conversation/claude/cloud-reviews.ts";
 import {
   listDirectoryIfExists,
@@ -57,13 +58,19 @@ export const createCloudReviews = (dir: string, call: Call) => {
     parentThreadId: string,
     parentFolder: string,
     review: CloudReview,
+    workerSession: string | null = null,
   ) =>
     queue.run("reviews", async () => {
       const path = join(dir, `${review.key}.json`);
       // A review already sent, such as one a restarted bridge reads again, is not sent twice.
       if ((await readJson(path))?.sent === true) return "done";
       if (!(await write(path, review))) return "not_kept";
-      const sent = await deliver(parentThreadId, parentFolder, review);
+      const sent = await deliver(
+        parentThreadId,
+        parentFolder,
+        review,
+        workerSession,
+      );
       // A send whose outcome is unknown may have shown the review, so it is kept as shown rather than sent again.
       if (sent.outcome === "done" || sent.outcome === "unknown")
         await write(path, {
@@ -79,11 +86,20 @@ export const createCloudReviews = (dir: string, call: Call) => {
     parentThreadId: string,
     parentFolder: string,
     review: CloudReview,
+    workerSession: string | null,
   ): Promise<{ outcome: string; threadId: string | null }> => {
     const prompt = `/cloud-review ${review.key}`;
     const chats = (await readJson(chatsPath)) ?? {};
-    const chat = chats[review.reviewer];
-    if (typeof chat === "string") {
+    const chat = chatIn(chats[review.reviewer])?.threadId ?? null;
+    // The chat's messages go to the session that ran the reviewer, which is kept with the chat.
+    const keep = async (threadId: string) => {
+      const latest = (await readJson(chatsPath)) ?? {};
+      await write(chatsPath, {
+        ...latest,
+        [review.reviewer]: { threadId, session: workerSession },
+      });
+    };
+    if (chat !== null) {
       const sent = await answerOf(
         call,
         parentThreadId,
@@ -92,7 +108,10 @@ export const createCloudReviews = (dir: string, call: Call) => {
       );
       const outcome = sendOutcome(sent);
       // Only a chat the app itself refused, such as one deleted, is replaced by a new one.
-      if (outcome !== "gone") return { outcome, threadId: chat };
+      if (outcome !== "gone") {
+        await keep(chat);
+        return { outcome, threadId: chat };
+      }
     }
     const listed = await answerOf(call, parentThreadId, "list_projects", {});
     if (listed.outcome !== "done") return NO_PROJECT;
@@ -107,32 +126,57 @@ export const createCloudReviews = (dir: string, call: Call) => {
     const threadId =
       typeof created.threadId === "string" ? created.threadId : null;
     // A chat the app made is kept even when its first turn did not go as asked, so the next review does not open another.
-    if (threadId !== null) {
-      const latest = (await readJson(chatsPath)) ?? {};
-      await write(chatsPath, { ...latest, [review.reviewer]: threadId });
-    }
+    if (threadId !== null) await keep(threadId);
     return { outcome: outcomeOf(created), threadId };
   };
 
-  // The reviews shown in a reviewer's chat as the records of a conversation, oldest first, for the chat's history.
+  // The reviewer a chat shows and the session that ran it, which the chat's messages go to.
+  const chatOf = async (threadId: string) => {
+    const chats = (await readJson(chatsPath)) ?? {};
+    for (const [reviewer, value] of Object.entries(chats)) {
+      const chat = chatIn(value);
+      if (chat?.threadId === threadId)
+        return { reviewer, session: chat.session };
+    }
+    return null;
+  };
+
+  // Keeps a message the user sent the reviewer from its chat, for the chat's history.
+  const noteAsk = async (threadId: string, text: string) => {
+    const at = new Date().toISOString();
+    await write(join(dir, `${ASKED}${Date.now()}-${randomUUID()}.json`), {
+      threadId,
+      shownAt: at,
+      asked: text,
+    });
+  };
+
+  // The reviews shown in a reviewer's chat and the messages sent from it, as the records of a conversation, oldest first, for the chat's history.
   const recordsOf = async (threadId: string) => {
     const names = await listDirectoryIfExists(dir);
     if (names.isErr() || names.value === null) return null;
-    const shown: { at: string; review: CloudReview }[] = [];
+    const shown: { at: string; records: SessionMessage[] }[] = [];
     for (const name of names.value) {
       if (!name.endsWith(".json") || name === "chats.json") continue;
       const kept = await readJson(join(dir, name));
       if (kept?.threadId !== threadId || typeof kept.shownAt !== "string")
         continue;
+      const at = kept.shownAt;
+      if (name.startsWith(ASKED)) {
+        if (typeof kept.asked === "string")
+          shown.push({ at, records: askedRecords(name, kept.asked, at) });
+        continue;
+      }
       const review = await reviewOf(name.slice(0, -".json".length));
-      if (review !== null) shown.push({ at: kept.shownAt, review });
+      if (review !== null)
+        shown.push({ at, records: reviewRecords(review, at) });
     }
     if (shown.length === 0) return null;
     shown.sort((a, b) => a.at.localeCompare(b.at));
-    return shown.flatMap(({ at, review }) => reviewRecords(review, at));
+    return shown.flatMap((entry) => entry.records);
   };
 
-  return { reviewOf, openReview, recordsOf };
+  return { reviewOf, openReview, recordsOf, chatOf, noteAsk };
 };
 
 const answerOf = async (
@@ -146,6 +190,50 @@ const answerOf = async (
   );
   return parsed.isOk() && isObject(parsed.value) ? parsed.value : {};
 };
+
+// A reviewer's chat as the chats file keeps it; a file written before the session was kept names the chat alone.
+const chatIn = (
+  value: unknown,
+): { threadId: string; session: string | null } | null => {
+  if (typeof value === "string") return { threadId: value, session: null };
+  if (!isObject(value) || typeof value.threadId !== "string") return null;
+  return {
+    threadId: value.threadId,
+    session: typeof value.session === "string" ? value.session : null,
+  };
+};
+
+const ASKED = "asked-";
+
+// A message sent from a reviewer's chat and the note that answered it, in the shape Claude's own records take.
+const askedRecords = (name: string, text: string, at: string) =>
+  [
+    {
+      type: "user",
+      uuid: `${name}-asked`,
+      session_id: "cloud-review",
+      message: { role: "user", content: text },
+      parent_tool_use_id: null,
+      timestamp: at,
+    },
+    {
+      type: "assistant",
+      uuid: `${name}-sent`,
+      session_id: "cloud-review",
+      message: {
+        id: name,
+        type: "message",
+        role: "assistant",
+        model: "cloud-review",
+        content: [{ type: "text", text: REVIEW_ASK_SENT }],
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        usage: {},
+      },
+      parent_tool_use_id: null,
+      timestamp: at,
+    },
+  ] as unknown as SessionMessage[];
 
 // A review as a prompt and the reply that shows it, in the shape Claude's own records take.
 const reviewRecords = (review: CloudReview, at: string) =>

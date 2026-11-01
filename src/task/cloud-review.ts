@@ -16,6 +16,7 @@ import {
   type Env,
   type Git,
   io,
+  readText,
   reviewFields,
   reviewRequest,
   sessionValue,
@@ -272,8 +273,87 @@ const locked = (
     });
   });
 
-// Reviews in a Claude Code cloud session with a Codex CLI run beside the worker, answering with its result instead of a chat in the app.
-export const cloudReview = (args: CloudReviewArgs, deps: CloudReviewDeps) =>
+// Passes a message, such as a question the user asked in the reviewer's chat, to the task's reviewer, answering with its reply; the reviewer's verdict and the reviewed head stay as they were.
+const asked = (
+  ask: string,
+  deps: CloudReviewDeps,
+  dir: string,
+  requested: Fields,
+) =>
+  Result.gen(async function* () {
+    const message = yield* Result.await(readText(ask));
+    if (message.trim() === "") return fail("the --ask file is empty");
+    const { state } = yield* Result.await(readRecords(dir));
+    const reviewer =
+      typeof state?.reviewer === "string" && THREAD_ID.test(state.reviewer)
+        ? state.reviewer
+        : null;
+    if (reviewer === null)
+      return fail("this task has no reviewer yet; run review first");
+    const bin = yield* configuredBinary(
+      deps.env,
+      "HARNEXUS_CODEX_BIN",
+      "codex",
+    );
+    const timeoutMs = yield* milliseconds(
+      deps.env,
+      "HARNEXUS_REVIEW_TIMEOUT_MS",
+      DEFAULT_TIMEOUT_MS,
+    );
+    const killGraceMs = yield* milliseconds(
+      deps.env,
+      "HARNEXUS_REVIEW_KILL_GRACE_MS",
+      DEFAULT_KILL_GRACE_MS,
+    );
+    const ran = await runProcess(
+      bin,
+      [
+        "exec",
+        "resume",
+        reviewer,
+        "--json",
+        "-c",
+        'sandbox_mode="read-only"',
+        "-",
+      ],
+      message,
+      {
+        cwd: String(requested.checkout),
+        env: deps.env,
+        timeoutMs,
+        killGraceMs,
+      },
+    );
+    if (ran.isErr()) return fail(ran.error.message);
+    const { status, stdout, stderr, ended } = ran.value;
+    if (ended !== "exit")
+      return fail(
+        `codex was stopped (${ended === "timeout" ? "timeout" : "output over the limit"}) in reviewer ${reviewer}; it may have answered, so check before asking again`,
+      );
+    const reply = replyOf(stdout);
+    if (status !== 0 || reply.failure !== null || reply.answer === null)
+      return fail(
+        `reviewer ${reviewer} did not answer (exit ${status}): ${detail(reply.failure ?? stderr)}`,
+      );
+    const reviewed = isObject(state?.candidate) ? state.candidate : null;
+    return Result.ok<Fields>({
+      status: "completed",
+      kind: "reply",
+      // Tells this reply from another of the same text, such as the same answer to a question asked again.
+      askedAt: new Date().toISOString(),
+      verdict: VERDICT.exec(reply.answer)?.[1] ?? null,
+      taskId: requested.taskId,
+      head: reviewed?.head ?? null,
+      reviewer,
+      answer: reply.answer,
+    });
+  });
+
+// Reviews in a Claude Code cloud session with a Codex CLI run beside the worker, answering with its result instead of a chat in the app; with ask, passes that message to the same reviewer instead.
+export const cloudReview = (
+  args: CloudReviewArgs & { ask?: string },
+  deps: CloudReviewDeps,
+) =>
   Result.gen(async function* () {
     const data = yield* Result.await(
       reviewRequest(args.request, deps.env, deps.git, { anyCheckout: true }),
@@ -284,7 +364,10 @@ export const cloudReview = (args: CloudReviewArgs, deps: CloudReviewDeps) =>
     yield* Result.await(io(prepareDirectory(dir)));
     const lock = join(dir, "lock.json");
     const token = yield* Result.await(acquire(lock, "review"));
-    const done = await locked(args, deps, dir, data);
+    const done =
+      args.ask === undefined
+        ? await locked(args, deps, dir, data)
+        : await asked(args.ask, deps, dir, data);
     await release(lock, token);
     return done;
   });

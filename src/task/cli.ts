@@ -94,6 +94,8 @@ type LaunchArgs = {
 type ReviewArgs = LaunchArgs & {
   updateBase: boolean;
   recover: "discard" | undefined;
+  // A message for the task's reviewer, in a Claude Code cloud session.
+  ask: string | undefined;
 };
 
 type StateArgs = { request: string | undefined };
@@ -190,6 +192,7 @@ const review = (args: ReviewArgs, deps: TaskDeps) =>
           ...(args.model === undefined ? {} : { model: args.model }),
           ...(args.thinking === undefined ? {} : { thinking: args.thinking }),
           ...(args.recover === undefined ? {} : { recover: args.recover }),
+          ...(args.ask === undefined ? {} : { ask: args.ask }),
         },
         {
           env: deps.env,
@@ -198,6 +201,11 @@ const review = (args: ReviewArgs, deps: TaskDeps) =>
         },
       );
     yield* refuseInCloud(deps.env, "review");
+    // In the app the reviewer is a chat of its own, which is asked there.
+    if (args.ask !== undefined)
+      return fail(
+        "--ask applies to review only in a Claude Code cloud session",
+      );
     if (args.recover !== undefined)
       return fail(
         "--recover applies to review only in a Claude Code cloud session",
@@ -655,16 +663,30 @@ const COMMANDS = {
   }),
   review: subcommand({
     usage:
-      "review --request REQUEST [--model MODEL] [--thinking THINKING] [--update-base] [--recover discard]",
+      "review --request REQUEST [--model MODEL] [--thinking THINKING] [--update-base] [--recover discard] [--ask FILE]",
     options: {
       request: { type: "string" },
+      ask: { type: "string" },
       ...MODEL_OPTIONS,
       "update-base": { type: "boolean" },
       recover: { type: "string" },
     },
     args: (values) =>
       Result.gen(function* () {
+        const ask = text(values, "ask");
+        // The reviewer keeps the model it was started with, so a question takes no model either.
+        if (
+          ask !== undefined &&
+          (values["update-base"] === true ||
+            values.recover !== undefined ||
+            values.model !== undefined ||
+            values.thinking !== undefined)
+        )
+          return invalid(
+            "--ask takes none of --update-base, --recover, --model and --thinking",
+          );
         return Result.ok<ReviewArgs>({
+          ask,
           request: yield* required(values, "request"),
           recover: yield* oneOf(values, "recover", ["discard"]),
           model: text(values, "model"),
