@@ -34,6 +34,7 @@ import type { ThreadStore } from "../infra/thread-store.ts";
 import { buildHistory, replayHistory } from "../presentation/history.ts";
 import { resizeImage } from "../runtime/image.boundary.ts";
 import { openCloudChild } from "./cloud-children.ts";
+import { createCloudReviews } from "./cloud-reviews.ts";
 
 type Runtime = Parameters<typeof createClaudeRuntime>[0];
 
@@ -70,7 +71,13 @@ export const connectClaudeThreads = ({
   codexHome: string;
   cronRecord: Parameters<typeof createCodexLink>[0]["cronRecord"];
   // Where Cloud sessions are reached and copied; without it a thread cannot link one.
-  cloud?: { cli: CloudCli; copyDir: string; checkouts: CloudCheckouts };
+  cloud?: {
+    cli: CloudCli;
+    copyDir: string;
+    checkouts: CloudCheckouts;
+    // Where the reviews a Cloud session read are kept for their chats.
+    reviewDir: string;
+  };
   send: (message: object) => void;
   log: (event: ClaudeLogEvent | RouteEvent | CloudLogEvent) => void;
 }) => {
@@ -142,6 +149,10 @@ export const connectClaudeThreads = ({
     request,
     delegations,
   });
+  const reviews =
+    cloud === undefined
+      ? undefined
+      : createCloudReviews(cloud.reviewDir, (call) => callGateway.handle(call));
   const runtime = createCloudRuntime(claude, {
     threads,
     sendToCloud: (cloudSessionId, text, cwd) =>
@@ -164,6 +175,17 @@ export const connectClaudeThreads = ({
     send,
     log,
     renameThread,
+    ...(reviews === undefined
+      ? {}
+      : {
+          openReview: (parentThreadId, review) => {
+            const parent = store.get(parentThreadId);
+            return parent === undefined
+              ? Promise.resolve("no_parent")
+              : reviews.openReview(parentThreadId, parent.worktree, review);
+          },
+          reviewOf: reviews.reviewOf,
+        }),
     openChild: (parentThreadId, child) => {
       const parent = store.get(parentThreadId);
       return parent === undefined
