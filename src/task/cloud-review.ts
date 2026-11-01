@@ -356,7 +356,7 @@ export const cloudReview = (
 ) =>
   Result.gen(async function* () {
     const data = yield* Result.await(
-      reviewRequest(args.request, deps.env, deps.git, { anyCheckout: true }),
+      reviewRequest(args.request, deps.env, deps.git, { cloud: true }),
     );
     if (!Object.hasOwn(data, "workerChatId"))
       data.workerChatId = deps.env.CLAUDE_CODE_SESSION_ID || "cloud";

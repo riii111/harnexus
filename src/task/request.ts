@@ -234,27 +234,30 @@ export const reviewRequest = (
   path: string,
   env: Env,
   git: Git,
-  { anyCheckout = false }: { anyCheckout?: boolean } = {},
+  // In a Claude Code cloud session the checkout is the session's own, and no app project is involved, so projectId may be left out.
+  { cloud = false }: { cloud?: boolean } = {},
 ) =>
   Result.gen(async function* () {
+    const project = ["projectId"];
     const data = yield* Result.await(
       readRequest(
         path,
         [
           "taskId",
           "workerAI",
-          "projectId",
+          ...(cloud ? [] : project),
           "checkout",
           "baseBranch",
           "documentRefs",
         ],
-        ["prUrl", "workerChatId", "displayName"],
+        ["prUrl", "workerChatId", "displayName", ...(cloud ? project : [])],
       ),
     );
     yield* taskId(data.taskId);
     yield* displayName(data.displayName);
     yield* Result.await(documentRefs(data.documentRefs));
     for (const key of ["projectId", "checkout", "baseBranch"]) {
+      if (cloud && key === "projectId" && data[key] === undefined) continue;
       yield* singleLine(data[key], key);
     }
     if (data.workerAI !== "Claude" && data.workerAI !== "Codex")
@@ -271,14 +274,14 @@ export const reviewRequest = (
     const checkout = await realPathOrSelf(requested);
     const worktrees = await realPathOrSelf(join(codexHome(env), "worktrees"));
     const refused = fail(
-      anyCheckout
+      cloud
         ? "checkout must be the absolute path of a repository's top level"
         : `checkout must be the top level of a worker worktree ${worktrees}/<id>/<name>`,
     );
     // A Claude Code cloud session works in its own checkout, so there the checkout only has to be the top level of a repository.
     if (
       !requested.startsWith("/") ||
-      (!anyCheckout && dirname(dirname(checkout)) !== worktrees) ||
+      (!cloud && dirname(dirname(checkout)) !== worktrees) ||
       !(await isDirectory(checkout))
     )
       return refused;

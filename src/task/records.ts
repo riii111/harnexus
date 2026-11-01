@@ -13,10 +13,6 @@ import { type Fields, isObject } from "../runtime/object.ts";
 import { fail, TaskFailed, truthy } from "./format.ts";
 import { absoluteOr, type Env, homeOf, io, NAME } from "./request.ts";
 
-export const RECOVERIES = ["adopt", "discard"] as const;
-
-export type Recovery = (typeof RECOVERIES)[number];
-
 export type SaveJson = (
   path: string,
   data: unknown,
@@ -50,24 +46,21 @@ export const readRecords = (directory: string) =>
     });
   });
 
-// Settles a pending send by the user's recovery flag: discard removes the record, and adopt returns it for the caller to continue from.
+// Settles a pending send: it blocks the next one until the user discards it.
 export const settlePending = (
   { pending, pendingPath }: Pick<Records, "pending" | "pendingPath">,
-  recover: Recovery | undefined,
+  recover: "discard" | undefined,
   messages: { blocked: (pending: Fields) => string; nothingPending: string },
 ) =>
   Result.gen(async function* () {
     if (pending === null)
       return recover === undefined
-        ? Result.ok<Fields | null>(null)
+        ? Result.ok()
         : fail(messages.nothingPending);
     // Only the user, having checked what the lost send did, releases it.
     if (recover === undefined) return fail(messages.blocked(pending));
-    if (recover === "discard") {
-      yield* Result.await(removeRecord(pendingPath));
-      return Result.ok<Fields | null>(null);
-    }
-    return Result.ok<Fields | null>(pending);
+    yield* Result.await(removeRecord(pendingPath));
+    return Result.ok();
   });
 
 const asRecord = (value: unknown, path: string) =>
