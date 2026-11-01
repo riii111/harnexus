@@ -24,7 +24,7 @@ describe("childSessionsIn", () => {
     ];
 
     expect(childSessionsIn(records)).toEqual([
-      { sessionId: CHILD, title: "[riii111/harnexus#178]" },
+      { sessionId: CHILD, title: "[riii111/harnexus#178]", toolUseId: "t1" },
     ]);
   });
 
