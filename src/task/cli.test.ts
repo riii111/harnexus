@@ -820,6 +820,47 @@ describe("harnexus-task cloud", () => {
     expect(harnexus.calls).toEqual([]);
   });
 
+  test("opens one chat per Cloud session, so a chat cannot open chats for it without end", async () => {
+    const { invoke, harnexus } = await fixture();
+    const args = ["cloud", "--link", SESSION, "--project", "project"];
+    await invoke(args, [{ outcome: "done", threadId: "cloud-chat" }]);
+
+    const again = await invoke(args);
+
+    expect([again.code, again.err]).toEqual([
+      1,
+      expect.stringContaining("already opened (threadId cloud-chat)"),
+    ]);
+    expect(harnexus.calls).toHaveLength(1);
+  });
+
+  test("lets a session whose chat the app did not open be linked again", async () => {
+    const { invoke, harnexus } = await fixture();
+    const args = ["cloud", "--link", SESSION, "--project", "project"];
+    await invoke(args, [{ outcome: "rejected", error: "busy" }]);
+
+    const again = await invoke(args, [
+      { outcome: "done", threadId: "cloud-chat" },
+    ]);
+
+    expect(again.out?.threadId).toBe("cloud-chat");
+    expect(harnexus.calls).toHaveLength(2);
+  });
+
+  test("keeps a session claimed when the app's answer is unknown", async () => {
+    const { invoke, harnexus } = await fixture();
+    const args = ["cloud", "--link", SESSION, "--project", "project"];
+    await invoke(args, [{ outcome: "unknown", error: "timeout" }]);
+
+    const again = await invoke(args);
+
+    expect([again.code, again.err]).toEqual([
+      1,
+      expect.stringContaining("is being opened"),
+    ]);
+    expect(harnexus.calls).toHaveLength(1);
+  });
+
   test("refuses a link that names no Cloud session, before calling the app", async () => {
     const { invoke, harnexus } = await fixture();
 

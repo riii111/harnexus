@@ -18,6 +18,7 @@ import {
 } from "../prwatch/store.ts";
 import type { WatchPaths } from "../prwatch/watcher.ts";
 import { type OptionTypes, parseOptions } from "../runtime/args.boundary.ts";
+import { removeFile } from "../runtime/fs.boundary.ts";
 import { type Fields, isObject } from "../runtime/object.ts";
 import { runCommand } from "../runtime/process.boundary.ts";
 import { type ClaudeArgs, claudeSession, PERMISSION_MODES } from "./cloud.ts";
@@ -29,6 +30,7 @@ import {
 } from "./environment.ts";
 import { asText, fail, isBlank, jsonEqual, truthy } from "./format.ts";
 import {
+  load,
   RECOVERIES,
   type Recovery,
   type SaveJson,
@@ -43,6 +45,7 @@ import {
   type Env,
   type GitRunner,
   gitIn,
+  io,
   launchRequest,
   NAME,
   readJson,
@@ -502,6 +505,27 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
       return fail(
         "--link must be a Cloud session id or its claude.ai/code URL",
       );
+    // One chat per session, so a chat that takes its own /cloud as a request cannot open chats without end.
+    const opened = join(
+      stateRoot(deps.env),
+      "cloud-chats",
+      `${sessionId}.json`,
+    );
+    // Claimed before the app is asked, so two runs for one session cannot both open a chat.
+    const claimed = await deps.saveJson(
+      opened,
+      { threadId: null, startedAt: new Date().toISOString() },
+      { exclusive: true },
+    );
+    if (claimed.isErr()) {
+      const earlier = yield* Result.await(load(opened));
+      const threadId = isObject(earlier) ? earlier.threadId : null;
+      return fail(
+        truthy(threadId)
+          ? `a chat for Cloud session ${sessionId} was already opened (threadId ${asText(threadId)}); use that chat, or remove ${opened} to open another`
+          : `a chat for Cloud session ${sessionId} is being opened, or its opening did not report back; check the app, then remove ${opened} to open one`,
+      );
+    }
     const answer = await callApp(deps.env, caller, "create_thread", {
       prompt: `/cloud ${sessionId}`,
       target: {
@@ -514,16 +538,29 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
       thinking: args.thinking || "high",
     });
     // A session already started keeps running, so its id is named even when the chat was not opened.
-    if (answer.outcome !== "done" || !truthy(answer.threadId))
+    if (answer.outcome !== "done" || !truthy(answer.threadId)) {
+      // Only a call the app surely did not act on frees the session for another try.
+      if (UNOPENED.has(String(answer.outcome)))
+        yield* Result.await(io(removeFile(opened)));
       return fail(
         `create_thread ${asText(answer.outcome)} for Cloud session ${sessionId}: ${asText(answer.error ?? answer)}`,
       );
+    }
+    yield* Result.await(
+      deps.saveJson(
+        opened,
+        { threadId: answer.threadId, openedAt: new Date().toISOString() },
+        { exclusive: false },
+      ),
+    );
     return Result.ok<Fields>({
       threadId: answer.threadId,
       cloudSessionId: sessionId,
       url: `https://claude.ai/code/${sessionId}`,
     });
   });
+
+const UNOPENED = new Set(["not_sent", "rejected", "invalid"]);
 
 // The folder of a project in the app.
 const projectFolder = async (env: Env, caller: string, projectId: string) => {

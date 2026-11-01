@@ -294,6 +294,25 @@ describe("createCloudRuntime /cloud", () => {
     });
   });
 
+  test("links a chat another chat opened when the app also sends the prompt as the message's text", async () => {
+    const env = setup({
+      copies: [[prompt("p1", "hello"), endReply("r1", "hi")]],
+    });
+    const turn = env.turn(`/cloud ${CLOUD_ID}`, {
+      delegatedBy: "create_thread",
+    });
+    turn.running.input = {
+      ...turn.running.input,
+      items: [{ type: "text", text: `/cloud ${CLOUD_ID}`, text_elements: [] }],
+      text: `${turn.running.input.text}\n/cloud ${CLOUD_ID}`,
+    };
+
+    await env.runtime.run(turn.running);
+
+    expect(env.links.map((link) => link.cloud.sessionId)).toEqual([CLOUD_ID]);
+    expect(env.innerRuns).toEqual([]);
+  });
+
   test("passes a /cloud another chat sent to an open chat to Claude", async () => {
     const env = setup({ copies: [] });
     const turn = env.turn(`/cloud ${CLOUD_ID}`, {
