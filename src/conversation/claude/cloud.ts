@@ -10,9 +10,11 @@ import {
   endsTurn,
   mainRecords,
   renderRecords,
+  timeOf,
   turnOpeningTextOf,
 } from "../../presentation/history.ts";
 import { renderNotice } from "../../presentation/turn.ts";
+import { isObject } from "../../runtime/object.ts";
 import { createSerialQueue } from "../../runtime/serial-queue.ts";
 import type { TurnEvent } from "../controller.ts";
 import { type Refusal, refusalMessage } from "../thread-request.ts";
@@ -184,6 +186,10 @@ export const createCloudRuntime = <Tag extends string>(
   const copies = createSerialQueue();
   let startOwnTurn = (_threadId: string) => false;
   let cancelTick: (() => void) | null = null;
+  let ticking = false;
+  // Whether a linked session was in the middle of a recent turn, or one was just linked, so the next idle copy comes soon.
+  let working = false;
+  let soon = false;
   let closed = false;
 
   const stateOf = (threadId: string): CloudThread =>
@@ -281,6 +287,9 @@ export const createCloudRuntime = <Tag extends string>(
     }
     log({ event: "claude_cloud", step: "linked" });
     reply(turn, LINKED);
+    // A session still running its turn, such as one just started, is copied again soon rather than after the idle wait.
+    const last = copied.value.records.at(-1);
+    if (last === undefined || !replied(last)) hurry();
     // A chat another chat opened has the name it was given; a failed rename leaves the name as it was.
     if (typed && renameThread !== undefined)
       void renameThread(
@@ -505,6 +514,7 @@ export const createCloudRuntime = <Tag extends string>(
   // The records of a copy past what the turn showed, and whether its reply ended.
   const advance = (follow: Follow, all: readonly SessionMessage[]) => {
     const from = indexAfter(all, follow.after);
+    const shown: SessionMessage[] = [];
     if (follow.record === null) {
       const first = follow.texts[0] ?? "";
       let found = -1;
@@ -516,12 +526,13 @@ export const createCloudRuntime = <Tag extends string>(
         }
       }
       if (found === -1) return { shown: [], ended: false };
+      // What the session did before the message that the app was not shown, such as a reply still running when the chat was linked.
+      shown.push(...all.slice(from, found));
       follow.record = keyOf(all[found]);
       follow.matched = 1;
       follow.last = follow.record;
     }
     const start = indexAfter(all, follow.last);
-    const shown: SessionMessage[] = [];
     let lastPrompt = indexOf(all, follow.record);
     for (let index = start; index < all.length; index++) {
       const message = all[index];
@@ -538,7 +549,7 @@ export const createCloudRuntime = <Tag extends string>(
     }
     const last = all.at(-1);
     const ended =
-      last !== undefined && endsTurn(last) && all.length - 1 > lastPrompt;
+      last !== undefined && replied(last) && all.length - 1 > lastPrompt;
     return { shown, ended };
   };
 
@@ -677,6 +688,7 @@ export const createCloudRuntime = <Tag extends string>(
 
   // Copies each linked thread with no turn running, and opens a turn of Claude's own for what it shows past where the app was shown.
   const tick = async () => {
+    working = false;
     for (const threadId of threads.cloudThreadIds()) {
       if (closed) return;
       const { busy, halted } = stateOf(threadId);
@@ -695,6 +707,15 @@ export const createCloudRuntime = <Tag extends string>(
         continue;
       }
       const all = copied.value.records;
+      const last = all.at(-1);
+      const recordAt = last === undefined ? null : timeOf(last);
+      if (
+        last !== undefined &&
+        !replied(last) &&
+        recordAt !== null &&
+        now() - recordAt < WORKING_FOR_MS
+      )
+        working = true;
       const at = indexOf(all, cloud.shown);
       // Claude compacted the session past the record the app was shown, so everything the copy holds came after it and is shown.
       if (cloud.shown !== null && at === -1) {
@@ -714,7 +735,22 @@ export const createCloudRuntime = <Tag extends string>(
 
   const plan = (ms: number) => {
     if (closed) return;
-    cancelTick = schedule(() => tick().then(() => plan(IDLE_MS)), ms);
+    cancelTick = schedule(async () => {
+      ticking = true;
+      await tick();
+      ticking = false;
+      const next = working || soon ? POLL_MS : IDLE_MS;
+      soon = false;
+      plan(next);
+    }, ms);
+  };
+
+  // Brings the next idle copy forward; a copy already running plans the next one itself.
+  const hurry = () => {
+    soon = true;
+    if (ticking || closed) return;
+    cancelTick?.();
+    plan(POLL_MS);
   };
 
   const stopFollowing = (threadId: string) => {
@@ -897,6 +933,18 @@ const cloudChatName = (
 const NAME_LENGTH = 60;
 const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
+// A record that ends Claude's turn with something to read; a copy may mark the thinking that opens the reply as the end too, before the reply's text arrives.
+const replied = (message: SessionMessage) =>
+  endsTurn(message) &&
+  isObject(message.message) &&
+  Array.isArray(message.message.content) &&
+  message.message.content.some(
+    (block) =>
+      isObject(block) &&
+      block.type !== "thinking" &&
+      block.type !== "redacted_thinking",
+  );
+
 const UNSENT_OUTCOMES = new Set(["not_sent", "no_project", "no_parent"]);
 
 // Stops waiting for a message whose send failed.
@@ -1002,6 +1050,8 @@ const FAST_POLL_FOR_MS = 60_000;
 const POLL_MS = 10_000;
 
 const IDLE_MS = 5 * 60_000;
+// How recent the last record of a session still in its turn must be for the idle copies to come at POLL_MS.
+const WORKING_FOR_MS = 10 * 60_000;
 
 const FIRST_TICK_MS = 15_000;
 
