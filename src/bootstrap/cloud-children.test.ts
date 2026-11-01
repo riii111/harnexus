@@ -81,6 +81,7 @@ describe("openCloudChild", () => {
       {
         sessionId: "session_01NfjPqs5GNSgknfAaJ3mdYA",
         title: "worker",
+        toolUseId: "t1",
       },
     );
 
@@ -110,7 +111,11 @@ describe("openCloudChild", () => {
       },
       "parent",
       "/nowhere",
-      { sessionId: "session_01NfjPqs5GNSgknfAaJ3mdYA", title: null },
+      {
+        sessionId: "session_01NfjPqs5GNSgknfAaJ3mdYA",
+        title: null,
+        toolUseId: "t1",
+      },
     );
 
     expect(outcome).toEqual({ outcome: "no_project", threadId: null });

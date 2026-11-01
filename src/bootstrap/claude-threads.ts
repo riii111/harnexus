@@ -238,6 +238,7 @@ export const connectClaudeThreads = ({
     log,
     subagentHistory: subagents.historyOf,
     ...(reviews === undefined ? {} : { keptRecords: reviews.recordsOf }),
+    workerRefOf: runtime.workerRefOf,
     subagents: {
       restore: subagentRestore.restore,
       agentRefOf: subagents.agentRefOf,

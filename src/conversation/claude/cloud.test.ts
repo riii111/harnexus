@@ -230,7 +230,10 @@ describe("createCloudRuntime child sessions", () => {
     await env.tick();
 
     expect(env.children).toEqual([
-      { parent: "thread-1", child: { sessionId: CHILD, title: "worker" } },
+      {
+        parent: "thread-1",
+        child: { sessionId: CHILD, title: "worker", toolUseId: "t1" },
+      },
     ]);
   });
 
@@ -293,6 +296,68 @@ describe("createCloudRuntime child sessions", () => {
       }),
       expect.objectContaining({ kind: "completed", agentThreadId: chat }),
     ]);
+  });
+
+  test("names the worker's chat at the call that started it, for the parent's history", () => {
+    const env = linked({ copies: [], shown: null });
+    env.owners.set(CHILD, `chat-${CHILD}`);
+    const records = [
+      prompt("p1", "start a worker"),
+      reply(
+        "a1",
+        "m1",
+        toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+        "tool_use",
+      ),
+      toolResult("u1", "t1", started(CHILD)),
+    ];
+
+    const ref = env.runtime.workerRefOf("thread-1", records);
+
+    expect(ref("t1")).toEqual({
+      threadId: `chat-${CHILD}`,
+      path: "☁️ worker",
+      active: true,
+      edits: [],
+    });
+    expect(ref("other")).toBeUndefined();
+  });
+
+  test("follows a worker whose chat was opened before, without showing it started anew", async () => {
+    const parentRecords = [
+      reply(
+        "a1",
+        "m1",
+        toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+        "tool_use",
+      ),
+      toolResult("u1", "t1", started(CHILD)),
+      endReply("a2", "started"),
+    ];
+    const env = linked({
+      copies: [parentRecords, [prompt("w1", "work"), endReply("w3", "done")]],
+      shown: "a2",
+    });
+    const chat = `chat-${CHILD}`;
+    env.clouds.set(chat, { sessionId: CHILD, shown: null });
+    env.owners.set(CHILD, chat);
+    env.sessionIds.set(chat, "copy-w");
+    env.runtime.listen(() => true);
+
+    await env.runtime.run(env.turn("", { startedBy: "claude" }).running);
+    await env.tick();
+
+    const kinds = env.sent.flatMap((message) => {
+      const notification = message as {
+        method?: string;
+        params?: { item?: { type?: string; kind?: string } };
+      };
+      return notification.method === "item/completed" &&
+        notification.params?.item?.type === "subAgentActivity"
+        ? [notification.params.item.kind]
+        : [];
+    });
+    expect(kinds).toEqual(["completed"]);
   });
 
   test("opens nothing for the sessions a session started before /cloud linked it", async () => {
@@ -1648,7 +1713,7 @@ const setup = ({
     renameFails: false,
     children: [] as {
       parent: string;
-      child: { sessionId: string; title: string | null };
+      child: { sessionId: string; title: string | null; toolUseId: string };
     }[],
     // The clock moves by the waits between copies, which are kept in order, and by each copy.
     clock: 1_000,
@@ -1718,7 +1783,9 @@ const setup = ({
         delegatedBy?: "create_thread" | "send_message_to_thread" | null;
       } = {},
     ) => fakeTurn(`turn-${++turns}`, typed, options),
-    runtime: undefined as unknown as TurnRuntime<string>,
+    runtime: undefined as unknown as ReturnType<
+      typeof createCloudRuntime<string>
+    >,
   };
   const deps: CloudDeps = {
     threads: {

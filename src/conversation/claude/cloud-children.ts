@@ -2,7 +2,12 @@ import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 
-export type CloudChild = { sessionId: string; title: string | null };
+// toolUseId names the call that started the session, which the parent's history shows the worker at.
+export type CloudChild = {
+  sessionId: string;
+  title: string | null;
+  toolUseId: string;
+};
 
 // The tool a Cloud session starts another one with; only its results are read, so text a session merely writes or quotes never opens a chat.
 const CREATE_SESSION = /(?:^|__)create_session$/;
@@ -33,7 +38,7 @@ export const childSessionsIn = (
         calls.has(block.tool_use_id) &&
         block.is_error !== true
       ) {
-        const child = createdIn(block.content);
+        const child = createdIn(block.content, block.tool_use_id);
         if (child !== null && !children.has(child.sessionId)) {
           children.set(child.sessionId, child);
         }
@@ -49,7 +54,7 @@ const contentOf = (record: SessionMessage): Record<string, unknown>[] => {
   return Array.isArray(content) ? content.filter(isObject) : [];
 };
 
-const createdIn = (content: unknown): CloudChild | null => {
+const createdIn = (content: unknown, toolUseId: string): CloudChild | null => {
   const texts =
     typeof content === "string"
       ? [content]
@@ -66,6 +71,7 @@ const createdIn = (content: unknown): CloudChild | null => {
     if (!isObject(ccr) || typeof ccr.id !== "string") continue;
     if (!SESSION_ID.test(ccr.id)) continue;
     return {
+      toolUseId,
       sessionId: ccr.id,
       title:
         typeof ccr.title === "string" && ccr.title.trim() !== ""

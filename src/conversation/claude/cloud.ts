@@ -7,6 +7,7 @@ import {
 } from "../../infra/claude/cloud.ts";
 import type { CloudLink } from "../../infra/thread-store.ts";
 import {
+  type AgentRef,
   endsTurn,
   mainRecords,
   renderRecords,
@@ -149,11 +150,21 @@ export type CloudDeps = {
 
 type Copied = { copy: string; records: SessionMessage[] };
 
+const workerOf = (parent: string, child: CloudChild, chat: string): Worker => ({
+  parent,
+  chat,
+  path: `${CLOUD_MARK} ${child.title ?? child.sessionId}`,
+  key: child.toolUseId,
+  runs: 0,
+  running: true,
+});
+
 // A worker session a linked one started, shown in the parent's chat like a subagent whose thread is the worker's own chat.
 type Worker = {
   parent: string;
   chat: string;
   path: string;
+  key: string;
   // How many times it started working again after it ended a turn, which names each activity.
   runs: number;
   running: boolean;
@@ -215,7 +226,12 @@ export const createCloudRuntime = <Tag extends string>(
     schedule = defaultSchedule,
     waitLimitMs = WAIT_LIMIT_MS,
   }: CloudDeps,
-): TurnRuntime<Tag | CloudFailureTag> => {
+): TurnRuntime<Tag | CloudFailureTag> & {
+  workerRefOf: (
+    threadId: string,
+    records: readonly SessionMessage[],
+  ) => (toolUseId: string) => AgentRef | undefined;
+} => {
   type Turn = RunningTurn<Tag | CloudFailureTag>;
 
   const states = new Map<string, CloudThread>();
@@ -664,6 +680,7 @@ export const createCloudRuntime = <Tag extends string>(
         failingSince = null;
         copiedOnce = true;
         shownAt = ended.started.at;
+        noticeWorker(threadId, copied.value.records);
         const progress = advance(follow, copied.value.records);
         if (progress.shown.length > 0) {
           turn.apply(renderRecords(turn.state(), progress.shown, now()));
@@ -757,6 +774,7 @@ export const createCloudRuntime = <Tag extends string>(
       return;
     }
     const all = copied.value.records;
+    if (taken === null) noticeWorker(threadId, all);
     const shown = all.slice(indexAfter(all, cloud.shown));
     log({ event: "claude_cloud", step: "own_turn" });
     if (shown.length > 0) {
@@ -823,7 +841,7 @@ export const createCloudRuntime = <Tag extends string>(
       ms: now() - startedAt,
     });
     noticeChildren(threadId, all);
-    noticeWorker(threadId, all);
+    followWorkers(threadId, all);
     noticeReviews(threadId, all);
     return Result.ok({ copy: copied.value, records: all });
   };
@@ -855,15 +873,19 @@ export const createCloudRuntime = <Tag extends string>(
 
   // Shows a worker's chat in its parent's chat the way the app shows a subagent, so the parent tells when it runs and opens it.
   const startWorker = (parent: string, child: CloudChild, chat: string) => {
-    const worker: Worker = {
-      parent,
-      chat,
-      path: `${CLOUD_MARK} ${child.title ?? child.sessionId}`,
-      runs: 0,
-      running: true,
-    };
+    const worker = workerOf(parent, child, chat);
     workers.set(child.sessionId, worker);
     showActivity(worker, "started");
+  };
+
+  // A worker whose chat was opened before, such as by a bridge that has since restarted, is followed again without showing it started anew.
+  const followWorkers = (parent: string, all: readonly SessionMessage[]) => {
+    for (const child of childSessionsIn(all)) {
+      if (workers.has(child.sessionId)) continue;
+      const chat = threads.cloudOwner(child.sessionId);
+      if (chat !== undefined)
+        workers.set(child.sessionId, workerOf(parent, child, chat));
+    }
   };
 
   // Marks a worker's activity done when its session ends a turn, and started again when it works anew.
@@ -901,7 +923,8 @@ export const createCloudRuntime = <Tag extends string>(
       for (const notification of renderWorkerActivity(
         { threadId: worker.chat, path: worker.path },
         kind,
-        `run${run}`,
+        // The first run is named by the call that started the worker, as the history rebuilt from the record names it.
+        run === 0 ? worker.key : `${worker.key}-run${run}`,
         { threadId: parent, turnId },
         now(),
       ))
@@ -995,6 +1018,7 @@ export const createCloudRuntime = <Tag extends string>(
       return "skipped";
     }
     const all = copied.value.records;
+    noticeWorker(threadId, all);
     const last = all.at(-1);
     const recordAt = last === undefined ? null : timeOf(last);
     // A session that just replied may go on by itself, such as when work it left running in the background ends.
@@ -1095,6 +1119,23 @@ export const createCloudRuntime = <Tag extends string>(
   };
 
   return {
+    // The workers a linked chat's record started, shown in its history at the call that started each, for those whose chat is still linked.
+    workerRefOf: (threadId, records) => {
+      if (threads.cloudOf(threadId) === null) return () => undefined;
+      const refs = new Map<string, AgentRef>();
+      for (const child of childSessionsIn(records)) {
+        const chat = threads.cloudOwner(child.sessionId);
+        if (chat === undefined) continue;
+        const worker = workerOf(threadId, child, chat);
+        refs.set(child.toolUseId, {
+          threadId: chat,
+          path: worker.path,
+          active: workers.get(child.sessionId)?.running ?? true,
+          edits: [],
+        });
+      }
+      return (toolUseId) => refs.get(toolUseId);
+    },
     compactPrompt: inner.compactPrompt,
     closeSession: (threadId) => inner.closeSession(threadId),
     pauseMessages: (threadId) => inner.pauseMessages(threadId),
