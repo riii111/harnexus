@@ -64,7 +64,8 @@ export const createCloudReviews = (dir: string, call: Call) => {
       if ((await readJson(path))?.sent === true) return "done";
       if (!(await write(path, review))) return "not_kept";
       const sent = await deliver(parentThreadId, parentFolder, review);
-      if (sent.outcome === "done")
+      // A send whose outcome is unknown may have shown the review, so it is kept as shown rather than sent again.
+      if (sent.outcome === "done" || sent.outcome === "unknown")
         await write(path, {
           ...review,
           sent: true,
@@ -89,9 +90,9 @@ export const createCloudReviews = (dir: string, call: Call) => {
         "send_message_to_thread",
         { threadId: chat, prompt },
       );
-      // A chat the app no longer takes, such as one deleted, is replaced by a new one; sent from a Claude chat, a failed send answers tool_error.
-      if (!GONE.has(outcomeOf(sent)))
-        return { outcome: outcomeOf(sent), threadId: chat };
+      const outcome = sendOutcome(sent);
+      // Only a chat the app itself refused, such as one deleted, is replaced by a new one.
+      if (outcome !== "gone") return { outcome, threadId: chat };
     }
     const listed = await answerOf(call, parentThreadId, "list_projects", {});
     if (listed.outcome !== "done") return NO_PROJECT;
@@ -181,6 +182,31 @@ const outcomeOf = (answer: { outcome?: unknown }) =>
 
 const NO_PROJECT = { outcome: "no_project", threadId: null };
 
-const GONE = new Set(["rejected", "invalid", "tool_error"]);
+// Sent from a Claude chat, every failure answers tool_error; the bridge's own failures are told apart by their text, and any other came from the app.
+const sendOutcome = (answer: { outcome?: unknown; result?: unknown }) => {
+  const outcome = outcomeOf(answer);
+  if (outcome !== "tool_error") return GONE.has(outcome) ? "gone" : outcome;
+  const text = resultText(answer.result);
+  if (UNKNOWN_SEND.test(text)) return "unknown";
+  if (BLOCKED_SEND.test(text)) return "blocked";
+  if (NOT_SENT.test(text)) return "not_sent";
+  return "gone";
+};
+
+const resultText = (result: unknown) =>
+  isObject(result) && Array.isArray(result.content)
+    ? result.content
+        .map((item) =>
+          isObject(item) && typeof item.text === "string" ? item.text : "",
+        )
+        .join("\n")
+    : "";
+
+const GONE = new Set(["rejected", "invalid"]);
+const UNKNOWN_SEND = /may or may not have taken effect/;
+// An earlier send left unknown stops every later one from the same chat, which trying again does not change.
+const BLOCKED_SEND =
+  /unknown outcome and is never repeated|not registered as a Claude thread/;
+const NOT_SENT = /was not sent/;
 
 const REVIEW_CHAT_MODEL = "claude-sonnet-5-5";

@@ -93,7 +93,13 @@ describe("createCloudReviews", () => {
     const { reviews, calls } = await setup([
       projects,
       { outcome: "done", threadId: "old-chat" },
-      { outcome: "tool_error", error: "no such thread" },
+      {
+        outcome: "tool_error",
+        result: {
+          content: [{ type: "text", text: "thread not found" }],
+          isError: true,
+        },
+      },
       projects,
       { outcome: "done", threadId: "new-chat" },
     ]);
@@ -113,6 +119,53 @@ describe("createCloudReviews", () => {
       "list_projects",
       "create_thread",
     ]);
+  });
+
+  test.each([
+    {
+      name: "was not sent, and tries it again later",
+      text: "the connection to the server is closed, so send_message_to_thread was not sent",
+      outcome: "not_sent",
+      shown: false,
+    },
+    {
+      name: "may have been sent, and keeps it as shown",
+      text: "timed out. The send_message_to_thread call may or may not have taken effect and will not be repeated; ask the user to check the app.",
+      outcome: "unknown",
+      shown: true,
+    },
+    {
+      name: "is blocked by an earlier unknown send",
+      text: "An earlier create_thread call has an unknown outcome and is never repeated automatically.",
+      outcome: "blocked",
+      shown: false,
+    },
+  ])("keeps the reviewer's chat when a send $name", async ({
+    text,
+    outcome,
+    shown,
+  }) => {
+    const { reviews, calls } = await setup([
+      projects,
+      { outcome: "done", threadId: "review-chat" },
+      {
+        outcome: "tool_error",
+        result: { content: [{ type: "text", text }], isError: true },
+      },
+    ]);
+
+    await reviews.openReview("parent", "/work/harnexus", review("t1"));
+    const sent = await reviews.openReview(
+      "parent",
+      "/work/harnexus",
+      review("t2"),
+    );
+
+    expect(sent).toBe(outcome);
+    expect(calls).toHaveLength(3);
+    expect((await reviews.recordsOf("review-chat"))?.length).toBe(
+      shown ? 4 : 2,
+    );
   });
 
   test("keeps a chat the app made whose first turn did not go as asked", async () => {
