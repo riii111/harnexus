@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// A stand-in for claude-cloud or codex: records its arguments, directory and stdin, then prints the next planned output.
+// A stand-in for codex: records its arguments, directory and stdin, then prints the next planned output.
 const SCRIPT = `#!/usr/bin/env bash
 dir="$FAKE_DIR"
 n=$(( $(cat "$dir/count" 2>/dev/null || echo 0) + 1 ))

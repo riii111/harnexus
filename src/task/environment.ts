@@ -93,8 +93,7 @@ export const detectEnvironment = async (
 };
 
 const CLOUD_ALTERNATIVE =
-  "Cloud cannot create or resume other tasks or threads from here. " +
-  "For a Claude turn inside this task use `harnexus-task claude`; " +
+  "Cloud cannot create or resume other tasks or threads from here; " +
   "PR notifications are not built for Cloud, so check the PR with gh";
 
 const CLAUDE_CLOUD_ALTERNATIVE =

@@ -160,7 +160,7 @@ describe("Cloud refusals", () => {
     });
     expect(run.code).toBe(1);
     expect(run.stderr).toContain("unavailable in Cloud");
-    expect(run.stderr).toContain("harnexus-task claude");
+    expect(run.stderr).toContain("check the PR with gh");
     expect(run.stderr).not.toContain("call socket");
   });
 
