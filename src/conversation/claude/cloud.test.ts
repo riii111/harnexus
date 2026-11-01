@@ -375,7 +375,7 @@ describe("createCloudRuntime /cloud", () => {
       },
     ]);
     expect(turn.outcome).toEqual({ status: "completed" });
-    expect(turn.texts().at(-1)).toContain("now shows the Cloud session");
+    expect(turn.texts().at(-1)).toContain("now shows the Cloud session.");
     expect(env.sent).toEqual([{ replayOf: "copy-1" }]);
     expect(env.picked).toEqual(["thread-1"]);
     expect(env.events).toContainEqual({
@@ -1155,6 +1155,33 @@ describe("createCloudRuntime turns", () => {
     expect(turn.failure?._tag).toBe("CloudCopyFailed");
     expect(env.copyCalls).toBe(1);
     expect(env.events).toContainEqual({ event: "claude_cloud", step });
+  });
+
+  test("keeps copying soon after a reply, so what the session does next by itself appears without the idle wait", async () => {
+    const at = "2026-11-01T00:00:00Z";
+    const replied = [prompt("p1", "hi", at), endReply("a1", "waiting")];
+    const env = linked({
+      copies: [
+        replied,
+        [
+          ...replied,
+          prompt("p2", "background task done", at),
+          reply("a2", "m2", text("LGTM"), "end_turn", at),
+        ],
+      ],
+      shown: null,
+    });
+    env.clock = Date.parse(at);
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+    await env.runtime.run(env.turn("hi").running);
+
+    await env.tick();
+
+    expect(env.planned.slice(0, 2)).toEqual([15_000, 10_000]);
+    expect(env.ownStarts).toEqual(["thread-1"]);
   });
 
   test("waits the idle wait, without copying, once a thread is halted", async () => {

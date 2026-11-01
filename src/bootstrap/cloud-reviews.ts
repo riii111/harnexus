@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { REVIEW_ASK_SENT, reviewText } from "../conversation/claude/cloud.ts";
+import {
+  CLOUD_MARK,
+  REVIEW_ASK_SENT,
+  reviewText,
+} from "../conversation/claude/cloud.ts";
 import type { CloudReview } from "../conversation/claude/cloud-reviews.ts";
 import {
   listDirectoryIfExists,
@@ -17,7 +22,11 @@ import { projectOf } from "./cloud-children.ts";
 type Call = (line: string) => Promise<string>;
 
 // Keeps the reviews a Cloud session read, one file each, and the chat each reviewer's reviews are shown in.
-export const createCloudReviews = (dir: string, call: Call) => {
+export const createCloudReviews = (
+  dir: string,
+  call: Call,
+  reviewHome = join(homedir(), "review-home"),
+) => {
   const chatsPath = join(dir, "chats.json");
   const queue = createSerialQueue();
 
@@ -115,12 +124,15 @@ export const createCloudReviews = (dir: string, call: Call) => {
     }
     const listed = await answerOf(call, parentThreadId, "list_projects", {});
     if (listed.outcome !== "done") return NO_PROJECT;
-    const projectId = await projectOf(listed.result, parentFolder);
+    // Like a reviewer in the app, the chat opens in the empty review project when there is one, and in the worker's project otherwise.
+    const projectId =
+      (await projectOf(listed.result, reviewHome)) ??
+      (await projectOf(listed.result, parentFolder));
     if (projectId === null) return NO_PROJECT;
     const created = await answerOf(call, parentThreadId, "create_thread", {
       prompt,
       target: { type: "project", projectId, environment: { type: "local" } },
-      title: `Review｜${review.taskId ?? review.reviewer}`,
+      title: `${CLOUD_MARK} Review｜${review.taskId ?? review.reviewer}`,
       model: REVIEW_CHAT_MODEL,
     });
     const threadId =

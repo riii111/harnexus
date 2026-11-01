@@ -460,6 +460,8 @@ export const createCloudRuntime = <Tag extends string>(
     } finally {
       if (stateOf(threadId).follow === follow) keep(threadId, { follow: null });
     }
+    // The session may go on after its reply, so the idle copies watch it closely for a while; a halted thread is not copied again.
+    if (!stateOf(threadId).halted) hurry(threadId);
   };
 
   // Sends a turn's first message or a steer to the Cloud session and logs how it went.
@@ -851,11 +853,12 @@ export const createCloudRuntime = <Tag extends string>(
     const all = copied.value.records;
     const last = all.at(-1);
     const recordAt = last === undefined ? null : timeOf(last);
+    // A session that just replied may go on by itself, such as when work it left running in the background ends.
+    const age = recordAt === null ? null : now() - recordAt;
     const working =
       last !== undefined &&
-      !replied(last) &&
-      recordAt !== null &&
-      now() - recordAt < WORKING_FOR_MS;
+      age !== null &&
+      (age < ACTIVE_FOR_MS || (!replied(last) && age < WORKING_FOR_MS));
     const at = indexOf(all, cloud.shown);
     // Claude compacted the session past the record the app was shown, so everything the copy holds came after it and is shown.
     if (cloud.shown !== null && at === -1) {
@@ -898,8 +901,11 @@ export const createCloudRuntime = <Tag extends string>(
   // Brings a thread's idle copy forward; a copy already running plans the next one itself.
   const hurry = (threadId: string) => {
     dueAt.set(threadId, 0);
-    soon = true;
-    if (ticking || closed) return;
+    if (ticking) {
+      soon = true;
+      return;
+    }
+    if (closed) return;
     cancelTick?.();
     plan(POLL_MS);
   };
@@ -1221,8 +1227,12 @@ const LINK_NOT_COPIED = "The Cloud session could not be copied";
 const LINK_NOT_SAVED =
   "The link to the Cloud session could not be saved; send /cloud again.";
 
-const LINKED =
-  "This thread now shows the Cloud session. Messages you send here go to it, and its replies appear here as they are copied. Stopping a turn here does not stop the session; stop it on claude.ai.";
+const LINKED = [
+  "This thread now shows the Cloud session.",
+  "",
+  "- Messages you send here go to the session, and its replies appear here as they are copied.",
+  "- Stopping a turn here does not stop the session; stop it on claude.ai.",
+].join("\n");
 
 const STOPPED_WAITING =
   "Stopped waiting here. The Cloud session keeps working; stop it on claude.ai if needed. Later replies appear here when they are copied.";
@@ -1253,6 +1263,8 @@ const POLL_MS = 10_000;
 const IDLE_MS = 5 * 60_000;
 // How recent the last record of a session still in its turn must be for the idle copies to come at POLL_MS.
 const WORKING_FOR_MS = 10 * 60_000;
+// How recent the last record of a session that replied must be for the idle copies to come at POLL_MS.
+const ACTIVE_FOR_MS = 2 * 60_000;
 
 const FIRST_TICK_MS = 15_000;
 
