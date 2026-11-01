@@ -265,6 +265,22 @@ describe("ThreadStore Cloud links", () => {
     expect(reopened.cloudThreadIds()).toEqual(["thread-1"]);
   });
 
+  test("ends a thread's link, so a new store holds no copy of it and another thread can link the session", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+    await store.linkCloud("thread-1", CLOUD, "copy-1");
+
+    await store.unlinkCloud("thread-1");
+    const reopened = await openStore();
+    const relinked = await reopened.linkCloud("thread-2", CLOUD, "copy-2");
+
+    expect(reopened.get("thread-1")).toMatchObject({ sessionId: null });
+    expect(reopened.get("thread-1")?.cloud).toBeUndefined();
+    expect(relinked.isOk()).toBe(true);
+    expect(reopened.cloudThreadIds()).toEqual(["thread-2"]);
+  });
+
   test("refuses a thread that already holds a conversation", async () => {
     const store = await openStore();
     await store.register(ENTRY);

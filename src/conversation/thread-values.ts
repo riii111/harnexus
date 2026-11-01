@@ -289,6 +289,11 @@ export const createThreadValues = (
     );
   };
 
+  const unlinkCloud = (threadId: string) => {
+    sessionIds.delete(threadId);
+    return logUnsaved("session_not_saved", store.unlinkCloud(threadId));
+  };
+
   const consumePick = (threadId: string) => picked.delete(threadId);
 
   return {
@@ -319,6 +324,7 @@ export const createThreadValues = (
     setSessionId,
     cloudOf,
     linkCloud,
+    unlinkCloud,
     setCloudCopy,
     cloudThreadIds: () => store.cloudThreadIds(),
     cloudOwner: (cloudSessionId: string) => store.cloudOwner(cloudSessionId),
