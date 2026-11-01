@@ -66,6 +66,16 @@ export const renderSubagentActivity = (
   return shownAt(item, { threadId: child.parentThreadId, turnId }, now);
 };
 
+// Shows another chat in a parent's chat as a subagent's activity, such as a Cloud worker's chat; the key tells its runs apart.
+export const renderWorkerActivity = (
+  agent: { threadId: string; path: string },
+  kind: SubAgentActivityItem["kind"],
+  key: string,
+  ref: { threadId: string; turnId: string },
+  now: number,
+): AppNotification[] =>
+  shownAt(subagentActivityItem(agent, kind, key), ref, now);
+
 export const renderDelegatedEdit = (
   edit: FileChangeItem,
   ref: { threadId: string; turnId: string },

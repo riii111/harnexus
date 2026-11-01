@@ -13,6 +13,7 @@ import {
   timeOf,
   turnOpeningTextOf,
 } from "../../presentation/history.ts";
+import { renderWorkerActivity } from "../../presentation/subagent.ts";
 import { renderNotice } from "../../presentation/turn.ts";
 import { isObject } from "../../runtime/object.ts";
 import { createSerialQueue } from "../../runtime/serial-queue.ts";
@@ -113,7 +114,11 @@ export type CloudDeps = {
   log: (event: CloudEvent) => void;
   // Opens a chat in the app linked to a session a linked Cloud session started.
   // Answers how the app took it, such as done, for the log.
-  openChild?: (parentThreadId: string, child: CloudChild) => Promise<string>;
+  // Answers how the app took it, for the log, and the chat it opened when it did.
+  openChild?: (
+    parentThreadId: string,
+    child: CloudChild,
+  ) => Promise<{ outcome: string; threadId: string | null }>;
   // Shows a review a linked Cloud session read in the reviewer's chat, opening it the first time; answers how the app took it, for the log.
   openReview?: (parentThreadId: string, review: CloudReview) => Promise<string>;
   // The review a /cloud-review message names, kept by openReview.
@@ -143,6 +148,16 @@ export type CloudDeps = {
 };
 
 type Copied = { copy: string; records: SessionMessage[] };
+
+// A worker session a linked one started, shown in the parent's chat like a subagent whose thread is the worker's own chat.
+type Worker = {
+  parent: string;
+  chat: string;
+  path: string;
+  // How many times it started working again after it ended a turn, which names each activity.
+  runs: number;
+  running: boolean;
+};
 
 // A copy holds the session as it was when the copy started, since records written later are left out, so of two copies the one started later is never older.
 // overlapped: started while another copy ran, so it is checked against what was shown before it is used.
@@ -206,6 +221,14 @@ export const createCloudRuntime = <Tag extends string>(
   const states = new Map<string, CloudThread>();
   const turnRecords = createTurnRecords();
   const openedChildren = new Set<string>();
+  // The workers whose chats were opened, by Cloud session, and the activity each parent's chat still has to show.
+  const workers = new Map<string, Worker>();
+  const pendingActivity = new Map<
+    string,
+    { worker: Worker; kind: "started" | "completed"; run: number }[]
+  >();
+  // The last turn each linked chat showed, which a worker's activity appears in.
+  const shownTurns = new Map<string, string>();
   const openedReviews = new Set<string>();
   const unsentReviews = new Map<
     string,
@@ -285,6 +308,8 @@ export const createCloudRuntime = <Tag extends string>(
       await inner.run(turn as RunningTurn<Tag>);
       return;
     }
+    shownTurns.set(turn.threadId, turn.turnId);
+    flushActivity(turn.threadId);
     if (turn.input.startedBy === "claude") {
       await showOwn(turn, cloud);
       return;
@@ -798,6 +823,7 @@ export const createCloudRuntime = <Tag extends string>(
       ms: now() - startedAt,
     });
     noticeChildren(threadId, all);
+    noticeWorker(threadId, all);
     noticeReviews(threadId, all);
     return Result.ok({ copy: copied.value, records: all });
   };
@@ -827,6 +853,62 @@ export const createCloudRuntime = <Tag extends string>(
     }
   };
 
+  // Shows a worker's chat in its parent's chat the way the app shows a subagent, so the parent tells when it runs and opens it.
+  const startWorker = (parent: string, child: CloudChild, chat: string) => {
+    const worker: Worker = {
+      parent,
+      chat,
+      path: `${CLOUD_MARK} ${child.title ?? child.sessionId}`,
+      runs: 0,
+      running: true,
+    };
+    workers.set(child.sessionId, worker);
+    showActivity(worker, "started");
+  };
+
+  // Marks a worker's activity done when its session ends a turn, and started again when it works anew.
+  const noticeWorker = (threadId: string, all: readonly SessionMessage[]) => {
+    const cloud = threads.cloudOf(threadId);
+    const worker = cloud === null ? undefined : workers.get(cloud.sessionId);
+    if (worker === undefined || worker.chat !== threadId) return;
+    const last = all.at(-1);
+    const done = last !== undefined && replied(last);
+    if (done === !worker.running) return;
+    if (done) {
+      worker.running = false;
+      showActivity(worker, "completed");
+    } else {
+      worker.running = true;
+      worker.runs += 1;
+      showActivity(worker, "started");
+    }
+  };
+
+  const showActivity = (worker: Worker, kind: "started" | "completed") => {
+    const pending = pendingActivity.get(worker.parent) ?? [];
+    pending.push({ worker, kind, run: worker.runs });
+    pendingActivity.set(worker.parent, pending);
+    flushActivity(worker.parent);
+  };
+
+  // An activity shows in a turn of the parent's chat, the one running or the last it showed; with none yet, it waits for the next.
+  const flushActivity = (parent: string) => {
+    const turnId = shownTurns.get(parent);
+    const pending = pendingActivity.get(parent);
+    if (turnId === undefined || pending === undefined) return;
+    pendingActivity.delete(parent);
+    for (const { worker, kind, run } of pending) {
+      for (const notification of renderWorkerActivity(
+        { threadId: worker.chat, path: worker.path },
+        kind,
+        `run${run}`,
+        { threadId: parent, turnId },
+        now(),
+      ))
+        send(notification);
+    }
+  };
+
   // Opens a chat, once, for each session a linked one started after the app was last shown.
   const noticeChildren = (threadId: string, all: readonly SessionMessage[]) => {
     // A copy made while a chat is being linked, or one whose link failed, opens nothing.
@@ -846,8 +928,9 @@ export const createCloudRuntime = <Tag extends string>(
       }
       openedChildren.add(child.sessionId);
       void openChild(threadId, child)
-        .catch(() => "threw")
-        .then((outcome) => {
+        .catch(() => ({ outcome: "threw", threadId: null }))
+        .then(({ outcome, threadId: chat }) => {
+          if (chat !== null) startWorker(threadId, child, chat);
           // Only a chat known not to be created is tried again, from here and not from the shown position, which a turn moves past it; any other answer may have made the chat.
           if (UNSENT_OUTCOMES.has(outcome)) {
             openedChildren.delete(child.sessionId);

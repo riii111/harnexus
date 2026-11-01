@@ -234,6 +234,67 @@ describe("createCloudRuntime child sessions", () => {
     ]);
   });
 
+  test("shows the worker's chat in the parent's chat like a subagent, started and then completed when its session ends a turn", async () => {
+    const parentRecords = [
+      prompt("p0", "earlier"),
+      endReply("r0", "ok"),
+      prompt("p1", "start a worker"),
+      reply(
+        "a1",
+        "m1",
+        toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+        "tool_use",
+      ),
+      toolResult("u1", "t1", started(CHILD)),
+      endReply("a2", "started"),
+    ];
+    const env = linked({
+      copies: [
+        parentRecords,
+        [prompt("w1", "work"), reply("w2", "m2", text("on it"), "tool_use")],
+        [prompt("w1", "work"), endReply("w3", "done")],
+      ],
+      shown: "r0",
+    });
+    const activity = () =>
+      env.sent.flatMap((message) => {
+        const params = message as {
+          method?: string;
+          params?: { item?: { type?: string }; turnId?: string };
+        };
+        return params.method === "item/completed" &&
+          params.params?.item?.type === "subAgentActivity"
+          ? [
+              {
+                ...(params.params.item as object),
+                turnId: params.params.turnId,
+              },
+            ]
+          : [];
+      });
+
+    await env.runtime.run(env.turn("start a worker").running);
+    await settle();
+    // The worker's chat links its session, as its first message /cloud does.
+    const chat = `chat-${CHILD}`;
+    env.clouds.set(chat, { sessionId: CHILD, shown: null });
+    env.owners.set(CHILD, chat);
+    env.sessionIds.set(chat, "copy-w");
+    env.runtime.listen(() => true);
+    await env.tick();
+    await env.tick();
+
+    expect(activity()).toEqual([
+      expect.objectContaining({
+        kind: "started",
+        agentThreadId: chat,
+        agentPath: "☁️ worker",
+        turnId: "turn-1",
+      }),
+      expect.objectContaining({ kind: "completed", agentThreadId: chat }),
+    ]);
+  });
+
   test("opens nothing for the sessions a session started before /cloud linked it", async () => {
     const env = setup({
       copies: [
@@ -1761,7 +1822,11 @@ const setup = ({
     },
     openChild: async (parent, child) => {
       env.children.push({ parent, child });
-      return env.childOutcomes.shift() ?? "done";
+      const outcome = env.childOutcomes.shift() ?? "done";
+      return {
+        outcome,
+        threadId: outcome === "done" ? `chat-${child.sessionId}` : null,
+      };
     },
     send: (message) => sent.push(message),
     log: (event) => events.push(event),

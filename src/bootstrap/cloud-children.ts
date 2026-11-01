@@ -14,24 +14,29 @@ export const openCloudChild = async (
   child: CloudChild,
 ) => {
   const listed = await answerOf(call, parentThreadId, "list_projects", {});
-  if (listed.outcome !== "done") return "no_project";
+  if (listed.outcome !== "done") return NO_PROJECT;
   const projectId = await projectOf(listed.result, parentFolder);
-  if (projectId === null) return "no_project";
+  if (projectId === null) return NO_PROJECT;
   const created = await answerOf(call, parentThreadId, "create_thread", {
     prompt: `/cloud ${child.sessionId}`,
     target: { type: "project", projectId, environment: { type: "local" } },
     title: `${CLOUD_MARK} ${child.title ?? child.sessionId}`,
     model: CLOUD_CHAT_MODEL,
   });
-  return typeof created.outcome === "string" ? created.outcome : "unknown";
+  return {
+    outcome: typeof created.outcome === "string" ? created.outcome : "unknown",
+    threadId: typeof created.threadId === "string" ? created.threadId : null,
+  };
 };
+
+const NO_PROJECT = { outcome: "no_project", threadId: null };
 
 const answerOf = async (
   call: Call,
   threadId: string,
   tool: string,
   args: object,
-): Promise<{ outcome?: unknown; result?: unknown }> => {
+): Promise<{ outcome?: unknown; result?: unknown; threadId?: unknown }> => {
   const parsed = parseJson(
     await call(JSON.stringify({ threadId, tool, arguments: args })),
   );

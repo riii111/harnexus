@@ -207,7 +207,7 @@ export const connectClaudeThreads = ({
     openChild: (parentThreadId, child) => {
       const parent = store.get(parentThreadId);
       return parent === undefined
-        ? Promise.resolve("no_parent")
+        ? Promise.resolve({ outcome: "no_parent", threadId: null })
         : openCloudChild(
             (call) => callGateway.handle(call),
             parentThreadId,
