@@ -483,20 +483,14 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
         : yield* Result.await(readText(args.promptFile));
     if (description !== null && isBlank(description))
       return fail("the prompt file is empty");
+    const lookUp = () =>
+      projectWhere(deps.env, caller, args.project, deps.cwd ?? process.cwd());
     // The project is looked up only when it is not named or its folder is needed to start a session.
-    const where =
-      args.project !== undefined && description === null
-        ? { projectId: args.project, folder: null }
-        : yield* Result.await(
-            projectWhere(
-              deps.env,
-              caller,
-              args.project,
-              deps.cwd ?? process.cwd(),
-            ),
-          );
+    let projectId = args.project ?? null;
     if (description !== null) {
-      const folder = String(where.folder);
+      const where = yield* Result.await(lookUp());
+      projectId = where.projectId;
+      const folder = where.folder;
       const start = deps.startCloud ?? TASK_DEPS.startCloud;
       const started = await start(description, folder, deps.env);
       if (started.isErr())
@@ -523,6 +517,9 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
         url: `https://claude.ai/code/${sessionId}`,
         alreadyLinked: true,
       });
+    // Looked up only now, so a session already linked is answered wherever the command runs.
+    if (projectId === null)
+      projectId = (yield* Result.await(lookUp())).projectId;
     // One chat per session, so a chat that takes its own /cloud as a request cannot open chats without end.
     const opened = join(
       stateRoot(deps.env),
@@ -548,7 +545,7 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
       prompt: `/cloud ${sessionId}`,
       target: {
         type: "project",
-        projectId: where.projectId,
+        projectId,
         environment: { type: "local" },
       },
       title: `☁️ ${title ?? sessionId}`,
