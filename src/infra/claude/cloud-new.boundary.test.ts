@@ -123,6 +123,19 @@ describe("startCloudSession", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 
+  test("keeps a title whose character arrives in separate chunks", async () => {
+    const { file, root } = await fakeClaude(
+      `printf 'Created cloud session: \\343'; sleep 0.2; printf '\\201\\202\\r\\nView: https://claude.ai/code/session_01NfjPqrHtNPEcDZP4SkBFGT\\r\\n'`,
+    );
+
+    const run = await startCloudSession(file, "summarize it", {
+      cwd: root,
+      env: { PATH: process.env.PATH },
+    });
+
+    expect(run.unwrap().title).toBe("あ");
+  });
+
   test("says when claude asks to trust the folder", async () => {
     const { file, root } = await fakeClaude(
       `printf 'Quick safety check: Is this a project you created or one you trust?\\n'`,

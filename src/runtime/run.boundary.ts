@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { Result, TaggedError } from "better-result";
 import { isObject } from "./object.ts";
 
@@ -60,6 +61,11 @@ export const runProcess = (
         });
         let stdout = "";
         let stderr = "";
+        // A chunk can end inside a character, which the decoder holds until the rest arrives.
+        const decoders = {
+          out: new StringDecoder("utf8"),
+          err: new StringDecoder("utf8"),
+        };
         let size = 0;
         let ended: ProcessRun["ended"] = "exit";
         let exited = false;
@@ -85,8 +91,8 @@ export const runProcess = (
             stop("output-limit");
             return;
           }
-          if (sink === "out") stdout += chunk.toString("utf8");
-          else stderr += chunk.toString("utf8");
+          if (sink === "out") stdout += decoders.out.write(chunk);
+          else stderr += decoders.err.write(chunk);
         };
         child.stdout.on("data", collect("out"));
         child.stderr.on("data", collect("err"));
@@ -107,6 +113,8 @@ export const runProcess = (
           clearTimeout(giveUp);
           // Anything the wrapper left in its group goes with it.
           if (child.pid !== undefined) signalGroup(child.pid, "SIGKILL");
+          stdout += decoders.out.end();
+          stderr += decoders.err.end();
           resolve({ status: code ?? 1, stdout, stderr, ended });
         });
       }),
