@@ -86,6 +86,7 @@ export type CloudDeps = {
     | "cloudOwner"
     | "cloudThreadIds"
     | "linkCloud"
+    | "unlinkCloud"
     | "setCloudCopy"
     | "sessionIdOf"
     | "consumePick"
@@ -880,6 +881,17 @@ export const createCloudRuntime = <Tag extends string>(
       if (ended === "deleted") {
         for (const [sessionId, entry] of unsentChildren) {
           if (entry.threadId === threadId) unsentChildren.delete(sessionId);
+        }
+        for (const [key, entry] of unsentReviews) {
+          if (entry.threadId === threadId) unsentReviews.delete(key);
+        }
+        // A deleted thread cannot return, so its session is no longer copied and is free for another thread; an archived one keeps it.
+        if (threads.cloudOf(threadId) !== null) {
+          const copy = threads.sessionIdOf(threadId);
+          states.delete(threadId);
+          void threads.unlinkCloud(threadId).then(async (unlinked) => {
+            if (unlinked.isOk() && copy !== null) await discardCopy(copy);
+          });
         }
       }
       inner.forgetThread(threadId, ended);

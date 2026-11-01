@@ -322,6 +322,14 @@ const createThreadStore = (
             );
       }),
 
+    // Ends a thread's link to its Cloud session, such as when the thread is deleted, so the session is no longer copied and another thread can link it.
+    unlinkCloud: (threadId: string) =>
+      update(threadId, (mapping) => {
+        if (mapping.cloud === undefined) return mapping;
+        const { cloud: _cloud, ...unlinked } = mapping;
+        return withSession(unlinked, null);
+      }),
+
     setCloudCopy: (
       threadId: string,
       copySessionId: string,

@@ -115,6 +115,39 @@ describe("createCloudRuntime reviews", () => {
   });
 });
 
+describe("createCloudRuntime deleted threads", () => {
+  test("stops copying a deleted thread's session and frees it for another thread", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "hi"), endReply("r1", "ok")]],
+      shown: "r1",
+    });
+    env.runtime.listen(() => true);
+
+    env.runtime.forgetThread("thread-1", "deleted");
+    await settle();
+    await env.tick();
+
+    expect(env.copyCalls).toBe(0);
+    expect(env.cloudOf("thread-1")).toBeNull();
+    expect(env.owners.has(CLOUD_ID)).toBe(false);
+    expect(env.discarded).toContain("copy-0");
+  });
+
+  test("keeps copying an archived thread's session", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "hi"), endReply("r1", "ok")]],
+      shown: "r1",
+    });
+    env.runtime.listen(() => true);
+
+    env.runtime.forgetThread("thread-1", "archived");
+    await env.tick();
+
+    expect(env.copyCalls).toBe(1);
+    expect(env.cloudOf("thread-1")?.sessionId).toBe(CLOUD_ID);
+  });
+});
+
 describe("createCloudRuntime child sessions", () => {
   const CHILD = "session_01NfjPqs5GNSgknfAaJ3mdYA";
   const started = (id: string) =>
@@ -1417,6 +1450,13 @@ const setup = ({
         clouds.set(threadId, cloud);
         owners.set(cloud.sessionId, threadId);
         sessionIds.set(threadId, copy);
+        return Result.ok({} as never);
+      },
+      unlinkCloud: async (threadId) => {
+        const cloud = clouds.get(threadId);
+        clouds.delete(threadId);
+        if (cloud !== undefined) owners.delete(cloud.sessionId);
+        sessionIds.delete(threadId);
         return Result.ok({} as never);
       },
       setCloudCopy: async (threadId, copy, shown) => {
