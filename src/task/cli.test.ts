@@ -913,6 +913,18 @@ describe("harnexus-task cloud", () => {
     });
   });
 
+  test("answers the chat a session is already linked to wherever it runs, without looking up a project", async () => {
+    const { invoke, harnexus } = await fixture();
+    harnexus.linkedChats.set(SESSION, "typed-chat");
+
+    const linked = await invoke(["cloud", "--link", SESSION], [], {
+      cwd: "/tmp/elsewhere",
+    });
+
+    expect(linked.out?.threadId).toBe("typed-chat");
+    expect(harnexus.calls).toEqual([]);
+  });
+
   test("says when no project holds the folder and none is named", async () => {
     const { invoke } = await fixture();
 
