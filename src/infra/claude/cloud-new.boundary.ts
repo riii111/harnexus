@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { Result, TaggedError } from "better-result";
 
 export class CloudStartFailed extends TaggedError("CloudStartFailed")<{
@@ -76,8 +77,9 @@ export const startCloudSession = (
             ),
           timeoutMs,
         );
-        const read = (chunk: Buffer) => {
-          seen = (seen + chunk.toString("utf8")).slice(-OUTPUT_KEPT);
+        // A chunk can end inside a character, which each stream's decoder holds until the rest arrives.
+        const read = (decoder: StringDecoder) => (chunk: Buffer) => {
+          seen = (seen + decoder.write(chunk)).slice(-OUTPUT_KEPT);
           const plain = withoutEscapes(seen);
           const view = VIEW.exec(plain);
           if (view?.[1] !== undefined) {
@@ -95,8 +97,8 @@ export const startCloudSession = (
               ),
             );
         };
-        child.stdout.on("data", read);
-        child.stderr.on("data", read);
+        child.stdout.on("data", read(new StringDecoder("utf8")));
+        child.stderr.on("data", read(new StringDecoder("utf8")));
         child.on("error", (error) => finish(() => reject(error)));
         child.on("close", () =>
           finish(() =>
