@@ -80,7 +80,7 @@ export const createCloudReviews = (dir: string, call: Call) => {
         "send_message_to_thread",
         { threadId: chat, prompt },
       );
-      // A chat the app no longer takes, such as one deleted, is replaced by a new one.
+      // A chat the app no longer takes, such as one deleted, is replaced by a new one; sent from a Claude chat, a failed send answers tool_error.
       if (!GONE.has(outcomeOf(sent))) return outcomeOf(sent);
     }
     const listed = await answerOf(call, parentThreadId, "list_projects", {});
@@ -93,7 +93,8 @@ export const createCloudReviews = (dir: string, call: Call) => {
       title: `Review｜${review.taskId ?? review.reviewer}`,
       model: REVIEW_CHAT_MODEL,
     });
-    if (created.outcome === "done" && typeof created.threadId === "string") {
+    // A chat the app made is kept even when its first turn did not go as asked, so the next review does not open another.
+    if (typeof created.threadId === "string") {
       const latest = (await readJson(chatsPath)) ?? {};
       await write(chatsPath, {
         ...latest,
@@ -121,6 +122,6 @@ const answerOf = async (
 const outcomeOf = (answer: { outcome?: unknown }) =>
   typeof answer.outcome === "string" ? answer.outcome : "unknown";
 
-const GONE = new Set(["rejected", "invalid"]);
+const GONE = new Set(["rejected", "invalid", "tool_error"]);
 
 const REVIEW_CHAT_MODEL = "claude-sonnet-5-5";

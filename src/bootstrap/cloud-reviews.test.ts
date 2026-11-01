@@ -93,7 +93,7 @@ describe("createCloudReviews", () => {
     const { reviews, calls } = await setup([
       projects,
       { outcome: "done", threadId: "old-chat" },
-      { outcome: "rejected", error: "no such thread" },
+      { outcome: "tool_error", error: "no such thread" },
       projects,
       { outcome: "done", threadId: "new-chat" },
     ]);
@@ -113,6 +113,22 @@ describe("createCloudReviews", () => {
       "list_projects",
       "create_thread",
     ]);
+  });
+
+  test("keeps a chat the app made whose first turn did not go as asked", async () => {
+    const { reviews, calls } = await setup([
+      projects,
+      { outcome: "model_mismatch", threadId: "review-chat" },
+      { outcome: "done" },
+    ]);
+
+    await reviews.openReview("parent", "/work/harnexus", review("t1"));
+    await reviews.openReview("parent", "/work/harnexus", review("t2"));
+
+    expect(calls.at(-1)).toEqual({
+      tool: "send_message_to_thread",
+      arguments: { threadId: "review-chat", prompt: "/cloud-review t2" },
+    });
   });
 
   test("does not send a review it already sent again", async () => {
