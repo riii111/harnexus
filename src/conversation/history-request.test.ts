@@ -72,6 +72,15 @@ describe("createHistoryRequests.answer", () => {
     });
   });
 
+  test("answers the records the bridge kept for a thread with no session, such as a Cloud reviewer's chat", async () => {
+    const { ask, reads } = setup({ records: {}, kept: conversation() });
+
+    const page = await ask("thread/turns/list", 7, {});
+
+    expect(reads).toEqual([]);
+    expect(page.result.data).toHaveLength(2);
+  });
+
   test.each([
     {
       name: "an unreadable record",
@@ -193,8 +202,10 @@ describe("createHistoryRequests.answer", () => {
 // A thread named in records has a session whose record holds those messages; "unreadable" makes reading it fail.
 const setup = ({
   records = { "th-claude": conversation() },
+  kept,
 }: {
   records?: Record<string, SessionMessage[] | "unreadable">;
+  kept?: SessionMessage[];
 } = {}) => {
   const sent: object[] = [];
   const reads: string[] = [];
@@ -225,6 +236,7 @@ const setup = ({
     },
     send: (message) => sent.push(message),
     log: (event) => events.push(event),
+    ...(kept === undefined ? {} : { keptRecords: async () => kept }),
   });
   const ask = async (
     method: Parameters<typeof history.answer>[0],

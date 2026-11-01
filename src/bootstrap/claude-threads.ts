@@ -219,6 +219,7 @@ export const connectClaudeThreads = ({
     send,
     log,
     subagentHistory: subagents.historyOf,
+    ...(reviews === undefined ? {} : { keptRecords: reviews.recordsOf }),
     subagents: {
       restore: subagentRestore.restore,
       agentRefOf: subagents.agentRefOf,

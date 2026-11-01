@@ -148,6 +148,30 @@ describe("createCloudReviews", () => {
     expect(calls).toHaveLength(2);
   });
 
+  test("keeps the reviews a chat showed, oldest first, as the records of its history", async () => {
+    const { reviews } = await setup([
+      projects,
+      { outcome: "done", threadId: "review-chat" },
+      { outcome: "done" },
+    ]);
+
+    await reviews.openReview("parent", "/work/harnexus", review("t1"));
+    await reviews.openReview("parent", "/work/harnexus", {
+      ...review("t2"),
+      answer: "判定: 修正必要",
+    });
+    const records = await reviews.recordsOf("review-chat");
+
+    expect(records?.map((record) => record.type)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    expect(JSON.stringify(records?.[3])).toContain("判定: 修正必要");
+    expect(await reviews.recordsOf("other-chat")).toBeNull();
+  });
+
   test("names no review it never kept", async () => {
     const { reviews } = await setup([]);
 

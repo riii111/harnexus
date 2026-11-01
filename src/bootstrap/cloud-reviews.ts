@@ -1,6 +1,9 @@
 import { join } from "node:path";
+import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import { reviewText } from "../conversation/claude/cloud.ts";
 import type { CloudReview } from "../conversation/claude/cloud-reviews.ts";
 import {
+  listDirectoryIfExists,
   prepareDirectory,
   readTextFileIfExists,
   writeFileAtomic,
@@ -61,15 +64,21 @@ export const createCloudReviews = (dir: string, call: Call) => {
       if ((await readJson(path))?.sent === true) return "done";
       if (!(await write(path, review))) return "not_kept";
       const sent = await deliver(parentThreadId, parentFolder, review);
-      if (sent === "done") await write(path, { ...review, sent: true });
-      return sent;
+      if (sent.outcome === "done")
+        await write(path, {
+          ...review,
+          sent: true,
+          threadId: sent.threadId,
+          shownAt: new Date().toISOString(),
+        });
+      return sent.outcome;
     });
 
   const deliver = async (
     parentThreadId: string,
     parentFolder: string,
     review: CloudReview,
-  ) => {
+  ): Promise<{ outcome: string; threadId: string | null }> => {
     const prompt = `/cloud-review ${review.key}`;
     const chats = (await readJson(chatsPath)) ?? {};
     const chat = chats[review.reviewer];
@@ -81,30 +90,48 @@ export const createCloudReviews = (dir: string, call: Call) => {
         { threadId: chat, prompt },
       );
       // A chat the app no longer takes, such as one deleted, is replaced by a new one; sent from a Claude chat, a failed send answers tool_error.
-      if (!GONE.has(outcomeOf(sent))) return outcomeOf(sent);
+      if (!GONE.has(outcomeOf(sent)))
+        return { outcome: outcomeOf(sent), threadId: chat };
     }
     const listed = await answerOf(call, parentThreadId, "list_projects", {});
-    if (listed.outcome !== "done") return "no_project";
+    if (listed.outcome !== "done") return NO_PROJECT;
     const projectId = await projectOf(listed.result, parentFolder);
-    if (projectId === null) return "no_project";
+    if (projectId === null) return NO_PROJECT;
     const created = await answerOf(call, parentThreadId, "create_thread", {
       prompt,
       target: { type: "project", projectId, environment: { type: "local" } },
       title: `Review｜${review.taskId ?? review.reviewer}`,
       model: REVIEW_CHAT_MODEL,
     });
+    const threadId =
+      typeof created.threadId === "string" ? created.threadId : null;
     // A chat the app made is kept even when its first turn did not go as asked, so the next review does not open another.
-    if (typeof created.threadId === "string") {
+    if (threadId !== null) {
       const latest = (await readJson(chatsPath)) ?? {};
-      await write(chatsPath, {
-        ...latest,
-        [review.reviewer]: created.threadId,
-      });
+      await write(chatsPath, { ...latest, [review.reviewer]: threadId });
     }
-    return outcomeOf(created);
+    return { outcome: outcomeOf(created), threadId };
   };
 
-  return { reviewOf, openReview };
+  // The reviews shown in a reviewer's chat as the records of a conversation, oldest first, for the chat's history.
+  const recordsOf = async (threadId: string) => {
+    const names = await listDirectoryIfExists(dir);
+    if (names.isErr() || names.value === null) return null;
+    const shown: { at: string; review: CloudReview }[] = [];
+    for (const name of names.value) {
+      if (!name.endsWith(".json") || name === "chats.json") continue;
+      const kept = await readJson(join(dir, name));
+      if (kept?.threadId !== threadId || typeof kept.shownAt !== "string")
+        continue;
+      const review = await reviewOf(name.slice(0, -".json".length));
+      if (review !== null) shown.push({ at: kept.shownAt, review });
+    }
+    if (shown.length === 0) return null;
+    shown.sort((a, b) => a.at.localeCompare(b.at));
+    return shown.flatMap(({ at, review }) => reviewRecords(review, at));
+  };
+
+  return { reviewOf, openReview, recordsOf };
 };
 
 const answerOf = async (
@@ -119,8 +146,40 @@ const answerOf = async (
   return parsed.isOk() && isObject(parsed.value) ? parsed.value : {};
 };
 
+// A review as a prompt and the reply that shows it, in the shape Claude's own records take.
+const reviewRecords = (review: CloudReview, at: string) =>
+  [
+    {
+      type: "user",
+      uuid: `review-${review.key}-asked`,
+      session_id: "cloud-review",
+      message: { role: "user", content: `/cloud-review ${review.key}` },
+      parent_tool_use_id: null,
+      timestamp: at,
+    },
+    {
+      type: "assistant",
+      uuid: `review-${review.key}-shown`,
+      session_id: "cloud-review",
+      message: {
+        id: `review-${review.key}`,
+        type: "message",
+        role: "assistant",
+        model: "cloud-review",
+        content: [{ type: "text", text: reviewText(review) }],
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        usage: {},
+      },
+      parent_tool_use_id: null,
+      timestamp: at,
+    },
+  ] as unknown as SessionMessage[];
+
 const outcomeOf = (answer: { outcome?: unknown }) =>
   typeof answer.outcome === "string" ? answer.outcome : "unknown";
+
+const NO_PROJECT = { outcome: "no_project", threadId: null };
 
 const GONE = new Set(["rejected", "invalid", "tool_error"]);
 
