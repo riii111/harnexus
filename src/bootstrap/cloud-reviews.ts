@@ -12,11 +12,13 @@ import {
   listDirectoryIfExists,
   prepareDirectory,
   readTextFileIfExists,
+  realPathOrSelf,
   writeFileAtomic,
 } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import { createSerialQueue } from "../runtime/serial-queue.ts";
+import { projectsIn } from "../task/session.ts";
 import { projectOf } from "./cloud-children.ts";
 
 type Call = (line: string) => Promise<string>;
@@ -126,7 +128,7 @@ export const createCloudReviews = (
     if (listed.outcome !== "done") return NO_PROJECT;
     // Like a reviewer in the app, the chat opens in the empty review project when there is one, and in the worker's project otherwise.
     const projectId =
-      (await projectOf(listed.result, reviewHome)) ??
+      (await projectAt(listed.result, reviewHome)) ??
       (await projectOf(listed.result, parentFolder));
     if (projectId === null) return NO_PROJECT;
     const created = await answerOf(call, parentThreadId, "create_thread", {
@@ -279,6 +281,21 @@ const reviewRecords = (review: CloudReview, at: string) =>
 
 const outcomeOf = (answer: { outcome?: unknown }) =>
   typeof answer.outcome === "string" ? answer.outcome : "unknown";
+
+// The project whose folder is the folder itself, not one holding it.
+const projectAt = async (result: unknown, folder: string) => {
+  const real = await realPathOrSelf(folder);
+  for (const project of projectsIn(result)) {
+    if (
+      isObject(project) &&
+      typeof project.projectId === "string" &&
+      typeof project.path === "string" &&
+      (await realPathOrSelf(project.path)) === real
+    )
+      return project.projectId;
+  }
+  return null;
+};
 
 const NO_PROJECT = { outcome: "no_project", threadId: null };
 
