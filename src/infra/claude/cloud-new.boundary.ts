@@ -27,12 +27,23 @@ export const startCloudSession = (
     try: () =>
       new Promise<CloudStarted>((resolve, reject) => {
         const command = [claude, "--cloud", description];
-        // BSD script takes the command after the file; util-linux script takes one shell command line.
-        const args =
+        // BSD script takes the command after the file and fails on a socket as its input, so it reads a pipe that stays open; util-linux script takes one shell command line.
+        const [file, args] =
           platform === "darwin"
-            ? ["-q", "/dev/null", ...command]
-            : ["-q", "-e", "-c", command.map(quote).join(" "), "/dev/null"];
-        const child = spawn("script", args, {
+            ? [
+                "/bin/sh",
+                [
+                  "-c",
+                  'sleep 86400 | script -q /dev/null "$@"',
+                  "sh",
+                  ...command,
+                ],
+              ]
+            : [
+                "script",
+                ["-q", "-e", "-c", command.map(quote).join(" "), "/dev/null"],
+              ];
+        const child = spawn(file, args, {
           cwd,
           env: {
             ...env,
