@@ -148,6 +148,7 @@ export const connectClaudeThreads = ({
     openLink,
     request,
     delegations,
+    cloudOwner: (cloudSessionId) => store.cloudOwner(cloudSessionId),
   });
   const reviews =
     cloud === undefined

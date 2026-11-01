@@ -50,9 +50,12 @@ export const createCallGateway = ({
   openLink,
   request,
   delegations,
+  cloudOwner = () => undefined,
   firstTurnWaitMs = FIRST_TURN_WAIT_MS,
 }: {
   isClaudeThread: (threadId: string) => boolean;
+  // The chat a Cloud session is linked to, however it was linked.
+  cloudOwner?: (cloudSessionId: string) => string | undefined;
   openLink: (threadId: string) => Link;
   request: ServerRequest;
   delegations: Pick<DelegationWatch, "expect">;
@@ -82,6 +85,15 @@ export const createCallGateway = ({
     }
     const { threadId, tool, arguments: args } = call.data;
     if (tool === "name_thread") return nameThread(threadId, args);
+    if (tool === "cloud_chat") {
+      const sessionId = args.sessionId;
+      return typeof sessionId === "string"
+        ? {
+            outcome: "done",
+            result: { threadId: cloudOwner(sessionId) ?? null },
+          }
+        : { outcome: "invalid", message: "cloud_chat expects a sessionId" };
+    }
     if (tool === "create_thread") {
       return creates.run(threadId, () => createThread(threadId, args));
     }
@@ -280,8 +292,8 @@ const APP_TOOLS = [
 
 type AppTool = (typeof APP_TOOLS)[number];
 
-// name_thread is answered by the gateway itself, since the app offers no tool that renames a thread.
-const TOOLS = [...APP_TOOLS, "name_thread"] as const;
+// name_thread and cloud_chat are answered by the gateway itself: the app offers no tool that renames a thread, and only the bridge knows which chat shows a Cloud session.
+const TOOLS = [...APP_TOOLS, "name_thread", "cloud_chat"] as const;
 
 const CALL = z.strictObject({
   threadId: z.string().min(1),

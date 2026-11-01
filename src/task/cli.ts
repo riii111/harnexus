@@ -505,6 +505,19 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
       return fail(
         "--link must be a Cloud session id or its claude.ai/code URL",
       );
+    // A session already linked, such as by a /cloud typed in a chat, keeps its chat, which is answered instead of opening one /cloud would refuse; a bridge that does not know the call answers as if it were not linked.
+    const linked = await callApp(deps.env, caller, "cloud_chat", { sessionId });
+    const owner =
+      linked.outcome === "done" && isObject(linked.result)
+        ? linked.result.threadId
+        : null;
+    if (typeof owner === "string")
+      return Result.ok<Fields>({
+        threadId: owner,
+        cloudSessionId: sessionId,
+        url: `https://claude.ai/code/${sessionId}`,
+        alreadyLinked: true,
+      });
     // One chat per session, so a chat that takes its own /cloud as a request cannot open chats without end.
     const opened = join(
       stateRoot(deps.env),
