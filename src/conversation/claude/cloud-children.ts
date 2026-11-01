@@ -2,12 +2,7 @@ import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 
-// toolUseId names the call that started the session, which the parent's history shows the worker at.
-export type CloudChild = {
-  sessionId: string;
-  title: string | null;
-  toolUseId: string;
-};
+export type CloudChild = { sessionId: string; title: string | null };
 
 // The tool a Cloud session starts another one with; only its results are read, so text a session merely writes or quotes never opens a chat.
 const CREATE_SESSION = /(?:^|__)create_session$/;
@@ -38,7 +33,7 @@ export const childSessionsIn = (
         calls.has(block.tool_use_id) &&
         block.is_error !== true
       ) {
-        const child = createdIn(block.content, block.tool_use_id);
+        const child = createdIn(block.content);
         if (child !== null && !children.has(child.sessionId)) {
           children.set(child.sessionId, child);
         }
@@ -54,16 +49,17 @@ const contentOf = (record: SessionMessage): Record<string, unknown>[] => {
   return Array.isArray(content) ? content.filter(isObject) : [];
 };
 
-const createdIn = (content: unknown, toolUseId: string): CloudChild | null => {
-  const texts =
-    typeof content === "string"
-      ? [content]
-      : Array.isArray(content)
-        ? content.flatMap((item) =>
-            isObject(item) && typeof item.text === "string" ? [item.text] : [],
-          )
-        : [];
-  for (const text of texts) {
+const textsOf = (content: unknown) =>
+  typeof content === "string"
+    ? [content]
+    : Array.isArray(content)
+      ? content.flatMap((item) =>
+          isObject(item) && typeof item.text === "string" ? [item.text] : [],
+        )
+      : [];
+
+const createdIn = (content: unknown): CloudChild | null => {
+  for (const text of textsOf(content)) {
     // create_session answers {"ccr":{"id":"session_…","title":…}}, as text.
     const parsed = parseJson(text);
     const ccr =
@@ -71,7 +67,6 @@ const createdIn = (content: unknown, toolUseId: string): CloudChild | null => {
     if (!isObject(ccr) || typeof ccr.id !== "string") continue;
     if (!SESSION_ID.test(ccr.id)) continue;
     return {
-      toolUseId,
       sessionId: ccr.id,
       title:
         typeof ccr.title === "string" && ccr.title.trim() !== ""
@@ -81,3 +76,124 @@ const createdIn = (content: unknown, toolUseId: string): CloudChild | null => {
   }
   return null;
 };
+
+// Whether a Cloud session that ended its turn is still waiting for work it handed off, and so is not done: a session it started and has not archived, or a message it scheduled to itself that has not arrived.
+export const waitingIn = (records: readonly SessionMessage[]) => {
+  const archived = new Set<string>();
+  const cancelled = new Set<string>();
+  const calls = new Map<string, Record<string, unknown>>();
+  const scheduled: {
+    due: number;
+    trigger: string | null;
+    message: string | null;
+    came: boolean;
+  }[] = [];
+  for (const record of records) {
+    const at = timeOfRecord(record);
+    // A scheduled message comes as a prompt of its own; one the user typed counts only when it is that message and nothing else.
+    const opening = record.type === "user" ? openingTextOf(record) : null;
+    if (opening !== null)
+      arrive(scheduled, at, (message) => opening.trim() === message);
+    for (const block of contentOf(record)) {
+      if (
+        block.type === "tool_use" &&
+        typeof block.id === "string" &&
+        typeof block.name === "string"
+      ) {
+        calls.set(block.id, { ...block, at });
+        continue;
+      }
+      if (
+        block.type !== "tool_result" ||
+        block.is_error === true ||
+        typeof block.tool_use_id !== "string"
+      )
+        continue;
+      const call = calls.get(block.tool_use_id);
+      const name = typeof call?.name === "string" ? call.name : "";
+      const input = isObject(call?.input) ? call.input : {};
+      // Or among the notifications the session reads, which the harness writes.
+      if (READ_NOTIFICATIONS.test(name)) {
+        const read = textsOf(block.content).join("\n");
+        arrive(scheduled, at, (message) => read.includes(message));
+      }
+      if (ARCHIVE_SESSION.test(name) && typeof input.session_id === "string")
+        archived.add(input.session_id);
+      if (DELETE_TRIGGER.test(name) && typeof input.trigger_id === "string")
+        cancelled.add(input.trigger_id);
+      if (SEND_LATER.test(name))
+        scheduled.push({
+          due: dueOf(input, typeof call?.at === "number" ? call.at : null),
+          message:
+            typeof input.message === "string" && input.message.trim() !== ""
+              ? input.message.trim()
+              : null,
+          came: false,
+          trigger:
+            TRIGGER_ID.exec(textsOf(block.content).join("\n"))?.[0] ?? null,
+        });
+    }
+  }
+  return (
+    childSessionsIn(records).some((child) => !archived.has(child.sessionId)) ||
+    scheduled.some(
+      ({ trigger, came }) =>
+        !came && (trigger === null || !cancelled.has(trigger)),
+    )
+  );
+};
+
+// Marks the scheduled messages that came with a message taken at a time: one taken before it was scheduled never is, since only the messages scheduled before it are looked at.
+const arrive = (
+  scheduled: { due: number; message: string | null; came: boolean }[],
+  at: number | null,
+  holds: (message: string) => boolean,
+) => {
+  if (at === null) return;
+  for (const entry of scheduled)
+    if (
+      at >= entry.due - FIRE_EARLY_MS &&
+      (entry.message === null || holds(entry.message))
+    )
+      entry.came = true;
+};
+
+// When a scheduled message is due; one whose time cannot be read counts as due at once, so the next message the session takes ends its wait.
+const dueOf = (input: Record<string, unknown>, calledAt: number | null) => {
+  const from = calledAt ?? 0;
+  if (typeof input.delay_minutes === "number")
+    return from + input.delay_minutes * 60_000;
+  const at =
+    typeof input.at === "string"
+      ? Date.parse(input.at.replace(/\[[^\]]*\]$/, ""))
+      : Number.NaN;
+  return Number.isNaN(at) ? from : at;
+};
+
+const timeOfRecord = (record: SessionMessage) => {
+  const stamp = (record as { timestamp?: unknown }).timestamp;
+  const ms = typeof stamp === "string" ? Date.parse(stamp) : Number.NaN;
+  return Number.isNaN(ms) ? null : ms;
+};
+
+// The text of a message that starts a turn of the session, such as one a scheduled message or a session it started delivers, rather than the results of its tools.
+const openingTextOf = (record: SessionMessage) => {
+  const message = isObject(record) ? record.message : null;
+  const content = isObject(message) ? message.content : null;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  const texts = content.flatMap((block) =>
+    isObject(block) && block.type === "text" && typeof block.text === "string"
+      ? [block.text]
+      : [],
+  );
+  return texts.length === 0 ? null : texts.join("\n");
+};
+
+const ARCHIVE_SESSION = /(?:^|__)archive_session$/;
+const SEND_LATER = /(?:^|__)send_later$/;
+const DELETE_TRIGGER = /(?:^|__)delete_trigger$/;
+const READ_NOTIFICATIONS = /(?:^|__)ReadNotifications$/;
+const TRIGGER_ID = /trig_[A-Za-z0-9]+/;
+// The scheduler fires by the minute, so a message may come up to a minute before its time.
+const FIRE_EARLY_MS = 60_000;

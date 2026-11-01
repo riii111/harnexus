@@ -20,6 +20,7 @@ import {
 } from "./protocol-values.ts";
 import { RECOVERY_CONTEXT, RECOVERY_NOTICE } from "./recovery.ts";
 import {
+  AGENT_TOOLS,
   closeTurnUnchecked,
   type Rendered,
   renderNotice,
@@ -259,8 +260,12 @@ const noteAgents = (
   at: number | null,
 ): Replay => {
   for (const block of body.content) {
-    // Besides Claude's own agents, a call the caller names an agent for shows it too, such as a Cloud session starting a worker.
-    if (block.type !== "tool_use") continue;
+    if (
+      block.type !== "tool_use" ||
+      !(AGENT_TOOLS.includes(block.name) || block.name === RESUME_TOOL)
+    ) {
+      continue;
+    }
     const agent = agentThreadOf(block.id);
     if (agent === undefined) continue;
     const items: ThreadItem[] = [

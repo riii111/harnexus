@@ -94,47 +94,6 @@ describe("renderRecords", () => {
 });
 
 describe("buildHistory", () => {
-  test("shows any call its caller names an agent for, such as a Cloud session starting a worker", () => {
-    const turns = buildHistory(
-      [
-        prompt("u1", "start a worker", "2026-11-01T00:00:00.000Z"),
-        reply(
-          "a1",
-          "m1",
-          toolUse("t1", "mcp__claude-code-remote__create_session", {}),
-          "tool_use",
-          "2026-11-01T00:00:01.000Z",
-        ),
-        toolResult("r1", "t1", "{}", false, "2026-11-01T00:00:02.000Z"),
-        reply(
-          "a2",
-          "m2",
-          text("started"),
-          "end_turn",
-          "2026-11-01T00:00:03.000Z",
-        ),
-      ],
-      { threadId: "parent", cwd: "/work" },
-      (toolUseId) =>
-        toolUseId === "t1"
-          ? {
-              threadId: "worker-chat",
-              path: "☁️ worker",
-              active: false,
-              edits: [],
-            }
-          : undefined,
-    );
-
-    const activity = turns
-      .flatMap((entry) => entry.items.map((kept) => kept.item))
-      .filter((item) => item.type === "subAgentActivity");
-    expect(activity).toMatchObject([
-      { kind: "started", agentThreadId: "worker-chat", agentPath: "☁️ worker" },
-      { kind: "completed", agentThreadId: "worker-chat" },
-    ]);
-  });
-
   test.each([
     {
       name: "typed text",

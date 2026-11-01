@@ -56,7 +56,6 @@ export const createHistoryRequests = ({
   subagentHistory,
   subagents,
   keptRecords,
-  workerRefOf,
 }: {
   threads: Pick<ThreadValues, "threadOf" | "sessionIdOf" | "rewindOf">;
   liveTurnOf: (threadId: string) => LiveTurn | null;
@@ -68,11 +67,6 @@ export const createHistoryRequests = ({
   subagents: SubagentsOfThread;
   // The records the bridge kept for a thread that has no Claude record, such as a Cloud reviewer's chat.
   keptRecords?: (threadId: string) => Promise<readonly SessionMessage[] | null>;
-  // The Cloud workers a linked chat's record started, shown like its agents.
-  workerRefOf?: (
-    threadId: string,
-    records: readonly SessionMessage[],
-  ) => (toolUseId: string) => AgentRef | undefined;
 }) => {
   // The app asks for a turn page and then each turn's items at once, so requests arriving while a read runs share it.
   const reading = new Map<string, { key: string; loaded: Promise<Loaded> }>();
@@ -121,15 +115,13 @@ export const createHistoryRequests = ({
           .tapError((error) =>
             log({ event: "claude_history_unreadable", error: error._tag }),
           )
-          .map((messages) => {
-            const agents = subagents.agentRefOf(threadId);
-            const workers = workerRefOf?.(threadId, messages);
-            return buildHistory(
+          .map((messages) =>
+            buildHistory(
               messages,
               { threadId, cwd: thread.cwd },
-              (toolUseId) => agents(toolUseId) ?? workers?.(toolUseId),
-            );
-          });
+              subagents.agentRefOf(threadId),
+            ),
+          );
       })
       .finally(() => {
         if (reading.get(threadId)?.loaded === loaded) reading.delete(threadId);
