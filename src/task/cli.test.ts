@@ -892,6 +892,47 @@ describe("harnexus-task cloud", () => {
     expect(harnexus.calls).toEqual([]);
   });
 
+  test("opens the chat in the project holding the folder it runs in when none is named", async () => {
+    const { invoke, harnexus } = await fixture();
+
+    const linked = await invoke(
+      ["cloud", "--link", SESSION],
+      [
+        projectsListed(
+          { projectId: "harnexus", path: "/Users/me/src/harnexus" },
+          { projectId: "dotfiles", path: "/Users/me/src/dotfiles" },
+        ),
+        { outcome: "done", threadId: "cloud-chat" },
+      ],
+      { cwd: "/Users/me/src/harnexus/src" },
+    );
+
+    expect(linked.out?.threadId).toBe("cloud-chat");
+    expect(harnexus.calls.at(-1)?.arguments).toMatchObject({
+      target: { projectId: "harnexus" },
+    });
+  });
+
+  test("says when no project holds the folder and none is named", async () => {
+    const { invoke } = await fixture();
+
+    const failed = await invoke(
+      ["cloud", "--link", SESSION],
+      [
+        projectsListed({
+          projectId: "dotfiles",
+          path: "/Users/me/src/dotfiles",
+        }),
+      ],
+      { cwd: "/tmp/elsewhere" },
+    );
+
+    expect([failed.code, failed.err]).toEqual([
+      1,
+      expect.stringContaining("name one with --project"),
+    ]);
+  });
+
   test("refuses a link that names no Cloud session, before calling the app", async () => {
     const { invoke, harnexus } = await fixture();
 

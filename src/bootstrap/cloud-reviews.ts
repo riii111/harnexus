@@ -18,8 +18,7 @@ import {
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
 import { createSerialQueue } from "../runtime/serial-queue.ts";
-import { projectsIn } from "../task/session.ts";
-import { projectOf } from "./cloud-children.ts";
+import { projectOf, projectsIn } from "../task/session.ts";
 
 type Call = (line: string) => Promise<string>;
 
