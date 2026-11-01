@@ -1,6 +1,10 @@
 import { join } from "node:path";
 import { Result, TaggedError } from "better-result";
-import { parseCloudSessionId } from "../infra/claude/cloud.ts";
+import { claudeCliFile, parseCloudSessionId } from "../infra/claude/cloud.ts";
+import {
+  type CloudStarted,
+  startCloudSession,
+} from "../infra/claude/cloud-new.boundary.ts";
 import type { CallOutcome } from "../infra/codex/call-gateway.ts";
 import { dryRun, release, status, watchForever } from "../prwatch/commands.ts";
 import { createGitHub } from "../prwatch/github.ts";
@@ -23,7 +27,7 @@ import {
   detectEnvironment,
   refuseInCloud,
 } from "./environment.ts";
-import { asText, fail, jsonEqual, truthy } from "./format.ts";
+import { asText, fail, isBlank, jsonEqual, truthy } from "./format.ts";
 import {
   RECOVERIES,
   type Recovery,
@@ -42,6 +46,7 @@ import {
   launchRequest,
   NAME,
   readJson,
+  readText,
   reviewFields,
   reviewRequest,
   sessionValue,
@@ -53,6 +58,7 @@ import {
   launchOfThread,
   launchSession,
   listState,
+  projectsIn,
   reviewProject,
   reviewSession,
 } from "./session.ts";
@@ -68,6 +74,12 @@ export type TaskDeps = {
   cwd?: string;
   // Only the watch writes as it runs, since it never returns.
   print: (line: string) => void;
+  // Starts a Cloud session from a description in a folder, as claude --cloud does.
+  startCloud?: (
+    description: string,
+    cwd: string,
+    env: Env,
+  ) => Promise<Result<CloudStarted, { message: string }>>;
 };
 
 export const TASK_DEPS = {
@@ -76,6 +88,8 @@ export const TASK_DEPS = {
   print: (line) => {
     process.stdout.write(line);
   },
+  startCloud: (description, cwd, env) =>
+    startCloudSession(claudeCliFile(env), description, { cwd, env }),
 } satisfies Omit<TaskDeps, "env">;
 
 type LaunchArgs = {
@@ -109,7 +123,8 @@ type WatchArgs = {
 };
 
 type CloudArgs = {
-  link: string;
+  link: string | undefined;
+  promptFile: string | undefined;
   project: string;
   title: string | undefined;
   model: string | undefined;
@@ -460,17 +475,33 @@ const linkOnly = (deps: TaskDeps, value: string) =>
     });
   });
 
-// Opens a chat that shows a Cloud session: a new Claude chat whose first message, /cloud, links it as if the user had typed it.
+// Opens a chat that shows a Cloud session: a new Claude chat whose first message, /cloud, links it as if the user had typed it; --prompt-file first starts the session in the project's folder.
 const cloud = (args: CloudArgs, deps: TaskDeps) =>
   Result.gen(async function* () {
     yield* refuseInCloud(deps.env, "cloud");
-    const sessionId = parseCloudSessionId(args.link);
+    yield* singleLine(args.project, "--project");
+    const caller = yield* callerId(deps.env);
+    let sessionId = parseCloudSessionId(args.link ?? "");
+    let title = args.title || null;
+    if (args.promptFile !== undefined) {
+      const description = yield* Result.await(readText(args.promptFile));
+      if (isBlank(description)) return fail("the prompt file is empty");
+      const folder = yield* Result.await(
+        projectFolder(deps.env, caller, args.project),
+      );
+      const start = deps.startCloud ?? TASK_DEPS.startCloud;
+      const started = await start(description, folder, deps.env);
+      if (started.isErr())
+        return fail(
+          `claude --cloud did not start a session: ${started.error.message}`,
+        );
+      sessionId = started.value.sessionId;
+      title ??= started.value.title;
+    }
     if (sessionId === null)
       return fail(
         "--link must be a Cloud session id or its claude.ai/code URL",
       );
-    yield* singleLine(args.project, "--project");
-    const caller = yield* callerId(deps.env);
     const answer = await callApp(deps.env, caller, "create_thread", {
       prompt: `/cloud ${sessionId}`,
       target: {
@@ -478,19 +509,37 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
         projectId: args.project,
         environment: { type: "local" },
       },
-      title: `☁️ ${args.title || sessionId}`,
+      title: `☁️ ${title ?? sessionId}`,
       model: args.model || "claude-sonnet-5-5",
       thinking: args.thinking || "high",
     });
+    // A session already started keeps running, so its id is named even when the chat was not opened.
     if (answer.outcome !== "done" || !truthy(answer.threadId))
       return fail(
-        `create_thread ${asText(answer.outcome)}: ${asText(answer.error ?? answer)}`,
+        `create_thread ${asText(answer.outcome)} for Cloud session ${sessionId}: ${asText(answer.error ?? answer)}`,
       );
     return Result.ok<Fields>({
       threadId: answer.threadId,
       cloudSessionId: sessionId,
+      url: `https://claude.ai/code/${sessionId}`,
     });
   });
+
+// The folder of a project in the app.
+const projectFolder = async (env: Env, caller: string, projectId: string) => {
+  const answer = await callApp(env, caller, "list_projects", {});
+  if (answer.outcome !== "done")
+    return fail(`list_projects failed: ${JSON.stringify(answer)}`);
+  for (const project of projectsIn(answer.result)) {
+    if (
+      isObject(project) &&
+      project.projectId === projectId &&
+      typeof project.path === "string"
+    )
+      return Result.ok(project.path);
+  }
+  return fail(`no project ${projectId} in the app`);
+};
 
 const environment = async (deps: TaskDeps) =>
   (await detectEnvironment(deps.env)).map((found): Fields => ({ ...found }));
@@ -698,17 +747,23 @@ const COMMANDS = {
   }),
   cloud: subcommand({
     usage:
-      "cloud --link SESSION_OR_URL --project PROJECT_ID [--title TITLE] [--model MODEL] [--thinking THINKING]",
+      "cloud (--link SESSION_OR_URL | --prompt-file FILE) --project PROJECT_ID [--title TITLE] [--model MODEL] [--thinking THINKING]",
     options: {
       link: { type: "string" },
+      "prompt-file": { type: "string" },
       project: { type: "string" },
       title: { type: "string" },
       ...MODEL_OPTIONS,
     },
     args: (values) =>
       Result.gen(function* () {
+        const link = text(values, "link");
+        const promptFile = text(values, "prompt-file");
+        if ((link === undefined) === (promptFile === undefined))
+          return invalid("exactly one of --link and --prompt-file is required");
         return Result.ok<CloudArgs>({
-          link: yield* required(values, "link"),
+          link,
+          promptFile,
           project: yield* required(values, "project"),
           title: text(values, "title"),
           model: text(values, "model"),
