@@ -760,12 +760,14 @@ export const createCloudRuntime = <Tag extends string>(
     }
   };
 
-  // Whether the session was in the middle of a recent turn, or skipped when the thread is busy or no longer linked.
+  // Whether the session was in the middle of a recent turn, or skipped when the thread is busy or no longer linked; a halted thread counts as idle.
   const copyIdle = async (
     threadId: string,
   ): Promise<"working" | "idle" | "skipped"> => {
     const { busy, halted } = stateOf(threadId);
-    if (busy || halted) return "skipped";
+    // A halted thread is never copied again, so it waits like an idle one rather than waking the copies every POLL_MS.
+    if (halted) return "idle";
+    if (busy) return "skipped";
     const cloud = threads.cloudOf(threadId);
     if (cloud === null) return "skipped";
     const reading = threads.sessionIdOf(threadId);

@@ -1105,6 +1105,19 @@ describe("createCloudRuntime turns", () => {
     expect(env.events).toContainEqual({ event: "claude_cloud", step });
   });
 
+  test("waits the idle wait, without copying, once a thread is halted", async () => {
+    const env = linked({ copies: [[prompt("p1", "hi")]], shown: null });
+    env.copyStop = "ran_model";
+    env.runtime.listen(() => true);
+    await env.runtime.run(env.turn("hi").running);
+
+    await env.tick();
+    await env.tick();
+
+    expect(env.copyCalls).toBe(1);
+    expect(env.planned).toEqual([15_000, 300_000, 300_000]);
+  });
+
   test("waits for a message sent while the finished reply's copy was saved", async () => {
     const env = linked({
       copies: [
