@@ -1,10 +1,11 @@
+import { createHash } from "node:crypto";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { parseJson } from "../../runtime/json.boundary.ts";
 import { isObject } from "../../runtime/object.ts";
 
 // A review harnexus-task review finished in a Cloud session, as its output names it.
 export type CloudReview = {
-  // The tool result that holds it, so each review is taken once.
+  // Names the review by its reviewer, head and answer, so a review read twice, such as from the file it was written to, is taken once.
   key: string;
   reviewer: string;
   verdict: string | null;
@@ -23,9 +24,8 @@ export const reviewsIn = (
     if (index < from) continue;
     for (const block of contentOf(record)) {
       if (block.type !== "tool_result" || block.is_error === true) continue;
-      if (typeof block.tool_use_id !== "string") continue;
       for (const text of textsOf(block.content)) {
-        const review = reviewOf(text, block.tool_use_id);
+        const review = reviewOf(text);
         if (review !== null && !reviews.has(review.key))
           reviews.set(review.key, review);
       }
@@ -50,7 +50,7 @@ const textsOf = (content: unknown) =>
       : [];
 
 // The output is harnexus-task's JSON, alone or with other lines around it, and with line numbers when a file was read.
-const reviewOf = (text: string, key: string): CloudReview | null => {
+const reviewOf = (text: string): CloudReview | null => {
   if (!text.includes('"reviewer"')) return null;
   const plain = text.replace(LINE_NUMBER, "");
   const start = plain.indexOf("{");
@@ -66,12 +66,16 @@ const reviewOf = (text: string, key: string): CloudReview | null => {
     output.answer.trim() === ""
   )
     return null;
+  const head = textOrNull(output.head);
   return {
-    key,
+    key: createHash("sha256")
+      .update(`${output.reviewer}\0${head ?? ""}\0${output.answer}`)
+      .digest("hex")
+      .slice(0, 32),
     reviewer: output.reviewer,
     verdict: textOrNull(output.verdict),
     taskId: textOrNull(output.taskId),
-    head: textOrNull(output.head),
+    head,
     answer: output.answer,
   };
 };

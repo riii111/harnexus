@@ -115,6 +115,23 @@ describe("createCloudReviews", () => {
     ]);
   });
 
+  test("does not send a review it already sent again", async () => {
+    const { reviews, calls } = await setup([
+      projects,
+      { outcome: "done", threadId: "review-chat" },
+    ]);
+
+    await reviews.openReview("parent", "/work/harnexus", review("t1"));
+    const again = await reviews.openReview(
+      "parent",
+      "/work/harnexus",
+      review("t1"),
+    );
+
+    expect(again).toBe("done");
+    expect(calls).toHaveLength(2);
+  });
+
   test("names no review it never kept", async () => {
     const { reviews } = await setup([]);
 

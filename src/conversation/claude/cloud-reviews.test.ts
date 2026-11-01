@@ -38,7 +38,7 @@ describe("reviewsIn", () => {
 
     expect(reviewsIn(records)).toEqual([
       {
-        key: "t1",
+        key: expect.stringMatching(/^[0-9a-f]{32}$/),
         reviewer: "0199-reviewer",
         verdict: "LGTM",
         taskId: "harnexus-1",
@@ -90,6 +90,21 @@ describe("reviewsIn", () => {
       ...ran("t2", output({ head: "fff0000" })),
     ];
 
-    expect(reviewsIn(records, 2).map((review) => review.key)).toEqual(["t2"]);
+    expect(reviewsIn(records, 2).map((review) => review.head)).toEqual([
+      "fff0000",
+    ]);
+  });
+
+  test("takes a review read twice once, and tells reviews of different heads apart", () => {
+    const records = [
+      ...ran("t1", output({})),
+      ...ran("t2", output({})),
+      ...ran("t3", output({ head: "fff0000" })),
+    ];
+
+    expect(reviewsIn(records).map((review) => review.head)).toEqual([
+      "abc1234def",
+      "fff0000",
+    ]);
   });
 });

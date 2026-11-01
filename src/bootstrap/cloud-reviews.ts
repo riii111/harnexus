@@ -56,40 +56,52 @@ export const createCloudReviews = (dir: string, call: Call) => {
     review: CloudReview,
   ) =>
     queue.run("reviews", async () => {
-      if (!(await write(join(dir, `${review.key}.json`), review)))
-        return "not_kept";
-      const prompt = `/cloud-review ${review.key}`;
-      const chats = (await readJson(chatsPath)) ?? {};
-      const chat = chats[review.reviewer];
-      if (typeof chat === "string") {
-        const sent = await answerOf(
-          call,
-          parentThreadId,
-          "send_message_to_thread",
-          { threadId: chat, prompt },
-        );
-        // A chat the app no longer takes, such as one deleted, is replaced by a new one.
-        if (!GONE.has(outcomeOf(sent))) return outcomeOf(sent);
-      }
-      const listed = await answerOf(call, parentThreadId, "list_projects", {});
-      if (listed.outcome !== "done") return "no_project";
-      const projectId = await projectOf(listed.result, parentFolder);
-      if (projectId === null) return "no_project";
-      const created = await answerOf(call, parentThreadId, "create_thread", {
-        prompt,
-        target: { type: "project", projectId, environment: { type: "local" } },
-        title: `Review｜${review.taskId ?? review.reviewer}`,
-        model: REVIEW_CHAT_MODEL,
-      });
-      if (created.outcome === "done" && typeof created.threadId === "string") {
-        const latest = (await readJson(chatsPath)) ?? {};
-        await write(chatsPath, {
-          ...latest,
-          [review.reviewer]: created.threadId,
-        });
-      }
-      return outcomeOf(created);
+      const path = join(dir, `${review.key}.json`);
+      // A review already sent, such as one a restarted bridge reads again, is not sent twice.
+      if ((await readJson(path))?.sent === true) return "done";
+      if (!(await write(path, review))) return "not_kept";
+      const sent = await deliver(parentThreadId, parentFolder, review);
+      if (sent === "done") await write(path, { ...review, sent: true });
+      return sent;
     });
+
+  const deliver = async (
+    parentThreadId: string,
+    parentFolder: string,
+    review: CloudReview,
+  ) => {
+    const prompt = `/cloud-review ${review.key}`;
+    const chats = (await readJson(chatsPath)) ?? {};
+    const chat = chats[review.reviewer];
+    if (typeof chat === "string") {
+      const sent = await answerOf(
+        call,
+        parentThreadId,
+        "send_message_to_thread",
+        { threadId: chat, prompt },
+      );
+      // A chat the app no longer takes, such as one deleted, is replaced by a new one.
+      if (!GONE.has(outcomeOf(sent))) return outcomeOf(sent);
+    }
+    const listed = await answerOf(call, parentThreadId, "list_projects", {});
+    if (listed.outcome !== "done") return "no_project";
+    const projectId = await projectOf(listed.result, parentFolder);
+    if (projectId === null) return "no_project";
+    const created = await answerOf(call, parentThreadId, "create_thread", {
+      prompt,
+      target: { type: "project", projectId, environment: { type: "local" } },
+      title: `Review｜${review.taskId ?? review.reviewer}`,
+      model: REVIEW_CHAT_MODEL,
+    });
+    if (created.outcome === "done" && typeof created.threadId === "string") {
+      const latest = (await readJson(chatsPath)) ?? {};
+      await write(chatsPath, {
+        ...latest,
+        [review.reviewer]: created.threadId,
+      });
+    }
+    return outcomeOf(created);
+  };
 
   return { reviewOf, openReview };
 };

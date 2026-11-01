@@ -66,7 +66,9 @@ describe("createCloudRuntime reviews", () => {
     await env.runtime.run(turn.running);
     await env.tick();
 
-    expect(env.reviews).toEqual([{ parent: "thread-1", key: "t1" }]);
+    expect(env.reviews).toEqual([
+      { parent: "thread-1", key: expect.stringMatching(/^[0-9a-f]{32}$/) },
+    ]);
   });
 
   test.each([
