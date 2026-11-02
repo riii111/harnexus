@@ -62,24 +62,28 @@ describe("startClaudeSession options", () => {
       fork: { resume: "session-1", forkSession: true },
       expected: { snapshot: false },
     },
-  ])("appends a side chat's instructions to the preset system prompt for $name", async ({
-    fork,
-    expected,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
+  ])(
+    "appends a side chat's instructions to the preset system prompt for $name",
+    async ({ fork, expected }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
 
-    await startClaudeSession(
-      { ...SETTINGS, ...fork, instructions: "You are in a side conversation." },
-      claude.runtime,
-    );
+      await startClaudeSession(
+        {
+          ...SETTINGS,
+          ...fork,
+          instructions: "You are in a side conversation.",
+        },
+        claude.runtime,
+      );
 
-    expect(claude.options().systemPrompt).toEqual({
-      type: "preset",
-      preset: "claude_code",
-      append: "You are in a side conversation.",
-      ...expected,
-    });
-  });
+      expect(claude.options().systemPrompt).toEqual({
+        type: "preset",
+        preset: "claude_code",
+        append: "You are in a side conversation.",
+        ...expected,
+      });
+    },
+  );
 
   test("resumes the given session with the given MCP servers and their allowed tools", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -168,21 +172,21 @@ describe("startClaudeSession options", () => {
       exposeThreadId: false,
       expected: "th-bridge",
     },
-  ])("CODEX_THREAD_ID for Claude's tools $name", async ({
-    exposeThreadId,
-    expected,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION, {
-      env: { PATH: "/usr/bin", CODEX_THREAD_ID: "th-bridge" },
-    });
+  ])(
+    "CODEX_THREAD_ID for Claude's tools $name",
+    async ({ exposeThreadId, expected }) => {
+      const claude = fakeClaude(SUBSCRIPTION, {
+        env: { PATH: "/usr/bin", CODEX_THREAD_ID: "th-bridge" },
+      });
 
-    await startClaudeSession({ ...SETTINGS, exposeThreadId }, claude.runtime);
+      await startClaudeSession({ ...SETTINGS, exposeThreadId }, claude.runtime);
 
-    expect(claude.options().env).toEqual({
-      PATH: "/usr/bin",
-      CODEX_THREAD_ID: expected,
-    });
-  });
+      expect(claude.options().env).toEqual({
+        PATH: "/usr/bin",
+        CODEX_THREAD_ID: expected,
+      });
+    },
+  );
 });
 
 describe("startClaudeSession authentication", () => {
@@ -230,20 +234,20 @@ describe("startClaudeSession authentication", () => {
       settingsEnv: { ANTHROPIC_BASE_URL: "https://gateway.example" },
       expected: "ANTHROPIC_BASE_URL",
     },
-  ])("stops before starting Claude when the repository's settings set $name", async ({
-    settingsEnv,
-    expected,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION, { settingsEnv });
+  ])(
+    "stops before starting Claude when the repository's settings set $name",
+    async ({ settingsEnv, expected }) => {
+      const claude = fakeClaude(SUBSCRIPTION, { settingsEnv });
 
-    const started = await startClaudeSession(SETTINGS, claude.runtime);
+      const started = await startClaudeSession(SETTINGS, claude.runtime);
 
-    expect(started.isErr() && started.error).toMatchObject({
-      _tag: "ClaudeSettingsOverrideAuth",
-      names: [expected],
-    });
-    expect(claude.started()).toBe(false);
-  });
+      expect(started.isErr() && started.error).toMatchObject({
+        _tag: "ClaudeSettingsOverrideAuth",
+        names: [expected],
+      });
+      expect(claude.started()).toBe(false);
+    },
+  );
 
   test("starts when settings set only unrelated custom headers", async () => {
     const claude = fakeClaude(SUBSCRIPTION, {
@@ -433,20 +437,19 @@ describe("startClaudeSession started session", () => {
       reached: (claude) => claude.efforts(),
       none: [],
     },
-  ])("refuses $name after close and never calls Claude", async ({
-    act,
-    reached,
-    none,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const session = await startedSession(claude);
+  ])(
+    "refuses $name after close and never calls Claude",
+    async ({ act, reached, none }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const session = await startedSession(claude);
 
-    session.close();
-    const refused = await act(session);
+      session.close();
+      const refused = await act(session);
 
-    expect(refused.isErr() && refused.error._tag).toBe("ClaudeSessionClosed");
-    expect(await reached(claude)).toEqual(none);
-  });
+      expect(refused.isErr() && refused.error._tag).toBe("ClaudeSessionClosed");
+      expect(await reached(claude)).toEqual(none);
+    },
+  );
 });
 
 describe("loadEffortSettings", () => {
@@ -785,21 +788,21 @@ describe("readClaudeSession", () => {
       prepare: unreadableRecord,
       expected: "err:ClaudeRecordUnreadable",
     },
-  ])("reports $name through the SDK's reader as $expected", async ({
-    prepare,
-    expected,
-  }) => {
-    const record = writeRecord(configDir, SESSION_ID, RECORD_LINE);
-    prepare(record);
+  ])(
+    "reports $name through the SDK's reader as $expected",
+    async ({ prepare, expected }) => {
+      const record = writeRecord(configDir, SESSION_ID, RECORD_LINE);
+      prepare(record);
 
-    const read = await withConfigDir(configDir, () =>
-      readClaudeSession(SESSION_ID, { configDir }),
-    );
+      const read = await withConfigDir(configDir, () =>
+        readClaudeSession(SESSION_ID, { configDir }),
+      );
 
-    expect(
-      read.isOk() ? `ok:${read.value.length}` : `err:${read.error._tag}`,
-    ).toBe(expected);
-  });
+      expect(
+        read.isOk() ? `ok:${read.value.length}` : `err:${read.error._tag}`,
+      ).toBe(expected);
+    },
+  );
 
   test("reports a missing record as an empty conversation", async () => {
     mkdirSync(join(configDir, "projects", "-work-tree"), { recursive: true });

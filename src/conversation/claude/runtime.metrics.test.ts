@@ -63,24 +63,24 @@ describe("effort", () => {
       },
       expected: "xhigh",
     },
-  ])("sets the effort $name names and logs the level", async ({
-    request,
-    expected,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, events } = await harness([claude]);
+  ])(
+    "sets the effort $name names and logs the level",
+    async ({ request, expected }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns, events } = await harness([claude]);
 
-    turns.startTurn(request(), undefined);
-    await until(() => claude.started());
+      turns.startTurn(request(), undefined);
+      await until(() => claude.started());
 
-    expect(await firstPrompt(claude.prompt())).toBe("hello");
-    expect(claude.efforts()).toEqual([expected]);
-    expect(events).toContainEqual({
-      event: "claude_turn",
-      step: "effort_applied",
-      effort: expected,
-    });
-  });
+      expect(await firstPrompt(claude.prompt())).toBe("hello");
+      expect(claude.efforts()).toEqual([expected]);
+      expect(events).toContainEqual({
+        event: "claude_turn",
+        step: "effort_applied",
+        effort: expected,
+      });
+    },
+  );
 
   test("runs another thread's reply, which names no effort, at the thread's effort", async () => {
     const claude = fakeClaude(SUBSCRIPTION);

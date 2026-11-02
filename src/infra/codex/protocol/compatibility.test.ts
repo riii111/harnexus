@@ -10,13 +10,14 @@ describe("responseCompatibility", () => {
       name: "a changed user-agent type",
       response: { result: { userAgent: 7 } },
     },
-  ])("detects an incompatible initialize response with $name", ({
-    response,
-  }) => {
-    expect(responseCompatibility("initialize", response)).toBe(
-      "InitializeResponseChanged",
-    );
-  });
+  ])(
+    "detects an incompatible initialize response with $name",
+    ({ response }) => {
+      expect(responseCompatibility("initialize", response)).toBe(
+        "InitializeResponseChanged",
+      );
+    },
+  );
   test.each([
     { name: "a missing model array", result: {} },
     { name: "a changed model array type", result: { data: {} } },
@@ -58,16 +59,14 @@ describe("responseCompatibility", () => {
   ])("accepts $name without validating unused fields", ({ kind, result }) => {
     expect(responseCompatibility(kind, { result })).toBeNull();
   });
-  test.each([
-    { kind: "initialize" as const },
-    { kind: "modelList" as const },
-  ])("does not classify an RPC error for $kind as a protocol change", ({
-    kind,
-  }) => {
-    expect(
-      responseCompatibility(kind, {
-        error: { code: -32603, message: "not ready" },
-      }),
-    ).toBeNull();
-  });
+  test.each([{ kind: "initialize" as const }, { kind: "modelList" as const }])(
+    "does not classify an RPC error for $kind as a protocol change",
+    ({ kind }) => {
+      expect(
+        responseCompatibility(kind, {
+          error: { code: -32603, message: "not ready" },
+        }),
+      ).toBeNull();
+    },
+  );
 });

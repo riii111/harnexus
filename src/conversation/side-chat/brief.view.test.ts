@@ -39,23 +39,22 @@ describe("sideChatBrief", () => {
       length: 0,
       omitted: "question 100 ",
     },
-  ])("keeps the first and newest messages of $name within the budget, labels included, and names the turns left out", ({
-    count,
-    length,
-    omitted,
-  }) => {
-    const record = turns(count, length);
+  ])(
+    "keeps the first and newest messages of $name within the budget, labels included, and names the turns left out",
+    ({ count, length, omitted }) => {
+      const record = turns(count, length);
 
-    const body = textOf(sideChatBrief(historyOf(record), "claude-fixture"));
+      const body = textOf(sideChatBrief(historyOf(record), "claude-fixture"));
 
-    expect(body).toContain("[user, turn 1]\nquestion 1 ");
-    expect(body).toContain(`[assistant, turn ${count}]\nanswer ${count} `);
-    expect(body).not.toContain(omitted);
-    expect(body).toMatch(
-      /The messages after the first one through turn \d+ are left out, so instructions or constraints given there may be missing; ask the user/,
-    );
-    expect(body.length).toBeLessThanOrEqual(32_000);
-  });
+      expect(body).toContain("[user, turn 1]\nquestion 1 ");
+      expect(body).toContain(`[assistant, turn ${count}]\nanswer ${count} `);
+      expect(body).not.toContain(omitted);
+      expect(body).toMatch(
+        /The messages after the first one through turn \d+ are left out, so instructions or constraints given there may be missing; ask the user/,
+      );
+      expect(body.length).toBeLessThanOrEqual(32_000);
+    },
+  );
 
   test("cuts a huge first message so the newest exchange still fits", () => {
     const record = [

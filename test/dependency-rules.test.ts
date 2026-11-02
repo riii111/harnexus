@@ -199,23 +199,22 @@ export const r = x;`,
         "exception link/codex-link.ts -> lib/object.ts is no longer needed",
       ],
     },
-  ])("reports only what an exception leaves uncovered for $name", async ({
-    target,
-    exception,
-    expected,
-  }) => {
-    const references = await collectReferences(
-      await writeProject({
-        "link/codex-link.ts": `import { m } from "${relative("link", target)}";
+  ])(
+    "reports only what an exception leaves uncovered for $name",
+    async ({ target, exception, expected }) => {
+      const references = await collectReferences(
+        await writeProject({
+          "link/codex-link.ts": `import { m } from "${relative("link", target)}";
 export const l = m;`,
-        [target]: "export const m = 1;",
-      }),
-    );
+          [target]: "export const m = 1;",
+        }),
+      );
 
-    const problems = checkDependencies(references, [exception]);
+      const problems = checkDependencies(references, [exception]);
 
-    expect(problems).toEqual(expected);
-  });
+      expect(problems).toEqual(expected);
+    },
+  );
 });
 
 type Area =

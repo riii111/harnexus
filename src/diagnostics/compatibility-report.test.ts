@@ -9,16 +9,16 @@ describe("compatibilityNotification", () => {
   test.each([
     { reason: "InitializeResponseChanged" as const, expected: "初期化応答" },
     { reason: "ModelListResponseChanged" as const, expected: "モデル一覧応答" },
-  ])("explains $reason and the next action without claiming a direct restart", ({
-    reason,
-    expected,
-  }) => {
-    const script = compatibilityNotification(reason);
-    expect(script).toContain(expected);
-    expect(script).toContain("Claude を無効にしました");
-    expect(script).toContain("bun run doctor");
-    expect(script).not.toContain("起動しました");
-  });
+  ])(
+    "explains $reason and the next action without claiming a direct restart",
+    ({ reason, expected }) => {
+      const script = compatibilityNotification(reason);
+      expect(script).toContain(expected);
+      expect(script).toContain("Claude を無効にしました");
+      expect(script).toContain("bun run doctor");
+      expect(script).not.toContain("起動しました");
+    },
+  );
 });
 
 describe("compatibilityRecord", () => {

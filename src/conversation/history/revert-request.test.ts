@@ -156,19 +156,19 @@ describe("Claude conversation rewind", () => {
       busy: false,
     },
     { name: "a running turn", beforeTurnId: "harnexus-history-u2", busy: true },
-  ])("rejects $name before changing the conversation", async ({
-    beforeTurnId,
-    busy,
-  }) => {
-    const { revert, store, closed, sent } = await setup({ busy });
-    await revert("thread/revert", {
-      id: 1,
-      params: { threadId: THREAD, beforeTurnId },
-    });
-    expect(store.get(THREAD)?.rewind).toBeUndefined();
-    expect(closed).toEqual([]);
-    expect(sent[0]).toMatchObject({ id: 1, error: { code: -32600 } });
-  });
+  ])(
+    "rejects $name before changing the conversation",
+    async ({ beforeTurnId, busy }) => {
+      const { revert, store, closed, sent } = await setup({ busy });
+      await revert("thread/revert", {
+        id: 1,
+        params: { threadId: THREAD, beforeTurnId },
+      });
+      expect(store.get(THREAD)?.rewind).toBeUndefined();
+      expect(closed).toEqual([]);
+      expect(sent[0]).toMatchObject({ id: 1, error: { code: -32600 } });
+    },
+  );
 
   test("closes the old session when the rewind was renamed but its sync failed", async () => {
     const { revert, store, closed, sent } = await setup({ failSync: true });

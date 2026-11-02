@@ -92,16 +92,18 @@ describe("createHistoryRequests.answer", () => {
       records: { "th-claude": conversation() },
       expected: -32602,
     },
-  ])("answers a history page with error $expected for $name", async ({
-    records,
-    expected,
-  }) => {
-    const { ask } = setup({ records });
+  ])(
+    "answers a history page with error $expected for $name",
+    async ({ records, expected }) => {
+      const { ask } = setup({ records });
 
-    const page = await ask("thread/turns/list", 7, { cursor: "server-cursor" });
+      const page = await ask("thread/turns/list", 7, {
+        cursor: "server-cursor",
+      });
 
-    expect(page).toMatchObject({ id: 7, error: { code: expected } });
-  });
+      expect(page).toMatchObject({ id: 7, error: { code: expected } });
+    },
+  );
 
   test("reads the record once for history pages asked for together and again for a later page", async () => {
     const records = { "th-claude": conversation() };

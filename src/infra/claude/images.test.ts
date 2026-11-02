@@ -88,38 +88,39 @@ describe("readImage", () => {
     { name: "lossy WebP", bytes: webpLossyBytes(1234, 567) },
     { name: "lossless WebP", bytes: webpLosslessBytes(1234, 567) },
     { name: "extended WebP", bytes: webpExtendedBytes(1234, 567) },
-  ])("re-encodes an oversized $name at its own long edge rather than enlarging it", async ({
-    bytes,
-  }) => {
-    const path = await writeImage("big", padded(bytes));
-    const resize = recordResize(pngBytes(1234, 567));
+  ])(
+    "re-encodes an oversized $name at its own long edge rather than enlarging it",
+    async ({ bytes }) => {
+      const path = await writeImage("big", padded(bytes));
+      const resize = recordResize(pngBytes(1234, 567));
 
-    const read = await readImage({ path }, resize.run);
+      const read = await readImage({ path }, resize.run);
 
-    expect(read.isOk()).toBe(true);
-    expect(resize.calls[0]?.longEdge).toBe(1234);
-  });
+      expect(read.isOk()).toBe(true);
+      expect(resize.calls[0]?.longEdge).toBe(1234);
+    },
+  );
 
   test.each([
     { name: "a PNG", bytes: pngBytes(4000, 3000), format: "png" },
     { name: "a JPEG", bytes: jpegBytes(3000, 4000), format: "jpeg" },
-  ])("shrinks $name longer than 2000 pixels to 2000 in its own format", async ({
-    bytes,
-    format,
-  }) => {
-    const path = await writeImage("wide", bytes);
-    const smaller = pngBytes(2000, 1500);
-    const resize = recordResize(smaller);
+  ])(
+    "shrinks $name longer than 2000 pixels to 2000 in its own format",
+    async ({ bytes, format }) => {
+      const path = await writeImage("wide", bytes);
+      const smaller = pngBytes(2000, 1500);
+      const resize = recordResize(smaller);
 
-    const read = await readImage({ path }, resize.run);
+      const read = await readImage({ path }, resize.run);
 
-    expect(resize.calls).toEqual([{ longEdge: 2000, format }]);
-    expect(read.isOk() && read.value.source).toEqual({
-      type: "base64",
-      media_type: `image/${format}`,
-      data: smaller.toString("base64"),
-    });
-  });
+      expect(resize.calls).toEqual([{ longEdge: 2000, format }]);
+      expect(read.isOk() && read.value.source).toEqual({
+        type: "base64",
+        media_type: `image/${format}`,
+        data: smaller.toString("base64"),
+      });
+    },
+  );
 
   test("falls back to JPEG when the shrunk PNG is still too large", async () => {
     const path = await writeImage("noisy.png", pngBytes(4000, 3000));

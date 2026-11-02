@@ -93,11 +93,10 @@ export const createSideChats = ({
     const sessionId = sessionIdOf(sourceId);
     if (sessionId === null) return Result.ok<ForkPoint>(null);
     const last = await lastRecordOf(sessionId);
-    return last.map(
-      (at): ForkPoint =>
-        at === null
-          ? null
-          : { sessionId, at, model: source.model, cwd: source.cwd },
+    return last.map((at): ForkPoint =>
+      at === null
+        ? null
+        : { sessionId, at, model: source.model, cwd: source.cwd },
     );
   };
 

@@ -410,42 +410,42 @@ describe("createGitHub", () => {
       },
     },
     { name: "no run of that name", runs: [], expected: null },
-  ])("reads a check run bot's progress from $name", async ({
-    runs,
-    expected,
-  }) => {
-    const suites = {
-      nodes: [
-        { checkRuns: { nodes: runs.slice(0, 1) } },
-        { checkRuns: { nodes: [] } },
-        { checkRuns: { nodes: runs.slice(1) } },
-      ],
-    };
-    const { github, posts } = fake({
-      data: {
-        p0: {
-          pullRequest: {
-            ...pull,
-            commits: { nodes: [{ commit: { ...commit, b0: suites } }] },
+  ])(
+    "reads a check run bot's progress from $name",
+    async ({ runs, expected }) => {
+      const suites = {
+        nodes: [
+          { checkRuns: { nodes: runs.slice(0, 1) } },
+          { checkRuns: { nodes: [] } },
+          { checkRuns: { nodes: runs.slice(1) } },
+        ],
+      };
+      const { github, posts } = fake({
+        data: {
+          p0: {
+            pullRequest: {
+              ...pull,
+              commits: { nodes: [{ commit: { ...commit, b0: suites } }] },
+            },
           },
         },
-      },
-    });
+      });
 
-    const summaries = (
-      await github.summaries(
-        "owner",
-        [{ repo: "org/pay", number: 7 }],
-        [PRESETS.claude],
-      )
-    ).unwrap();
+      const summaries = (
+        await github.summaries(
+          "owner",
+          [{ repo: "org/pay", number: 7 }],
+          [PRESETS.claude],
+        )
+      ).unwrap();
 
-    expect(posts[0]?.query).toContain(
-      'b0: checkSuites(first: 50) { nodes { checkRuns(last: 1, filterBy: { checkName: "Claude AI Review" }) { nodes { databaseId',
-    );
-    expect(posts[0]?.query).not.toContain("status {");
-    expect(summaries[0]?.bots).toEqual({ claude: expected });
-  });
+      expect(posts[0]?.query).toContain(
+        'b0: checkSuites(first: 50) { nodes { checkRuns(last: 1, filterBy: { checkName: "Claude AI Review" }) { nodes { databaseId',
+      );
+      expect(posts[0]?.query).not.toContain("status {");
+      expect(summaries[0]?.bots).toEqual({ claude: expected });
+    },
+  );
 
   test("leaves a check run bot's own failed run out of the failed required checks", async () => {
     const reviewRun = {

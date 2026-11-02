@@ -308,20 +308,19 @@ describe("createObserver", () => {
       line: `{"id":1,"result":"${SECRET}${SECRET}"}\n`,
       expected: "too_large",
     },
-  ])("counts $name as unobserved without logging its content", ({
-    direction,
-    line,
-    expected,
-  }) => {
-    const { log, records } = observe([{ direction, line }], {
-      maxLineBytes: 48,
-    });
+  ])(
+    "counts $name as unobserved without logging its content",
+    ({ direction, line, expected }) => {
+      const { log, records } = observe([{ direction, line }], {
+        maxLineBytes: 48,
+      });
 
-    expect(records).toEqual([
-      { event: "rpc_unobserved", direction, reason: expected },
-    ]);
-    expect(log).not.toContain(SECRET);
-  });
+      expect(records).toEqual([
+        { event: "rpc_unobserved", direction, reason: expected },
+      ]);
+      expect(log).not.toContain(SECRET);
+    },
+  );
 
   test("records the protocol fields a thread fork names and what the server opened, without ids or text", () => {
     const { log, records } = observe([
@@ -393,36 +392,36 @@ describe("createObserver", () => {
         threadSource: "<redacted>",
       },
     },
-  ])("reads a thread open with $name as naming nothing", ({
-    message,
-    expected,
-  }) => {
-    const { log, records } = observe([toServer(message)]);
+  ])(
+    "reads a thread open with $name as naming nothing",
+    ({ message, expected }) => {
+      const { log, records } = observe([toServer(message)]);
 
-    expect(records[0].threadOpen).toEqual(expected);
-    expect(log).not.toContain(SECRET);
-    expect(log).not.toContain(PROMPT);
-  });
+      expect(records[0].threadOpen).toEqual(expected);
+      expect(log).not.toContain(SECRET);
+      expect(log).not.toContain(PROMPT);
+    },
+  );
 
   test.each([
     { source: "guardian_review", expected: "guardian_review" },
     { source: "sk-ant-api03-Key0", expected: "<redacted>" },
     { source: "/private/path", expected: "<redacted>" },
     { source: "Feature", expected: "<redacted>" },
-  ])("records the thread source $source as $expected", ({
-    source,
-    expected,
-  }) => {
-    const { records } = observe([
-      toServer({
-        id: 1,
-        method: "thread/fork",
-        params: { threadSource: source },
-      }),
-    ]);
+  ])(
+    "records the thread source $source as $expected",
+    ({ source, expected }) => {
+      const { records } = observe([
+        toServer({
+          id: 1,
+          method: "thread/fork",
+          params: { threadSource: source },
+        }),
+      ]);
 
-    expect(records[0].threadOpen.threadSource).toBe(expected);
-  });
+      expect(records[0].threadOpen.threadSource).toBe(expected);
+    },
+  );
 
   test("does not read a thread open sent the other way", () => {
     const { records } = observe([

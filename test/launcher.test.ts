@@ -622,14 +622,14 @@ describe("refusals", () => {
       codexPath: () => join(dir, "none"),
       expected: "is not an executable file",
     },
-  ])("refuses a HARNEXUS_CODEX_PATH that is $name", async ({
-    codexPath,
-    expected,
-  }) => {
-    const { env } = setup({ HARNEXUS_CODEX_PATH: codexPath() });
+  ])(
+    "refuses a HARNEXUS_CODEX_PATH that is $name",
+    async ({ codexPath, expected }) => {
+      const { env } = setup({ HARNEXUS_CODEX_PATH: codexPath() });
 
-    await expectRefused(["exec"], env, expected);
-  });
+      await expectRefused(["exec"], env, expected);
+    },
+  );
 
   test("runs standard Codex when Bun is unavailable", async () => {
     const { env } = setup({ HARNEXUS_BUN_PATH: undefined });

@@ -35,19 +35,18 @@ describe("collectSetupFacts", () => {
       output: "codex-cli 0.163.0;rm -rf ~",
       expected: null,
     },
-  ])("reads the Codex CLI version from $name", async ({
-    name,
-    output,
-    expected,
-  }) => {
-    const codex = join(dir, name.replaceAll(" ", "-"));
-    await writeFile(codex, `#!/bin/sh\necho '${output}'\n`);
-    await chmod(codex, 0o755);
+  ])(
+    "reads the Codex CLI version from $name",
+    async ({ name, output, expected }) => {
+      const codex = join(dir, name.replaceAll(" ", "-"));
+      await writeFile(codex, `#!/bin/sh\necho '${output}'\n`);
+      await chmod(codex, 0o755);
 
-    const facts = await collectSetupFacts(dir, codex, LAUNCHD);
+      const facts = await collectSetupFacts(dir, codex, LAUNCHD);
 
-    expect(facts.codex).toEqual({ path: codex, version: expected });
-  });
+      expect(facts.codex).toEqual({ path: codex, version: expected });
+    },
+  );
 
   test("reads the pins and leaves a Codex CLI that cannot run unknown", async () => {
     const facts = await collectSetupFacts(dir, join(dir, "missing"), LAUNCHD);

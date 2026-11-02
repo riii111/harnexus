@@ -151,18 +151,19 @@ describe("Cloud refusals", () => {
     { name: "name", argv: ["name", "--pr", "1"] },
     { name: "watch", argv: ["watch", "--status"] },
     { name: "state --request", argv: ["state", "--request", "/x.json"] },
-  ])("$name names Cloud and the alternative instead of a socket hint", async ({
-    argv,
-  }) => {
-    const run = await runTask(argv, {
-      ...TASK_DEPS,
-      env: { CODEX_ENVIRONMENT_ID: "env_1" },
-    });
-    expect(run.code).toBe(1);
-    expect(run.stderr).toContain("unavailable in Cloud");
-    expect(run.stderr).toContain("check the PR with gh");
-    expect(run.stderr).not.toContain("call socket");
-  });
+  ])(
+    "$name names Cloud and the alternative instead of a socket hint",
+    async ({ argv }) => {
+      const run = await runTask(argv, {
+        ...TASK_DEPS,
+        env: { CODEX_ENVIRONMENT_ID: "env_1" },
+      });
+      expect(run.code).toBe(1);
+      expect(run.stderr).toContain("unavailable in Cloud");
+      expect(run.stderr).toContain("check the PR with gh");
+      expect(run.stderr).not.toContain("call socket");
+    },
+  );
 
   test("points a Claude Code cloud session to a new cloud session", async () => {
     const run = await runTask(["launch", "--request", "/x.json"], {

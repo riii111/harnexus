@@ -447,15 +447,13 @@ const USER_SETTINGS: SettingSource[] = ["user"];
 const MODELS_TIMEOUT_MS = 30_000;
 
 const processRuntime = async () =>
-  (await loadClaudeSdk()).map(
-    (sdk): ClaudeRuntime => ({
-      query: sdk.query,
-      resolveSettings: sdk.resolveSettings,
-      createSdkMcpServer: sdk.createSdkMcpServer,
-      // resolveSettings resolves settings directories such as CLAUDE_CONFIG_DIR from this process's environment, so Claude starts from the same one and differs only by the billing variables removed from it.
-      env: process.env,
-    }),
-  );
+  (await loadClaudeSdk()).map((sdk): ClaudeRuntime => ({
+    query: sdk.query,
+    resolveSettings: sdk.resolveSettings,
+    createSdkMcpServer: sdk.createSdkMcpServer,
+    // resolveSettings resolves settings directories such as CLAUDE_CONFIG_DIR from this process's environment, so Claude starts from the same one and differs only by the billing variables removed from it.
+    env: process.env,
+  }));
 
 const sessionClosed = () =>
   new ClaudeSessionClosed({ message: "the Claude session is closed" });
