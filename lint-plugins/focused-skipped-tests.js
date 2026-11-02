@@ -7,14 +7,21 @@ const rootName = (node) => {
   return root.type === "Identifier" ? root.name : undefined;
 };
 
+const propertyName = ({ computed, property }) => {
+  if (!computed && property.type === "Identifier") return property.name;
+  return computed &&
+    property.type === "Literal" &&
+    typeof property.value === "string"
+    ? property.value
+    : undefined;
+};
+
 const modifierRule = (modifier, aliases, message) => ({
   meta: { type: "problem", messages: { found: message }, schema: [] },
   create: (context) => ({
     MemberExpression: (node) => {
       if (
-        !node.computed &&
-        node.property.type === "Identifier" &&
-        node.property.name === modifier &&
+        propertyName(node) === modifier &&
         REGISTERS.has(rootName(node.object))
       ) {
         context.report({ node: node.property, messageId: "found" });

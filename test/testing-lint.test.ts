@@ -122,6 +122,16 @@ describe("testing lint rules", () => {
       source: lintCase(`test.skip("a", () => {});`),
       expected: [{ line: 1, rule: SKIPPED }],
     },
+    {
+      name: "a test focused by bracket notation",
+      source: lintCase(`test["only"]("a", () => {});`),
+      expected: [{ line: 1, rule: FOCUSED }],
+    },
+    {
+      name: "a test skipped by bracket notation",
+      source: lintCase(`test["skip"]("a", () => {});`),
+      expected: [{ line: 1, rule: SKIPPED }],
+    },
   ])("reports $name", ({ source, expected }) => {
     const diagnostics = reports.get(source);
 
