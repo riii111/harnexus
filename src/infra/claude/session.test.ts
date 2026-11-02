@@ -118,7 +118,7 @@ describe("startClaudeSession options", () => {
     const runtime = {
       ...claude.runtime,
       createSdkMcpServer: () => {
-        // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
+        // oxlint-disable-next-line harnexus/no-throw-try-catch -- fakes the Claude SDK, which reports failures by throwing.
         throw new Error("tool schema rejected");
       },
     };
@@ -738,7 +738,7 @@ describe("readClaudeSubagents", () => {
 
     const read = await readClaudeSubagents(SESSION_ID, {
       read: async (_sessionId, agentId) => {
-        // biome-ignore lint/plugin/no-throw-try-catch: getSubagentMessages rejects when the record cannot be read.
+        // oxlint-disable-next-line harnexus/no-throw-try-catch -- getSubagentMessages rejects when the record cannot be read.
         if (agentId === "a1") throw new Error("unreadable");
         return [];
       },
@@ -826,7 +826,7 @@ describe("readClaudeSession", () => {
   test("reports a reader that fails as unreadable", async () => {
     const read = await readClaudeSession("se-1", {
       read: async () => {
-        // biome-ignore lint/plugin/no-throw-try-catch: getSessionMessages rejects when it cannot read at all.
+        // oxlint-disable-next-line harnexus/no-throw-try-catch -- getSessionMessages rejects when it cannot read at all.
         throw new Error("unreadable");
       },
       configDir,

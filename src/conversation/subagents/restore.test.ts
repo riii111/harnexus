@@ -241,7 +241,7 @@ describe("agents read back after a restart", () => {
         restore: (agents) => {
           if (faults > 0) {
             faults -= 1;
-            // biome-ignore lint/plugin/no-throw-try-catch: a fault in the bridge throws.
+            // oxlint-disable-next-line harnexus/no-throw-try-catch -- a fault in the bridge throws.
             throw new Error("broken invariant");
           }
           registry.restore(agents);

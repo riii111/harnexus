@@ -76,7 +76,7 @@ export const createAutomationTool = ({
             "A cron automation needs a name and a prompt, by which the new automation is told apart from others; nothing was sent.",
           );
         }
-        return createCron({ ...(runSettings ?? {}), ...fields }, queuedIn);
+        return createCron({ ...runSettings, ...fields }, queuedIn);
       }
       if (runSettings !== undefined) return failure(RUN_SETTINGS_ONLY_FOR_CRON);
       return write(
@@ -128,7 +128,7 @@ export const createAutomationTool = ({
     return write(
       "automation_update",
       reached.kind === "cron"
-        ? { mode, id, ...(runSettings ?? {}), ...fields, kind: "cron" }
+        ? { mode, id, ...runSettings, ...fields, kind: "cron" }
         : {
             mode,
             id,

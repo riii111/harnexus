@@ -181,7 +181,7 @@ export const SUBSCRIPTION: AccountInfo = {
   apiProvider: "firstParty",
 };
 
-// biome-ignore lint/suspicious/noExplicitAny: messages are checked by shape in each test.
+// oxlint-disable-next-line typescript/no-explicit-any -- messages are checked by shape in each test.
 export type Sent = any;
 
 export const harness = async (

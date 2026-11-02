@@ -153,7 +153,7 @@ describe("dryRun", () => {
 
     const [report] = ran.unwrap().prs as Record<string, unknown>[];
     expect([report?.firstRead, report?.prompt]).toEqual([true, null]);
-    expect((report?.notified as unknown[]).length).toBe(1);
+    expect(report?.notified).toHaveLength(1);
     expect((await loadWatchState(root, REF)).unwrap()).toEqual(freshState());
   });
 

@@ -528,7 +528,7 @@ const until = async (condition: () => boolean) => {
   }
 };
 
-// biome-ignore lint/suspicious/noExplicitAny: messages are checked by shape in each test.
+// oxlint-disable-next-line typescript/no-explicit-any -- messages are checked by shape in each test.
 type Sent = any;
 
 const WORKER_A = "th-fixture-worker-a";

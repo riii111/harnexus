@@ -1,0 +1,36 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "jsPlugins": ["@stylistic/eslint-plugin", "./lint-plugins/harnexus.js"],
+  "categories": { "correctness": "error" },
+  "ignorePatterns": [".claude/**"],
+  "rules": {
+    "no-console": "error",
+    "harnexus/no-focused-tests": "error",
+    "harnexus/no-skipped-tests": "error",
+    "typescript/no-explicit-any": "error",
+    "no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "ignoreRestSiblings": true
+      }
+    ],
+    "unicorn/no-useless-spread": "off",
+    "@stylistic/padding-line-between-statements": [
+      "error",
+      { "blankLine": "always", "prev": "multiline-block-like", "next": "*" }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["src/**"],
+      "excludeFiles": ["src/**/*.boundary.ts"],
+      "rules": { "harnexus/no-throw-try-catch": "error" }
+    },
+    {
+      "files": ["**/*.test.ts"],
+      "rules": { "harnexus/testing": "error" }
+    }
+  ]
+}

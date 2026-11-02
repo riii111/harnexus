@@ -147,9 +147,10 @@ const CODE_FILES = new Set([
   "package.json",
   "bun.lock",
   "tsconfig.json",
-  "biome.json",
+  ".oxlintrc.json",
+  ".oxfmtrc.json",
 ]);
-const CODE_DIRECTORIES = ["src/", "bin/", "test/", "biome-plugins/"];
+const CODE_DIRECTORIES = ["src/", "bin/", "test/", "lint-plugins/"];
 const MAX_LISTED_CHANGES = 20;
 
 export type DependencyState = {

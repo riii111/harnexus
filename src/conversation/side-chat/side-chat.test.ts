@@ -470,7 +470,7 @@ const setup = ({
     readSession: (sessionId) =>
       readClaudeSession(sessionId, {
         read: async () => {
-          // biome-ignore lint/plugin/no-throw-try-catch: getSessionMessages rejects when the record cannot be read.
+          // oxlint-disable-next-line harnexus/no-throw-try-catch -- getSessionMessages rejects when the record cannot be read.
           if (reading.unreadable) throw new Error("unreadable");
           return [...record];
         },

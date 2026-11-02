@@ -115,12 +115,12 @@ describe("testing lint rules", () => {
     {
       name: "a focused test",
       source: lintCase(`test.only("a", () => {});`),
-      expected: [{ line: 1, rule: "lint/suspicious/noFocusedTests" }],
+      expected: [{ line: 1, rule: FOCUSED }],
     },
     {
       name: "a skipped test",
       source: lintCase(`test.skip("a", () => {});`),
-      expected: [{ line: 1, rule: "lint/suspicious/noSkippedTests" }],
+      expected: [{ line: 1, rule: SKIPPED }],
     },
   ])("reports $name", ({ source, expected }) => {
     const diagnostics = reports.get(source);
@@ -185,20 +185,20 @@ const TUPLE = `Use object rows with a name instead of tuple rows.${KEEP_INLINE}`
 const SPECIFIER = `Embed a row property such as $name instead of a positional specifier.${KEEP_INLINE}`;
 const MISSING_NAME = `Embed a row property such as $name in the title so each case is named.${KEEP_INLINE}`;
 const LOOP = "Register parametrized tests with test.each instead of a loop.";
-const TARGET_CATEGORIES = new Set([
-  "plugin",
-  "lint/suspicious/noFocusedTests",
-  "lint/suspicious/noSkippedTests",
-]);
+const TESTING = "harnexus(testing)";
+const FOCUSED = "harnexus(no-focused-tests)";
+const SKIPPED = "harnexus(no-skipped-tests)";
+const TARGET_CODES = new Set([TESTING, FOCUSED, SKIPPED]);
 const ROOT = join(import.meta.dir, "..");
-const BIOME = join(ROOT, "node_modules", ".bin", "biome");
+const OXLINT = join(ROOT, "node_modules", ".bin", "oxlint");
 
 type Reported = { line: number; rule: string };
 
 type Diagnostic = {
-  category: string;
+  code: string;
   message: string;
-  location: { path: string; start: { line: number; column: number } };
+  filename: string;
+  labels: { span: { line: number; column: number } }[];
 };
 
 const sources: string[] = [];
@@ -224,11 +224,9 @@ const lintAll = async (target: string) => {
   );
   const proc = Bun.spawn(
     [
-      BIOME,
-      "lint",
-      `--config-path=${ROOT}`,
-      "--reporter=json",
-      "--max-diagnostics=none",
+      OXLINT,
+      `--config=${join(ROOT, ".oxlintrc.json")}`,
+      "--format=json",
       target,
     ],
     { stdout: "pipe", stderr: "ignore" },
@@ -239,21 +237,22 @@ const lintAll = async (target: string) => {
   await proc.exited;
   const reports = new Map(sources.map((source) => [source, [] as Reported[]]));
   for (const diagnostic of report.diagnostics.sort(byPosition)) {
-    const source = files.get(basename(diagnostic.location.path));
-    if (source !== undefined && TARGET_CATEGORIES.has(diagnostic.category)) {
+    const source = files.get(basename(diagnostic.filename));
+    if (source !== undefined && TARGET_CODES.has(diagnostic.code)) {
       reports.get(source)?.push(toReported(diagnostic));
     }
   }
   return reports;
 };
 
+const startOf = (diagnostic: Diagnostic) =>
+  diagnostic.labels[0]?.span ?? { line: 0, column: 0 };
+
 const byPosition = (a: Diagnostic, b: Diagnostic) =>
-  a.location.start.line - b.location.start.line ||
-  a.location.start.column - b.location.start.column;
+  startOf(a).line - startOf(b).line || startOf(a).column - startOf(b).column;
 
 const toReported = (diagnostic: Diagnostic) => ({
   // The import line is prepended, so source lines start at 2.
-  line: diagnostic.location.start.line - 1,
-  rule:
-    diagnostic.category === "plugin" ? diagnostic.message : diagnostic.category,
+  line: startOf(diagnostic).line - 1,
+  rule: diagnostic.code === TESTING ? diagnostic.message : diagnostic.code,
 });

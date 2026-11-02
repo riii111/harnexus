@@ -66,38 +66,38 @@ export const fakeClaude = (
         (await new Promise<Delivery>((resolve) => {
           waiting = resolve;
         }));
-      // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
+      // oxlint-disable-next-line harnexus/no-throw-try-catch -- fakes the Claude SDK, which reports failures by throwing.
       if (item instanceof Error) throw item;
       return item;
     },
     interrupt: async () => {
       interrupts += 1;
       await interruptAnswered;
-      // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
+      // oxlint-disable-next-line harnexus/no-throw-try-catch -- fakes the Claude SDK, which reports failures by throwing.
       if (interruptError !== undefined) throw interruptError;
       return stillQueued === undefined
         ? undefined
         : { still_queued: stillQueued };
     },
     setPermissionMode: async (mode) => {
-      // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
+      // oxlint-disable-next-line harnexus/no-throw-try-catch -- fakes the Claude SDK, which reports failures by throwing.
       if (permissionModeError !== undefined) throw permissionModeError;
       modes.push(mode);
     },
     applyFlagSettings: async (settings) => {
-      // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
+      // oxlint-disable-next-line harnexus/no-throw-try-catch -- fakes the Claude SDK, which reports failures by throwing.
       if (effortError !== undefined) throw effortError;
       efforts.push(settings.effortLevel);
     },
     supportedModels: async () => {
-      // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
+      // oxlint-disable-next-line harnexus/no-throw-try-catch -- fakes the Claude SDK, which reports failures by throwing.
       if (models instanceof Error) throw models;
       if (models === "unanswered") return new Promise<ModelInfo[]>(() => {});
       return models;
     },
     accountInfo: async () => {
       await accountAnswered;
-      // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
+      // oxlint-disable-next-line harnexus/no-throw-try-catch -- fakes the Claude SDK, which reports failures by throwing.
       if (account instanceof Error) throw account;
       return account;
     },
@@ -107,7 +107,7 @@ export const fakeClaude = (
     },
   };
   const resolveSettings: ClaudeSdk["resolveSettings"] = async () => {
-    // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
+    // oxlint-disable-next-line harnexus/no-throw-try-catch -- fakes the Claude SDK, which reports failures by throwing.
     if (settingsEnv instanceof Error) throw settingsEnv;
     return { effective: { env: settingsEnv } };
   };
@@ -150,7 +150,7 @@ export const fakeClaude = (
 export const failingQuery =
   (error: Error): ClaudeSdk["query"] =>
   () => {
-    // biome-ignore lint/plugin/no-throw-try-catch: fakes the Claude SDK, which reports failures by throwing.
+    // oxlint-disable-next-line harnexus/no-throw-try-catch -- fakes the Claude SDK, which reports failures by throwing.
     throw error;
   };
 

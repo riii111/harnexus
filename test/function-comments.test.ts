@@ -70,7 +70,7 @@ export const documented = () => 1;
 // TODO: decide when the second caller exists.
 export const todo = () => 1;
 
-// biome-ignore lint/suspicious/noExplicitAny: fixture
+// oxlint-disable-next-line typescript/no-explicit-any -- fixture
 export const ignored = (x: any) => x;
 
 // Explains a constant, not a function.
@@ -87,7 +87,7 @@ export const bare = () => 1;`,
 
 type Found = { id: string };
 
-// The short length is the lines a declaration takes once Biome has wrapped it, so a function of one expression or a few statements counts.
+// The short length is the lines a declaration takes once Oxfmt has wrapped it, so a function of one expression or a few statements counts.
 const SHORT_LINES = 2;
 
 // A comment above a short function mostly says what its name could, or a reason that applies to one line of it; the reason belongs on that line.
@@ -165,7 +165,7 @@ const hasLeadingLineComment = (text: string, pos: number) =>
       !DIRECTIVE.test(text.slice(range.pos, range.end)),
   );
 
-const DIRECTIVE = /^\/\/\s*(TODO|biome-ignore|@ts-)/;
+const DIRECTIVE = /^\/\/\s*(TODO|oxlint-disable|@ts-)/;
 
 const startOf = (text: string, node: Node) => {
   const comments = getLeadingCommentRanges(text, node.pos) ?? [];
