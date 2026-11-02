@@ -27,7 +27,14 @@ export const startCloudSession = (
   Result.tryPromise({
     try: () =>
       new Promise<CloudStarted>((resolve, reject) => {
-        const command = [claude, "--cloud", description];
+        // Started in Auto mode, a session and the workers it starts run most tools without stopping for a permission prompt no one here can answer.
+        const command = [
+          claude,
+          "--cloud",
+          description,
+          "--permission-mode",
+          "auto",
+        ];
         // BSD script takes the command after the file and fails on a socket as its input, so it reads a pipe that stays open; util-linux script takes one shell command line.
         const [file, args] =
           platform === "darwin"
