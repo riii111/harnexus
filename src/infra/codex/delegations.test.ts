@@ -375,6 +375,15 @@ describe("delegationSource", () => {
       },
       expected: null,
     },
+    {
+      name: "a later valid source after an invalid source",
+      toolOutput: {
+        name: "create_thread",
+        output:
+          "<source_thread_id>bad.id</source_thread_id><source_thread_id>valid-id</source_thread_id>",
+      },
+      expected: "valid-id",
+    },
   ])("reads $expected from $name", ({ toolOutput, expected }) => {
     expect(delegationSource({ threadId: "th-new", toolOutput })).toBe(expected);
   });

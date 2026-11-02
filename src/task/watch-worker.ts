@@ -1,4 +1,8 @@
 import type { Result } from "better-result";
+import {
+  delegationFields,
+  isDelegatingTool,
+} from "../infra/codex/delegations.ts";
 import type { Answer, Workers } from "../prwatch/worker.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { type Fields, isObject } from "../runtime/object.ts";
@@ -206,7 +210,10 @@ const delegationOf = (first: unknown) => {
   )
     return { source: carried.sourceThreadId, input: carried.input };
 
-  if (first.type === "functionCallOutput" && DELEGATING.has(String(first.name)))
+  if (
+    first.type === "functionCallOutput" &&
+    isDelegatingTool(String(first.name))
+  )
     return parseDelegation(isObject(first.output) ? first.output.text : null);
   if (first.type === "userMessage" && Array.isArray(first.content))
     return parseDelegation(
@@ -224,26 +231,8 @@ const parseDelegation = (text: unknown) => {
   )
     return null;
 
-  const source = /<source_thread_id>\s*([^<\s]+)\s*<\/source_thread_id>/.exec(
-    text,
-  )?.[1];
-  // A cut output may end inside the escaped XML the app writes.
-  const input = /<input>([\s\S]*?)(?:<\/input>|$)/.exec(text)?.[1];
-  return {
-    source: source ?? "",
-    input: unescapeXml(input ?? ""),
-  };
+  return delegationFields(text);
 };
-
-const unescapeXml = (text: string) =>
-  text
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'")
-    .replaceAll("&amp;", "&");
-
-const DELEGATING = new Set(["send_message_to_thread", "create_thread"]);
 
 const finalTextOf = (items: unknown[]) => {
   const messages = items.filter(
