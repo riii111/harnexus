@@ -7,10 +7,10 @@ import {
   readTextFileIfExists,
   removeFile,
   writeFileAtomic,
-} from "../../runtime/fs.boundary.ts";
-import { parseJson } from "../../runtime/json.boundary.ts";
-import { isObject } from "../../runtime/object.ts";
-import { type ProcessRun, runProcess } from "../../runtime/run.boundary.ts";
+} from "../../lib/fs.boundary.ts";
+import { parseJson } from "../../lib/json.boundary.ts";
+import { isObject } from "../../lib/object.ts";
+import { type ProcessRun, runProcess } from "../../lib/run.boundary.ts";
 import { bundledClaude } from "./bundled-claude.boundary.ts";
 import type { CloudCheckouts } from "./cloud-checkouts.ts";
 import { printAnswer, UUID } from "./print.ts";

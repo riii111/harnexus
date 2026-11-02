@@ -1,7 +1,7 @@
 import { VERSION } from "../infra/checkout.ts";
-import { isShapePath } from "../infra/codex/shape.ts";
-import { parseJson } from "../runtime/json.boundary.ts";
-import { isObject } from "../runtime/object.ts";
+import { isShapePath } from "../infra/codex/protocol/shape.ts";
+import { parseJson } from "../lib/json.boundary.ts";
+import { isObject } from "../lib/object.ts";
 import type { RecordedShape } from "./feedback-protocol.ts";
 
 type LogLine = {

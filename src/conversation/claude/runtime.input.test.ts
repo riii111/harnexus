@@ -8,7 +8,6 @@ import type {
 import { Result } from "better-result";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
 import { pngBytes } from "../../infra/claude/testing/image-files.ts";
-import type { createTurnController } from "../controller.ts";
 import {
   answer,
   completedItems,
@@ -39,6 +38,7 @@ import {
   until,
   useTempDir,
 } from "../testing/harness.ts";
+import type { createTurnController } from "../turn/controller.ts";
 import {
   type FakeClaude,
   steer,

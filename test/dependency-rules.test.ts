@@ -21,31 +21,31 @@ describe("checkDependencies", () => {
       await writeProject({
         "infra/codex/c.ts": `import { a } from "../../conversation/a.ts";
 export const c = a;`,
-        "runtime/r.ts": `import type { P } from "../presentation/p.ts";
+        "lib/r.ts": `import type { P } from "../conversation/p.view.ts";
 export type R = P;`,
         "infra/claude/s.ts": `export * from "../codex/c.ts";`,
-        "presentation/p.ts": `export type P = 1;
+        "conversation/p.view.ts": `export type P = 1;
 export const load = () => import("../infra/thread-store.ts");`,
         "conversation/a.ts": `export const a = 1;
-export type M = typeof import("../bootstrap/main.ts");`,
+export type M = typeof import("../cli/bridge.ts");`,
         "infra/thread-store.ts": "export const s = 1;",
         "task/t.ts": `import { a } from "../conversation/a.ts";
 export const t = a;`,
         "diagnostics/d.ts": `import { a } from "../conversation/a.ts";
 export const d = a;`,
-        "bootstrap/main.ts": "export const m = 1;",
+        "cli/bridge.ts": "export const m = 1;",
       }),
     );
 
     const problems = checkDependencies(references, []);
 
     expect(problems).toEqual([
-      "conversation/a.ts -> bootstrap/main.ts: conversation/ may not reference bootstrap/",
+      "conversation/a.ts -> cli/bridge.ts: conversation/ may not reference cli/",
+      "conversation/p.view.ts -> infra/thread-store.ts: a view may reference only views, infra/codex/protocol/ and lib/",
       "diagnostics/d.ts -> conversation/a.ts: diagnostics/ may not reference conversation/",
       "infra/claude/s.ts -> infra/codex/c.ts: infra/claude/ may not reference infra/codex/",
       "infra/codex/c.ts -> conversation/a.ts: infra/ may not reference conversation/",
-      "presentation/p.ts -> infra/thread-store.ts: presentation/ may not reference infra/",
-      "runtime/r.ts -> presentation/p.ts: runtime/ may not reference presentation/",
+      "lib/r.ts -> conversation/p.view.ts: lib/ may not reference conversation/",
       "task/t.ts -> conversation/a.ts: task/ may not reference conversation/",
     ]);
   });
@@ -66,19 +66,41 @@ export const c = r;`,
     ]);
   });
 
-  test("reports an I/O boundary used from presentation", async () => {
+  test("reports an I/O boundary used from a view", async () => {
     const references = await collectReferences(
       await writeProject({
-        "presentation/p.ts": `import { f } from "../runtime/fs.boundary.ts";
+        "conversation/p.view.ts": `import { f } from "../lib/fs.boundary.ts";
 export const p = f;`,
-        "runtime/fs.boundary.ts": "export const f = 1;",
+        "lib/fs.boundary.ts": "export const f = 1;",
       }),
     );
 
     const problems = checkDependencies(references, []);
 
     expect(problems).toEqual([
-      "presentation/p.ts -> runtime/fs.boundary.ts: presentation/ may not reference an I/O boundary",
+      "conversation/p.view.ts -> lib/fs.boundary.ts: a view may not reference an I/O boundary",
+    ]);
+  });
+
+  test("reports a view referencing a file other than views, the App protocol and pure lib helpers", async () => {
+    const references = await collectReferences(
+      await writeProject({
+        "conversation/turn/t.view.ts": `import { h } from "../history/h.view.ts";
+import { j } from "../../lib/json.boundary.ts";
+import { m } from "../../infra/codex/protocol/m.ts";
+import { c } from "./controller.ts";
+export const t = [h, j, m, c];`,
+        "conversation/history/h.view.ts": "export const h = 1;",
+        "lib/json.boundary.ts": "export const j = 1;",
+        "infra/codex/protocol/m.ts": "export const m = 1;",
+        "conversation/turn/controller.ts": "export const c = 1;",
+      }),
+    );
+
+    const problems = checkDependencies(references, []);
+
+    expect(problems).toEqual([
+      "conversation/turn/t.view.ts -> conversation/turn/controller.ts: a view may reference only views, infra/codex/protocol/ and lib/",
     ]);
   });
 
@@ -97,12 +119,12 @@ export const a = t;`,
     {
       name: "a file outside src",
       files: {
-        "runtime/r.ts": `import { x } from "../../test/x.ts";
+        "lib/r.ts": `import { x } from "../../test/x.ts";
 export const r = x;`,
         "../test/x.ts": "export const x = 1;",
       },
       expected: [
-        "runtime/r.ts -> ../test/x.ts: target lies outside the areas of src/",
+        "lib/r.ts -> ../test/x.ts: target lies outside the areas of src/",
       ],
     },
   ])("reports a reference to $name", async ({ files, expected }) => {
@@ -124,11 +146,11 @@ export const r = x;`,
     {
       name: "a require call",
       files: {
-        "runtime/r.ts": `export const m = require("../conversation/m.ts");`,
+        "lib/r.ts": `export const m = require("../conversation/m.ts");`,
         "conversation/m.ts": "export const m = 1;",
       },
       expected: [
-        'runtime/r.ts -> "require("../conversation/m.ts")": cannot be resolved',
+        'lib/r.ts -> "require("../conversation/m.ts")": cannot be resolved',
       ],
     },
   ])("reports $name as unresolvable", async ({ files, expected }) => {
@@ -165,16 +187,16 @@ export const r = x;`,
       target: "conversation/route.ts",
       exception: EXCEPTION,
       expected: [
-        "infra/codex/codex-link.ts -> conversation/route.ts: infra/ may not reference conversation/",
-        "exception infra/codex/codex-link.ts -> conversation/models.ts is no longer needed",
+        "link/codex-link.ts -> conversation/route.ts: link/ may not reference conversation/",
+        "exception link/codex-link.ts -> conversation/models.ts is no longer needed",
       ],
     },
     {
       name: "a reference the area rules already allow",
-      target: "runtime/object.ts",
-      exception: { ...EXCEPTION, to: "runtime/object.ts" },
+      target: "lib/object.ts",
+      exception: { ...EXCEPTION, to: "lib/object.ts" },
       expected: [
-        "exception infra/codex/codex-link.ts -> runtime/object.ts is no longer needed",
+        "exception link/codex-link.ts -> lib/object.ts is no longer needed",
       ],
     },
   ])("reports only what an exception leaves uncovered for $name", async ({
@@ -184,7 +206,7 @@ export const r = x;`,
   }) => {
     const references = await collectReferences(
       await writeProject({
-        "infra/codex/codex-link.ts": `import { m } from "${relative("infra/codex", target)}";
+        "link/codex-link.ts": `import { m } from "${relative("link", target)}";
 export const l = m;`,
         [target]: "export const m = 1;",
       }),
@@ -197,14 +219,14 @@ export const l = m;`,
 });
 
 type Area =
-  | "bootstrap"
+  | "cli"
   | "conversation"
   | "diagnostics"
-  | "presentation"
+  | "link"
   | "prwatch"
   | "task"
   | "infra"
-  | "runtime";
+  | "lib";
 
 type Exception = { from: string; to: string; reason: string; until: string };
 
@@ -212,29 +234,29 @@ type Exception = { from: string; to: string; reason: string; until: string };
 const EXCEPTIONS: readonly Exception[] = [];
 
 const ALLOWED: Record<Area, readonly Area[]> = {
-  bootstrap: [
-    "bootstrap",
+  cli: [
+    "cli",
     "conversation",
     "diagnostics",
-    "presentation",
+    "link",
     "prwatch",
     "task",
     "infra",
-    "runtime",
+    "lib",
   ],
-  conversation: ["conversation", "presentation", "infra", "runtime"],
-  diagnostics: ["diagnostics", "infra", "runtime"],
-  presentation: ["presentation", "runtime"],
+  conversation: ["conversation", "link", "infra", "lib"],
+  diagnostics: ["diagnostics", "infra", "lib"],
+  link: ["link", "infra", "lib"],
   // The PR watch stands apart from the conversation and is told how to reach workers, so it may be moved out whole.
-  prwatch: ["prwatch", "infra", "runtime"],
-  // harnexus-task drives the PR watch and the Claude and Codex CLIs, but knows nothing of the bridge's conversations.
-  task: ["task", "prwatch", "infra", "runtime"],
-  infra: ["infra", "runtime"],
-  runtime: ["runtime"],
+  prwatch: ["prwatch", "infra", "lib"],
+  // harnexus-task drives the PR watch, the thread links and the Claude and Codex CLIs, but knows nothing of the bridge's conversations.
+  task: ["task", "link", "prwatch", "infra", "lib"],
+  infra: ["infra", "lib"],
+  lib: ["lib"],
 };
 
-// Parsing JSON performs no I/O, so presentation/ may use it like any pure runtime helper.
-const PURE_BOUNDARIES = new Set(["runtime/json.boundary.ts"]);
+// Parsing JSON performs no I/O, so a view may use it like any pure lib helper.
+const PURE_BOUNDARIES = new Set(["lib/json.boundary.ts"]);
 
 type Reference =
   | { kind: "file"; file: string }
@@ -286,12 +308,12 @@ const brokenRule = (from: string, to: string) => {
     return "source code may not reference tests or testing helpers";
   if (!ALLOWED[fromArea].includes(toArea))
     return `${fromArea}/ may not reference ${toArea}/`;
-  if (
-    fromArea === "presentation" &&
-    to.endsWith(".boundary.ts") &&
-    !PURE_BOUNDARIES.has(to)
-  )
-    return "presentation/ may not reference an I/O boundary";
+  if (from.endsWith(".view.ts")) {
+    if (to.endsWith(".boundary.ts") && !PURE_BOUNDARIES.has(to))
+      return "a view may not reference an I/O boundary";
+    if (!isViewTarget(to))
+      return "a view may reference only views, infra/codex/protocol/ and lib/";
+  }
   if (
     fromArea === "prwatch" &&
     toArea === "infra" &&
@@ -308,6 +330,11 @@ const brokenRule = (from: string, to: string) => {
     return "conversation/ outside claude/ may not reference conversation/claude/";
   return undefined;
 };
+
+const isViewTarget = (path: string) =>
+  path.endsWith(".view.ts") ||
+  path.startsWith("infra/codex/protocol/") ||
+  path.startsWith("lib/");
 
 const areaOf = (path: string) => {
   const [first, ...rest] = path.split("/");
@@ -424,7 +451,7 @@ const missingProject = (root: string): Reference => ({
 });
 
 const EXCEPTION: Exception = {
-  from: "infra/codex/codex-link.ts",
+  from: "link/codex-link.ts",
   to: "conversation/models.ts",
   reason: "fixture",
   until: "RA-02",

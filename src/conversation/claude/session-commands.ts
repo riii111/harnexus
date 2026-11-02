@@ -5,12 +5,9 @@ import type {
   listClaudeConversations,
   readLastRecordUuid,
 } from "../../infra/claude/transcripts.ts";
-import type {
-  PickerAnswer,
-  PickerPage,
-} from "../../presentation/session-picker.ts";
-import type { SessionReply } from "../../presentation/session-reply.ts";
 import type { ThreadValues } from "../thread-values.ts";
+import type { PickerAnswer, PickerPage } from "./session-picker.view.ts";
+import type { SessionReply } from "./session-reply.view.ts";
 
 export type SessionCommand =
   | { kind: "resume"; search: string | null }

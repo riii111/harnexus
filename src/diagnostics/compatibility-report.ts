@@ -1,8 +1,8 @@
 import {
   type CompatibilityEvent,
   compatibilityVersion,
-} from "../infra/codex/compatibility.ts";
-import { isObject } from "../runtime/object.ts";
+} from "../infra/codex/protocol/compatibility.ts";
+import { isObject } from "../lib/object.ts";
 import type { Check } from "./doctor-report.ts";
 
 export const compatibilityRecord = (

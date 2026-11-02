@@ -6,17 +6,17 @@ import {
   versionOf,
 } from "../infra/checkout.ts";
 import { readLaunchd } from "../infra/setup/launchd.boundary.ts";
-import { parseOptions } from "../runtime/args.boundary.ts";
-import { loadLogPath, loadStatePath } from "../runtime/config.ts";
+import { parseOptions } from "../lib/args.boundary.ts";
+import { loadLogPath, loadStatePath } from "../lib/config.ts";
 import {
   listFilesDeepIfExists,
   readFileSlice,
   readTextFileIfExists,
   statFileIfExists,
-} from "../runtime/fs.boundary.ts";
-import { parseJson } from "../runtime/json.boundary.ts";
-import { isObject } from "../runtime/object.ts";
-import { readCommandOutput, runCommand } from "../runtime/process.boundary.ts";
+} from "../lib/fs.boundary.ts";
+import { parseJson } from "../lib/json.boundary.ts";
+import { isObject } from "../lib/object.ts";
+import { readCommandOutput, runCommand } from "../lib/process.boundary.ts";
 import { bridgeSettings, SDK_PACKAGE } from "./bridge-identity.ts";
 import {
   CODEX_IN_APP,

@@ -1,6 +1,6 @@
 import type { fakeClaude } from "../../../infra/claude/testing/fake-claude.ts";
-import type { createTurnController } from "../../controller.ts";
 import { result, type Sent, THREAD } from "../../testing/harness.ts";
+import type { createTurnController } from "../../turn/controller.ts";
 
 export type Turns = ReturnType<typeof createTurnController>;
 

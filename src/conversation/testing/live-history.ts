@@ -1,4 +1,4 @@
-import type { LiveTurn } from "../../presentation/history.ts";
+import type { LiveTurn } from "../history/history.view.ts";
 
 export const LIVE: LiveTurn = {
   turnId: "harnexus-turn-live",

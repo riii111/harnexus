@@ -1,5 +1,5 @@
-import { parseJson } from "../runtime/json.boundary.ts";
-import { isObject } from "../runtime/object.ts";
+import { parseJson } from "../lib/json.boundary.ts";
+import { isObject } from "../lib/object.ts";
 
 export const parseMessage = (line: Buffer) => {
   const parsed = parseJson(line.toString("utf8"));

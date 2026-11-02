@@ -1,0 +1,282 @@
+import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Result } from "better-result";
+import type { SubagentRecord } from "../../infra/claude/session.ts";
+import type { FileChangeItem } from "../../infra/codex/protocol/messages.ts";
+import {
+  type AgentRef,
+  buildSubagentHistory,
+  delegatedEditIn,
+  type HistoryTurn,
+} from "../history/history.view.ts";
+import { startOfRecord } from "../history/message.view.ts";
+import { type AgentResume, findAgentResumes } from "./agent-resume.view.ts";
+import { isAppliedEdit, type SubagentThread } from "./subagent.view.ts";
+import {
+  agentNickname,
+  childThreadId,
+  freePath,
+  type Subagents,
+} from "./subagents.ts";
+
+type ReadSubagents<E> = (
+  sessionId: string,
+) => Promise<Result<SubagentRecord[], E>>;
+
+export type SubagentRestoreEvent<E extends { _tag: string }> = {
+  event: "claude_subagents_unreadable";
+  error: E["_tag"];
+};
+
+// Reads a Claude thread's agents back from Claude's records the first time its conversation is read after a restart.
+export const createSubagentRestore = <E extends { _tag: string }>({
+  subagents,
+  readSubagents,
+  log,
+  now = Date.now,
+}: {
+  subagents: Pick<Subagents, "restore">;
+  readSubagents: ReadSubagents<E>;
+  log: (event: SubagentRestoreEvent<E>) => void;
+  now?: () => number;
+}) => {
+  const restored = new Map<string, Promise<void>>();
+
+  const restore = (
+    threadId: string,
+    sessionId: string,
+    cwd: string,
+    messages: readonly SessionMessage[],
+  ) => {
+    const key = `${threadId}\n${sessionId}`;
+    const running = restored.get(key);
+    if (running !== undefined) return running;
+    // Records that cannot be read leave the thread's agents out, and a later read tries again.
+    const reading = readSubagents(sessionId).then((read) => {
+      if (read.isErr()) {
+        restored.delete(key);
+        log({ event: "claude_subagents_unreadable", error: read.error._tag });
+        return;
+      }
+      subagents.restore(rebuild(threadId, cwd, read.value, messages, now()));
+    });
+    restored.set(key, reading);
+    // A fault in the bridge reaches the caller as it is rather than as a record it could not read, and is not kept, so a later read tries again.
+    reading.catch(() => {
+      if (restored.get(key) === reading) restored.delete(key);
+    });
+    return reading;
+  };
+
+  return { restore };
+};
+
+// The agents, their histories and each run's edits, rebuilt from the records Claude kept.
+const rebuild = (
+  threadId: string,
+  cwd: string,
+  records: readonly SubagentRecord[],
+  messages: readonly SessionMessage[],
+  at: number,
+): {
+  thread: SubagentThread;
+  history: HistoryTurn[];
+  edits: ReadonlyMap<string, readonly FileChangeItem[]>;
+}[] => {
+  // Sorted by start, so agents are numbered under their parent as they were while they ran.
+  const started = usable(
+    records
+      .map((record) => ({
+        record,
+        startedAtMs: startOfRecord(record.messages) ?? at,
+        parentAgentId: record.messages[0]?.parent_agent_id ?? null,
+      }))
+      .sort((a, b) => a.startedAtMs - b.startedAtMs),
+  );
+  const threads = new Map<string, SubagentThread>();
+  for (const { record, startedAtMs, parentAgentId } of started) {
+    const parent =
+      parentAgentId === null ? undefined : threads.get(parentAgentId);
+    if (parentAgentId !== null && parent === undefined) continue;
+    // A nested agent whose records do not name the agent that started it cannot be placed.
+    if (parentAgentId === null && record.depth > 1) continue;
+    const parentThreadId = parent?.id ?? threadId;
+    const siblings = [...threads.values()].filter(
+      (thread) => thread.parentThreadId === parentThreadId,
+    );
+    threads.set(record.agentId, {
+      id: childThreadId(threadId, record.agentId),
+      rootThreadId: threadId,
+      parentThreadId,
+      depth: parent === undefined ? 1 : parent.depth + 1,
+      calls: [record.toolUseId],
+      toolUseId: record.toolUseId,
+      taskId: record.agentId,
+      nickname: agentNickname(record.description, record.agentType),
+      role: record.agentType,
+      path: freePath(parent?.path ?? null, record.agentType, siblings),
+      turnId: null,
+      runs: 1,
+      active: false,
+      createdAtMs: startedAtMs,
+      updatedAtMs: startedAtMs,
+    });
+  }
+  const resumes = resumesOf(
+    [messages, ...started.map(({ record }) => record.messages)],
+    started.map(({ record }) => record),
+  );
+  const madeAt = new Map<string, number | null>();
+  // The history of whichever conversation made a call shows the agent's activity and edits there, so every resuming call is a run of the agent.
+  for (const [agentId, calls] of resumes) {
+    const thread = threads.get(agentId);
+    if (thread === undefined) continue;
+    for (const call of calls) madeAt.set(call.toolUseId, call.at);
+    const all = [...thread.calls, ...calls.map((call) => call.toolUseId)];
+    threads.set(agentId, {
+      ...thread,
+      calls: all,
+      toolUseId: all.at(-1) ?? thread.toolUseId,
+    });
+  }
+  const edits = new Map<string, FileChangeItem[]>();
+  const refOf = (toolUseId: string): AgentRef | undefined => {
+    const agent = [...threads.values()].find((thread) =>
+      thread.calls.includes(toolUseId),
+    );
+    return agent === undefined
+      ? undefined
+      : {
+          threadId: agent.id,
+          path: agent.path,
+          active: false,
+          edits: edits.get(toolUseId) ?? [],
+        };
+  };
+  // Agents that resume each other each need the other's edits first, so the histories are rebuilt until no run gains an edit.
+  const histories = new Map<string, HistoryTurn[]>();
+  const runCount = [...threads.values()].reduce(
+    (count, thread) => count + thread.calls.length,
+    0,
+  );
+  for (let pass = 0; pass <= runCount; pass += 1) {
+    const before = editIds(edits);
+    for (const { record } of started) {
+      const thread = threads.get(record.agentId);
+      if (thread === undefined) continue;
+      const history = buildSubagentHistory(
+        record.messages,
+        { threadId: thread.id, cwd },
+        refOf,
+      );
+      histories.set(record.agentId, history);
+      for (const [call, applied] of editsByRun(
+        history,
+        thread,
+        madeAt,
+        [...edits.values()].flat(),
+      )) {
+        edits.set(call, applied);
+      }
+    }
+    if (editIds(edits) === before) break;
+  }
+  return started.flatMap(({ record }) => {
+    const thread = threads.get(record.agentId);
+    const history = histories.get(record.agentId);
+    if (thread === undefined || history === undefined) return [];
+    return [
+      {
+        thread: { ...thread, runs: Math.max(history.length, 1) },
+        history,
+        edits: new Map(
+          thread.calls.map((call) => [call, edits.get(call) ?? []]),
+        ),
+      },
+    ];
+  });
+};
+
+const editsByRun = (
+  history: readonly HistoryTurn[],
+  { calls }: SubagentThread,
+  madeAt: ReadonlyMap<string, number | null>,
+  delegated: readonly FileChangeItem[],
+) => {
+  const byCall = new Map<string, FileChangeItem[]>(
+    calls.map((call) => [call, []]),
+  );
+  for (const { turn, items } of history) {
+    const startedAt = items[0]?.startedAtMs ?? null;
+    // A record does not say which call a turn ran under, so it is taken as the last call made before the turn started.
+    const call = [...calls]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate === calls[0] ||
+          (startedAt !== null &&
+            (madeAt.get(candidate) ?? Number.POSITIVE_INFINITY) <= startedAt),
+      );
+    if (call === undefined) continue;
+    for (const item of items.map((entry) => entry.item).filter(isAppliedEdit)) {
+      byCall
+        .get(call)
+        ?.push(
+          delegated.find(
+            (edit) => delegatedEditIn(edit, turn.id).id === item.id,
+          ) ?? item,
+        );
+    }
+  }
+  return byCall;
+};
+
+const editIds = (edits: ReadonlyMap<string, readonly FileChangeItem[]>) =>
+  JSON.stringify(
+    [...edits].map(([call, applied]) => [call, applied.map((edit) => edit.id)]),
+  );
+
+const usable = <T extends { record: SubagentRecord }>(
+  started: readonly T[],
+) => {
+  // Records Claude kept may disagree with each other, so an agent whose id or starting call an earlier agent already has is left out.
+  const agentIds = new Set<string>();
+  const calls = new Set<string>();
+  return started.filter(({ record }) => {
+    if (agentIds.has(record.agentId) || calls.has(record.toolUseId)) {
+      return false;
+    }
+    agentIds.add(record.agentId);
+    calls.add(record.toolUseId);
+    return true;
+  });
+};
+
+// The calls that resumed each agent, in the order they were made.
+const resumesOf = (
+  conversations: readonly (readonly SessionMessage[])[],
+  records: readonly SubagentRecord[],
+) => {
+  const byAddress = new Map<string, string>();
+  for (const record of records) {
+    if (record.name !== null && !byAddress.has(record.name)) {
+      byAddress.set(record.name, record.agentId);
+    }
+  }
+  for (const record of records) byAddress.set(record.agentId, record.agentId);
+  const resumed = new Map<string, AgentResume[]>();
+  const found: AgentResume[] = conversations
+    .flatMap((messages) => findAgentResumes(messages))
+    .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+  for (const resume of found) {
+    // A call names the agent by its id, or as the call addressed it, by its id or the name it was started with plus any reference Claude appended.
+    const agentId =
+      resume.resumedAgentId ??
+      byAddress.get(resume.recipient.replace(APPENDED_REFERENCE, ""));
+    if (agentId === undefined) continue;
+    resumed.set(agentId, [...(resumed.get(agentId) ?? []), resume]);
+  }
+  return resumed;
+};
+
+// Claude may ask for an agent's name to be sent with the reference it listed, as "name [ref]".
+const APPENDED_REFERENCE = /\s+\[[^\]]*\]$/;

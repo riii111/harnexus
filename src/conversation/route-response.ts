@@ -1,10 +1,10 @@
 import type { EffortRule, ModelCatalog } from "../infra/claude/models.ts";
+import { isObject } from "../lib/object.ts";
 import {
   type HistoryTurn,
   type LiveTurn,
   withLiveTurn,
-} from "../presentation/history.ts";
-import { isObject } from "../runtime/object.ts";
+} from "./history/history.view.ts";
 import {
   type createHistoryRequests,
   endsLive,
@@ -12,15 +12,15 @@ import {
   withLiveStatus,
   withResumeHistory,
   withTurns,
-} from "./history-request.ts";
+} from "./history/request.ts";
 import { encode } from "./json-line.ts";
 import { shownEffort, withClaudeModels } from "./model-list.ts";
 import type { createCompatibility } from "./route-compatibility.ts";
-import type { createSideChats, Opened } from "./side-chat.ts";
-import type { SubagentRequests } from "./subagent-requests.ts";
+import type { createSideChats, Opened } from "./side-chat/side-chat.ts";
+import type { SubagentRequests } from "./subagents/requests.ts";
 import type { Thread } from "./thread-request.ts";
 import type { ThreadValues } from "./thread-values.ts";
-import type { ThreadEnd } from "./turn-runtime.ts";
+import type { ThreadEnd } from "./turn/turn-runtime.ts";
 
 type History = ReturnType<typeof createHistoryRequests>;
 

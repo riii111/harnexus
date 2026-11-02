@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { runCommand } from "../runtime/process.boundary.ts";
+import { runCommand } from "../lib/process.boundary.ts";
 
 const SCRIPT = join(import.meta.dir, "../../scripts/install-cloud-task.sh");
 

@@ -26,18 +26,18 @@ import {
   listClaudeConversations,
   readLastRecordUuid,
 } from "../../infra/claude/transcripts.ts";
-import { createCodexLink } from "../../infra/codex/codex-link.ts";
-import { createDelegationWatch } from "../../infra/codex/delegations.ts";
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
 import { createMemoryCronRecord } from "../../infra/codex/testing/cron-record.ts";
 import { openThreadStore } from "../../infra/thread-store.ts";
-import { FileWriteFailed } from "../../runtime/fs.boundary.ts";
+import { FileWriteFailed } from "../../lib/fs.boundary.ts";
+import { createCodexLink } from "../../link/codex-link.ts";
+import { createDelegationWatch } from "../../link/delegations.ts";
 
 import { type ClaudeLogEvent, createClaudeRuntime } from "../claude/runtime.ts";
-import { createTurnController } from "../controller.ts";
-import { createSubagents } from "../subagents.ts";
+import { createSubagents } from "../subagents/subagents.ts";
 import { createThreadValues } from "../thread-values.ts";
-import type { TurnLink } from "../turn-runtime.ts";
+import { createTurnController } from "../turn/controller.ts";
+import type { TurnLink } from "../turn/turn-runtime.ts";
 
 type StartSession = Parameters<typeof createClaudeRuntime>[0]["startSession"];
 

@@ -1,11 +1,8 @@
 import type { Result } from "better-result";
-import {
-  delegationFields,
-  isDelegatingTool,
-} from "../infra/codex/delegations.ts";
+import { parseJson } from "../lib/json.boundary.ts";
+import { type Fields, isObject } from "../lib/object.ts";
+import { delegationFields, isDelegatingTool } from "../link/delegations.ts";
 import type { Answer, Workers } from "../prwatch/worker.ts";
-import { parseJson } from "../runtime/json.boundary.ts";
-import { type Fields, isObject } from "../runtime/object.ts";
 
 // The PR watch's workers, Codex chats linked to a PR, reached through the app.
 export const codexWorkers = (

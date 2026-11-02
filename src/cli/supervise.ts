@@ -1,0 +1,115 @@
+import { Result } from "better-result";
+import { type Signal, signalProcess } from "../lib/process.boundary.ts";
+
+const SERVER_PID_ENV = "HARNEXUS_SERVER_PID";
+
+export type BridgeFailedEvent = {
+  event: "bridge_failed";
+  reason: "UnhandledRejection";
+};
+
+export type ServerSignalEvent =
+  | { event: "server_signaled"; signal: Signal }
+  | { event: "server_signal_failed"; signal: Signal; code: string | null };
+
+// A rejection nothing awaits is a fault in the bridge, which Bun ends with status 1 and a stack on stderr only; this also records it in the log and closes the Claude processes, as a signal does.
+export const exitOnUnhandledRejection =
+  ({
+    log,
+    closeAll,
+    report = (reason) => process.stderr.write(`${stackOf(reason)}\n`),
+    exit = process.exit,
+  }: {
+    log: (event: BridgeFailedEvent) => void;
+    closeAll: () => void;
+    report?: (reason: unknown) => void;
+    exit?: (code: number) => void;
+  }) =>
+  (reason: unknown) => {
+    log({ event: "bridge_failed", reason: "UnhandledRejection" });
+    report(reason);
+    try {
+      closeAll();
+    } finally {
+      exit(1);
+    }
+  };
+
+const stackOf = (reason: unknown) =>
+  reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+
+// The app-server the launcher started, which the bridge watches and stops.
+export const serverFromEnv = (
+  env: NodeJS.ProcessEnv,
+  {
+    parentPid = () => process.ppid,
+    send = signalProcess,
+  }: {
+    parentPid?: () => number;
+    send?: typeof signalProcess;
+  } = {},
+) => {
+  const pid = Number(env[SERVER_PID_ENV]);
+  const known = Number.isInteger(pid) && pid > 1;
+  const isRunning = () =>
+    // The server is alive only while it is still this process's parent; without a pid from the launcher nothing is ever signaled, so a reparented bridge cannot mistake launchd or a reused pid for the server.
+    known && parentPid() === pid;
+  return {
+    isRunning,
+    signal: (signal: Signal) =>
+      isRunning() ? send(pid, signal).map(() => true) : Result.ok(false),
+  };
+};
+
+export const serializeServerSignalEvent = (entry: ServerSignalEvent) => {
+  switch (entry.event) {
+    case "server_signaled":
+      return { event: entry.event, signal: entry.signal };
+    case "server_signal_failed":
+      return { event: entry.event, signal: entry.signal, code: entry.code };
+  }
+};
+
+// The errno code tells a refused signal (EPERM) apart from a server that exited just before it (ESRCH).
+export const signalWithLog =
+  (
+    server: Pick<ReturnType<typeof serverFromEnv>, "signal">,
+    log: (entry: ServerSignalEvent) => void,
+  ) =>
+  (signal: Signal) => {
+    const sent = server.signal(signal);
+    if (sent.isErr()) {
+      log({ event: "server_signal_failed", signal, code: sent.error.code });
+    } else if (sent.value) {
+      log({ event: "server_signaled", signal });
+    }
+  };
+
+// Stops a server that closed stdout but keeps running, which once the relay ends only the bridge is left to stop.
+export const stopLingeringServer = async ({
+  isRunning,
+  signal,
+  graceMs,
+  pollMs = POLL_MS,
+}: {
+  isRunning: () => boolean;
+  signal: (signal: Signal) => void;
+  graceMs: number;
+  pollMs?: number;
+}) => {
+  const exitsWithin = async (ms: number) => {
+    const deadline = Date.now() + ms;
+    while (isRunning()) {
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+    return true;
+  };
+  if (await exitsWithin(graceMs)) return;
+  signal("SIGTERM");
+  if (await exitsWithin(graceMs)) return;
+  signal("SIGKILL");
+  await exitsWithin(graceMs);
+};
+
+const POLL_MS = 20;

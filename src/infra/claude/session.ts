@@ -13,9 +13,9 @@ import { Result, TaggedError } from "better-result";
 import {
   listFilesDeepIfExists,
   readTextFileIfExists,
-} from "../../runtime/fs.boundary.ts";
-import { parseJson } from "../../runtime/json.boundary.ts";
-import { isObject } from "../../runtime/object.ts";
+} from "../../lib/fs.boundary.ts";
+import { parseJson } from "../../lib/json.boundary.ts";
+import { isObject } from "../../lib/object.ts";
 import {
   checkSettingsEnv,
   checkSubscription,

@@ -2,13 +2,13 @@ import { join } from "node:path";
 import type { Result } from "better-result";
 import { readInstalledPackage, versionOf } from "../infra/checkout.ts";
 import type { readLaunchd } from "../infra/setup/launchd.boundary.ts";
-import { readTextFileIfExists } from "../runtime/fs.boundary.ts";
-import { parseJson } from "../runtime/json.boundary.ts";
-import { isObject } from "../runtime/object.ts";
+import { readTextFileIfExists } from "../lib/fs.boundary.ts";
+import { parseJson } from "../lib/json.boundary.ts";
+import { isObject } from "../lib/object.ts";
 import {
   type CommandFailed,
   readCommandOutput,
-} from "../runtime/process.boundary.ts";
+} from "../lib/process.boundary.ts";
 import { SDK_PACKAGE } from "./bridge-identity.ts";
 import { parseTimedProcesses, type TimedProcess } from "./feedback-report.ts";
 

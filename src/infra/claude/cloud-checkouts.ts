@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { Result, TaggedError } from "better-result";
-import { prepareDirectory } from "../../runtime/fs.boundary.ts";
-import { runCommand } from "../../runtime/process.boundary.ts";
+import { prepareDirectory } from "../../lib/fs.boundary.ts";
+import { runCommand } from "../../lib/process.boundary.ts";
 
 // teleport copies a session made in a repository only from a checkout of it, which it tells by the remote URL alone; a checkout here is an empty repository with that remote, so nothing is fetched unless the session names a branch.
 // teleport fetches and checks out a branch the session names, so each copy running at once gets a checkout of its own, apart from the user's repositories.

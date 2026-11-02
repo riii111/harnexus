@@ -1,4 +1,4 @@
-import { fileIdentity } from "../runtime/fs.boundary.ts";
+import { fileIdentity } from "../lib/fs.boundary.ts";
 import { jsonEqual } from "./format.ts";
 
 // A check of whether a newer harnexus-task was installed over the running one.

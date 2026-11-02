@@ -1,5 +1,5 @@
-import { parseJson } from "../../runtime/json.boundary.ts";
-import { isObject } from "../../runtime/object.ts";
+import { parseJson } from "../../lib/json.boundary.ts";
+import { isObject } from "../../lib/object.ts";
 
 export const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

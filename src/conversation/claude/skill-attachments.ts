@@ -1,5 +1,5 @@
-import { skillBlock, skillLinks } from "../../presentation/skill-prompt.ts";
-import { readRegularTextFile } from "../../runtime/fs.boundary.ts";
+import { readRegularTextFile } from "../../lib/fs.boundary.ts";
+import { skillBlock, skillLinks } from "./skill-prompt.view.ts";
 
 export const readSkills = async (text: string) => {
   const links = skillLinks(text);

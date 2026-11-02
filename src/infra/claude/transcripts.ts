@@ -5,9 +5,9 @@ import {
   listDirectoryIfExists,
   readFileSlice,
   statFileIfExists,
-} from "../../runtime/fs.boundary.ts";
-import { parseJson } from "../../runtime/json.boundary.ts";
-import { isObject } from "../../runtime/object.ts";
+} from "../../lib/fs.boundary.ts";
+import { parseJson } from "../../lib/json.boundary.ts";
+import { isObject } from "../../lib/object.ts";
 
 // name is the one Claude or the user gave the conversation, and title falls back to its first prompt; entrypoint is the program that started it, such as cli or claude-desktop.
 export type ClaudeConversation = {
