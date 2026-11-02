@@ -5,18 +5,15 @@ import {
   type ModelCatalog,
 } from "../infra/claude/models.ts";
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
-import {
-  type DelegationWatch,
-  delegationSource,
-} from "../infra/codex/delegations.ts";
-import type { LiveTurn } from "../presentation/history.ts";
-import { isObject } from "../runtime/object.ts";
+import { isObject } from "../lib/object.ts";
+import { type DelegationWatch, delegationSource } from "../link/delegations.ts";
+import type { LiveTurn } from "./history/history.view.ts";
 import {
   type createHistoryRequests,
   HISTORY_METHODS,
   type HistoryEvent,
   isHistoryMethod,
-} from "./history-request.ts";
+} from "./history/request.ts";
 import { encode, encodeWithoutParams, parseMessage } from "./json-line.ts";
 import {
   type CompatibilityLogEvent,
@@ -28,9 +25,9 @@ import {
   type Pending,
   type ResponseEvent,
 } from "./route-response.ts";
-import type { createSideChats, Opened } from "./side-chat.ts";
-import type { SubagentRequests } from "./subagent-requests.ts";
-import type { SubagentRestoreEvent } from "./subagent-restore.ts";
+import type { createSideChats, Opened } from "./side-chat/side-chat.ts";
+import type { SubagentRequests } from "./subagents/requests.ts";
+import type { SubagentRestoreEvent } from "./subagents/restore.ts";
 import {
   type AppRequest,
   checkThread,
@@ -43,7 +40,7 @@ import {
   type Thread,
 } from "./thread-request.ts";
 import type { ThreadValues } from "./thread-values.ts";
-import type { ThreadEnd } from "./turn-runtime.ts";
+import type { ThreadEnd } from "./turn/turn-runtime.ts";
 
 type SubagentsReadTag = InferErr<
   Awaited<ReturnType<typeof readClaudeSubagents>>

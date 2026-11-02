@@ -1,5 +1,5 @@
 import { Result, TaggedError } from "better-result";
-import { isObject } from "../runtime/object.ts";
+import { isObject } from "../lib/object.ts";
 
 // A failure's message is shown to whoever ran the command and may carry a path or what a command printed, so the log records the tag alone.
 export class GithubAuthFailed extends TaggedError("GithubAuthFailed")<{

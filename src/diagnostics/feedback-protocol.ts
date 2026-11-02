@@ -1,9 +1,9 @@
+import { type ShapePath, shapeKey } from "../infra/codex/protocol/shape.ts";
 import {
   createObserver,
   type ObservationEvent,
-} from "../infra/codex/observe.ts";
-import type { Direction } from "../infra/codex/relay.ts";
-import { type ShapePath, shapeKey } from "../infra/codex/shape.ts";
+} from "../infra/codex/transport/observe.ts";
+import type { Direction } from "../infra/codex/transport/relay.ts";
 
 export type RecordedShape = {
   direction: string;

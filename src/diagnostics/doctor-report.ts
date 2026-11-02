@@ -1,5 +1,5 @@
-import { parseJson } from "../runtime/json.boundary.ts";
-import { isObject } from "../runtime/object.ts";
+import { parseJson } from "../lib/json.boundary.ts";
+import { isObject } from "../lib/object.ts";
 
 export type Check = {
   status: "ok" | "warn" | "fail";

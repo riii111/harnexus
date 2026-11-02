@@ -7,9 +7,9 @@ import {
   prepareDirectory,
   readTextFileIfExists,
   writeFileAtomic,
-} from "../runtime/fs.boundary.ts";
-import { parseJson } from "../runtime/json.boundary.ts";
-import { type Fields, isObject } from "../runtime/object.ts";
+} from "../lib/fs.boundary.ts";
+import { parseJson } from "../lib/json.boundary.ts";
+import { type Fields, isObject } from "../lib/object.ts";
 import type { Finding } from "./classify.ts";
 import type { WatchEvent } from "./events.ts";
 import {

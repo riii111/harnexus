@@ -153,9 +153,9 @@ describe("startup fallback", () => {
       const launcher = join(root, "bin", "harnexus-codex");
       await writeFile(launcher, await Bun.file(LAUNCHER).text());
       await chmod(launcher, 0o755);
-      await mkdir(join(root, "src", "bootstrap"), { recursive: true });
+      await mkdir(join(root, "src", "cli"), { recursive: true });
       await writeFile(
-        join(root, "src", "bootstrap", "main.ts"),
+        join(root, "src", "cli", "bridge.ts"),
         'import "./missing-dependency.ts";',
       );
       const { env } = setup();

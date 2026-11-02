@@ -45,7 +45,7 @@ if (runs_app_server(@ARGV)) {
 
 exec { $codex } $codex, @ARGV or fail("cannot start $codex: $!");
 
-# codex_app works only while the process the app started is Codex itself, so this process becomes Codex; fds 3 (Codex stdout) and 4 (Codex stdin) must match src/bootstrap/main.ts.
+# codex_app works only while the process the app started is Codex itself, so this process becomes Codex; fds 3 (Codex stdout) and 4 (Codex stdin) must match src/cli/bridge.ts.
 sub start_sidecar {
   my $bun = $ENV{HARNEXUS_BUN_PATH} // "";
   return {reason => "BunUnavailable", version => undef} unless $bun =~ m{^/} && -f $bun && -x _;
@@ -107,7 +107,7 @@ sub place_fds {
 sub bun_command {
   my ($bun) = @_;
   return ($bun, "--no-env-file", "--config=/dev/null",
-    dirname(dirname($self)) . "/src/bootstrap/main.ts", "--launcher");
+    dirname(dirname($self)) . "/src/cli/bridge.ts", "--launcher");
 }
 
 # The app puts global options before `app-server`; helper subcommands such as generate-ts and non-stdio listeners carry no app traffic, so they go straight to Codex.

@@ -1,8 +1,8 @@
 import { Result } from "better-result";
 import { z } from "zod";
-import { readRegularTextFile } from "../runtime/fs.boundary.ts";
-import { parseJson } from "../runtime/json.boundary.ts";
-import { compileRegex } from "../runtime/regex.boundary.ts";
+import { readRegularTextFile } from "../lib/fs.boundary.ts";
+import { parseJson } from "../lib/json.boundary.ts";
+import { compileRegex } from "../lib/regex.boundary.ts";
 import {
   ConfigInvalid,
   type ConfigUnreadable,

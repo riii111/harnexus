@@ -4,7 +4,7 @@ import type {
   PermissionUpdate,
 } from "@anthropic-ai/claude-agent-sdk";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
-import { createEmptyFile } from "../../runtime/fs.boundary.ts";
+import { createEmptyFile } from "../../lib/fs.boundary.ts";
 import {
   answer,
   appRequest,

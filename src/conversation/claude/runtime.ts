@@ -11,38 +11,29 @@ import type {
   ClaudeSessionSettings,
   claudeSessionExists,
 } from "../../infra/claude/session.ts";
+import type { TokenUsageBreakdown } from "../../infra/codex/protocol/messages.ts";
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
 import type { ThreadRecord } from "../../infra/thread-store.ts";
-import type { TokenUsageBreakdown } from "../../presentation/protocol.ts";
-import { RECOVERY_CONTEXT } from "../../presentation/recovery.ts";
-import {
-  type PickerPage,
-  pickerPrompt,
-  searchPrompt,
-} from "../../presentation/session-picker.ts";
-import {
-  RECORD_ADVANCED,
-  sessionReplyText,
-} from "../../presentation/session-reply.ts";
-import { breakdown } from "../../presentation/token-usage.ts";
+import { ABORTED, waitForAbort } from "../../lib/wait-for-abort.ts";
+import type { Subagents } from "../subagents/subagents.ts";
+import { type Refusal, refusalMessage } from "../thread-request.ts";
+import type { ThreadValues } from "../thread-values.ts";
+import type { TurnEvent } from "../turn/controller.ts";
+import { RECOVERY_CONTEXT } from "../turn/recovery.view.ts";
+import { breakdown } from "../turn/token-usage.view.ts";
 import {
   renderInterimResult,
   renderNotice,
   renderSdkMessage,
   type TurnOutcome,
-} from "../../presentation/turn.ts";
-import { ABORTED, waitForAbort } from "../../runtime/wait-for-abort.ts";
-import type { TurnEvent } from "../controller.ts";
-import type { Subagents } from "../subagents.ts";
-import { type Refusal, refusalMessage } from "../thread-request.ts";
-import type { ThreadValues } from "../thread-values.ts";
+} from "../turn/turn.view.ts";
 import type {
   ErrorTag,
   RunningTurn,
   ThreadEnd,
   TurnLink,
   TurnRuntime,
-} from "../turn-runtime.ts";
+} from "../turn/turn-runtime.ts";
 import { createApprovals } from "./approvals.ts";
 import { createForkPoints } from "./fork-points.ts";
 import { readImages } from "./image-attachments.ts";
@@ -53,6 +44,12 @@ import {
   type SessionEvent,
   sessionCommandOf,
 } from "./session-commands.ts";
+import {
+  type PickerPage,
+  pickerPrompt,
+  searchPrompt,
+} from "./session-picker.view.ts";
+import { RECORD_ADVANCED, sessionReplyText } from "./session-reply.view.ts";
 import {
   type ClaudeSession,
   type CodexLink,

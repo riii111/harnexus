@@ -1,6 +1,6 @@
 import type { InferOk } from "better-result";
 import type { startClaudeSession } from "../../infra/claude/session.ts";
-import type { createCodexLink } from "../../infra/codex/codex-link.ts";
+import type { createCodexLink } from "../../link/codex-link.ts";
 import type { ThreadValues } from "../thread-values.ts";
 import type { Inbox } from "./inbox.ts";
 

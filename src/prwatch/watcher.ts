@@ -1,5 +1,5 @@
 import { Result } from "better-result";
-import type { Fields } from "../runtime/object.ts";
+import type { Fields } from "../lib/object.ts";
 import type { Finding } from "./classify.ts";
 import { loadConfig, type WatchConfig } from "./config.ts";
 import { nextEvents, type WatchEvent } from "./events.ts";

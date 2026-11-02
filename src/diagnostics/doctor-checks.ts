@@ -1,18 +1,18 @@
 import { dirname, join } from "node:path";
 import { claudeCliFile } from "../infra/claude/cloud.ts";
 import { readClaudeLogin } from "../infra/claude/session.ts";
-import { isVerifiedCodex } from "../infra/codex/versions.ts";
+import { isVerifiedCodex } from "../infra/codex/protocol/versions.ts";
 import { registeredEnvironment } from "../infra/setup/open-app-plan.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
-import { loadLogPath, loadStatePath } from "../runtime/config.ts";
+import { loadLogPath, loadStatePath } from "../lib/config.ts";
 import {
   checkAccess,
   readFileSlice,
   readTextFileIfExists,
   statFileIfExists,
-} from "../runtime/fs.boundary.ts";
-import { parseJson } from "../runtime/json.boundary.ts";
-import { readCommandOutput } from "../runtime/process.boundary.ts";
+} from "../lib/fs.boundary.ts";
+import { parseJson } from "../lib/json.boundary.ts";
+import { readCommandOutput } from "../lib/process.boundary.ts";
 import { compatibilityCheck } from "./compatibility-report.ts";
 import {
   type Check,

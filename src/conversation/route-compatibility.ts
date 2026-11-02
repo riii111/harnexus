@@ -2,8 +2,11 @@ import {
   type CompatibilityEvent,
   compatibilityVersion,
   responseCompatibility,
-} from "../infra/codex/compatibility.ts";
-import { codexVersion, isVerifiedCodex } from "../infra/codex/versions.ts";
+} from "../infra/codex/protocol/compatibility.ts";
+import {
+  codexVersion,
+  isVerifiedCodex,
+} from "../infra/codex/protocol/versions.ts";
 
 export type CompatibilityLogEvent =
   | CompatibilityEvent

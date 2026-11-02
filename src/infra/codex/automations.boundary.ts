@@ -4,10 +4,10 @@ import {
   listDirectoryIfExists,
   readTextFileIfExists,
   writeFileAtomic,
-} from "../../runtime/fs.boundary.ts";
-import { parseJson } from "../../runtime/json.boundary.ts";
-import { isObject } from "../../runtime/object.ts";
-import { createSerialQueue } from "../../runtime/serial-queue.ts";
+} from "../../lib/fs.boundary.ts";
+import { parseJson } from "../../lib/json.boundary.ts";
+import { isObject } from "../../lib/object.ts";
+import { createSerialQueue } from "../../lib/serial-queue.ts";
 
 class AutomationUnparsable extends TaggedError("AutomationUnparsable")<{
   message: string;

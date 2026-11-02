@@ -10,11 +10,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result } from "better-result";
-import { runCommand } from "../../runtime/process.boundary.ts";
-import {
-  type ProcessRun,
-  ProcessRunFailed,
-} from "../../runtime/run.boundary.ts";
+import { runCommand } from "../../lib/process.boundary.ts";
+import { type ProcessRun, ProcessRunFailed } from "../../lib/run.boundary.ts";
 import { bundledClaude } from "./bundled-claude.boundary.ts";
 import {
   type CloudCli,

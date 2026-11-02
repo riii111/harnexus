@@ -1,0 +1,213 @@
+import type {
+  ThreadItem,
+  Turn,
+  TurnError,
+} from "../../infra/codex/protocol/messages.ts";
+import type { HistoryItem, HistoryTurn } from "./history.view.ts";
+
+export type TurnsView = "notLoaded" | "summary" | "full";
+
+export type SortDirection = "asc" | "desc";
+
+type Page<T> = {
+  data: T[];
+  nextCursor: string | null;
+  backwardsCursor: string | null;
+};
+
+type TimelineEntry =
+  | {
+      type: "turnStarted";
+      position: number;
+      turnId: string;
+      startedAt: number | null;
+    }
+  | { type: "item"; position: number; turnId: string; item: ThreadItem }
+  | {
+      type: "turnCompleted";
+      position: number;
+      turnId: string;
+      status: Turn["status"];
+      error: TurnError | null;
+      startedAt: number | null;
+      completedAt: number | null;
+      durationMs: number | null;
+    };
+
+export const pageTurns = (
+  history: readonly HistoryTurn[],
+  request: {
+    cursor: string | null;
+    limit: number | null;
+    sortDirection: SortDirection;
+    itemsView: TurnsView;
+  },
+): Page<Turn> | null => {
+  const paged = page(
+    ordered(history, request.sortDirection),
+    (entry) => entry.turn.id,
+    () => true,
+    request,
+  );
+  return paged === null
+    ? null
+    : {
+        ...paged,
+        data: paged.data.map((entry) => viewTurn(entry, request.itemsView)),
+      };
+};
+
+export const pageItems = (
+  history: readonly HistoryTurn[],
+  request: {
+    turnId: string | null;
+    cursor: string | null;
+    limit: number | null;
+    sortDirection: SortDirection;
+  },
+): Page<HistoryItem> | null =>
+  page(
+    ordered(
+      history.flatMap((entry) => entry.items),
+      request.sortDirection,
+    ),
+    (entry) => entry.item.id,
+    // The app starts every turn's item pages from the thread's newest item, so a cursor may name an item of another turn and the turn filter applies after it.
+    (entry) => request.turnId === null || entry.turnId === request.turnId,
+    request,
+  );
+
+export const itemAnchorCursor = (itemId: string) =>
+  // An item anchor is exclusive in the asked direction, so it starts the page as a next cursor after that item does.
+  `${AFTER}${itemId}`;
+
+export const pageTimeline = (
+  history: readonly HistoryTurn[],
+  request: { cursor: string | null; limit: number | null },
+): Omit<Page<TimelineEntry>, "backwardsCursor"> | null => {
+  const entries = timeline(history);
+  const end =
+    request.cursor === null ? entries.length : timelineEnd(request.cursor);
+  if (end === null || end > entries.length) return null;
+  // The app reads the timeline from its newest page back, so a page holds the entries just before its cursor in record order.
+  const start = Math.max(0, end - pageSize(request.limit, end));
+  return {
+    data: entries.slice(start, end),
+    nextCursor: start > 0 ? `${BEFORE}${start}` : null,
+  };
+};
+
+// The cursors the app pages back from the newest turn and item with.
+export const resumeCursors = (history: readonly HistoryTurn[]) => {
+  const newestTurn = history.at(-1);
+  const newestItem = history.flatMap((entry) => entry.items).at(-1);
+  return {
+    turnsBackwardsCursor:
+      newestTurn === undefined ? null : `${AT}${newestTurn.turn.id}`,
+    itemsBackwardsCursor:
+      newestItem === undefined ? null : `${AT}${newestItem.item.id}`,
+  };
+};
+
+export const viewTurn = (entry: HistoryTurn, view: TurnsView): Turn => {
+  switch (view) {
+    case "notLoaded":
+      return { ...entry.turn, items: [], itemsView: "notLoaded" };
+    case "summary":
+      return entry.turn;
+    case "full":
+      return {
+        ...entry.turn,
+        items: entry.items.map(({ item }) => item),
+        itemsView: "full",
+      };
+  }
+};
+
+const timeline = (history: readonly HistoryTurn[]): TimelineEntry[] => {
+  const entries: TimelineEntry[] = [];
+  for (const { turn, items } of history) {
+    entries.push({
+      type: "turnStarted",
+      position: entries.length,
+      turnId: turn.id,
+      startedAt: turn.startedAt,
+    });
+    for (const { item } of items) {
+      entries.push({
+        type: "item",
+        position: entries.length,
+        turnId: turn.id,
+        item,
+      });
+    }
+    // A running agent's turn gets its completion entry only once it ends; it is always the last turn, so no earlier position moves.
+    if (turn.status === "inProgress") continue;
+    entries.push({
+      type: "turnCompleted",
+      position: entries.length,
+      turnId: turn.id,
+      status: turn.status,
+      error: turn.error,
+      startedAt: turn.startedAt,
+      completedAt: turn.completedAt,
+      durationMs: turn.durationMs,
+    });
+  }
+  return entries;
+};
+
+const timelineEnd = (cursor: string) => {
+  if (!cursor.startsWith(BEFORE)) return null;
+  const end = Number(cursor.slice(BEFORE.length));
+  return Number.isInteger(end) && end > 0 ? end : null;
+};
+
+const page = <T>(
+  entries: readonly T[],
+  idOf: (entry: T) => string,
+  keep: (entry: T) => boolean,
+  request: { cursor: string | null; limit: number | null },
+): Page<T> | null => {
+  const from =
+    request.cursor === null ? 0 : startOf(entries, idOf, request.cursor);
+  if (from === null) return null;
+  const candidates = entries.slice(from).filter(keep);
+  const data = candidates.slice(0, pageSize(request.limit, candidates.length));
+  const first = data[0];
+  const last = data.at(-1);
+  return {
+    data,
+    // A next cursor resumes after the page's last entry, and a backwards cursor reverses from its first entry, which it includes again.
+    nextCursor:
+      last !== undefined && candidates.length > data.length
+        ? `${AFTER}${idOf(last)}`
+        : null,
+    backwardsCursor: first === undefined ? null : `${AT}${idOf(first)}`,
+  };
+};
+
+const startOf = <T>(
+  entries: readonly T[],
+  idOf: (entry: T) => string,
+  cursor: string,
+) => {
+  const inclusive = cursor.startsWith(AT);
+  if (!inclusive && !cursor.startsWith(AFTER)) return null;
+  // An id stays put as the conversation grows, so turn and item cursors name ids rather than positions.
+  const id = cursor.slice(inclusive ? AT.length : AFTER.length);
+  const index = entries.findIndex((entry) => idOf(entry) === id);
+  if (index === -1) return null;
+  return inclusive ? index : index + 1;
+};
+
+const ordered = <T>(entries: readonly T[], direction: SortDirection) =>
+  direction === "asc" ? entries : [...entries].reverse();
+
+const pageSize = (limit: number | null, available: number) =>
+  // Without a limit the whole rest is one page, as the history is already in memory.
+  limit === null ? available : Math.max(1, Math.floor(limit));
+
+const AT = "at:";
+const AFTER = "after:";
+const BEFORE = "before:";

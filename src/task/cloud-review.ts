@@ -1,9 +1,9 @@
 import { join } from "node:path";
 import { Result } from "better-result";
-import { prepareDirectory, removeFile } from "../runtime/fs.boundary.ts";
-import { parseJson } from "../runtime/json.boundary.ts";
-import { type Fields, isObject } from "../runtime/object.ts";
-import { runProcess } from "../runtime/run.boundary.ts";
+import { prepareDirectory, removeFile } from "../lib/fs.boundary.ts";
+import { parseJson } from "../lib/json.boundary.ts";
+import { type Fields, isObject } from "../lib/object.ts";
+import { runProcess } from "../lib/run.boundary.ts";
 import { asText, detail, fail, jsonEqual } from "./format.ts";
 import {
   readRecords,

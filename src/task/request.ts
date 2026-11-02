@@ -6,13 +6,10 @@ import {
   pathExists,
   readRegularTextFile,
   realPathOrSelf,
-} from "../runtime/fs.boundary.ts";
-import { parseJson } from "../runtime/json.boundary.ts";
-import { type Fields, isObject } from "../runtime/object.ts";
-import type {
-  CommandFailed,
-  CommandOutput,
-} from "../runtime/process.boundary.ts";
+} from "../lib/fs.boundary.ts";
+import { parseJson } from "../lib/json.boundary.ts";
+import { type Fields, isObject } from "../lib/object.ts";
+import type { CommandFailed, CommandOutput } from "../lib/process.boundary.ts";
 import {
   fail,
   hasSpace,

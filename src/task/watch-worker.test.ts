@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Result } from "better-result";
-import type { Fields } from "../runtime/object.ts";
+import type { Fields } from "../lib/object.ts";
 import { codexWorkers } from "./watch-worker.ts";
 
 const answered = (read: unknown) => async () => ({

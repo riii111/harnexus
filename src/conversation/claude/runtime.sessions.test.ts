@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Result } from "better-result";
 import { startClaudeSession } from "../../infra/claude/session.ts";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
-import { createEmptyFile, writeFileAtomic } from "../../runtime/fs.boundary.ts";
+import { createEmptyFile, writeFileAtomic } from "../../lib/fs.boundary.ts";
 import {
   ALLOWED_TOOLS,
   answer,

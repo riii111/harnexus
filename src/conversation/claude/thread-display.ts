@@ -1,14 +1,10 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import {
-  NO_PLAN,
-  renderPlan,
-  type ThreadPlan,
-} from "../../presentation/plan.ts";
+import { NO_PLAN, renderPlan, type ThreadPlan } from "../turn/plan.view.ts";
 import {
   NO_USAGE,
   renderTokenUsage,
   type ThreadUsage,
-} from "../../presentation/token-usage.ts";
+} from "../turn/token-usage.view.ts";
 
 // The token usage and plan the app shows for each thread beyond its turns.
 export const createThreadDisplay = ({

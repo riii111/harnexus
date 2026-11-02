@@ -9,23 +9,18 @@ import type {
 import { type InferErr, Result } from "better-result";
 import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import { readClaudeSession } from "../infra/claude/session.ts";
-import { createCallGateway } from "../infra/codex/call-gateway.ts";
-import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
-import type { LiveTurn } from "../presentation/history.ts";
-import {
-  conversation,
-  prompt,
-  reply,
-  text,
-} from "../presentation/testing/session-record.ts";
-import { createHistoryRequests } from "./history-request.ts";
+import { createCallGateway } from "../link/call-gateway.ts";
+import { createDelegationWatch } from "../link/delegations.ts";
+import type { LiveTurn } from "./history/history.view.ts";
+import { createHistoryRequests } from "./history/request.ts";
 import { createRouter, type RouteEvent } from "./route.ts";
-import { createSideChats } from "./side-chat.ts";
-import { createSubagentRequests } from "./subagent-requests.ts";
-import { createSubagents } from "./subagents.ts";
+import { createSideChats } from "./side-chat/side-chat.ts";
+import { createSubagentRequests } from "./subagents/requests.ts";
+import { createSubagents } from "./subagents/subagents.ts";
 import { until } from "./testing/harness.ts";
 import { LIVE, statusOf } from "./testing/live-history.ts";
+import { conversation, prompt, reply, text } from "./testing/session-record.ts";
 import {
   type AppRequest,
   type Mode,

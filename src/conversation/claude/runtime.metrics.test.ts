@@ -2,8 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
 import { effortRule } from "../../infra/claude/models.ts";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
-import { writeFileAtomic } from "../../runtime/fs.boundary.ts";
-import type { createTurnController } from "../controller.ts";
+import { writeFileAtomic } from "../../lib/fs.boundary.ts";
 import {
   answer,
   BUILT_IN_EFFORTS,
@@ -31,6 +30,7 @@ import {
   useTempDir,
   withEffort,
 } from "../testing/harness.ts";
+import type { createTurnController } from "../turn/controller.ts";
 import { steer } from "./testing/runtime-fixtures.ts";
 
 useTempDir();

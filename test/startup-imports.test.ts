@@ -6,9 +6,9 @@ const SRC = join(import.meta.dir, "..", "src");
 describe("bridge startup imports", () => {
   test("loads no Claude Agent SDK module before a Claude session starts", async () => {
     const modules = [
-      "bootstrap/claude-threads.ts",
+      "cli/bridge-wiring.ts",
       "infra/claude/session.ts",
-      "infra/codex/codex-link.ts",
+      "link/codex-link.ts",
     ].map((path) => join(SRC, path));
     const script = `
       for (const path of ${JSON.stringify(modules)}) await import(path);

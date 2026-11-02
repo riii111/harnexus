@@ -10,7 +10,7 @@ import {
   FileWriteFailed,
   removeFile,
   writeFileAtomic,
-} from "../runtime/fs.boundary.ts";
+} from "../lib/fs.boundary.ts";
 import { openThreadStore } from "./thread-store.ts";
 
 let dir: string;

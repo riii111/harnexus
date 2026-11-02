@@ -1,5 +1,5 @@
 import { Result, TaggedError } from "better-result";
-import { readRegularFileBytesWithin } from "../../runtime/fs.boundary.ts";
+import { readRegularFileBytesWithin } from "../../lib/fs.boundary.ts";
 
 export type ImageBlock = {
   type: "image";

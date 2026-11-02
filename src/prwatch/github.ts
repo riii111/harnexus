@@ -3,12 +3,9 @@ import {
   type GraphqlAnswer,
   postGraphql,
 } from "../infra/github/graphql.boundary.ts";
-import { parseJson } from "../runtime/json.boundary.ts";
-import { isObject } from "../runtime/object.ts";
-import type {
-  CommandFailed,
-  CommandOutput,
-} from "../runtime/process.boundary.ts";
+import { parseJson } from "../lib/json.boundary.ts";
+import { isObject } from "../lib/object.ts";
+import type { CommandFailed, CommandOutput } from "../lib/process.boundary.ts";
 import type { ItemKind } from "./config.ts";
 import {
   GithubAuthFailed,
