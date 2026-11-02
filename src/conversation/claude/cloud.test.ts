@@ -35,6 +35,10 @@ import type { CloudReview } from "./cloud-reviews.ts";
 
 const CLOUD_ID = "session_01NfjPqrX1AK5RmKyV182VYD";
 
+// How the app links a picked skill in the message it sends.
+const CLOUD_SKILL_LINK =
+  "[$cloud-session](/home/me/.agents/skills/cloud-session/SKILL.md)";
+
 type CloudEvent = Parameters<typeof serializeCloudEvent>[0];
 
 type SendAnswer = Result<void, CloudSendRejected | CloudSendUnknown>;
@@ -400,6 +404,78 @@ describe("createCloudRuntime /cloud", () => {
     ]);
     expect(turn.texts().at(-1)).toContain("now shows the Cloud session");
     expect(env.innerRuns).toEqual([]);
+  });
+
+  test("starts a Cloud session for a request sent with the cloud-session skill in an empty chat, without the skill's link and without Claude", async () => {
+    const env = setup({ copies: [[]] });
+    const turn = env.turn(
+      `${CLOUD_SKILL_LINK} README の誤字を直して\nPR は作らない`,
+    );
+
+    await env.runtime.run(turn.running);
+    await settle();
+
+    expect(env.started).toEqual([
+      { request: "README の誤字を直して\nPR は作らない", cwd: "/work/tree" },
+    ]);
+    expect(env.links.map((link) => link.cloud.sessionId)).toEqual([CLOUD_ID]);
+    expect(env.renames.map((renamed) => renamed.name)).toEqual([
+      "☁️ README の誤字",
+    ]);
+    expect(env.innerRuns).toEqual([]);
+  });
+
+  test.each([
+    { name: "id", argument: CLOUD_ID },
+    { name: "URL", argument: `https://claude.ai/code/${CLOUD_ID}` },
+  ])("links an empty chat to the session whose $name is sent with the cloud-session skill", async ({
+    argument,
+  }) => {
+    const env = setup({
+      copies: [[prompt("p1", "hello"), endReply("r1", "hi")]],
+    });
+
+    await env.runtime.run(env.turn(`${CLOUD_SKILL_LINK} ${argument}`).running);
+
+    expect(env.started).toEqual([]);
+    expect(env.links.map((link) => link.cloud.sessionId)).toEqual([CLOUD_ID]);
+    expect(env.innerRuns).toEqual([]);
+  });
+
+  test("refuses the cloud-session skill sent alone in an empty chat as it refuses /cloud alone", async () => {
+    const env = setup({ copies: [] });
+    const turn = env.turn(`${CLOUD_SKILL_LINK}\n`);
+
+    await env.runtime.run(turn.running);
+
+    expect(env.started).toEqual([]);
+    expect(env.innerRuns).toEqual([]);
+    expect(turn.texts().at(-1)).toContain("Send /cloud followed by");
+  });
+
+  test.each([
+    {
+      name: "the cloud-session skill in a chat that holds a conversation",
+      text: `${CLOUD_SKILL_LINK} README の誤字を直して`,
+      held: true,
+    },
+    {
+      name: "another skill in an empty chat",
+      text: "[$cloud-review](/skills/cloud-review/SKILL.md) README の誤字を直して",
+      held: false,
+    },
+  ])("passes $name on to Claude, starting no session", async ({
+    text,
+    held,
+  }) => {
+    const env = setup({ copies: [] });
+    if (held) env.sessionIds.set("thread-1", "local-1");
+
+    await env.runtime.run(env.turn(text).running);
+
+    expect(env.started).toEqual([]);
+    expect(env.links).toEqual([]);
+    expect(env.innerRuns).toEqual(["turn-1"]);
   });
 
   test("says when the Cloud session for a request could not start", async () => {

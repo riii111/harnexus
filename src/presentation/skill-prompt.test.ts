@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { skillBlock, skillLinks } from "./skill-prompt.ts";
+import { skillBlock, skillLinks, withoutSkillLinks } from "./skill-prompt.ts";
 
 describe("skillLinks", () => {
   test("finds each linked SKILL.md once in the order it appears", () => {
@@ -30,5 +30,16 @@ describe("skillBlock", () => {
     expect(skillBlock("one", "/skills/one/SKILL.md", "Do it.")).toBe(
       "<skill>\n<name>one</name>\n<path>/skills/one/SKILL.md</path>\nDo it.\n</skill>",
     );
+  });
+});
+
+describe("withoutSkillLinks", () => {
+  test("takes out every link to the named skill and keeps links to others", () => {
+    expect(
+      withoutSkillLinks(
+        "[$one](/skills/one/SKILL.md) do [$two](/skills/two/SKILL.md) it [$one](/skills/one/SKILL.md)",
+        "one",
+      ),
+    ).toBe(" do [$two](/skills/two/SKILL.md) it ");
   });
 });
