@@ -204,19 +204,6 @@ describe("createCloudRuntime child sessions", () => {
   const CHILD = "session_01NfjPqs5GNSgknfAaJ3mdYA";
   const started = (id: string) =>
     JSON.stringify({ ccr: { id, title: "worker" } });
-  // The session archives the worker it started, so it is done and its turn ends.
-  const archived = (id: string) => [
-    reply(
-      "x1",
-      "mx",
-      toolUse("tx", "mcp__claude-code-remote__archive_session", {
-        session_id: id,
-      }),
-      "tool_use",
-    ),
-    toolResult("ux", "tx", "archived"),
-    endReply("x2", "archived"),
-  ];
 
   test("opens a chat for a session the linked one started after the app was shown, once", async () => {
     const env = linked({
@@ -233,7 +220,6 @@ describe("createCloudRuntime child sessions", () => {
           ),
           toolResult("u1", "t1", started(CHILD)),
           endReply("a2", "started"),
-          ...archived(CHILD),
         ],
       ],
       shown: "r0",
@@ -260,7 +246,6 @@ describe("createCloudRuntime child sessions", () => {
           ),
           toolResult("u1", "t1", started(CHILD)),
           endReply("a2", "started"),
-          ...archived(CHILD),
         ],
       ],
     });
@@ -287,7 +272,6 @@ describe("createCloudRuntime child sessions", () => {
           ),
           toolResult("u1", "t1", started(CHILD)),
           endReply("a2", "started"),
-          ...archived(CHILD),
         ],
       ],
       shown: "r0",
@@ -328,7 +312,6 @@ describe("createCloudRuntime child sessions", () => {
           ),
           toolResult("u1", "t1", started(CHILD)),
           endReply("a2", "started"),
-          ...archived(CHILD),
         ],
       ],
       shown: "r0",
@@ -338,7 +321,7 @@ describe("createCloudRuntime child sessions", () => {
 
     await env.runtime.run(env.turn("start a worker").running);
     await settle();
-    expect(env.cloudOf("thread-1")?.shown).toBe("x2");
+    expect(env.cloudOf("thread-1")?.shown).toBe("a2");
     await env.tick();
     await settle();
     await env.tick();
@@ -361,12 +344,11 @@ describe("createCloudRuntime child sessions", () => {
           ),
           toolResult("u1", "t1", started(CHILD)),
           endReply("a2", "started"),
-          ...archived(CHILD),
           prompt("p1", "hi"),
           endReply("a3", "hello"),
         ],
       ],
-      shown: "x2",
+      shown: "a2",
     });
     const turn = env.turn("hi");
 
@@ -1374,19 +1356,23 @@ describe("createCloudRuntime idle copies", () => {
     expect(env.copyCalls).toBe(1);
   });
 
-  test("keeps Claude's own turn running while the session waits for a session it started, until it archives it", async () => {
-    const CREATE = "mcp__claude-code-remote__create_session";
-    const ARCHIVE = "mcp__claude-code-remote__archive_session";
-    const CHILD = "session_01NfjPqs5GNSgknfAaJ3mdYA";
+  test("keeps Claude's own turn running while the session waits for a message it scheduled, until it comes", async () => {
+    const SEND_LATER = "mcp__claude-code-remote__send_later";
     const waiting = [
       prompt("p1", "first"),
       endReply("a1", "one"),
-      reply("a2", "m2", toolUse("t1", CREATE, { prompt: "go" }), "tool_use"),
-      toolResult("r1", "t1", JSON.stringify({ ccr: { id: CHILD } })),
-      endReply("a3", "started a worker"),
+      reply(
+        "a2",
+        "m2",
+        toolUse("t1", SEND_LATER, { delay_minutes: 30, message: "check CI" }),
+        "tool_use",
+        "2026-11-01T00:00:00Z",
+      ),
+      toolResult("r1", "t1", '{"trigger_id":"trig_01Abc"}'),
+      endReply("a3", "will check later"),
     ];
     const env = linked({
-      // Waiting for its worker is no reason to stop following it, however long it takes.
+      // Waiting for what it scheduled is no reason to stop following it, however long it takes.
       waitLimitMs: 0,
       copies: [
         waiting,
@@ -1394,15 +1380,8 @@ describe("createCloudRuntime idle copies", () => {
         waiting,
         [
           ...waiting,
-          prompt("p2", "the worker finished"),
-          reply(
-            "a4",
-            "m4",
-            toolUse("t2", ARCHIVE, { session_id: CHILD }),
-            "tool_use",
-          ),
-          toolResult("r2", "t2", "archived"),
-          endReply("a5", "all done"),
+          prompt("p2", "check CI", "2026-11-01T00:30:00Z"),
+          endReply("a5", "CI passed"),
         ],
       ],
       shown: "a1",
@@ -1413,26 +1392,23 @@ describe("createCloudRuntime idle copies", () => {
     const turn = env.turn("", { startedBy: "claude" });
     await env.runtime.run(turn.running);
 
-    expect(turn.texts()).toEqual(["started a worker", "all done"]);
-    expect(turn.userTexts()).toEqual(["the worker finished"]);
+    expect(turn.texts()).toEqual(["will check later", "CI passed"]);
+    expect(turn.userTexts()).toEqual(["check CI"]);
     expect(turn.outcome).toEqual({ status: "completed" });
     expect(env.cloudOf("thread-1")?.shown).toBe("a5");
   });
 
-  test("follows a session linked while it waits for its worker with a turn of Claude's own, and not again once the user stops it", async () => {
-    const CHILD = "session_01NfjPqs5GNSgknfAaJ3mdYA";
-    const waiting = [
+  test("follows a session linked while it is in its turn with a turn of Claude's own, and not again once the user stops it", async () => {
+    const working = [
       prompt("p1", "first"),
       reply(
         "a2",
         "m2",
-        toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+        toolUse("t1", "Bash", { command: "bun test" }),
         "tool_use",
       ),
-      toolResult("r1", "t1", JSON.stringify({ ccr: { id: CHILD } })),
-      endReply("a3", "started a worker"),
     ];
-    const env = linked({ copies: [waiting], shown: "a3" });
+    const env = linked({ copies: [working], shown: "a2" });
     env.runtime.listen((threadId) => {
       env.ownStarts.push(threadId);
       return true;
@@ -1448,6 +1424,37 @@ describe("createCloudRuntime idle copies", () => {
 
     expect(env.ownStarts).toEqual(["thread-1"]);
     expect(turn.outcome).toEqual({ status: "interrupted" });
+  });
+
+  test("leaves a session that replied after starting a worker done, since the worker tells it of its work itself", async () => {
+    const env = linked({
+      copies: [
+        [
+          prompt("p1", "first"),
+          reply(
+            "a2",
+            "m2",
+            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+            "tool_use",
+          ),
+          toolResult(
+            "r1",
+            "t1",
+            JSON.stringify({ ccr: { id: "session_01NfjPqs5GNSgknfAaJ3mdYA" } }),
+          ),
+          endReply("a3", "started a worker"),
+        ],
+      ],
+      shown: "a3",
+    });
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+
+    await env.tick();
+
+    expect(env.ownStarts).toEqual([]);
   });
 
   test("keeps the copy it reads when nothing is new", async () => {

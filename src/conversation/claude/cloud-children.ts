@@ -77,9 +77,8 @@ const createdIn = (content: unknown): CloudChild | null => {
   return null;
 };
 
-// Whether a Cloud session that ended its turn is still waiting for work it handed off, and so is not done: a session it started and has not archived, or a message it scheduled to itself that has not arrived.
+// Whether a Cloud session that ended its turn is still watching for something, and so is not done: a message it scheduled to itself that has not arrived. A session it started tells it of its work by a message of its own, so it is not waited for.
 export const waitingIn = (records: readonly SessionMessage[]) => {
-  const archived = new Set<string>();
   const cancelled = new Set<string>();
   const calls = new Map<string, Record<string, unknown>>();
   const scheduled: {
@@ -117,8 +116,6 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
         const read = textsOf(block.content).join("\n");
         arrive(scheduled, at, (message) => read.includes(message));
       }
-      if (ARCHIVE_SESSION.test(name) && typeof input.session_id === "string")
-        archived.add(input.session_id);
       if (DELETE_TRIGGER.test(name) && typeof input.trigger_id === "string")
         cancelled.add(input.trigger_id);
       if (SEND_LATER.test(name))
@@ -134,12 +131,9 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
         });
     }
   }
-  return (
-    childSessionsIn(records).some((child) => !archived.has(child.sessionId)) ||
-    scheduled.some(
-      ({ trigger, came }) =>
-        !came && (trigger === null || !cancelled.has(trigger)),
-    )
+  return scheduled.some(
+    ({ trigger, came }) =>
+      !came && (trigger === null || !cancelled.has(trigger)),
   );
 };
 
@@ -190,7 +184,6 @@ const openingTextOf = (record: SessionMessage) => {
   return texts.length === 0 ? null : texts.join("\n");
 };
 
-const ARCHIVE_SESSION = /(?:^|__)archive_session$/;
 const SEND_LATER = /(?:^|__)send_later$/;
 const DELETE_TRIGGER = /(?:^|__)delete_trigger$/;
 const READ_NOTIFICATIONS = /(?:^|__)ReadNotifications$/;
