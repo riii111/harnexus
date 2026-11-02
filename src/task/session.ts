@@ -162,64 +162,11 @@ const openSession = (
     const { statePath, pendingPath, loaded, state } = records;
     let { pending } = records;
     const save = deps.saveJson;
-
-    const checkIdle = (): Result<void, TaskFailed> => {
-      if (pending === null) return Result.ok();
-      if (pending.status === "refused")
-        return fail(
-          truthy(pending.reason)
-            ? `the bridge refused the first turn of thread ${asText(pending.threadId)}: ${asText(pending.reason)}; ` +
-                "fix the cause, then resolve --not-sent"
-            : `thread ${asText(pending.threadId)} refused its first turn: ${refusalText(pending.expected, pending.actual)}; ` +
-                "fix the model, then resolve --not-sent",
-        );
-      return fail(
-        `previous ${asText(pending.tool)} ended as ${asText(pending.status)}; never resend. ` +
-          "Ask the user to check the App, then run resolve --sent or --not-sent",
-      );
-    };
-
-    const confirm = (record: Fields, thread: unknown, answer: Fields | null) =>
-      Result.gen(async function* () {
-        if (!truthy(thread))
-          return fail(
-            "thread ID is unknown; check the App, then resolve --sent --thread-id",
-          );
-        const args = isObject(record.arguments) ? record.arguments : {};
-        const sent = {
-          tool: record.tool ?? null,
-          prompt: args.prompt ?? null,
-          expected: {
-            model: args.model ?? null,
-            effort: args.thinking ?? null,
-          },
-          actual: {
-            model: answer?.model ?? null,
-            effort: answer?.effort ?? null,
-          },
-          workspace: record.workspace ?? null,
-          answer,
-        };
-        const id = yield* chatId(thread, "threadId");
-        const next = yield* confirmed(id, record, sent, state);
-        yield* Result.await(save(statePath, next, { exclusive: false }));
-        yield* Result.await(removeRecord(pendingPath));
-        // A message to an existing thread that asked for no model or effort learns neither, so nulls would only mislead.
-        const unasked =
-          sent.tool === "send_message_to_thread" &&
-          args.model === undefined &&
-          args.thinking === undefined;
-        return Result.ok({
-          tool: sent.tool,
-          threadId: thread,
-          ...(!unasked && { ...sent.actual, expected: sent.expected }),
-          state: statePath,
-        });
-      });
+    const confirmDeps = { confirmed, state, statePath, pendingPath, save };
 
     const send = (caller: string, tool: string, args: Fields, extra: Fields) =>
       Result.gen(async function* () {
-        yield* checkIdle();
+        yield* checkIdle(pending);
         const record: Fields = {
           status: "sending",
           tool,
@@ -239,7 +186,7 @@ const openSession = (
           ? answer.threadId
           : (args.threadId ?? null);
         if (outcome === ("done" satisfies CallOutcome)) {
-          const confirmed = await confirm(record, thread, answer);
+          const confirmed = await confirm(record, thread, answer, confirmDeps);
           // The thread exists, so a failed record is kept for resolve rather than released.
           if (confirmed.isErr()) {
             Object.assign(record, {
@@ -272,7 +219,7 @@ const openSession = (
           });
           yield* Result.await(save(pendingPath, record, { exclusive: false }));
           pending = record;
-          yield* checkIdle();
+          yield* checkIdle(pending);
         }
         const text = JSON.stringify(answer);
         // A lost send_message answer reaches Claude callers as tool_error.
@@ -315,6 +262,7 @@ const openSession = (
           pending,
           truthy(thread) ? thread : (pending.threadId ?? null),
           null,
+          confirmDeps,
         );
       });
 
@@ -339,7 +287,81 @@ const openSession = (
         });
       });
 
-    return Result.ok({ statePath, state, checkIdle, send, resolve, show });
+    return Result.ok({
+      statePath,
+      state,
+      checkIdle: () => checkIdle(pending),
+      send,
+      resolve,
+      show,
+    });
+  });
+
+type ConfirmDeps = {
+  confirmed: Confirmed;
+  state: Fields | null;
+  statePath: string;
+  pendingPath: string;
+  save: SaveJson;
+};
+
+const checkIdle = (pending: Fields | null): Result<void, TaskFailed> => {
+  if (pending === null) return Result.ok();
+  if (pending.status === "refused")
+    return fail(
+      truthy(pending.reason)
+        ? `the bridge refused the first turn of thread ${asText(pending.threadId)}: ${asText(pending.reason)}; ` +
+            "fix the cause, then resolve --not-sent"
+        : `thread ${asText(pending.threadId)} refused its first turn: ${refusalText(pending.expected, pending.actual)}; ` +
+            "fix the model, then resolve --not-sent",
+    );
+  return fail(
+    `previous ${asText(pending.tool)} ended as ${asText(pending.status)}; never resend. ` +
+      "Ask the user to check the App, then run resolve --sent or --not-sent",
+  );
+};
+
+const confirm = (
+  record: Fields,
+  thread: unknown,
+  answer: Fields | null,
+  { confirmed, state, statePath, pendingPath, save }: ConfirmDeps,
+) =>
+  Result.gen(async function* () {
+    if (!truthy(thread))
+      return fail(
+        "thread ID is unknown; check the App, then resolve --sent --thread-id",
+      );
+    const args = isObject(record.arguments) ? record.arguments : {};
+    const sent = {
+      tool: record.tool ?? null,
+      prompt: args.prompt ?? null,
+      expected: {
+        model: args.model ?? null,
+        effort: args.thinking ?? null,
+      },
+      actual: {
+        model: answer?.model ?? null,
+        effort: answer?.effort ?? null,
+      },
+      workspace: record.workspace ?? null,
+      answer,
+    };
+    const id = yield* chatId(thread, "threadId");
+    const next = yield* confirmed(id, record, sent, state);
+    yield* Result.await(save(statePath, next, { exclusive: false }));
+    yield* Result.await(removeRecord(pendingPath));
+    // A message to an existing thread that asked for no model or effort learns neither, so nulls would only mislead.
+    const unasked =
+      sent.tool === "send_message_to_thread" &&
+      args.model === undefined &&
+      args.thinking === undefined;
+    return Result.ok({
+      tool: sent.tool,
+      threadId: thread,
+      ...(!unasked && { ...sent.actual, expected: sent.expected }),
+      state: statePath,
+    });
   });
 
 const sessionDir = (env: Env, kind: string, ...values: string[]) =>

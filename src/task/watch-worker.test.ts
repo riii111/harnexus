@@ -22,6 +22,39 @@ const look = (
   );
 
 describe("codexWorkers.look", () => {
+  test("matches an escaped delegation in a user message", async () => {
+    const prompt = "read <file> & reply";
+    const view = await look(
+      answered({
+        thread: { status: { type: "idle" } },
+        turns: [
+          {
+            status: "completed",
+            startedAt: 100,
+            items: [
+              {
+                type: "userMessage",
+                content: [
+                  {
+                    text: "  <codex_delegation><source_thread_id>reviewer</source_thread_id><input>read &lt;file&gt; &amp; reply</input></codex_delegation>",
+                  },
+                ],
+              },
+              { type: "agentMessage", phase: "final_answer", text: "done" },
+            ],
+          },
+        ],
+      }),
+      { at: new Date(100_000).toISOString(), sender: "reviewer", prompt },
+    );
+
+    expect(view).toEqual({
+      gone: false,
+      busy: null,
+      answer: { status: "completed", text: "done" },
+    });
+  });
+
   test("reads a Codex worker's delegation from the call output, even when cut short", async () => {
     const prompt =
       "$task-worker\nPR <https://github.com/org/pay/pull/7> で対応が必要なこと";

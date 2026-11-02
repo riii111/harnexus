@@ -271,7 +271,7 @@ export const delegatedMessage = (params: Record<string, unknown>) => {
   if (
     !isObject(output) ||
     typeof output.name !== "string" ||
-    !DELEGATING_TOOLS.has(output.name)
+    !isDelegatingTool(output.name)
   ) {
     return null;
   }
@@ -283,7 +283,7 @@ export const delegatedMessage = (params: Record<string, unknown>) => {
     tool: output.name,
     text,
     // The app writes the sender as <source_thread_id>…</source_thread_id> in the text.
-    sourceThreadId: SOURCE_THREAD.exec(text)?.[1] ?? null,
+    sourceThreadId: sourceThread(text, true),
     toolOutput: {
       name: output.name,
       namespace: typeof output.namespace === "string" ? output.namespace : null,
@@ -315,10 +315,34 @@ const outputTexts = (body: unknown) => {
   return texts;
 };
 
+export const isDelegatingTool = (name: string) => DELEGATING_TOOLS.has(name);
+
+// Thread reads can truncate the input; keep its available prefix for correlation.
+export const delegationFields = (text: string) => ({
+  source: sourceThread(text, false) ?? "",
+  input: unescapeXml(/<input>([\s\S]*?)(?:<\/input>|$)/.exec(text)?.[1] ?? ""),
+});
+
+const sourceThread = (text: string, strict: boolean) => {
+  for (const match of text.matchAll(SOURCE_THREAD)) {
+    const source = match[1];
+    if (source !== undefined && (!strict || /^[0-9A-Za-z_-]+$/.test(source)))
+      return source;
+  }
+  return null;
+};
+
+const unescapeXml = (text: string) =>
+  text
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&amp;", "&");
+
 const DELEGATING_TOOLS: ReadonlySet<string> = new Set([
   "create_thread",
   "send_message_to_thread",
 ]);
 
-const SOURCE_THREAD =
-  /<source_thread_id>\s*([0-9A-Za-z_-]+)\s*<\/source_thread_id>/;
+const SOURCE_THREAD = /<source_thread_id>\s*([^<\s]+)\s*<\/source_thread_id>/g;
