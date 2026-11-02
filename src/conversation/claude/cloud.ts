@@ -9,10 +9,10 @@ import type { CloudLink } from "../../infra/thread-store.ts";
 import {
   endsTurn,
   mainRecords,
-  renderRecords,
-  timeOf,
   turnOpeningTextOf,
 } from "../../presentation/history.ts";
+import { timeOf } from "../../presentation/history-message.ts";
+import { renderRecords } from "../../presentation/history-records.ts";
 import { renderNotice } from "../../presentation/turn.ts";
 import { isObject } from "../../runtime/object.ts";
 import { createSerialQueue } from "../../runtime/serial-queue.ts";

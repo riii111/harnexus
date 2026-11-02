@@ -2,14 +2,16 @@ import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { Result } from "better-result";
 import type { SubagentRecord } from "../infra/claude/session.ts";
 import {
-  type AgentRef,
   type AgentResume,
+  findAgentResumes,
+} from "../presentation/agent-resume.ts";
+import {
+  type AgentRef,
   buildSubagentHistory,
   delegatedEditIn,
-  findAgentResumes,
   type HistoryTurn,
-  startOfRecord,
 } from "../presentation/history.ts";
+import { startOfRecord } from "../presentation/history-message.ts";
 import type { FileChangeItem } from "../presentation/protocol.ts";
 import {
   isAppliedEdit,

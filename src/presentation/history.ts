@@ -3,14 +3,25 @@ import type {
   SDKUserMessage,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
+import { RESUME_TOOL } from "./agent-resume.ts";
+import {
+  assistantOf,
+  INTERRUPTED,
+  inputOf,
+  isAssistantBody,
+  isMetaMessage,
+  opensTurn,
+  type Prompt,
+  promptOf,
+  timeOf,
+  toolResultsOf,
+} from "./history-message.ts";
 import type {
   AppNotification,
   FileChangeItem,
   ThreadItem,
   Turn,
-  UserInput,
 } from "./protocol.ts";
 import {
   inProgressTurn,
@@ -18,7 +29,7 @@ import {
   itemStartedAt,
   subagentActivityItem,
 } from "./protocol-values.ts";
-import { RECOVERY_CONTEXT, RECOVERY_NOTICE } from "./recovery.ts";
+import { RECOVERY_NOTICE } from "./recovery.ts";
 import {
   AGENT_TOOLS,
   closeTurnUnchecked,
@@ -61,7 +72,7 @@ export const buildHistory = (
         }
       } else if (INTERRUPTED.test(prompt.text)) {
         if (replay !== null) replay = interrupt(replay);
-      } else if (!LOCAL_COMMAND.test(prompt.text)) {
+      } else if (opensTurn(prompt)) {
         // Each prompt opens a turn, so a steer taken mid-turn appears as a turn of its own.
         if (replay !== null) turns.push(close(replay));
         replay = start(thread, message.uuid, prompt, at);
@@ -92,43 +103,10 @@ export const turnOpeningTextOf = (message: SessionMessage) => {
   return prompt !== null && opensTurn(prompt) ? prompt.text : null;
 };
 
-const opensTurn = (prompt: Prompt) =>
-  !INTERRUPTED.test(prompt.text) && !LOCAL_COMMAND.test(prompt.text);
-
 export const endsTurn = (message: SessionMessage) =>
   message.type === "assistant" &&
   isObject(message.message) &&
   message.message.stop_reason === "end_turn";
-
-// Renders records as they are copied, such as a Cloud thread's, as the live turn renders Claude's messages.
-export const renderRecords = (
-  state: TurnState,
-  messages: readonly SessionMessage[],
-  now: number,
-): Rendered => {
-  let current = state;
-  const notifications: Rendered["notifications"] = [];
-  const add = (next: Rendered) => {
-    current = next.state;
-    notifications.push(...next.notifications);
-  };
-  for (const message of messages) {
-    const at = timeOf(message) ?? now;
-    const body = message.message;
-    if (message.type === "user") {
-      const prompt = promptOf(body);
-      if (prompt === null) {
-        add(renderSdkMessage(current, toolResultsOf(message, body), at));
-      } else if (opensTurn(prompt)) {
-        // A prompt typed elsewhere is shown as the user's message.
-        add(renderUserInput(current, inputOf(prompt), null, at));
-      }
-    } else if (isAssistantBody(body)) {
-      add(renderSdkMessage(current, assistantOf(message, body), at));
-    }
-  }
-  return { state: current, notifications };
-};
 
 export type LiveTurn = {
   turnId: string;
@@ -287,94 +265,6 @@ const noteAgents = (
   return replay;
 };
 
-// Claude resumes an agent that has ended when a SendMessage call addresses it, and the agent runs under that call.
-const RESUME_TOOL = "SendMessage";
-
-export type AgentResume = {
-  toolUseId: string;
-  recipient: string;
-  resumedAgentId: string | null;
-  at: number | null;
-};
-
-// The calls in a record that resumed an agent.
-export const findAgentResumes = (
-  messages: readonly SessionMessage[],
-): AgentResume[] => {
-  const calls: Omit<AgentResume, "resumedAgentId">[] = [];
-  const answers = new Map<string, unknown>();
-  for (const message of messages) {
-    if (isMetaMessage(message)) continue;
-    const body = message.message;
-    if (!isObject(body) || !Array.isArray(body.content)) continue;
-    for (const block of body.content) {
-      if (!isObject(block)) continue;
-      if (
-        message.type === "assistant" &&
-        block.type === "tool_use" &&
-        block.name === RESUME_TOOL &&
-        typeof block.id === "string"
-      ) {
-        const recipient = recipientOf(block.input);
-        if (recipient !== null) {
-          calls.push({ toolUseId: block.id, recipient, at: timeOf(message) });
-        }
-      } else if (
-        message.type === "user" &&
-        block.type === "tool_result" &&
-        typeof block.tool_use_id === "string" &&
-        block.is_error !== true
-      ) {
-        answers.set(block.tool_use_id, resumeAnswer(block.content));
-      }
-    }
-  }
-  // Only Claude's answer tells a resume from a message queued for an agent still running.
-  return calls.flatMap((call) => {
-    const answer = answers.get(call.toolUseId);
-    if (!isObject(answer)) return [];
-    return [
-      {
-        ...call,
-        resumedAgentId:
-          typeof answer.resumedAgentId === "string"
-            ? answer.resumedAgentId
-            : null,
-      },
-    ];
-  });
-};
-
-const recipientOf = (input: unknown) => {
-  if (!isObject(input)) return null;
-  // recipient is the older shape Claude still takes.
-  const to = typeof input.to === "string" ? input.to : input.recipient;
-  return typeof to === "string" && to !== "" ? to : null;
-};
-
-const resumeAnswer = (content: unknown) => {
-  const first = Array.isArray(content)
-    ? content.find((block) => isObject(block) && block.type === "text")
-    : { text: content };
-  const text =
-    isObject(first) && typeof first.text === "string" ? first.text : "";
-  // Claude's answer opens with one line of JSON, which a report handed back with it follows.
-  const answer = parseLine(text.split("\n", 1)[0] ?? "");
-  if (!isObject(answer) || answer.success !== true) return null;
-  // The answer names the agent as resumedAgentId, or, when the agent's report comes back in it or the agent answers to another agent, says it is resuming or resumed the agent.
-  return typeof answer.resumedAgentId === "string" ||
-    (typeof answer.message === "string" && RESUMED.test(answer.message))
-    ? answer
-    : null;
-};
-
-const parseLine = (line: string): unknown => {
-  const parsed = parseJson(line);
-  return parsed.isOk() ? parsed.value : null;
-};
-
-const RESUMED = /^Resum(?:ed|ing) agent\b/;
-
 type Replay = {
   state: TurnState;
   items: Map<string, HistoryItem>;
@@ -520,120 +410,7 @@ const updateOpenItem = (
   items.set(itemId, { ...entry, item: update(entry.item) });
 };
 
-type Prompt = { text: string; images: UserInput[]; recovering?: boolean };
-
-const inputOf = (prompt: Prompt): UserInput[] => [
-  // An image sent alone has no text to show beside it.
-  ...(prompt.text === "" && prompt.images.length > 0
-    ? []
-    : [{ type: "text", text: prompt.text, text_elements: [] }]),
-  ...prompt.images,
-];
-
-// The prompt a user record holds, or null for one carrying tool results, which continues the turn.
-const promptOf = (body: unknown): Prompt | null => {
-  if (!isObject(body)) return null;
-  const { content } = body;
-  if (typeof content === "string") return { text: content, images: [] };
-  if (!Array.isArray(content)) return null;
-  if (
-    content.some((block) => isObject(block) && block.type === "tool_result")
-  ) {
-    return null;
-  }
-  // The first text block is what was typed; later ones are files the bridge attached.
-  const typed = content.find(
-    (block) =>
-      isObject(block) &&
-      block.type === "text" &&
-      block.text !== RECOVERY_CONTEXT,
-  );
-  return {
-    text: isObject(typed) && typeof typed.text === "string" ? typed.text : "",
-    recovering: content.some(
-      (block) =>
-        isObject(block) &&
-        block.type === "text" &&
-        block.text === RECOVERY_CONTEXT,
-    ),
-    // The file an attached image came from may be gone, so the image is shown from the copy Claude recorded.
-    images: content.flatMap((block) => {
-      const url = imageUrlOf(block);
-      return url === null ? [] : [{ type: "image", url }];
-    }),
-  };
-};
-
-const imageUrlOf = (block: unknown) => {
-  if (!isObject(block) || block.type !== "image") return null;
-  const { source } = block;
-  if (!isObject(source)) return null;
-  if (
-    source.type === "base64" &&
-    typeof source.media_type === "string" &&
-    typeof source.data === "string"
-  ) {
-    return `data:${source.media_type};base64,${source.data}`;
-  }
-  return source.type === "url" && typeof source.url === "string"
-    ? source.url
-    : null;
-};
-
-const isAssistantBody = (
-  body: unknown,
-): body is SDKAssistantMessage["message"] =>
-  // The SDK types a record's message as unknown, so only a message with the fields the renderer reads is replayed.
-  isObject(body) && typeof body.id === "string" && Array.isArray(body.content);
-
-const assistantOf = (
-  message: SessionMessage,
-  body: SDKAssistantMessage["message"],
-): SDKAssistantMessage => ({
-  type: "assistant",
-  message: body,
-  parent_tool_use_id: null,
-  uuid: message.uuid as SDKAssistantMessage["uuid"],
-  session_id: message.session_id,
-});
-
-const toolResultsOf = (
-  message: SessionMessage,
-  body: unknown,
-): SDKUserMessage => ({
-  type: "user",
-  // A user record without a prompt carries tool results.
-  message: body as SDKUserMessage["message"],
-  parent_tool_use_id: null,
-  session_id: message.session_id,
-});
-
-const isMetaMessage = (message: SessionMessage) =>
-  // The SDK returns these fields without typing them; a compact summary and other hidden records carry is_meta.
-  (message as { is_meta?: unknown }).is_meta === true;
-
-export const startOfRecord = (messages: readonly SessionMessage[]) => {
-  for (const message of messages) {
-    const at = timeOf(message);
-    if (at !== null) return at;
-  }
-  return null;
-};
-
-export const timeOf = (message: SessionMessage) => {
-  const stamp = (message as { timestamp?: unknown }).timestamp;
-  const ms = typeof stamp === "string" ? Date.parse(stamp) : Number.NaN;
-  return Number.isNaN(ms) ? null : ms;
-};
-
 const HISTORY_TURN_PREFIX = "harnexus-history-";
 
 export const historyTurnId = (record: string) =>
   `${HISTORY_TURN_PREFIX}${record}`;
-
-// Claude Code writes these as user messages when a turn is stopped.
-const INTERRUPTED = /^\[Request interrupted by user/;
-
-// A slash command such as /compact is recorded as its command, caveat and output rather than as a prompt Claude answered.
-const LOCAL_COMMAND =
-  /^<(command-name|local-command-stdout|local-command-caveat)>/;

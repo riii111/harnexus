@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
-import { buildHistory, renderRecords, replayHistory } from "./history.ts";
+import { buildHistory, replayHistory } from "./history.ts";
+import { renderRecords } from "./history-records.ts";
 import type { ThreadItem, Turn } from "./protocol.ts";
 import { RECOVERY_CONTEXT, RECOVERY_NOTICE } from "./recovery.ts";
 import {
