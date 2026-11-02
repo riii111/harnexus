@@ -35,14 +35,23 @@ export const listClaudeConversations = (
     for (const project of (projects ?? []).filter(isFolderOf(cwd))) {
       const folder = join(projectsDir, project);
       const files = yield* Result.await(listDirectoryIfExists(folder));
-      for (const file of files ?? []) {
+      const sessions = (files ?? []).flatMap((file) => {
         const sessionId = sessionIdOf(file);
-        if (sessionId === null) continue;
-        const read = await readConversation(join(folder, file), sessionId, {
-          cwd,
-          since,
-        });
-        if (read !== null) found.push(read);
+        return sessionId === null ? [] : [{ file, sessionId }];
+      });
+      for (
+        let offset = 0;
+        offset < sessions.length;
+        offset += LIST_READ_LIMIT
+      ) {
+        const reads = await Promise.all(
+          sessions
+            .slice(offset, offset + LIST_READ_LIMIT)
+            .map(({ file, sessionId }) =>
+              readConversation(join(folder, file), sessionId, { cwd, since }),
+            ),
+        );
+        for (const read of reads) if (read !== null) found.push(read);
       }
     }
     return Result.ok(found.sort((a, b) => b.updatedAtMs - a.updatedAtMs));
@@ -287,6 +296,8 @@ const promptTexts = (content: unknown): string[] => {
 
 // Large enough for the opening records and a title, as Claude's own session list reads.
 const END_BYTES = 64 * 1024;
+
+const LIST_READ_LIMIT = 16;
 
 const FOLDER_NAME_LIMIT = 200;
 

@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -56,6 +63,22 @@ describe("listClaudeConversations", () => {
         entrypoint: "cli",
       },
     ]);
+  });
+
+  test("keeps folder order for equally recent conversations across read batches", async () => {
+    for (let i = 0; i < 35; i += 1) {
+      await writeRecord(PROJECT_FOLDER, `se-${i}`, conversation(`ask ${i}`));
+    }
+    const files = await readdir(join(dir, "projects", PROJECT_FOLDER));
+
+    const listed = await listClaudeConversations(PROJECT, {
+      since: NOW - DAY,
+      configDir: dir,
+    });
+
+    expect(
+      listed.isOk() && listed.value.map(({ sessionId }) => sessionId),
+    ).toEqual(files.map((file) => file.slice(0, -".jsonl".length)));
   });
 
   test.each([
