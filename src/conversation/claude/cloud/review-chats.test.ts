@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,7 @@ import { createCloudReviews } from "./review-chats.ts";
 
 const roots: string[] = [];
 afterEach(async () => {
+  setSystemTime();
   for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
 });
@@ -225,7 +226,8 @@ describe("createCloudReviews", () => {
     expect(await reviews.recordsOf("other-chat")).toBeNull();
   });
 
-  test("knows the reviewer a chat shows and the session that ran it, and keeps what was asked there in its history", async () => {
+  test("knows the reviewer a chat shows and the session that ran it, and keeps what was asked there after the review shown in the same millisecond", async () => {
+    setSystemTime(new Date("2026-11-03T00:00:00.000Z"));
     const { reviews } = await setup([
       projects,
       { outcome: "done", threadId: "review-chat" },
