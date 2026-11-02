@@ -71,6 +71,29 @@ describe("waitingIn", () => {
     toolResult("r1", "t1", created(CHILD)),
     reply("a2", "m2", text("waiting for the worker"), "end_turn"),
   ];
+  const background = [
+    prompt("p1", "review it"),
+    reply(
+      "a1",
+      "m1",
+      toolUse("t1", "Bash", {
+        command: "harnexus-task review --request req.json",
+        run_in_background: true,
+      }),
+      "tool_use",
+    ),
+    toolResult(
+      "r1",
+      "t1",
+      "Command running in background with ID: b42t71ybw. Output is being written to: /tmp/tasks/b42t71ybw.output.",
+    ),
+    reply(
+      "a2",
+      "m2",
+      text("Asked Codex; it takes a minute or two."),
+      "end_turn",
+    ),
+  ];
   const scheduled = [
     prompt("p1", "check later", "2026-11-01T00:00:00Z"),
     reply(
@@ -156,6 +179,28 @@ describe("waitingIn", () => {
           false,
           "2026-11-01T00:30:01Z",
         ),
+      ],
+      expected: false,
+    },
+    {
+      name: "waits for a review it left running in the background",
+      records: background,
+      expected: true,
+    },
+    {
+      name: "stops waiting once a later record names the background work, such as the session reading its output",
+      records: [
+        ...background,
+        reply(
+          "a3",
+          "m3",
+          toolUse("t2", "Bash", {
+            command: "cat /tmp/tasks/b42t71ybw.output",
+          }),
+          "tool_use",
+        ),
+        toolResult("r2", "t2", '{"verdict":"LGTM"}'),
+        reply("a4", "m4", text("LGTM"), "end_turn"),
       ],
       expected: false,
     },
