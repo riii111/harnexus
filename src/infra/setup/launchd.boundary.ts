@@ -6,8 +6,11 @@ import {
   readTextFileIfExists,
   removeFile,
   writeFileAtomic,
-} from "../runtime/fs.boundary.ts";
-import { readCommandOutput, runCommand } from "../runtime/process.boundary.ts";
+} from "../../runtime/fs.boundary.ts";
+import {
+  readCommandOutput,
+  runCommand,
+} from "../../runtime/process.boundary.ts";
 import {
   AGENT_LABEL,
   environmentCommands,

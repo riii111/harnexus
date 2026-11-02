@@ -1,5 +1,3 @@
-import type { ProcessEntry } from "./doctor-report.ts";
-
 type OpenAppPaths = {
   app: string;
   launcher: string;
@@ -47,8 +45,8 @@ export const REGISTERED_ENV_NAMES = [
   "HARNEXUS_CALL_SOCKET",
 ] as const;
 
-export const isAppRunning = (
-  processes: readonly ProcessEntry[],
+export const isAppRunning = <T extends { command: string }>(
+  processes: readonly T[],
   app: string,
 ) => {
   const binary = `${app}/Contents/MacOS/`;

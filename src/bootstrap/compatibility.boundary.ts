@@ -1,13 +1,13 @@
 import { dirname, join } from "node:path";
 import { Result } from "better-result";
+import {
+  compatibilityNotification,
+  compatibilityRecord,
+} from "../diagnostics/compatibility-report.ts";
 import type { CompatibilityEvent } from "../infra/codex/compatibility.ts";
 import { loadStatePath } from "../runtime/config.ts";
 import { prepareDirectory, writeFileAtomic } from "../runtime/fs.boundary.ts";
 import { startDetachedCommand } from "../runtime/process.boundary.ts";
-import {
-  compatibilityNotification,
-  compatibilityRecord,
-} from "./compatibility-report.ts";
 
 export const reportCompatibilityFailure = (
   event: CompatibilityEvent,

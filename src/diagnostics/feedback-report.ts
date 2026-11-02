@@ -1,6 +1,6 @@
 import { Result, TaggedError } from "better-result";
+import type { CheckoutHead } from "../infra/checkout.ts";
 import type { BridgeSettings } from "./bridge-identity.ts";
-import type { CheckoutHead } from "./checkout.ts";
 import { type Check, formatReport } from "./doctor-report.ts";
 import type { LoggedStart, LogSelection } from "./feedback-log.ts";
 import { formatProtocol, type ProtocolDiff } from "./feedback-protocol.ts";

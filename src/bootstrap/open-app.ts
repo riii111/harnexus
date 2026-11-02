@@ -1,4 +1,12 @@
 import { isAbsolute, join, resolve } from "node:path";
+import { parseProcesses } from "../diagnostics/doctor-report.ts";
+import { REPO } from "../diagnostics/repo.ts";
+import { configureLaunchd } from "../infra/setup/launchd.boundary.ts";
+import {
+  isAppRunning,
+  openArguments,
+  registeredEnvironment,
+} from "../infra/setup/open-app-plan.ts";
 import {
   loadCallSocketPath,
   loadLogPath,
@@ -7,14 +15,6 @@ import {
 } from "../runtime/config.ts";
 import { checkAccess } from "../runtime/fs.boundary.ts";
 import { readCommandOutput } from "../runtime/process.boundary.ts";
-import { parseProcesses } from "./doctor-report.ts";
-import { configureLaunchd } from "./launchd.boundary.ts";
-import {
-  isAppRunning,
-  openArguments,
-  registeredEnvironment,
-} from "./open-app-plan.ts";
-import { REPO } from "./repo.ts";
 
 // Opens the app with harnexus, or with --standard as the app normally runs; either way the app must be quit first, since it reads its environment only at start.
 const APP = resolve(

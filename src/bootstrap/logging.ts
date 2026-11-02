@@ -14,6 +14,7 @@ import {
   type RouteEvent,
   serializeRouteEvent,
 } from "../conversation/route.ts";
+import type { BridgeIdentity } from "../diagnostics/bridge-identity.ts";
 import type {
   loadClaudeModels,
   loadEffortSettings,
@@ -34,7 +35,6 @@ import { openLogSink } from "../runtime/fs.boundary.ts";
 import { createLogger } from "../runtime/logger.ts";
 import type { Signal } from "../runtime/process.boundary.ts";
 import type { serveLines } from "../runtime/socket.boundary.ts";
-import type { BridgeIdentity } from "./bridge-identity.ts";
 import {
   type BridgeFailedEvent,
   type ServerSignalEvent,
