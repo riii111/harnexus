@@ -13,6 +13,10 @@ import {
 } from "../../presentation/history.ts";
 import { timeOf } from "../../presentation/history-message.ts";
 import { renderRecords } from "../../presentation/history-records.ts";
+import {
+  skillLinks,
+  withoutSkillLinks,
+} from "../../presentation/skill-prompt.ts";
 import { renderNotice } from "../../presentation/turn.ts";
 import { isObject } from "../../runtime/object.ts";
 import { createSerialQueue } from "../../runtime/serial-queue.ts";
@@ -275,17 +279,26 @@ export const createCloudRuntime = <Tag extends string>(
         return;
       }
     }
-    const typed = sessionCommandTextOf(turn.input) !== null;
+    const typedText = sessionCommandTextOf(turn.input);
+    const typed = typedText !== null;
+    const empty =
+      threads.sessionIdOf(turn.threadId) === null &&
+      threads.cloudOf(turn.threadId) === null;
+    // The cloud-session skill picked in a chat that holds nothing yet is /cloud, so Claude never decides whether to follow it; later in a chat it is a skill like any other.
+    const picked =
+      turn.input.startedBy === "app" && typed && empty
+        ? cloudSkillCommandOf(typedText)
+        : null;
+    if (picked !== null) {
+      await link(turn, picked, true);
+      return;
+    }
     const command =
       turn.input.startedBy === "app"
         ? cloudCommandOf(commandText(turn.input))
         : null;
     // A /cloud followed by more than a session is a command only where it can start one: typed in a chat that holds nothing yet. Elsewhere it is a message like any other.
-    const starts =
-      typed &&
-      startCloud !== undefined &&
-      threads.sessionIdOf(turn.threadId) === null &&
-      threads.cloudOf(turn.threadId) === null;
+    const starts = typed && startCloud !== undefined && empty;
     if (command !== null && (starts || !/\s/.test(command))) {
       await link(turn, command, typed);
       return;
@@ -1221,6 +1234,14 @@ const cloudCommandOf = (text: string | null) => {
 };
 
 const CLOUD_COMMAND = /^\/cloud(?:\s+([\s\S]+?))?\s*$/;
+
+// What follows the cloud-session skill the app links in a message, the same as what follows /cloud, or null when the message links no such skill.
+const cloudSkillCommandOf = (text: string) =>
+  skillLinks(text).some(({ name }) => name === CLOUD_SKILL)
+    ? withoutSkillLinks(text, CLOUD_SKILL).trim()
+    : null;
+
+const CLOUD_SKILL = "cloud-session";
 
 const reviewCommandOf = (text: string | null) =>
   text === null ? null : (REVIEW_COMMAND.exec(text.trim())?.[1] ?? null);

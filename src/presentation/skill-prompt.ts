@@ -14,3 +14,9 @@ export const skillBlock = (name: string, path: string, body: string) =>
   `<skill>\n<name>${name}</name>\n<path>${path}</path>\n${body.replace(/\n$/, "")}\n</skill>`;
 
 const SKILL_LINK = /\[\$([^\]\s]+)\]\((\/[^)\s]*\/SKILL\.md)\)/g;
+
+// The text with every link to the named skill taken out, as the app wrote it before the request.
+export const withoutSkillLinks = (text: string, name: string) =>
+  text.replace(SKILL_LINK, (link, linked: string) =>
+    linked === name ? "" : link,
+  );
