@@ -101,6 +101,67 @@ describe("turn/start on a Claude thread", () => {
     ]);
   });
 
+  test("shows the files the turn changed as the turn's diff", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, "fix it"), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    claude.emit(
+      sdk({
+        type: "assistant",
+        message: {
+          id: "msg-1",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-1",
+              name: "Edit",
+              input: {
+                file_path: `${dir}/src/a.ts`,
+                old_string: "old",
+                new_string: "new",
+              },
+            },
+          ],
+          stop_reason: "tool_use",
+        },
+        parent_tool_use_id: null,
+      }),
+    );
+    claude.emit(
+      sdk({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-1",
+              content: "ok",
+              is_error: false,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      }),
+    );
+    claude.emit(sdk(answer("msg-2", "done")));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    const diffs = sent.filter(
+      (message) => message.method === "turn/diff/updated",
+    );
+    expect(diffs.map((message) => message.params)).toEqual([
+      {
+        threadId: THREAD,
+        turnId: "turn-1",
+        diff: "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,1 +1,1 @@\n-old\n+new\n",
+      },
+    ]);
+  });
+
   test("names the running turn and its prompt's record until the turn ends", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);

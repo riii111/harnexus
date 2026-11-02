@@ -23,6 +23,10 @@ export type AppNotificationBody =
     >
   | Envelope<"thread/compacted", { threadId: string; turnId: string }>
   | Envelope<
+      "turn/diff/updated",
+      { threadId: string; turnId: string; diff: string }
+    >
+  | Envelope<
       "turn/plan/updated",
       {
         threadId: string;

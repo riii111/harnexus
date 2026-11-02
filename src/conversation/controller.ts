@@ -7,7 +7,11 @@ import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import { isManualTurnTrigger } from "../infra/codex/turn-trigger.ts";
 import type { ThreadRecord, ThreadStore } from "../infra/thread-store.ts";
 import type { LiveTurn } from "../presentation/history.ts";
-import type { UserInput } from "../presentation/protocol.ts";
+import type {
+  AppNotification,
+  FileUpdateChange,
+  UserInput,
+} from "../presentation/protocol.ts";
 import { RECOVERY_NOTICE } from "../presentation/recovery.ts";
 import {
   markInterrupting,
@@ -21,6 +25,7 @@ import {
   type TurnOutcome,
   type TurnState,
 } from "../presentation/turn.ts";
+import { turnDiff } from "../presentation/turn-diff.ts";
 import { isObject } from "../runtime/object.ts";
 import {
   type AppRequest,
@@ -98,6 +103,8 @@ type ActiveTurn<Tag extends string> = {
   turn: RunningTurn<Tag>;
   link: TurnLink | null;
   outcomeUnknown: boolean;
+  // The file changes the turn made so far, which the app shows as the turn's diff.
+  changes: FileUpdateChange[];
 };
 
 // answered is set when the app got the turn as soon as it was accepted, so a turn that cannot run is shown as failed rather than refused; a turn Claude started on its own answers no request.
@@ -761,6 +768,7 @@ export const createTurnController = <Tag extends string>({
       turn,
       link: null,
       outcomeUnknown: false,
+      changes: [],
     };
     return active;
   };
@@ -798,6 +806,19 @@ export const createTurnController = <Tag extends string>({
     if (rendered.state.finished) release(active);
     for (const notification of rendered.notifications) {
       send(notification);
+      const changed = changesOf(notification);
+      if (changed.length > 0) {
+        active.changes.push(...changed);
+        send({
+          method: "turn/diff/updated",
+          params: {
+            threadId: active.threadId,
+            turnId: active.turn.turnId,
+            diff: turnDiff(active.changes, active.turn.record.worktree),
+          },
+          emittedAtMs: notification.emittedAtMs,
+        });
+      }
       if (
         notification.method === "turn/completed" &&
         notification.params.turn.status !== "inProgress" &&
@@ -1025,3 +1046,11 @@ const messageInput = (
 };
 
 const INVALID_REQUEST = -32600;
+
+// The changes a file change the app was told of has made.
+const changesOf = (notification: AppNotification) =>
+  notification.method === "item/completed" &&
+  notification.params.item.type === "fileChange" &&
+  notification.params.item.status === "completed"
+    ? notification.params.item.changes
+    : [];
