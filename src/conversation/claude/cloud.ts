@@ -558,50 +558,24 @@ export const createCloudRuntime = <Tag extends string>(
     const { threadId } = turn;
     const startedAt = now();
     let failingSince: number | null = null;
-    // While a reply is young, a copy starts every OVERLAP_MS without waiting for the ones running, and each is read as soon as it ends.
-    const running: Started[] = [];
+    const copies = scheduleCopies(
+      () => fetchCopy(threadId, cloudSessionId),
+      follow.woken,
+      startedAt,
+      now,
+      sleep,
+    );
     // When the copy last shown started; a copy started before it is older and dropped.
     let shownAt = Number.NEGATIVE_INFINITY;
-    // When the latest copy started, so copies keep OVERLAP_MS apart even when one ends sooner.
-    let lastAt = Number.NEGATIVE_INFINITY;
-    // Copies overlap only once one has worked, so a copy that runs a model turn is caught before a second one starts.
-    let copiedOnce = false;
     // Whether the last copy showed the session waiting for a message it scheduled, which takes minutes, so it is copied less often.
     let waiting = false;
     // When the turn last showed something new.
     let movedAt = startedAt;
-    const overlapping = () =>
-      copiedOnce &&
-      failingSince === null &&
-      now() - startedAt < BACK_TO_BACK_FOR_MS &&
-      running.length < OVERLAP_LIMIT;
-    // The first copy to end, or null once it is time to start another or the turn is being stopped.
-    const nextEnded = () => {
-      const due =
-        running.length > 0 && overlapping()
-          ? sleep(Math.max(0, lastAt + OVERLAP_MS - now()), follow.woken)
-          : follow.woken;
-      return Promise.race([
-        ...running.map((started) =>
-          started.copied.then((copied) => ({ started, copied })),
-        ),
-        due.then(() => null),
-      ]);
-    };
     // Copies still running are removed once written, however the wait ends.
     try {
       for (;;) {
-        if (running.length === 0) {
-          await sleep(
-            Math.max(
-              waiting
-                ? WAITING_POLL_MS
-                : pollMs(now() - startedAt, failingSince !== null),
-              lastAt + OVERLAP_MS - now(),
-            ),
-            follow.woken,
-          );
-        }
+        const delay = copies.wait(waiting, failingSince !== null);
+        if (delay !== null) await delay;
         if (follow.stop || closed || turn.state().interrupting) {
           park(threadId, follow);
           log({ event: "claude_cloud", step: "stopped" });
@@ -611,21 +585,8 @@ export const createCloudRuntime = <Tag extends string>(
           turn.finish({ status: "interrupted" }, null);
           return;
         }
-        if (
-          running.length === 0 ||
-          (overlapping() && now() - lastAt >= OVERLAP_MS)
-        ) {
-          const overlapped = running.length > 0;
-          lastAt = now();
-          running.push({
-            at: lastAt,
-            overlapped,
-            copied: fetchCopy(threadId, cloudSessionId),
-          });
-        }
-        const ended = await nextEnded();
+        const ended = await copies.next(failingSince !== null);
         if (ended === null) continue;
-        running.splice(running.indexOf(ended.started), 1);
         const { copied } = ended;
         // The session only grows between compactions, so an overlapping copy without the last record shown read it before that record arrived; a compaction is taken by the next copy that does not overlap.
         const shownLast = follow.last ?? follow.after;
@@ -654,7 +615,7 @@ export const createCloudRuntime = <Tag extends string>(
           return;
         }
         failingSince = null;
-        copiedOnce = true;
+        copies.succeeded();
         shownAt = ended.started.at;
         const progress = advance(follow, copied.value.records);
         waiting = progress.waiting && !progress.ended;
@@ -701,7 +662,7 @@ export const createCloudRuntime = <Tag extends string>(
         }
       }
     } finally {
-      for (const started of running) void discardStarted(started);
+      for (const started of copies.running()) void discardStarted(started);
     }
   };
 
@@ -1143,6 +1104,67 @@ const newFollow = (text: string | null, after: string | null): Follow => {
     stop: false,
     wake,
     woken,
+  };
+};
+
+const scheduleCopies = (
+  fetch: () => Started["copied"],
+  woken: Promise<void>,
+  startedAt: number,
+  now: () => number,
+  sleep: (ms: number, woken: Promise<void>) => Promise<void>,
+) => {
+  const running: Started[] = [];
+  let lastAt = Number.NEGATIVE_INFINITY;
+  // A copy must succeed before another overlaps, so one that runs a model turn is caught first.
+  let copiedOnce = false;
+  const overlapping = (failing: boolean) =>
+    copiedOnce &&
+    !failing &&
+    now() - startedAt < BACK_TO_BACK_FOR_MS &&
+    running.length < OVERLAP_LIMIT;
+
+  const wait = (waiting: boolean, failing: boolean) =>
+    running.length === 0
+      ? sleep(
+          Math.max(
+            waiting ? WAITING_POLL_MS : pollMs(now() - startedAt, failing),
+            lastAt + OVERLAP_MS - now(),
+          ),
+          woken,
+        )
+      : null;
+
+  const next = async (failing: boolean) => {
+    if (
+      running.length === 0 ||
+      (overlapping(failing) && now() - lastAt >= OVERLAP_MS)
+    ) {
+      const overlapped = running.length > 0;
+      lastAt = now();
+      running.push({ at: lastAt, overlapped, copied: fetch() });
+    }
+    const due =
+      running.length > 0 && overlapping(failing)
+        ? sleep(Math.max(0, lastAt + OVERLAP_MS - now()), woken)
+        : woken;
+    const ended = await Promise.race([
+      ...running.map((started) =>
+        started.copied.then((copied) => ({ started, copied })),
+      ),
+      due.then(() => null),
+    ]);
+    if (ended !== null) running.splice(running.indexOf(ended.started), 1);
+    return ended;
+  };
+
+  return {
+    wait,
+    next,
+    succeeded: () => {
+      copiedOnce = true;
+    },
+    running: () => running,
   };
 };
 

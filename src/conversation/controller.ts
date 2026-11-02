@@ -136,17 +136,20 @@ export const createTurnController = <Tag extends string>({
   const activeTurns = new Map<string, ActiveTurn<Tag>>();
   // Message ids accepted but not yet saved, so a copy arriving while the first waits or runs is caught too.
   const acceptedMessageIds = new Map<string, Set<string>>();
-  const turnsInFlight = new Map<string, number>();
+  const turnsInFlight = new Map<
+    string,
+    Map<
+      string,
+      {
+        request: TurnRequest;
+        acceptedAtMs: number;
+        starting: boolean;
+        waiting: boolean;
+      }
+    >
+  >();
   const materialized = new Set<string>();
   const changingConversations = new Set<string>();
-  const startingTurns = new Map<
-    string,
-    { threadId: string; acceptedAtMs: number }
-  >();
-  const waitingTurns = new Map<
-    string,
-    { threadId: string; request: TurnRequest }
-  >();
   const steeringMessages = new Map<string, Promise<void>>();
   const appRequests = createAppRequests({ send, now });
   let closed = false;
@@ -293,20 +296,28 @@ export const createTurnController = <Tag extends string>({
       return;
     }
     runtime.threadBusy(threadId);
-    const inFlight = turnsInFlight.get(threadId) ?? 0;
-    if (inFlight > 0) log({ event: "claude_turn", step: "queued" });
-    turnsInFlight.set(threadId, inFlight + 1);
+    let inFlight = turnsInFlight.get(threadId);
+    if (inFlight === undefined) {
+      inFlight = new Map();
+      turnsInFlight.set(threadId, inFlight);
+    }
+    const queued = inFlight.size > 0;
+    if (queued) log({ event: "claude_turn", step: "queued" });
     const request = {
       id,
       turnId: newTurnId(),
       // A turn/start that waits behind a running turn is answered on acceptance, since its sender gives up long before the running turn may end.
-      answered: compaction || inFlight > 0 || id === null,
+      answered: compaction || queued || id === null,
       stopped: false,
       compaction,
       allowRecovery,
     };
-    if (inFlight > 0) waitingTurns.set(request.turnId, { threadId, request });
-    startingTurns.set(request.turnId, { threadId, acceptedAtMs: now() });
+    inFlight.set(request.turnId, {
+      request,
+      acceptedAtMs: now(),
+      starting: true,
+      waiting: queued,
+    });
     if (compaction) {
       send({ id, result: {} });
     } else if (request.answered && id !== null) {
@@ -319,12 +330,8 @@ export const createTurnController = <Tag extends string>({
       send({ id, result: { turn: waiting.turn } });
     }
     void runTurn(request, thread, threadId, turn, messageId).then(() => {
-      startingTurns.delete(request.turnId);
-      const left = (turnsInFlight.get(threadId) ?? 1) - 1;
-      if (left > 0) {
-        turnsInFlight.set(threadId, left);
-        return;
-      }
+      inFlight.delete(request.turnId);
+      if (inFlight.size > 0) return;
       turnsInFlight.delete(threadId);
       runtime.threadIdle(threadId);
     });
@@ -337,7 +344,7 @@ export const createTurnController = <Tag extends string>({
       active.state.finished ||
       active.state.interrupting ||
       active.state.compaction ||
-      turnsInFlight.get(threadId) !== 1
+      turnsInFlight.get(threadId)?.size !== 1
       ? null
       : active;
   };
@@ -439,8 +446,10 @@ export const createTurnController = <Tag extends string>({
     turnId: unknown,
   ) => {
     const waiting =
-      typeof turnId === "string" ? waitingTurns.get(turnId) : undefined;
-    if (waiting?.threadId !== threadId) {
+      typeof turnId === "string"
+        ? turnsInFlight.get(threadId)?.get(turnId)
+        : undefined;
+    if (waiting?.waiting !== true) {
       refuse(id, "no_running_turn");
       return;
     }
@@ -619,7 +628,8 @@ export const createTurnController = <Tag extends string>({
       refuse(request.id, reason, cause, message);
       return;
     }
-    waitingTurns.delete(request.turnId);
+    const pending = turnsInFlight.get(threadId)?.get(request.turnId);
+    if (pending !== undefined) pending.waiting = false;
     logRefusal(reason, cause);
     const started = renderTurnStarted({
       threadId,
@@ -703,8 +713,11 @@ export const createTurnController = <Tag extends string>({
         active,
         renderNotice(active.state, RECOVERY_NOTICE, "commentary", now()),
       );
-    waitingTurns.delete(request.turnId);
-    startingTurns.delete(request.turnId);
+    const pending = turnsInFlight.get(threadId)?.get(request.turnId);
+    if (pending !== undefined) {
+      pending.waiting = false;
+      pending.starting = false;
+    }
     if (request.stopped) {
       active.state = markInterrupting(active.state);
     }
@@ -859,7 +872,7 @@ export const createTurnController = <Tag extends string>({
     if (
       closed ||
       changingConversations.has(threadId) ||
-      (turnsInFlight.get(threadId) ?? 0) > 0
+      turnsInFlight.has(threadId)
     )
       return null;
     changingConversations.add(threadId);
@@ -892,9 +905,9 @@ export const createTurnController = <Tag extends string>({
         };
       }
       // A turn accepted but not yet started keeps the thread running between one turn's end and the next one's start.
-      for (const [turnId, starting] of startingTurns) {
-        if (starting.threadId === threadId) {
-          return { turnId, record: null, startedAtMs: starting.acceptedAtMs };
+      for (const [turnId, pending] of turnsInFlight.get(threadId) ?? []) {
+        if (pending.starting) {
+          return { turnId, record: null, startedAtMs: pending.acceptedAtMs };
         }
       }
       return null;
