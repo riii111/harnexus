@@ -96,6 +96,7 @@ const newFindings = (
     seen.add(finding.id);
     events.push({ type: "finding", finding });
   }
+
   return events;
 };
 

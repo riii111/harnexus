@@ -82,6 +82,7 @@ export const modelsFromSdk = (infos: readonly ModelInfo[]): ClaudeModel[] => {
       efforts: info.supportedEffortLevels ?? [],
     });
   }
+
   return models;
 };
 
@@ -138,6 +139,7 @@ const compareVersions = (
     const difference = (a[i] ?? 0) - (b[i] ?? 0);
     if (difference !== 0) return difference;
   }
+
   return 0;
 };
 

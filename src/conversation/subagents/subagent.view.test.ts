@@ -10,35 +10,35 @@ describe("renderSubagentActivity", () => {
   test.each([
     { name: "started", kind: "started" as const, active: true },
     { name: "completed", kind: "completed" as const, active: false },
-  ])("names the $name activity as a history rebuilt from the record does", ({
-    kind,
-    active,
-  }) => {
-    const live = renderSubagentActivity(CHILD, kind, 1).flatMap(
-      (notification) =>
-        notification.method === "item/started"
-          ? [notification.params.item.id]
-          : [],
-    );
+  ])(
+    "names the $name activity as a history rebuilt from the record does",
+    ({ kind, active }) => {
+      const live = renderSubagentActivity(CHILD, kind, 1).flatMap(
+        (notification) =>
+          notification.method === "item/started"
+            ? [notification.params.item.id]
+            : [],
+      );
 
-    const [turn] = buildHistory(
-      [
-        prompt("u1", "go"),
-        reply("a1", "m1", toolUse(CHILD.toolUseId, "Agent", {}), "tool_use"),
-      ],
-      { threadId: CHILD.parentThreadId, cwd: "/w" },
-      (toolUseId) =>
-        toolUseId === CHILD.toolUseId
-          ? { threadId: CHILD.id, path: CHILD.path, active, edits: [] }
-          : undefined,
-    );
-    const rebuilt = (turn?.items ?? []).flatMap(({ item }) =>
-      item.type === "subAgentActivity" && item.kind === kind ? [item.id] : [],
-    );
+      const [turn] = buildHistory(
+        [
+          prompt("u1", "go"),
+          reply("a1", "m1", toolUse(CHILD.toolUseId, "Agent", {}), "tool_use"),
+        ],
+        { threadId: CHILD.parentThreadId, cwd: "/w" },
+        (toolUseId) =>
+          toolUseId === CHILD.toolUseId
+            ? { threadId: CHILD.id, path: CHILD.path, active, edits: [] }
+            : undefined,
+      );
+      const rebuilt = (turn?.items ?? []).flatMap(({ item }) =>
+        item.type === "subAgentActivity" && item.kind === kind ? [item.id] : [],
+      );
 
-    expect(live).toHaveLength(1);
-    expect(rebuilt).toEqual(live);
-  });
+      expect(live).toHaveLength(1);
+      expect(rebuilt).toEqual(live);
+    },
+  );
 });
 
 const CHILD: SubagentThread = {

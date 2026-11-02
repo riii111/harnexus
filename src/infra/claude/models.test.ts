@@ -172,14 +172,14 @@ describe("effortRule", () => {
       expected: "low",
     },
     { name: "no level in the settings", settings: {}, expected: "high" },
-  ])("runs a thread with no level picked at $name", ({
-    settings,
-    expected,
-  }) => {
-    const rule = effortRule(settings, BUILT_IN_EFFORTS);
+  ])(
+    "runs a thread with no level picked at $name",
+    ({ settings, expected }) => {
+      const rule = effortRule(settings, BUILT_IN_EFFORTS);
 
-    expect(rule(OPUS, null)).toBe(expected);
-  });
+      expect(rule(OPUS, null)).toBe(expected);
+    },
+  );
 
   test("finds the settings of a model under its name without the context suffix", () => {
     const rule = effortRule(
@@ -253,15 +253,14 @@ describe("effortRule", () => {
       picked: null,
       expected: "high",
     },
-  ])("runs $name at the highest level under it that the model runs", ({
-    settings,
-    picked,
-    expected,
-  }) => {
-    const rule = effortRule(settings, () => OPUS_4_6_EFFORTS);
+  ])(
+    "runs $name at the highest level under it that the model runs",
+    ({ settings, picked, expected }) => {
+      const rule = effortRule(settings, () => OPUS_4_6_EFFORTS);
 
-    expect(rule(OPUS, picked)).toBe(expected);
-  });
+      expect(rule(OPUS, picked)).toBe(expected);
+    },
+  );
 
   test("runs a cap below every level the model runs at its lowest level", () => {
     const rule = effortRule({ maxEffortLevel: "low" }, () => [

@@ -143,6 +143,7 @@ const cloudCopyCheck = (entries: readonly LogEntry[]): Check => {
       detail: `${stopped.length} stopped in the last 24h (last ${last.time}, ${field(last.step)}); copies of that chat resume after the bridge restarts`,
     };
   }
+
   return {
     status: "ok",
     name: "Cloud copies",
@@ -164,6 +165,7 @@ export const cloudCheck = (
       detail: `cannot run ${file}; set HARNEXUS_CLAUDE_CLI to the claude command to use Cloud threads`,
     };
   }
+
   // A Cloud thread sends with claude -p --cloud and copies with claude --teleport, so the claude command must offer both.
   const missing = ["--cloud", "--teleport"].filter(
     (flag) => !new RegExp(`(^|\\s)${flag}(\\s|$)`, "m").test(help),
@@ -176,6 +178,7 @@ export const cloudCheck = (
       detail: `${file} (${shown}) lacks ${missing.join(" and ")}; update Claude Code to use Cloud threads`,
     };
   }
+
   return {
     status: "ok",
     name,

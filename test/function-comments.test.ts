@@ -70,7 +70,7 @@ export const documented = () => 1;
 // TODO: decide when the second caller exists.
 export const todo = () => 1;
 
-// biome-ignore lint/suspicious/noExplicitAny: fixture
+// oxlint-disable-next-line typescript/no-explicit-any -- fixture
 export const ignored = (x: any) => x;
 
 // Explains a constant, not a function.
@@ -87,7 +87,7 @@ export const bare = () => 1;`,
 
 type Found = { id: string };
 
-// The short length is the lines a declaration takes once Biome has wrapped it, so a function of one expression or a few statements counts.
+// The short length is the lines a declaration takes once Oxfmt has wrapped it, so a function of one expression or a few statements counts.
 const SHORT_LINES = 2;
 
 // A comment above a short function mostly says what its name could, or a reason that applies to one line of it; the reason belongs on that line.
@@ -123,10 +123,13 @@ const findCommentedShortFunctions = async (root: string) => {
             found.push({ id: `${relative(src, file)}#${name}` });
           }
         }
+
         node.forEachChild(visit);
       };
+
       visit(source);
     }
+
     return found;
   } finally {
     await api.close();
@@ -137,6 +140,7 @@ const functionNameOf = (node: Node): string | undefined => {
   if (node.kind === SyntaxKind.FunctionDeclaration) {
     return (node as Node & { name?: { text: string } }).name?.text;
   }
+
   if (node.kind !== SyntaxKind.VariableStatement) return undefined;
   const { declarations } = (
     node as Node & {
@@ -165,7 +169,7 @@ const hasLeadingLineComment = (text: string, pos: number) =>
       !DIRECTIVE.test(text.slice(range.pos, range.end)),
   );
 
-const DIRECTIVE = /^\/\/\s*(TODO|biome-ignore|@ts-)/;
+const DIRECTIVE = /^\/\/\s*(TODO|oxlint-disable|@ts-)/;
 
 const startOf = (text: string, node: Node) => {
   const comments = getLeadingCommentRanges(text, node.pos) ?? [];
@@ -182,6 +186,7 @@ const lineIndex = (lineStarts: readonly number[], offset: number) => {
     if ((lineStarts[middle] ?? 0) <= offset) low = middle;
     else high = middle - 1;
   }
+
   return low;
 };
 
@@ -192,6 +197,7 @@ const sourceFiles = async (src: string) => {
   })) {
     if (!isTestCode(path)) files.push(join(src, path));
   }
+
   return files.sort();
 };
 
@@ -230,5 +236,6 @@ const writeProject = async (files: Record<string, string>) => {
     await mkdir(dirname(join(src, path)), { recursive: true });
     await writeFile(join(src, path), `${text}\n`);
   }
+
   return root;
 };

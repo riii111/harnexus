@@ -26,6 +26,7 @@ export const childSessionsIn = (
       ) {
         calls.add(block.id);
       }
+
       if (
         block.type === "tool_result" &&
         index >= from &&
@@ -40,6 +41,7 @@ export const childSessionsIn = (
       }
     }
   }
+
   return [...children.values()];
 };
 
@@ -74,6 +76,7 @@ const createdIn = (content: unknown): CloudChild | null => {
           : null,
     };
   }
+
   return null;
 };
 
@@ -102,6 +105,7 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
         calls.set(block.id, { ...block, at });
         continue;
       }
+
       if (
         block.type !== "tool_result" ||
         block.is_error === true ||
@@ -116,6 +120,7 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
         const read = textsOf(block.content).join("\n");
         arrive(scheduled, at, (message) => read.includes(message));
       }
+
       if (DELETE_TRIGGER.test(name) && typeof input.trigger_id === "string")
         cancelled.add(input.trigger_id);
       if (SEND_LATER.test(name))
@@ -131,6 +136,7 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
         });
     }
   }
+
   return scheduled.some(
     ({ trigger, came }) =>
       !came && (trigger === null || !cancelled.has(trigger)),

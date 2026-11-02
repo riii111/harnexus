@@ -90,6 +90,7 @@ export const createAppToolCalls = ({
           `An earlier ${unknownWrite} call has an unknown outcome and is never repeated automatically. Stop sending or creating threads and ask the user to check the app.`,
         );
       }
+
       // A write queued behind another is dropped once its turn is stopped, since nobody is left to act on its result.
       if (queuedIn !== generation) return notSentAfterStop(name);
       const refusal = refuseTargets(targets, { allowSelf: false });
@@ -103,12 +104,14 @@ export const createAppToolCalls = ({
           if (called.error._tag === "ServerRequestNotSent") {
             return failure(called.error.message);
           }
+
           // A malformed answer is still an answer to a call that ran, so like a lost one it leaves the outcome unknown.
           unknownWrite = name;
           return failure(
             `${called.error.message}. The ${name} call may or may not have taken effect and will not be repeated; ask the user to check the app.`,
           );
         }
+
         return called.value.isError === true
           ? called.value
           : await onSuccess(called.value);
@@ -126,6 +129,7 @@ export const createAppToolCalls = ({
     if (store.get(callerThreadId) === undefined) {
       return "This conversation is not registered as a Claude thread, so it cannot use the Codex app threads.";
     }
+
     // Messaging this thread itself would start a turn behind the one making the call and could wake itself without end, so it may only be read and waited on.
     // Any other thread the app itself lets the caller reach is a valid target, since parallel threads read, wait on and message one another.
     return allowSelf || !targets.includes(callerThreadId)
@@ -172,6 +176,7 @@ const readToolResult = (answer: unknown) => {
       }),
     );
   }
+
   const content = answer.content.flatMap(toContentItem);
   const result: ToolResult = {
     content,
@@ -195,6 +200,7 @@ const toContentItem = (item: unknown): ContentItem[] => {
   if (item.type === "text" && typeof item.text === "string") {
     return [{ type: "text", text: item.text }];
   }
+
   if (
     (item.type === "image" || item.type === "audio") &&
     typeof item.data === "string" &&
@@ -202,6 +208,7 @@ const toContentItem = (item: unknown): ContentItem[] => {
   ) {
     return [{ type: item.type, data: item.data, mimeType: item.mimeType }];
   }
+
   return [];
 };
 

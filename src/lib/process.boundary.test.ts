@@ -9,7 +9,7 @@ import {
 describe("signalProcess", () => {
   test("keeps the errno code of a signal the system refuses", () => {
     const kill = spyOn(process, "kill").mockImplementation(() => {
-      // biome-ignore lint/plugin/no-throw-try-catch: fakes process.kill, which reports refusals by throwing.
+      // oxlint-disable-next-line harnexus/no-throw-try-catch -- fakes process.kill, which reports refusals by throwing.
       throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
     });
 

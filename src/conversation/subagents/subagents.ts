@@ -127,6 +127,7 @@ export const createSubagents = ({
     ) {
       return;
     }
+
     const parent = sdkMessage.parent_tool_use_id;
     if (parent === null) return;
     const child = sessionAgents(threadId).find(
@@ -148,6 +149,7 @@ export const createSubagents = ({
     if (run === undefined || run.edits.some((known) => known.id === edit.id)) {
       return;
     }
+
     runs.set(call, { ...run, edits: [...run.edits, edit] });
     // The app sums only a turn's own file changes, so an agent's edit is also shown in the turn that made its call.
     if (run.turnId !== null) {
@@ -159,6 +161,7 @@ export const createSubagents = ({
       sendAll(notifications);
       keepInTurn(run.threadId, run.turnId, notifications);
     }
+
     if (run.parentCall !== null) delegateEdit(run.parentCall, edit, at);
   };
 
@@ -188,6 +191,7 @@ export const createSubagents = ({
       ]);
       sendAll(closed.notifications);
     }
+
     sendActivity(done, "completed", at);
   };
 
@@ -217,8 +221,10 @@ export const createSubagents = ({
       for (const notification of notifications) {
         noteItem(turn.items, notification);
       }
+
       return;
     }
+
     const kept = histories
       .get(agentId)
       ?.find((entry) => entry.turn.id === turnId);
@@ -248,6 +254,7 @@ export const createSubagents = ({
       running.delete(child.id);
       histories.delete(child.id);
     }
+
     for (const [call, run] of runs) {
       if (threads.has(run.threadId)) runs.delete(call);
     }
@@ -284,6 +291,7 @@ export const createSubagents = ({
           edits: [...(edits.get(call) ?? [])],
         });
       }
+
       const parent = children.get(thread.parentThreadId);
       const siblings = childrenOf(thread.parentThreadId);
       // A parent comes before the agents it started, so each agent is placed under its parent's path as the parent ended up.

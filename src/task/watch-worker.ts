@@ -115,6 +115,7 @@ const readThread = async (
     turns.push(...older.turns);
     cursor = older.nextCursor;
   }
+
   return { gone: false, active: first.active, turns };
 };
 

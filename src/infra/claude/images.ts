@@ -44,17 +44,20 @@ export const readImage = async (
       }),
     );
   }
+
   const size = sizeOf(bytes, mediaType);
   if (size === null) {
     return Result.err(
       new ImageUnreadable({ message: "the image size cannot be read" }),
     );
   }
+
   const longEdge = Math.max(size.width, size.height);
   // Claude refuses a whole request once it holds an image over its limits, and a conversation keeps every image it was sent, so an image is brought within them before it reaches Claude.
   if (longEdge <= MAX_EDGE && fits(bytes)) {
     return Result.ok(block(mediaType, bytes));
   }
+
   return shrink(bytes, mediaType, Math.min(longEdge, MAX_EDGE), resize);
 };
 
@@ -67,10 +70,12 @@ const bytesOf = async (
       ? Result.err(new ImageUnreadable({ message: "not a base64 data URL" }))
       : Result.ok(Buffer.from(data, "base64"));
   }
+
   const read = await readRegularFileBytesWithin(source.path, MAX_FILE_BYTES);
   if (read.isErr()) {
     return Result.err(new ImageUnreadable({ message: read.error.message }));
   }
+
   return read.value === null
     ? Result.err(new ImageTooLarge({ message: "the image file is too large" }))
     : Result.ok(read.value);
@@ -93,6 +98,7 @@ const shrink = async (
       return Result.ok(block(`image/${format}`, resized.value));
     }
   }
+
   return Result.err(
     new ImageTooLarge({ message: "the image could not be made small enough" }),
   );
@@ -119,6 +125,7 @@ const mediaTypeOf = (bytes: Uint8Array): MediaType | null => {
   if (ascii(bytes, 0, 4) === "RIFF" && ascii(bytes, 8, 4) === "WEBP") {
     return "image/webp";
   }
+
   return null;
 };
 
@@ -157,6 +164,7 @@ const webpSize = (bytes: Uint8Array, view: DataView) => {
         height: ((bits >>> 14) & 0x3fff) + 1,
       };
     }
+
     case "VP8X":
       return {
         width: (view.getUint32(24, true) & 0xffffff) + 1,
@@ -186,6 +194,7 @@ const jpegSize = (bytes: Uint8Array, view: DataView) => {
       offset += 2 + view.getUint16(offset + 2);
     }
   }
+
   return null;
 };
 

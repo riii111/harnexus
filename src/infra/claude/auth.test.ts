@@ -41,12 +41,12 @@ describe("withoutApiBilling", () => {
       },
       expected: { PATH: "/usr/bin" },
     },
-  ])("keeps only the custom headers that cannot replace the login for $name", ({
-    env,
-    expected,
-  }) => {
-    expect(withoutApiBilling(env)).toEqual(expected);
-  });
+  ])(
+    "keeps only the custom headers that cannot replace the login for $name",
+    ({ env, expected }) => {
+      expect(withoutApiBilling(env)).toEqual(expected);
+    },
+  );
 });
 
 describe("checkSubscription", () => {

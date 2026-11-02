@@ -26,6 +26,7 @@ export const startToolItem = (
   if (use.name === "Bash" && typeof input.command === "string") {
     return startCommand(id, input.command, cwd);
   }
+
   if (
     use.name === "Edit" &&
     typeof input.file_path === "string" &&
@@ -38,6 +39,7 @@ export const startToolItem = (
       diff: replacementDiff(input.old_string, input.new_string),
     });
   }
+
   if (
     use.name === "Write" &&
     typeof input.file_path === "string" &&
@@ -49,6 +51,7 @@ export const startToolItem = (
       diff: input.content,
     });
   }
+
   // Claude Code tools without an app counterpart fall back to a generic MCP-style item so their arguments and result stay visible.
   return startMcpToolCall(id, use);
 };
@@ -176,6 +179,7 @@ const completeGeneric = (
       durationMs: result.durationMs,
     };
   }
+
   return {
     ...item,
     status: "completed",
@@ -198,6 +202,7 @@ const appliedChange = (output: unknown): FileUpdateChange | null => {
       diff: record.content,
     };
   }
+
   if (!Array.isArray(record.structuredPatch)) return null;
   return {
     path: record.filePath,
@@ -252,6 +257,7 @@ const toMcpContent = (block: unknown) => {
   if (source.type === "base64") {
     return { type: "image", data: source.data, mimeType: source.media_type };
   }
+
   return {
     type: "text",
     text: `[image: ${String(source.url ?? source.type)}]`,

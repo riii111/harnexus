@@ -88,27 +88,28 @@ describe("createCloudRuntime reviews", () => {
       name: "a later message to that chat",
       delegatedBy: "send_message_to_thread" as const,
     },
-  ])("shows a review sent as $name, without Claude", async ({
-    delegatedBy,
-  }) => {
-    const env = setup({ copies: [] });
-    env.reviewKept.set("t1", {
-      key: "t1",
-      reviewer: "0199-reviewer",
-      verdict: "LGTM",
-      taskId: "harnexus-1",
-      head: "abc1234def",
-      answer: "判定: LGTM",
-    });
-    const turn = env.turn("/cloud-review t1", { delegatedBy });
+  ])(
+    "shows a review sent as $name, without Claude",
+    async ({ delegatedBy }) => {
+      const env = setup({ copies: [] });
+      env.reviewKept.set("t1", {
+        key: "t1",
+        reviewer: "0199-reviewer",
+        verdict: "LGTM",
+        taskId: "harnexus-1",
+        head: "abc1234def",
+        answer: "判定: LGTM",
+      });
+      const turn = env.turn("/cloud-review t1", { delegatedBy });
 
-    await env.runtime.run(turn.running);
+      await env.runtime.run(turn.running);
 
-    expect(turn.texts().at(-1)).toContain("判定: LGTM");
-    expect(turn.texts().at(-1)).toContain("`abc1234`");
-    expect(env.innerRuns).toEqual([]);
-    expect(env.links).toEqual([]);
-  });
+      expect(turn.texts().at(-1)).toContain("判定: LGTM");
+      expect(turn.texts().at(-1)).toContain("`abc1234`");
+      expect(env.innerRuns).toEqual([]);
+      expect(env.links).toEqual([]);
+    },
+  );
 
   test("sends a message typed in a reviewer's chat to the session that ran the reviewer, without Claude, and copies the worker's chat soon", async () => {
     const env = setup({ copies: [] });
@@ -302,43 +303,43 @@ describe("createCloudRuntime child sessions", () => {
     { name: "not sent", outcome: "not_sent", tries: 2 },
     { name: "without a project", outcome: "no_project", tries: 2 },
     { name: "of unknown result", outcome: "unknown", tries: 1 },
-  ])("tries a chat the app answered $name again only when none may exist, after a turn moved the shown position past it", async ({
-    outcome,
-    tries,
-  }) => {
-    const env = linked({
-      copies: [
-        [
-          prompt("p0", "earlier"),
-          endReply("r0", "ok"),
-          prompt("p1", "start a worker"),
-          reply(
-            "a1",
-            "m1",
-            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
-            "tool_use",
-          ),
-          toolResult("u1", "t1", started(CHILD)),
-          endReply("a2", "started"),
+  ])(
+    "tries a chat the app answered $name again only when none may exist, after a turn moved the shown position past it",
+    async ({ outcome, tries }) => {
+      const env = linked({
+        copies: [
+          [
+            prompt("p0", "earlier"),
+            endReply("r0", "ok"),
+            prompt("p1", "start a worker"),
+            reply(
+              "a1",
+              "m1",
+              toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+              "tool_use",
+            ),
+            toolResult("u1", "t1", started(CHILD)),
+            endReply("a2", "started"),
+          ],
         ],
-      ],
-      shown: "r0",
-    });
-    env.childOutcomes.push(outcome);
-    env.runtime.listen(() => true);
+        shown: "r0",
+      });
+      env.childOutcomes.push(outcome);
+      env.runtime.listen(() => true);
 
-    await env.runtime.run(env.turn("start a worker").running);
-    await settle();
-    expect(env.cloudOf("thread-1")?.shown).toBe("a2");
-    await env.tick();
-    await settle();
-    await env.tick();
-    await settle();
+      await env.runtime.run(env.turn("start a worker").running);
+      await settle();
+      expect(env.cloudOf("thread-1")?.shown).toBe("a2");
+      await env.tick();
+      await settle();
+      await env.tick();
+      await settle();
 
-    expect(env.children.map((opened) => opened.child.sessionId)).toEqual(
-      Array(tries).fill(CHILD),
-    );
-  });
+      expect(env.children.map((opened) => opened.child.sessionId)).toEqual(
+        Array(tries).fill(CHILD),
+      );
+    },
+  );
 
   test("leaves a session started before the app was shown to the user", async () => {
     const env = linked({
@@ -432,19 +433,22 @@ describe("createCloudRuntime /cloud", () => {
   test.each([
     { name: "id", argument: CLOUD_ID },
     { name: "URL", argument: `https://claude.ai/code/${CLOUD_ID}` },
-  ])("links an empty chat to the session whose $name is sent with the cloud-session skill", async ({
-    argument,
-  }) => {
-    const env = setup({
-      copies: [[prompt("p1", "hello"), endReply("r1", "hi")]],
-    });
+  ])(
+    "links an empty chat to the session whose $name is sent with the cloud-session skill",
+    async ({ argument }) => {
+      const env = setup({
+        copies: [[prompt("p1", "hello"), endReply("r1", "hi")]],
+      });
 
-    await env.runtime.run(env.turn(`${CLOUD_SKILL_LINK} ${argument}`).running);
+      await env.runtime.run(
+        env.turn(`${CLOUD_SKILL_LINK} ${argument}`).running,
+      );
 
-    expect(env.started).toEqual([]);
-    expect(env.links.map((link) => link.cloud.sessionId)).toEqual([CLOUD_ID]);
-    expect(env.innerRuns).toEqual([]);
-  });
+      expect(env.started).toEqual([]);
+      expect(env.links.map((link) => link.cloud.sessionId)).toEqual([CLOUD_ID]);
+      expect(env.innerRuns).toEqual([]);
+    },
+  );
 
   test("refuses the cloud-session skill sent alone in an empty chat as it refuses /cloud alone", async () => {
     const env = setup({ copies: [] });
@@ -468,19 +472,19 @@ describe("createCloudRuntime /cloud", () => {
       text: "[$cloud-review](/skills/cloud-review/SKILL.md) README の誤字を直して",
       held: false,
     },
-  ])("passes $name on to Claude, starting no session", async ({
-    text,
-    held,
-  }) => {
-    const env = setup({ copies: [] });
-    if (held) env.sessionIds.set("thread-1", "local-1");
+  ])(
+    "passes $name on to Claude, starting no session",
+    async ({ text, held }) => {
+      const env = setup({ copies: [] });
+      if (held) env.sessionIds.set("thread-1", "local-1");
 
-    await env.runtime.run(env.turn(text).running);
+      await env.runtime.run(env.turn(text).running);
 
-    expect(env.started).toEqual([]);
-    expect(env.links).toEqual([]);
-    expect(env.innerRuns).toEqual(["turn-1"]);
-  });
+      expect(env.started).toEqual([]);
+      expect(env.links).toEqual([]);
+      expect(env.innerRuns).toEqual(["turn-1"]);
+    },
+  );
 
   test("says when the Cloud session for a request could not start", async () => {
     const env = setup({ copies: [] });
@@ -518,20 +522,19 @@ describe("createCloudRuntime /cloud", () => {
       options: {},
       held: true,
     },
-  ])("passes $name on as a message, starting no session", async ({
-    text,
-    options,
-    held,
-  }) => {
-    const env = setup({ copies: [] });
-    if (held) env.sessionIds.set("thread-1", "local-1");
-    const turn = env.turn(text, options);
+  ])(
+    "passes $name on as a message, starting no session",
+    async ({ text, options, held }) => {
+      const env = setup({ copies: [] });
+      if (held) env.sessionIds.set("thread-1", "local-1");
+      const turn = env.turn(text, options);
 
-    await env.runtime.run(turn.running);
+      await env.runtime.run(turn.running);
 
-    expect(env.started).toEqual([]);
-    expect(env.innerRuns).toEqual(["turn-1"]);
-  });
+      expect(env.started).toEqual([]);
+      expect(env.innerRuns).toEqual(["turn-1"]);
+    },
+  );
 
   test("starts no session for a request with images, which a Cloud session cannot take", async () => {
     const env = setup({ copies: [] });
@@ -954,22 +957,23 @@ describe("createCloudRuntime turns", () => {
         env.runtime.interrupt(turn.running, false),
     },
     { name: "the bridge closes", stop: (env: Env) => env.runtime.closeAll() },
-  ])("stops waiting when $name and says the session keeps working", async ({
-    stop,
-  }) => {
-    const env = linked({ copies: [], shown: null });
-    env.wait = (woken) => woken;
-    const turn = env.turn("hi");
-    const running = env.runtime.run(turn.running);
-    await env.untilSent(1);
+  ])(
+    "stops waiting when $name and says the session keeps working",
+    async ({ stop }) => {
+      const env = linked({ copies: [], shown: null });
+      env.wait = (woken) => woken;
+      const turn = env.turn("hi");
+      const running = env.runtime.run(turn.running);
+      await env.untilSent(1);
 
-    stop(env, turn);
-    await running;
+      stop(env, turn);
+      await running;
 
-    expect(turn.outcome).toEqual({ status: "interrupted" });
-    expect(turn.texts().at(-1)).toContain("keeps working");
-    expect(env.copyCalls).toBe(0);
-  });
+      expect(turn.outcome).toEqual({ status: "interrupted" });
+      expect(turn.texts().at(-1)).toContain("keeps working");
+      expect(env.copyCalls).toBe(0);
+    },
+  );
 
   test("does not send a turn stopped while it waited to start", async () => {
     const env = linked({ copies: [], shown: null });
@@ -1061,35 +1065,35 @@ describe("createCloudRuntime turns", () => {
       answer: Result.err(new CloudSendRejected({ message: "archived" })),
       expected: { refusal: "cloud_not_sent", unknown: false, texts: ["one"] },
     },
-  ])("settles $name as its send went and stops waiting for it", async ({
-    answer,
-    expected,
-  }) => {
-    const env = linked({
-      copies: [[prompt("p1", "first"), endReply("a1", "one")]],
-      shown: null,
-    });
-    const turn = env.turn("first");
-    const steered = createGate();
-    env.wait = () => steered.promise;
-    const running = env.runtime.run(turn.running);
-    await env.untilSent(1);
-    env.sendQueue.push(answer);
+  ])(
+    "settles $name as its send went and stops waiting for it",
+    async ({ answer, expected }) => {
+      const env = linked({
+        copies: [[prompt("p1", "first"), endReply("a1", "one")]],
+        shown: null,
+      });
+      const turn = env.turn("first");
+      const steered = createGate();
+      env.wait = () => steered.promise;
+      const running = env.runtime.run(turn.running);
+      await env.untilSent(1);
+      env.sendQueue.push(answer);
 
-    const refusal = await env.runtime.steer(turn.running, {
-      text: "second",
-      images: [],
-    });
-    steered.open();
-    await running;
+      const refusal = await env.runtime.steer(turn.running, {
+        text: "second",
+        images: [],
+      });
+      steered.open();
+      await running;
 
-    expect({
-      refusal,
-      unknown: turn.outcomeUnknown,
-      texts: turn.texts(),
-    }).toEqual(expected);
-    expect(turn.outcome).toEqual({ status: "completed" });
-  });
+      expect({
+        refusal,
+        unknown: turn.outcomeUnknown,
+        texts: turn.texts(),
+      }).toEqual(expected);
+      expect(turn.outcome).toEqual({ status: "completed" });
+    },
+  );
 
   test("keeps the previous copy while the new one could not be saved", async () => {
     const env = linked({
@@ -1215,6 +1219,7 @@ describe("createCloudRuntime turns", () => {
           })
         : Promise.resolve();
     };
+
     const turn = env.turn("hi");
 
     await env.runtime.run(turn.running);
@@ -1249,8 +1254,10 @@ describe("createCloudRuntime turns", () => {
         release();
         return new Promise<void>((resolve) => setTimeout(resolve, 5));
       }
+
       return Promise.resolve();
     };
+
     const turn = env.turn("hi");
 
     await env.runtime.run(turn.running);
@@ -1732,6 +1739,7 @@ const setup = ({
     owners.set(link.sessionId, "thread-1");
     sessionIds.set("thread-1", "copy-0");
   }
+
   const env = {
     sessionIds,
     owners,
@@ -1797,6 +1805,7 @@ const setup = ({
           resolve();
           return;
         }
+
         copyWaiters.push(() => {
           if (env.copyCalls < count) return false;
           resolve();
@@ -1810,6 +1819,7 @@ const setup = ({
           setTimeout(resolve, 0);
           return;
         }
+
         sendWaiters.push(() => {
           if (sends.length < count) return false;
           resolve();
@@ -1854,6 +1864,7 @@ const setup = ({
         if (env.linkFails) {
           return Result.err({ _tag: "StatePersistFailed" }) as never;
         }
+
         links.push({ threadId, cloud, copy });
         clouds.set(threadId, cloud);
         owners.set(cloud.sessionId, threadId);
@@ -1874,6 +1885,7 @@ const setup = ({
         if (env.saveFails) {
           return Result.err({ _tag: "StatePersistFailed" }) as never;
         }
+
         const cloud = clouds.get(threadId);
         if (cloud !== undefined) clouds.set(threadId, { ...cloud, shown });
         return Result.ok({} as never);
@@ -1903,6 +1915,7 @@ const setup = ({
           new CloudCopyFailed({ stopped: null, message: env.copyFailure }),
         );
       }
+
       const sessionId = `copy-${call}`;
       contents.set(sessionId, copies[Math.min(call, copies.length) - 1] ?? []);
       if (env.copyStop !== null) {
@@ -1913,6 +1926,7 @@ const setup = ({
           }),
         );
       }
+
       return Result.ok(sessionId);
     },
     readCopy: async (copy) => Result.ok(contents.get(copy) ?? []),
@@ -2083,6 +2097,7 @@ const fakeTurn = (
     state = rendered.state;
     notifications.push(...rendered.notifications);
   };
+
   result.running = {
     threadId: "thread-1",
     turnId,

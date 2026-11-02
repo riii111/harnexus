@@ -76,6 +76,7 @@ const fakeHarnexus = async (path: string) => {
         );
         return;
       }
+
       calls.push(call);
       const answer = answers.shift();
       if (answer === undefined) unplanned.push(call);
@@ -144,11 +145,13 @@ const fixture = async () => {
       stdout: run.stdout,
     };
   };
+
   const write = async (data: unknown) => {
     const path = join(root, "request.json");
     await writeFile(path, JSON.stringify(data));
     return path;
   };
+
   return { root, codex, socket, env, harnexus, invoke, write };
 };
 
@@ -276,25 +279,24 @@ describe("harnexus-task launch", () => {
       },
       message: "directory_unknown",
     },
-  ])("stops at $name without a second create", async ({
-    args,
-    answer,
-    message,
-  }) => {
-    const { harnexus, invoke, write, data, launch } = await launchFixture();
+  ])(
+    "stops at $name without a second create",
+    async ({ args, answer, message }) => {
+      const { harnexus, invoke, write, data, launch } = await launchFixture();
 
-    const refused = await launch(args, [answer]);
+      const refused = await launch(args, [answer]);
 
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain(message);
-    expect((await launch(args)).code).toBe(1);
-    expect(harnexus.calls).toHaveLength(1);
-    const state = await invoke(["state", "--request", await write(data)]);
-    expect(state.out).toMatchObject({
-      pending: "refused",
-      pendingThreadId: "w1",
-    });
-  });
+      expect(refused.code).toBe(1);
+      expect(refused.err).toContain(message);
+      expect((await launch(args)).code).toBe(1);
+      expect(harnexus.calls).toHaveLength(1);
+      const state = await invoke(["state", "--request", await write(data)]);
+      expect(state.out).toMatchObject({
+        pending: "refused",
+        pendingThreadId: "w1",
+      });
+    },
+  );
 
   test("creates the worker again once a model mismatch is released as not sent", async () => {
     const { invoke, write, data, launch } = await launchFixture();
@@ -406,18 +408,22 @@ describe("harnexus-task launch", () => {
       name: "a tool error",
       answer: { outcome: "tool_error", error: "bad project" },
     },
-  ])("releases the pending send when the answer says $name", async ({
-    answer,
-  }) => {
-    const { launch } = await launchFixture();
+  ])(
+    "releases the pending send when the answer says $name",
+    async ({ answer }) => {
+      const { launch } = await launchFixture();
 
-    const refused = await launch([], [answer]);
-    const sent = await launch([], [created("w1", "claude-sonnet-5-5", "high")]);
+      const refused = await launch([], [answer]);
+      const sent = await launch(
+        [],
+        [created("w1", "claude-sonnet-5-5", "high")],
+      );
 
-    expect(refused.code).toBe(1);
-    expect(refused.err).toContain("was not sent");
-    expect([sent.code, sent.err]).toEqual([0, ""]);
-  });
+      expect(refused.code).toBe(1);
+      expect(refused.err).toContain("was not sent");
+      expect([sent.code, sent.err]).toEqual([0, ""]);
+    },
+  );
 
   test("treats a missing socket as not sent", async () => {
     const { env, root, socket, launch } = await launchFixture();
@@ -533,20 +539,21 @@ describe("harnexus-task launch", () => {
     { branch: "a..b" },
     { branch: "a b" },
     { branch: "a.lock" },
-  ])("rejects the starting branch $branch before sending", async ({
-    branch,
-  }) => {
-    const { harnexus, data, launch } = await launchFixture();
-    data.startingBranch = branch;
+  ])(
+    "rejects the starting branch $branch before sending",
+    async ({ branch }) => {
+      const { harnexus, data, launch } = await launchFixture();
+      data.startingBranch = branch;
 
-    const rejected = await launch();
+      const rejected = await launch();
 
-    expect([rejected.code, rejected.err]).toEqual([
-      1,
-      expect.stringContaining("startingBranch must be a branch name"),
-    ]);
-    expect(harnexus.calls).toEqual([]);
-  });
+      expect([rejected.code, rejected.err]).toEqual([
+        1,
+        expect.stringContaining("startingBranch must be a branch name"),
+      ]);
+      expect(harnexus.calls).toEqual([]);
+    },
+  );
 
   test("keeps an unrecognized outcome pending as unknown", async () => {
     const { launch } = await launchFixture();
@@ -1236,10 +1243,12 @@ const reviewFixture = async () => {
     ]);
     return ran.stdout.toString().trim();
   };
+
   const commit = (message: string) => {
     git("commit", "--allow-empty", "-qm", message);
     return git("rev-parse", "HEAD");
   };
+
   git("init", "-q");
   const initial = commit("test: initial");
   git("branch", "base");
@@ -1359,20 +1368,19 @@ describe("harnexus-task review", () => {
       value: "Appで自動マージを承認する",
       title: "Review｜Appで自動マージを承認する",
     },
-  ])("titles the reviewer thread from $name", async ({
-    field,
-    value,
-    title,
-  }) => {
-    const { harnexus, commit, data, review, listed } = await reviewFixture();
-    commit("test: candidate");
-    data[field] = value;
+  ])(
+    "titles the reviewer thread from $name",
+    async ({ field, value, title }) => {
+      const { harnexus, commit, data, review, listed } = await reviewFixture();
+      commit("test: candidate");
+      data[field] = value;
 
-    const sent = await review([], [listed, created("r1", "gpt-6.1-sol")]);
+      const sent = await review([], [listed, created("r1", "gpt-6.1-sol")]);
 
-    expect([sent.code, sent.err]).toEqual([0, ""]);
-    expect(harnexus.calls[1]?.arguments.title).toBe(title);
-  });
+      expect([sent.code, sent.err]).toEqual([0, ""]);
+      expect(harnexus.calls[1]?.arguments.title).toBe(title);
+    },
+  );
 
   test("creates no reviewer until the review home is a project", async () => {
     const { harnexus, root, commit, review } = await reviewFixture();
@@ -1484,34 +1492,35 @@ describe("harnexus-task review", () => {
       },
     },
     { name: "a lost answer", answer: DROP },
-  ])("blocks a resend after a re-review ends with $name", async ({
-    answer,
-  }) => {
-    const { harnexus, invoke, write, commit, data, review, listed } =
-      await reviewFixture();
-    expect(
-      (await review([], [listed, created("r1", "gpt-6.1-sol")])).code,
-    ).toBe(0);
-    commit("test: fix");
+  ])(
+    "blocks a resend after a re-review ends with $name",
+    async ({ answer }) => {
+      const { harnexus, invoke, write, commit, data, review, listed } =
+        await reviewFixture();
+      expect(
+        (await review([], [listed, created("r1", "gpt-6.1-sol")])).code,
+      ).toBe(0);
+      commit("test: fix");
 
-    const failed = await review([], [answer]);
-    commit("test: another fix");
-    const blocked = await review();
+      const failed = await review([], [answer]);
+      commit("test: another fix");
+      const blocked = await review();
 
-    expect(failed.code).toBe(1);
-    expect(failed.err).toContain("never resend");
-    expect(blocked.code).toBe(1);
-    expect(blocked.err).toContain("never resend");
-    expect(harnexus.calls).toHaveLength(3);
-    const resolved = await invoke([
-      "resolve",
-      "--request",
-      await write(data),
-      "--sent",
-    ]);
-    expect([resolved.code, resolved.err]).toEqual([0, ""]);
-    expect(resolved.out.threadId).toBe("r1");
-  });
+      expect(failed.code).toBe(1);
+      expect(failed.err).toContain("never resend");
+      expect(blocked.code).toBe(1);
+      expect(blocked.err).toContain("never resend");
+      expect(harnexus.calls).toHaveLength(3);
+      const resolved = await invoke([
+        "resolve",
+        "--request",
+        await write(data),
+        "--sent",
+      ]);
+      expect([resolved.code, resolved.err]).toEqual([0, ""]);
+      expect(resolved.out.threadId).toBe("r1");
+    },
+  );
 
   test.each([
     {
@@ -1614,6 +1623,7 @@ describe("harnexus-task review", () => {
       );
       expect(env.GIT_NO_LAZY_FETCH).toBe("1");
     }
+
     const outside = join(root, "outside");
     await mkdir(outside);
     data.checkout = outside;

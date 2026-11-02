@@ -72,6 +72,7 @@ export const startCloudSession = (
           if (child.pid !== undefined) stopGroup(child.pid);
           outcome();
         };
+
         const timer = setTimeout(
           () =>
             finish(() =>
@@ -95,6 +96,7 @@ export const startCloudSession = (
             finish(() => resolve({ sessionId, title }));
             return;
           }
+
           if (TRUST_PROMPT.test(plain))
             finish(() =>
               reject(
@@ -104,6 +106,7 @@ export const startCloudSession = (
               ),
             );
         };
+
         child.stdout.on("data", read(new StringDecoder("utf8")));
         child.stderr.on("data", read(new StringDecoder("utf8")));
         child.on("error", (error) => finish(() => reject(error)));
@@ -130,6 +133,7 @@ const stopGroup = (pid: number) => {
   } catch {
     return;
   }
+
   setTimeout(() => {
     try {
       process.kill(-pid, "SIGKILL");

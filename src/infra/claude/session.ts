@@ -114,6 +114,7 @@ export const startClaudeSession = (
       prompt.end();
       closeQuery(claude);
     };
+
     const closeOnAbort = () => closeStartup();
     signal?.addEventListener("abort", closeOnAbort, { once: true });
     if (signal?.aborted) closeStartup();
@@ -124,11 +125,13 @@ export const startClaudeSession = (
       closeStartup();
       if (signal?.aborted) return Result.err(sessionStartCancelled());
     }
+
     yield* checked;
     if (signal?.aborted) {
       closeStartup();
       return Result.err(sessionStartCancelled());
     }
+
     signal?.removeEventListener("abort", closeOnAbort);
     return Result.ok(createSession(claude, prompt));
   });
@@ -238,6 +241,7 @@ export const readClaudeSession = (
     if (messages.length === 0) {
       yield* Result.await(checkRecordReadable(sessionId, configDir));
     }
+
     return Result.ok(messages);
   });
 
@@ -275,6 +279,7 @@ export const readClaudeSubagents = (
         found.set(agentId, join(folder, dirname(file)));
       }
     }
+
     const agents = await Promise.all(
       [...found].map(([agentId, at]) =>
         readAgent(at, sessionId, agentId, reader),
@@ -395,6 +400,7 @@ const createSession = (
     queue.end();
     closeQuery(claude);
   };
+
   return {
     messages: readMessages(claude, () => closed, close),
     isClosed: () => closed,
@@ -431,6 +437,7 @@ async function* readMessages(
         yield Result.err(next.error);
         return;
       }
+
       if (next.value.done === true) return;
       yield Result.ok(next.value.value);
     }
@@ -447,15 +454,13 @@ const USER_SETTINGS: SettingSource[] = ["user"];
 const MODELS_TIMEOUT_MS = 30_000;
 
 const processRuntime = async () =>
-  (await loadClaudeSdk()).map(
-    (sdk): ClaudeRuntime => ({
-      query: sdk.query,
-      resolveSettings: sdk.resolveSettings,
-      createSdkMcpServer: sdk.createSdkMcpServer,
-      // resolveSettings resolves settings directories such as CLAUDE_CONFIG_DIR from this process's environment, so Claude starts from the same one and differs only by the billing variables removed from it.
-      env: process.env,
-    }),
-  );
+  (await loadClaudeSdk()).map((sdk): ClaudeRuntime => ({
+    query: sdk.query,
+    resolveSettings: sdk.resolveSettings,
+    createSdkMcpServer: sdk.createSdkMcpServer,
+    // resolveSettings resolves settings directories such as CLAUDE_CONFIG_DIR from this process's environment, so Claude starts from the same one and differs only by the billing variables removed from it.
+    env: process.env,
+  }));
 
 const sessionClosed = () =>
   new ClaudeSessionClosed({ message: "the Claude session is closed" });

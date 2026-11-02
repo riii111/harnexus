@@ -11,6 +11,7 @@ export const printAnswer = (stdout: string): Record<string, unknown> | null => {
   if (!Array.isArray(parsed.value)) {
     return isObject(parsed.value) ? parsed.value : null;
   }
+
   const result = parsed.value
     .filter((event) => isObject(event) && event.type === "result")
     .at(-1);

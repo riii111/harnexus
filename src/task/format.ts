@@ -53,12 +53,14 @@ export const formatTemplate = (
         problem ??= `single '${match}' in template`;
         return match;
       }
+
       const value = Object.hasOwn(fields, name) ? fields[name] : undefined;
       if (value === undefined) problem ??= `unknown template field {${name}}`;
       else {
         const refused = refuse(value);
         if (refused !== null) problem ??= `{${name}} ${refused}`;
       }
+
       return value ?? match;
     },
   );

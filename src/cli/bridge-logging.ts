@@ -117,6 +117,7 @@ export const createBridgeLogger = (env: NodeJS.ProcessEnv) => {
   if (file.isErr()) {
     logger.log({ event: "log_file_unavailable", reason: file.error._tag });
   }
+
   return logger;
 };
 

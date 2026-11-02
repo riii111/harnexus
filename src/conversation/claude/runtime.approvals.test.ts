@@ -111,30 +111,34 @@ describe("tool approval", () => {
       proposed: undefined,
       expected: { behavior: "allow" },
     },
-  ])("answers the app's always allow of a command $name", async ({
-    options,
-    proposed,
-    expected,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await startedTurn(claude);
+  ])(
+    "answers the app's always allow of a command $name",
+    async ({ options, proposed, expected }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns, sent } = await startedTurn(claude);
 
-    const decision = askTool(claude, "Bash", { command: "npm test" }, options);
-    const request = await appRequest(sent);
-    turns.answerRequest({
-      id: request.id,
-      result: {
-        decision: {
-          acceptWithExecpolicyAmendment: {
-            execpolicy_amendment: ["npm", "test"],
+      const decision = askTool(
+        claude,
+        "Bash",
+        { command: "npm test" },
+        options,
+      );
+      const request = await appRequest(sent);
+      turns.answerRequest({
+        id: request.id,
+        result: {
+          decision: {
+            acceptWithExecpolicyAmendment: {
+              execpolicy_amendment: ["npm", "test"],
+            },
           },
         },
-      },
-    });
+      });
 
-    expect(request.params.proposedExecpolicyAmendment).toEqual(proposed);
-    expect(await decision).toEqual(expected);
-  });
+      expect(request.params.proposedExecpolicyAmendment).toEqual(proposed);
+      expect(await decision).toEqual(expected);
+    },
+  );
 
   test("shows a tool the app declined as declined", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -305,21 +309,21 @@ describe("tool approval", () => {
       stop: (_turns, claude) => claude.fail(new Error("socket closed")),
       status: "failed",
     },
-  ])("denies a waiting tool and closes its prompt when $name", async ({
-    stop,
-    status,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
-    const { turns, sent } = await startedTurn(claude);
+  ])(
+    "denies a waiting tool and closes its prompt when $name",
+    async ({ stop, status }) => {
+      const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
+      const { turns, sent } = await startedTurn(claude);
 
-    const decision = askTool(claude, "Bash", { command: "ls" });
-    const request = await appRequest(sent);
-    stop(turns, claude);
+      const decision = askTool(claude, "Bash", { command: "ls" });
+      const request = await appRequest(sent);
+      stop(turns, claude);
 
-    expect((await decision)?.behavior).toBe("deny");
-    expect(turnCompleted(sent)?.status).toBe(status);
-    expect(resolvedRequests(sent)).toEqual([request.id]);
-  });
+      expect((await decision)?.behavior).toBe("deny");
+      expect(turnCompleted(sent)?.status).toBe(status);
+      expect(resolvedRequests(sent)).toEqual([request.id]);
+    },
+  );
 
   test("denies a waiting tool when Claude aborts the request", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -415,28 +419,28 @@ describe("permission mode", () => {
   test.each([
     { name: "plan", mode: "plan", expected: "plan" },
     { name: "default", mode: "default", expected: "auto" },
-  ])("runs a turn in the app's $name mode as Claude's $expected mode", async ({
-    mode,
-    expected,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns } = await harness([claude]);
-    const request = turnStart(10, "hello");
+  ])(
+    "runs a turn in the app's $name mode as Claude's $expected mode",
+    async ({ mode, expected }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns } = await harness([claude]);
+      const request = turnStart(10, "hello");
 
-    turns.startTurn(
-      {
-        ...request,
-        params: {
-          ...request.params,
-          collaborationMode: { mode, settings: { model: MODEL } },
+      turns.startTurn(
+        {
+          ...request,
+          params: {
+            ...request.params,
+            collaborationMode: { mode, settings: { model: MODEL } },
+          },
         },
-      },
-      undefined,
-    );
-    await until(() => claude.modes().length === 1);
+        undefined,
+      );
+      await until(() => claude.modes().length === 1);
 
-    expect(claude.modes()).toEqual([expected]);
-  });
+      expect(claude.modes()).toEqual([expected]);
+    },
+  );
 });
 
 describe("approvals no turn could show", () => {
@@ -619,38 +623,39 @@ describe("approvals no turn could show", () => {
       name: "fails",
       stop: (claude) => claude.fail(new Error("socket closed")),
     },
-  ])("shows what Claude said during the wait to the turn the user queued when Claude's stream $name, and fails that turn", async ({
-    stop,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const next = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude, next]);
-    await completeTurn(turns, sent, claude, 10);
+  ])(
+    "shows what Claude said during the wait to the turn the user queued when Claude's stream $name, and fails that turn",
+    async ({ stop }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const next = fakeClaude(SUBSCRIPTION);
+      const { turns, sent } = await harness([claude, next]);
+      await completeTurn(turns, sent, claude, 10);
 
-    const decision = agentAsks(claude, "tool-1");
-    await appRequest(sent);
-    turns.startTurn(turnStart(11, "next"), undefined);
-    await until(() => responseTo(sent, 11) !== undefined);
-    claude.emit(sdk(INIT));
-    claude.emit(sdk(answer("msg-2", "own words")));
-    stop(claude);
-    expect((await decision)?.behavior).toBe("deny");
-    await until(() => completedTurnStatuses(sent).length === 3);
+      const decision = agentAsks(claude, "tool-1");
+      await appRequest(sent);
+      turns.startTurn(turnStart(11, "next"), undefined);
+      await until(() => responseTo(sent, 11) !== undefined);
+      claude.emit(sdk(INIT));
+      claude.emit(sdk(answer("msg-2", "own words")));
+      stop(claude);
+      expect((await decision)?.behavior).toBe("deny");
+      await until(() => completedTurnStatuses(sent).length === 3);
 
-    expect(completedTurns(sent).slice(1)).toMatchObject([
-      { id: "turn-2", status: "failed" },
-      { id: "turn-3", status: "failed" },
-    ]);
-    expect(
-      sent.find(
-        (m) =>
-          m.method === "item/completed" &&
-          m.params.turnId === "turn-3" &&
-          m.params.item.type === "agentMessage",
-      )?.params.item,
-    ).toMatchObject({ text: "own words" });
-    expect(next.started()).toBe(false);
-  });
+      expect(completedTurns(sent).slice(1)).toMatchObject([
+        { id: "turn-2", status: "failed" },
+        { id: "turn-3", status: "failed" },
+      ]);
+      expect(
+        sent.find(
+          (m) =>
+            m.method === "item/completed" &&
+            m.params.turnId === "turn-3" &&
+            m.params.item.type === "agentMessage",
+        )?.params.item,
+      ).toMatchObject({ text: "own words" });
+      expect(next.started()).toBe(false);
+    },
+  );
 
   test.each<{
     name: string;
@@ -661,27 +666,28 @@ describe("approvals no turn could show", () => {
       name: "fails",
       stop: (claude) => claude.fail(new Error("socket closed")),
     },
-  ])("declines the approvals and fails both turns when Claude's stream $name after it started a turn during the wait", async ({
-    stop,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
-    await completeTurn(turns, sent, claude, 10);
+  ])(
+    "declines the approvals and fails both turns when Claude's stream $name after it started a turn during the wait",
+    async ({ stop }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns, sent } = await harness([claude]);
+      await completeTurn(turns, sent, claude, 10);
 
-    const decision = agentAsks(claude, "tool-1");
-    await appRequest(sent);
-    claude.emit(sdk(INIT));
-    claude.emit(sdk(answer("msg-2", "the agent finished")));
-    stop(claude);
-    expect((await decision)?.behavior).toBe("deny");
-    await until(() => completedTurnStatuses(sent).length === 3);
+      const decision = agentAsks(claude, "tool-1");
+      await appRequest(sent);
+      claude.emit(sdk(INIT));
+      claude.emit(sdk(answer("msg-2", "the agent finished")));
+      stop(claude);
+      expect((await decision)?.behavior).toBe("deny");
+      await until(() => completedTurnStatuses(sent).length === 3);
 
-    expect(completedTurns(sent).slice(1)).toMatchObject([
-      { id: "turn-2", status: "failed" },
-      { id: "turn-3", status: "failed" },
-    ]);
-    expect(claude.closes()).toBeGreaterThan(0);
-  });
+      expect(completedTurns(sent).slice(1)).toMatchObject([
+        { id: "turn-2", status: "failed" },
+        { id: "turn-3", status: "failed" },
+      ]);
+      expect(claude.closes()).toBeGreaterThan(0);
+    },
+  );
 
   test("shows a main agent's approval that comes while a turn Claude started waits behind the approval turn in that turn without an item", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -893,34 +899,35 @@ describe("approvals no turn could show", () => {
       },
     },
     { name: "the bridge closes", end: ({ turns }) => turns.closeAll() },
-  ])("declines the approvals the turn holds and fails it when $name", async ({
-    end,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const started = await harness([claude]);
-    const { turns, sent } = started;
-    await completeTurn(turns, sent, claude, 10);
+  ])(
+    "declines the approvals the turn holds and fails it when $name",
+    async ({ end }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const started = await harness([claude]);
+      const { turns, sent } = started;
+      await completeTurn(turns, sent, claude, 10);
 
-    const first = agentAsks(claude, "tool-1");
-    const second = agentAsks(claude, "tool-2");
-    await until(() => askedRequests(sent).length === 2);
-    end(started, claude);
+      const first = agentAsks(claude, "tool-1");
+      const second = agentAsks(claude, "tool-2");
+      await until(() => askedRequests(sent).length === 2);
+      end(started, claude);
 
-    expect((await first)?.behavior).toBe("deny");
-    expect((await second)?.behavior).toBe("deny");
-    await until(() => completedTurnStatuses(sent).length === 2);
-    expect(completedTurns(sent)[1]).toMatchObject({
-      id: "turn-2",
-      status: "failed",
-      error: {
-        message: "Claude's session ended before the approval was answered",
-      },
-    });
-    expect(resolvedRequests(sent)).toEqual(
-      askedRequests(sent).map((m) => m.id),
-    );
-    await until(() => claude.closes() > 0);
-  });
+      expect((await first)?.behavior).toBe("deny");
+      expect((await second)?.behavior).toBe("deny");
+      await until(() => completedTurnStatuses(sent).length === 2);
+      expect(completedTurns(sent)[1]).toMatchObject({
+        id: "turn-2",
+        status: "failed",
+        error: {
+          message: "Claude's session ended before the approval was answered",
+        },
+      });
+      expect(resolvedRequests(sent)).toEqual(
+        askedRequests(sent).map((m) => m.id),
+      );
+      await until(() => claude.closes() > 0);
+    },
+  );
 
   test.each<{
     name: string;
@@ -937,24 +944,24 @@ describe("approvals no turn could show", () => {
       options: {},
       beforeAsk: (turns) => turns.closeAll(),
     },
-  ])("declines an approval without opening a turn when $name", async ({
-    options,
-    beforeAsk,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude], options);
-    await completeTurn(turns, sent, claude, 10);
-    beforeAsk(turns);
+  ])(
+    "declines an approval without opening a turn when $name",
+    async ({ options, beforeAsk }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns, sent } = await harness([claude], options);
+      await completeTurn(turns, sent, claude, 10);
+      beforeAsk(turns);
 
-    const decision = await agentAsks(claude, "tool-1");
+      const decision = await agentAsks(claude, "tool-1");
 
-    expect(decision).toEqual({
-      behavior: "deny",
-      message: "no Claude turn is running to ask the app for approval",
-    });
-    expect(askedRequests(sent)).toEqual([]);
-    expect(startedTurns(sent)).toEqual(["turn-1"]);
-  });
+      expect(decision).toEqual({
+        behavior: "deny",
+        message: "no Claude turn is running to ask the app for approval",
+      });
+      expect(askedRequests(sent)).toEqual([]);
+      expect(startedTurns(sent)).toEqual(["turn-1"]);
+    },
+  );
 
   test("shows a background agent's call declined in the turn holding it as declined in the agent's thread", async () => {
     const claude = fakeClaude(SUBSCRIPTION);

@@ -102,8 +102,10 @@ describe("canceling Claude session startup", () => {
           if (started.isOk()) {
             fake.emit(sdk(answer("msg-late", "stale startup output")));
           }
+
           return started;
         }
+
         return startClaudeSession(session, fake.runtime, signal);
       },
     });
@@ -149,6 +151,7 @@ describe("canceling Claude session startup", () => {
             advancedFinished.open();
             return Result.ok("record-after");
           }
+
           return Result.ok("record-before");
         },
         lookupSession: async () => Result.ok(true),
@@ -194,6 +197,7 @@ describe("canceling Claude session startup", () => {
           await resumeGate.promise;
           staleLookupFinished.open();
         }
+
         return Result.ok(true);
       },
     });
@@ -254,6 +258,7 @@ describe("canceling Claude session startup", () => {
               lookupEnded.open();
               return Result.ok("record-after");
             }
+
             return Result.ok("record-before");
           },
           lookupSession: async () => Result.ok(true),
@@ -290,29 +295,29 @@ describe("canceling Claude session startup", () => {
         };
       },
     },
-  ])("closeAll completes a turn waiting on $name and closes the query once", async ({
-    sentPrompts,
-    waitOnLookup,
-  }) => {
-    const lookup = createGate();
-    const { claude, started, turnsEnded, lookupEnded } =
-      await waitOnLookup(lookup);
+  ])(
+    "closeAll completes a turn waiting on $name and closes the query once",
+    async ({ sentPrompts, waitOnLookup }) => {
+      const lookup = createGate();
+      const { claude, started, turnsEnded, lookupEnded } =
+        await waitOnLookup(lookup);
 
-    started.turns.closeAll();
-    await until(
-      () => completedTurnStatuses(started.sent).length === turnsEnded,
-    );
-    expect(completedTurnStatuses(started.sent).at(-1)).toBe("failed");
-    expect(claude.closes()).toBe(1);
-    lookup.open();
-    await lookupEnded;
+      started.turns.closeAll();
+      await until(
+        () => completedTurnStatuses(started.sent).length === turnsEnded,
+      );
+      expect(completedTurnStatuses(started.sent).at(-1)).toBe("failed");
+      expect(claude.closes()).toBe(1);
+      lookup.open();
+      await lookupEnded;
 
-    expect(started.settings).toHaveLength(1);
-    expect(claude.closes()).toBe(1);
-    expect(
-      (await claude.prompts()).map((prompt) => prompt.message.content),
-    ).toEqual(sentPrompts);
-  });
+      expect(started.settings).toHaveLength(1);
+      expect(claude.closes()).toBe(1);
+      expect(
+        (await claude.prompts()).map((prompt) => prompt.message.content),
+      ).toEqual(sentPrompts);
+    },
+  );
 });
 
 describe("session ids", () => {
@@ -650,20 +655,20 @@ describe("a fork of a Claude thread", () => {
         await completeTurn(started.turns, started.sent, source, 10);
       },
     },
-  ])("starts a conversation of its own when $name", async ({
-    options,
-    prepare,
-  }) => {
-    const source = fakeClaude(SUBSCRIPTION);
-    const fork = fakeClaude(SUBSCRIPTION);
-    const started = await harness([source, fork], options);
-    await prepare(started, source);
+  ])(
+    "starts a conversation of its own when $name",
+    async ({ options, prepare }) => {
+      const source = fakeClaude(SUBSCRIPTION);
+      const fork = fakeClaude(SUBSCRIPTION);
+      const started = await harness([source, fork], options);
+      await prepare(started, source);
 
-    await forkTurn(started, fork, 11);
+      await forkTurn(started, fork, 11);
 
-    expect(started.settings[1]?.resume).toBeUndefined();
-    expect(started.settings[1]?.forkSession).toBeUndefined();
-  });
+      expect(started.settings[1]?.resume).toBeUndefined();
+      expect(started.settings[1]?.forkSession).toBeUndefined();
+    },
+  );
 
   test("fails the turn without starting Claude when the source's record could not be read at the fork", async () => {
     const source = fakeClaude(SUBSCRIPTION);
@@ -785,27 +790,28 @@ describe("Claude's own turns", () => {
       name: "for a send of another client",
       fields: { origin: undefined, user_message_uuids: ["uuid-elsewhere"] },
     },
-  ])("keeps the turn open through a turn Claude ran $name before taking the prompt", async ({
-    fields,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
+  ])(
+    "keeps the turn open through a turn Claude ran $name before taking the prompt",
+    async ({ fields }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns, sent } = await harness([claude]);
 
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
-    const [prompt] = await readPrompts(claude, 1);
-    claude.emit(sdk(answer("msg-1", "the agent finished")));
-    claude.emit(sdk(ownResult(fields)));
-    await until(() => claude.drained());
-    expect(completedTurnStatuses(sent)).toEqual([]);
-    claude.emit(sdk(answer("msg-2", "hi")));
-    claude.emit(sdk(success([prompt?.uuid])));
-    await until(() => turnCompleted(sent) !== undefined);
+      turns.startTurn(turnStart(10, "hello"), undefined);
+      await until(() => claude.started());
+      const [prompt] = await readPrompts(claude, 1);
+      claude.emit(sdk(answer("msg-1", "the agent finished")));
+      claude.emit(sdk(ownResult(fields)));
+      await until(() => claude.drained());
+      expect(completedTurnStatuses(sent)).toEqual([]);
+      claude.emit(sdk(answer("msg-2", "hi")));
+      claude.emit(sdk(success([prompt?.uuid])));
+      await until(() => turnCompleted(sent) !== undefined);
 
-    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
-    expect(turnCompleted(sent).items).toMatchObject([{ text: "hi" }]);
-    expect(claude.closes()).toBe(0);
-  });
+      expect(completedTurnStatuses(sent)).toEqual(["completed"]);
+      expect(turnCompleted(sent).items).toMatchObject([{ text: "hi" }]);
+      expect(claude.closes()).toBe(0);
+    },
+  );
 
   test("keeps a steer pending through a turn Claude ran on its own", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -868,49 +874,47 @@ describe("subagent threads", () => {
       status: "interrupted",
       keepsOutput: false,
     },
-  ])("holds child output during a rewind and settles the child as $status when $name", async ({
-    applied,
-    finishRewind,
-    status,
-    keepsOutput,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, store, runtime, subagents } = await harness([claude]);
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.prompted());
-    claude.emit(sdk(taskStarted("toolu-agent", 1)));
-    claude.emit(sdk(success()));
-    await until(() => store.get(THREAD)?.runState === "idle");
-    await settle();
-    const child = subagents.childrenOf(THREAD)[0];
-    if (child === undefined) return expect.unreachable("child did not start");
-    const gate = createGate();
-    const changing = turns.changeConversation(THREAD, async () => {
-      await gate.promise;
-      finishRewind(runtime);
-      return applied;
-    });
-    claude.emit(
-      sdk({
-        ...answer("msg-child", "held child output"),
-        parent_tool_use_id: "toolu-agent",
-      }),
-    );
-    claude.emit(sdk(taskNotification("toolu-agent")));
-    await settle();
-    expect(child.active).toBe(true);
-    expect(JSON.stringify(subagents.historyOf(child.id))).not.toContain(
-      "held child output",
-    );
-    gate.open();
-    expect(await changing).toBe(applied);
-    await until(() => subagents.childrenOf(THREAD)[0]?.active === false);
-    const history = subagents.historyOf(child.id);
-    expect(history?.[0]?.turn.status).toBe(status);
-    expect(JSON.stringify(history).includes("held child output")).toBe(
-      keepsOutput,
-    );
-  });
+  ])(
+    "holds child output during a rewind and settles the child as $status when $name",
+    async ({ applied, finishRewind, status, keepsOutput }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns, store, runtime, subagents } = await harness([claude]);
+      turns.startTurn(turnStart(10, "hello"), undefined);
+      await until(() => claude.prompted());
+      claude.emit(sdk(taskStarted("toolu-agent", 1)));
+      claude.emit(sdk(success()));
+      await until(() => store.get(THREAD)?.runState === "idle");
+      await settle();
+      const child = subagents.childrenOf(THREAD)[0];
+      if (child === undefined) return expect.unreachable("child did not start");
+      const gate = createGate();
+      const changing = turns.changeConversation(THREAD, async () => {
+        await gate.promise;
+        finishRewind(runtime);
+        return applied;
+      });
+      claude.emit(
+        sdk({
+          ...answer("msg-child", "held child output"),
+          parent_tool_use_id: "toolu-agent",
+        }),
+      );
+      claude.emit(sdk(taskNotification("toolu-agent")));
+      await settle();
+      expect(child.active).toBe(true);
+      expect(JSON.stringify(subagents.historyOf(child.id))).not.toContain(
+        "held child output",
+      );
+      gate.open();
+      expect(await changing).toBe(applied);
+      await until(() => subagents.childrenOf(THREAD)[0]?.active === false);
+      const history = subagents.historyOf(child.id);
+      expect(history?.[0]?.turn.status).toBe(status);
+      expect(JSON.stringify(history).includes("held child output")).toBe(
+        keepsOutput,
+      );
+    },
+  );
 
   test("shows an agent Claude starts as a thread under the turn's thread until it completes", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -1026,24 +1030,24 @@ describe("subagent threads", () => {
       },
       turn: { status: "failed", error: { message: "API error: overloaded" } },
     },
-  ])("ends an agent's thread when the agent $name", async ({
-    ending,
-    turn,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, subagents } = await harness([claude]);
+  ])(
+    "ends an agent's thread when the agent $name",
+    async ({ ending, turn }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns, sent, subagents } = await harness([claude]);
 
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.prompted());
-    claude.emit(sdk(taskStarted("toolu-agent", 1)));
-    claude.emit(sdk(ending));
-    claude.emit(sdk(success()));
-    await until(() => turnCompleted(sent) !== undefined);
+      turns.startTurn(turnStart(10, "hello"), undefined);
+      await until(() => claude.prompted());
+      claude.emit(sdk(taskStarted("toolu-agent", 1)));
+      claude.emit(sdk(ending));
+      claude.emit(sdk(success()));
+      await until(() => turnCompleted(sent) !== undefined);
 
-    const [child] = subagents.childrenOf(THREAD);
-    expect(child).toMatchObject({ active: false });
-    expect(subagents.historyOf(child?.id ?? "")).toMatchObject([{ turn }]);
-  });
+      const [child] = subagents.childrenOf(THREAD);
+      expect(child).toMatchObject({ active: false });
+      expect(subagents.historyOf(child?.id ?? "")).toMatchObject([{ turn }]);
+    },
+  );
 
   test("ends the agents of a session that closed", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -1366,41 +1370,42 @@ describe("a Claude that stops while a turn waits to read it", () => {
       name: "fails",
       stop: (claude) => claude.fail(new Error("socket closed")),
     },
-  ])("runs the turn on a new Claude when the idle Claude $name before it", async ({
-    stop,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const next = fakeClaude(SUBSCRIPTION);
-    const marking = { held: false };
-    const gate = createGate();
-    const { turns, sent, settings } = await harness([claude, next], {
-      files: {
-        createMarker: async (path) => {
-          if (marking.held) await gate.promise;
-          return createEmptyFile(path);
+  ])(
+    "runs the turn on a new Claude when the idle Claude $name before it",
+    async ({ stop }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const next = fakeClaude(SUBSCRIPTION);
+      const marking = { held: false };
+      const gate = createGate();
+      const { turns, sent, settings } = await harness([claude, next], {
+        files: {
+          createMarker: async (path) => {
+            if (marking.held) await gate.promise;
+            return createEmptyFile(path);
+          },
         },
-      },
-    });
-    await completeTurn(turns, sent, claude, 10);
+      });
+      await completeTurn(turns, sent, claude, 10);
 
-    marking.held = true;
-    turns.startTurn(turnStart(11, "next"), undefined);
-    stop(claude);
-    await until(() => claude.closes() > 0);
-    gate.open();
-    await until(() => next.prompted());
-    next.emit(sdk(answer("msg-2", "hi")));
-    next.emit(sdk(success()));
-    await until(() => completedTurnStatuses(sent).length === 2);
+      marking.held = true;
+      turns.startTurn(turnStart(11, "next"), undefined);
+      stop(claude);
+      await until(() => claude.closes() > 0);
+      gate.open();
+      await until(() => next.prompted());
+      next.emit(sdk(answer("msg-2", "hi")));
+      next.emit(sdk(success()));
+      await until(() => completedTurnStatuses(sent).length === 2);
 
-    expect(completedTurns(sent)[1]).toMatchObject({
-      id: "turn-2",
-      status: "completed",
-      items: [{ text: "hi" }],
-    });
-    expect(await firstPrompt(next.prompt())).toBe("next");
-    expect(settings[1]).toMatchObject({ resume: "se-1" });
-  });
+      expect(completedTurns(sent)[1]).toMatchObject({
+        id: "turn-2",
+        status: "completed",
+        items: [{ text: "hi" }],
+      });
+      expect(await firstPrompt(next.prompt())).toBe("next");
+      expect(settings[1]).toMatchObject({ resume: "se-1" });
+    },
+  );
 });
 
 describe("thread tools", () => {
@@ -1563,12 +1568,14 @@ const subagentEvents = (sent: Sent[]) =>
         `${params.threadId} ${params.turnId} ${params.item.kind} ${params.item.agentThreadId}`,
       ];
     }
+
     if (
       message.method === "thread/status/changed" &&
       message.params.threadId !== THREAD
     ) {
       return [`${message.params.threadId} ${message.params.status.type}`];
     }
+
     return [];
   });
 

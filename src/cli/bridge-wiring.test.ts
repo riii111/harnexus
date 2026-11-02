@@ -379,6 +379,7 @@ const workerA = async () => {
       content: [{ type: "text", text: JSON.stringify(PROVISIONAL) }],
     });
   };
+
   const threads = connect(store, sent, {
     request,
     startSession: async (session) => {
@@ -405,6 +406,7 @@ const workerA = async () => {
     threads.closeAll();
     return created;
   };
+
   return {
     store,
     sent,
@@ -528,7 +530,7 @@ const until = async (condition: () => boolean) => {
   }
 };
 
-// biome-ignore lint/suspicious/noExplicitAny: messages are checked by shape in each test.
+// oxlint-disable-next-line typescript/no-explicit-any -- messages are checked by shape in each test.
 type Sent = any;
 
 const WORKER_A = "th-fixture-worker-a";

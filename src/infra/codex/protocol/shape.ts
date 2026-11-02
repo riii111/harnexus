@@ -17,6 +17,7 @@ export const shapeOf = (value: unknown): ShapePath[] => {
     if (size > MAX_SHAPE_CHARS) break;
     kept.push(path);
   }
+
   return kept;
 };
 
@@ -34,6 +35,7 @@ const walk = (
     paths.add(`${at}:deeper`);
     return;
   }
+
   if (
     OPAQUE_FIELDS.has(key) ||
     OPAQUE_PATHS.some((suffix) => at.endsWith(suffix)) ||
@@ -42,12 +44,14 @@ const walk = (
     paths.add(`${at}:${typeName(value)}`);
     return;
   }
+
   if (Array.isArray(value)) {
     if (value.length === 0) paths.add(`${at}:array`);
     for (const item of value.slice(0, MAX_ITEMS))
       walk(item, `${at}[]`, key, depth + 1, paths, budget);
     return;
   }
+
   if (typeof value === "object" && value !== null) {
     // A key that is not a field name names the user's data unless it is a map entry, so below it only the type is kept.
     const isMap = MAP_FIELDS.has(key);
@@ -69,9 +73,11 @@ const walk = (
         paths.add(`${path}:${typeName(child)}`);
       else walk(child, path, field, depth + 1, paths, budget);
     }
+
     if (count === 0) paths.add(`${at}:object`);
     return;
   }
+
   paths.add(`${at}:${typeName(value)}`);
 };
 

@@ -69,22 +69,22 @@ describe("pickerPrompt", () => {
         older: "none",
       },
     },
-  ])("offers newer and older conversations only where the list continues on $name", ({
-    offset,
-    expected,
-  }) => {
-    const prompt = pickerPrompt(
-      TARGET,
-      page([listed("ask")], { offset, total: 3 }),
-      NOW,
-    );
+  ])(
+    "offers newer and older conversations only where the list continues on $name",
+    ({ offset, expected }) => {
+      const prompt = pickerPrompt(
+        TARGET,
+        page([listed("ask")], { offset, total: 3 }),
+        NOW,
+      );
 
-    expect({
-      labels: labelsOf(prompt),
-      newer: prompt.answerOf(picked("Newer conversations")).kind,
-      older: prompt.answerOf(picked("Older conversations")).kind,
-    }).toEqual(expected);
-  });
+      expect({
+        labels: labelsOf(prompt),
+        newer: prompt.answerOf(picked("Newer conversations")).kind,
+        older: prompt.answerOf(picked("Older conversations")).kind,
+      }).toEqual(expected);
+    },
+  );
 
   test("keeps titles that read like its own choices apart from them", () => {
     const prompt = pickerPrompt(

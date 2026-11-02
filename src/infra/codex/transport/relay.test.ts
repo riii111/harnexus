@@ -185,6 +185,7 @@ const collector = ({ delayMs = 0, highWaterMark = 16 * 1024 } = {}) => {
         chunks.push(chunk);
         callback();
       };
+
       if (delayMs === 0) complete();
       else setTimeout(complete, delayMs);
     },
@@ -206,6 +207,7 @@ const heldCollector = () => {
         chunks.push(chunk);
         callback();
       };
+
       if (released) complete();
       else held.push(complete);
     },
@@ -214,6 +216,7 @@ const heldCollector = () => {
     released = true;
     for (const complete of held.splice(0)) complete();
   };
+
   return { stream, release, bytes: () => Buffer.concat(chunks) };
 };
 

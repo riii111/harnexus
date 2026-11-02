@@ -147,6 +147,7 @@ const documentRefs = (values: unknown) =>
           `document reference must be an existing absolute path or HTTPS URL: ${ref}`,
         );
     }
+
     if (new Set(values).size !== values.length)
       return fail("documentRefs must not contain duplicate references");
     return Result.ok(values.map((value) => `- ${value}`).join("\n"));
@@ -257,6 +258,7 @@ export const reviewRequest = (
       if (cloud && key === "projectId" && data[key] === undefined) continue;
       yield* singleLine(data[key], key);
     }
+
     if (data.workerAI !== "Claude" && data.workerAI !== "Codex")
       return fail("workerAI must be Claude or Codex");
     const prUrl = data.prUrl;
@@ -332,6 +334,7 @@ export const candidate = (
         git(checkout, "rev-parse", "--verify", `${reference}^{commit}`),
       );
     }
+
     const base = String(data.base);
     const merged = yield* Result.await(
       git(checkout, "merge-base", base, String(data.head)),

@@ -97,18 +97,19 @@ describe("createSideChats.beforeTurn", () => {
   test.each([
     { name: "no model", model: undefined },
     { name: "a Claude model", model: "claude-fixture" },
-  ])("leaves a Claude side chat on Claude for a message naming $name", async ({
-    model,
-  }) => {
-    const { sideChats, injects } = setup();
-    sideChats.remember(
-      "th-side",
-      claudeSide(await pointOf(sideChats), undefined),
-    );
+  ])(
+    "leaves a Claude side chat on Claude for a message naming $name",
+    async ({ model }) => {
+      const { sideChats, injects } = setup();
+      sideChats.remember(
+        "th-side",
+        claudeSide(await pointOf(sideChats), undefined),
+      );
 
-    expect(sideChats.beforeTurn("th-side", model)).toBeNull();
-    expect(injects).toEqual([]);
-  });
+      expect(sideChats.beforeTurn("th-side", model)).toBeNull();
+      expect(injects).toEqual([]);
+    },
+  );
 
   test("leaves a side chat whose Claude conversation began to the usual routing", async () => {
     const { sideChats, injects, begun } = setup();
@@ -330,18 +331,18 @@ describe("createSideChats.referenceOf", () => {
       desc: page([RUNNING_TURN], "cursor"),
       asc: page([], null),
     },
-  ])("fails rather than hand over an empty or mixed conversation on $name", async ({
-    desc,
-    asc,
-  }) => {
-    const { sideChats, main } = setup();
-    main.desc = desc;
-    main.asc = asc;
+  ])(
+    "fails rather than hand over an empty or mixed conversation on $name",
+    async ({ desc, asc }) => {
+      const { sideChats, main } = setup();
+      main.desc = desc;
+      main.asc = asc;
 
-    const reference = await sideChats.referenceOf("th-main");
+      const reference = await sideChats.referenceOf("th-main");
 
-    expect(reference.isErr()).toBe(true);
-  });
+      expect(reference.isErr()).toBe(true);
+    },
+  );
 });
 
 describe("createSideChats.remember", () => {
@@ -470,7 +471,7 @@ const setup = ({
     readSession: (sessionId) =>
       readClaudeSession(sessionId, {
         read: async () => {
-          // biome-ignore lint/plugin/no-throw-try-catch: getSessionMessages rejects when the record cannot be read.
+          // oxlint-disable-next-line harnexus/no-throw-try-catch -- getSessionMessages rejects when the record cannot be read.
           if (reading.unreadable) throw new Error("unreadable");
           return [...record];
         },

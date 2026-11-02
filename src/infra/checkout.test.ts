@@ -125,6 +125,7 @@ const project = async (name: string, files: Record<string, string>) => {
     await mkdir(dirname(join(root, path)), { recursive: true });
     await writeFile(join(root, path), content);
   }
+
   return root;
 };
 

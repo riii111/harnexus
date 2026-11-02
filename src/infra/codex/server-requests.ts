@@ -87,6 +87,7 @@ export const attachServerRequests = ({
         pending.delete(id);
         resolve(toResult(method, answer, timeoutMs));
       };
+
       pending.set(id, settle);
       const sent = injector.inject(
         `${JSON.stringify({ id, method, params })}\n`,

@@ -45,8 +45,10 @@ const sizeOfJpeg = (bytes: Uint8Array) => {
         width: data.readUInt16BE(offset + 7),
       };
     }
+
     offset += 2 + data.readUInt16BE(offset + 2);
   }
+
   return null;
 };
 

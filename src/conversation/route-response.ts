@@ -116,6 +116,7 @@ export const createServerResponses = ({
     if (request.kind === "initialize" || request.kind === "modelList") {
       if (compatibility.judge(request.kind, message)) return line;
     }
+
     if (!isObject(message.result)) return line;
     const result = message.result;
     switch (request.kind) {
@@ -150,6 +151,7 @@ export const createServerResponses = ({
     for (const model of listed.collisions) {
       log({ event: "model_id_collision", model });
     }
+
     return encode({ ...message, result: listed.result });
   };
 
@@ -165,6 +167,7 @@ export const createServerResponses = ({
         ? encode({ ...message, result: withLiveStatus(result, live) })
         : line;
     }
+
     return serveHistory(
       "thread/read",
       request.history,
@@ -196,9 +199,11 @@ export const createServerResponses = ({
     if (request.sideChat !== null) {
       sideChats.remember(threadId, request.sideChat);
     }
+
     if (request.createdModel !== null && typeof result.cwd === "string") {
       threads.adopt(threadId, { model: request.createdModel, cwd: result.cwd });
     }
+
     const source =
       request.forkOf === null ? undefined : threads.threadOf(request.forkOf);
     // The app is shown the fork only once where its source stood has been read, so nothing the source says after the fork appears reaches it.
@@ -207,6 +212,7 @@ export const createServerResponses = ({
         .adoptFork(threadId, source, request.forkOf)
         .then(() => openedResponse(line, message, request, threadId));
     }
+
     return openedResponse(line, message, request, threadId);
   };
 
@@ -314,6 +320,7 @@ export const createServerResponses = ({
     if (threadId === undefined || model === undefined || !isObject(settings)) {
       return null;
     }
+
     const effort = shownEffort(threads.effortOf(threadId));
     const mode = settings.collaborationMode;
     return encode({

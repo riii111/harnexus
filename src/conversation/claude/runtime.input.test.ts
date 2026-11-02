@@ -89,29 +89,29 @@ describe("turn/steer", () => {
       taken: (uuid) => [uuid],
       queued: 0,
     },
-  ])("keeps the turn open through the Claude turn that runs a steer $name", async ({
-    taken,
-    queued,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
+  ])(
+    "keeps the turn open through the Claude turn that runs a steer $name",
+    async ({ taken, queued }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns, sent } = await harness([claude]);
 
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
-    turns.steerTurn(steer(30, "turn-1", "also this"));
-    const [prompt, steered] = await readPrompts(claude, 2);
-    claude.emit(sdk(answer("msg-1", "first")));
-    claude.emit(sdk(success(taken(prompt?.uuid), queued)));
-    await until(() => claude.drained());
-    expect(completedTurnStatuses(sent)).toEqual([]);
-    claude.emit(sdk(answer("msg-2", "second")));
-    claude.emit(sdk(success([steered?.uuid])));
-    await until(() => turnCompleted(sent) !== undefined);
+      turns.startTurn(turnStart(10, "hello"), undefined);
+      await until(() => claude.started());
+      turns.steerTurn(steer(30, "turn-1", "also this"));
+      const [prompt, steered] = await readPrompts(claude, 2);
+      claude.emit(sdk(answer("msg-1", "first")));
+      claude.emit(sdk(success(taken(prompt?.uuid), queued)));
+      await until(() => claude.drained());
+      expect(completedTurnStatuses(sent)).toEqual([]);
+      claude.emit(sdk(answer("msg-2", "second")));
+      claude.emit(sdk(success([steered?.uuid])));
+      await until(() => turnCompleted(sent) !== undefined);
 
-    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
-    expect(turnCompleted(sent).items).toMatchObject([{ text: "second" }]);
-    expect(claude.closes()).toBe(0);
-  });
+      expect(completedTurnStatuses(sent)).toEqual(["completed"]);
+      expect(turnCompleted(sent).items).toMatchObject([{ text: "second" }]);
+      expect(claude.closes()).toBe(0);
+    },
+  );
 
   // user_message_uuids holds at most 64 sends and user_message_uuid only the last, so a steer Claude took can go unnamed.
   test.each<{ name: string; taken: (uuid: string | undefined) => object }>([
@@ -125,40 +125,41 @@ describe("turn/steer", () => {
         ],
       }),
     },
-  ])("fails the turn asking for the steer again and resumes on a new session when nothing is queued and the result has $name", async ({
-    taken,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const next = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, settings } = await harness([claude, next]);
+  ])(
+    "fails the turn asking for the steer again and resumes on a new session when nothing is queued and the result has $name",
+    async ({ taken }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const next = fakeClaude(SUBSCRIPTION);
+      const { turns, sent, settings } = await harness([claude, next]);
 
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
-    turns.steerTurn(steer(30, "turn-1", "also this"));
-    const [prompt] = await readPrompts(claude, 2);
-    claude.emit(sdk(answer("msg-1", "ok")));
-    claude.emit(
-      sdk(
-        result({
-          subtype: "success",
-          is_error: false,
-          result: "done",
-          queued_turn_count: 0,
-          ...taken(prompt?.uuid),
-        }),
-      ),
-    );
-    await until(() => turnCompleted(sent) !== undefined);
-    await completeTurn(turns, sent, next, 11);
+      turns.startTurn(turnStart(10, "hello"), undefined);
+      await until(() => claude.started());
+      turns.steerTurn(steer(30, "turn-1", "also this"));
+      const [prompt] = await readPrompts(claude, 2);
+      claude.emit(sdk(answer("msg-1", "ok")));
+      claude.emit(
+        sdk(
+          result({
+            subtype: "success",
+            is_error: false,
+            result: "done",
+            queued_turn_count: 0,
+            ...taken(prompt?.uuid),
+          }),
+        ),
+      );
+      await until(() => turnCompleted(sent) !== undefined);
+      await completeTurn(turns, sent, next, 11);
 
-    expect(turnCompleted(sent)).toMatchObject({
-      status: "failed",
-      error: { message: expect.stringContaining("send it again") },
-    });
-    expect(completedTurnStatuses(sent)).toEqual(["failed", "completed"]);
-    expect(claude.closes()).toBe(1);
-    expect(settings[1]).toMatchObject({ resume: "se-1" });
-  });
+      expect(turnCompleted(sent)).toMatchObject({
+        status: "failed",
+        error: { message: expect.stringContaining("send it again") },
+      });
+      expect(completedTurnStatuses(sent)).toEqual(["failed", "completed"]);
+      expect(claude.closes()).toBe(1);
+      expect(settings[1]).toMatchObject({ resume: "se-1" });
+    },
+  );
 
   test("completes the turn when the result names the steer as its only uuid", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -197,6 +198,7 @@ describe("turn/steer", () => {
     for (let id = 100; id < 162; id += 1) {
       steered.push(turns.steerTurn(steer(id, "turn-1", `steer ${id}`)));
     }
+
     steered.push(turns.steerTurn(steer(162, "turn-1", "one too many")));
     await Promise.all(steered);
 
@@ -295,23 +297,24 @@ describe("turn/steer", () => {
         },
       },
     },
-  ])("refuses a steer with $name and leaves the turn running", async ({
-    request,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
+  ])(
+    "refuses a steer with $name and leaves the turn running",
+    async ({ request }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns, sent } = await harness([claude]);
 
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
-    turns.steerTurn(request);
-    const [prompt] = await readPrompts(claude, 1);
-    claude.emit(sdk(success([prompt?.uuid])));
-    await until(() => turnCompleted(sent) !== undefined);
+      turns.startTurn(turnStart(10, "hello"), undefined);
+      await until(() => claude.started());
+      turns.steerTurn(request);
+      const [prompt] = await readPrompts(claude, 1);
+      claude.emit(sdk(success([prompt?.uuid])));
+      await until(() => turnCompleted(sent) !== undefined);
 
-    expect(responseTo(sent, 30)).toEqual(REFUSED(30));
-    expect(prompt?.message.content).toBe("hello");
-    expect(completedTurnStatuses(sent)).toEqual(["completed"]);
-  });
+      expect(responseTo(sent, 30)).toEqual(REFUSED(30));
+      expect(prompt?.message.content).toBe("hello");
+      expect(completedTurnStatuses(sent)).toEqual(["completed"]);
+    },
+  );
 
   test("refuses a steer once the turn is stopping", async () => {
     const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
@@ -636,40 +639,39 @@ describe("images in Claude input", () => {
       finish: async () => {},
       status: "completed",
     },
-  ])("refuses a steer whose image was still being shrunk when the turn $name, without sending it to Claude", async ({
-    stop,
-    finish,
-    status,
-  }) => {
-    const path = await writeImage("wide.png", pngBytes(4000, 3000));
-    const shrunk = createGate();
-    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
-    const { turns, sent } = await harness([claude], {
-      resizeImage: async () => {
-        await shrunk.promise;
-        return Result.ok(pngBytes(2000, 1500));
-      },
-    });
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.started());
-    const [prompt] = await readPrompts(claude, 1);
-    if (prompt === undefined) return expect.unreachable("no prompt");
+  ])(
+    "refuses a steer whose image was still being shrunk when the turn $name, without sending it to Claude",
+    async ({ stop, finish, status }) => {
+      const path = await writeImage("wide.png", pngBytes(4000, 3000));
+      const shrunk = createGate();
+      const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
+      const { turns, sent } = await harness([claude], {
+        resizeImage: async () => {
+          await shrunk.promise;
+          return Result.ok(pngBytes(2000, 1500));
+        },
+      });
+      turns.startTurn(turnStart(10, "hello"), undefined);
+      await until(() => claude.started());
+      const [prompt] = await readPrompts(claude, 1);
+      if (prompt === undefined) return expect.unreachable("no prompt");
 
-    const steered = turns.steerTurn(
-      withInput(steer(30, "turn-1", ""), [{ type: "localImage", path }]),
-    );
-    await stop({ turns, claude, prompt, sent });
-    shrunk.open();
-    await steered;
-    await finish(claude);
-    await until(() => turnCompleted(sent) !== undefined);
-    turns.startTurn(turnStart(11, "next"), undefined);
-    const [following] = await readPrompts(claude, 1);
+      const steered = turns.steerTurn(
+        withInput(steer(30, "turn-1", ""), [{ type: "localImage", path }]),
+      );
+      await stop({ turns, claude, prompt, sent });
+      shrunk.open();
+      await steered;
+      await finish(claude);
+      await until(() => turnCompleted(sent) !== undefined);
+      turns.startTurn(turnStart(11, "next"), undefined);
+      const [following] = await readPrompts(claude, 1);
 
-    expect(turnCompleted(sent)?.status).toBe(status);
-    expect(responseTo(sent, 30)).toEqual(REFUSED(30));
-    expect(following?.message.content).toBe("next");
-  });
+      expect(turnCompleted(sent)?.status).toBe(status);
+      expect(responseTo(sent, 30)).toEqual(REFUSED(30));
+      expect(following?.message.content).toBe("next");
+    },
+  );
 
   test("refuses a steer whose image Claude cannot read and leaves the turn running", async () => {
     const path = await writeImage(

@@ -141,33 +141,32 @@ describe("createCloudReviews", () => {
       outcome: "blocked",
       shown: false,
     },
-  ])("keeps the reviewer's chat when a send $name", async ({
-    text,
-    outcome,
-    shown,
-  }) => {
-    const { reviews, calls } = await setup([
-      projects,
-      { outcome: "done", threadId: "review-chat" },
-      {
-        outcome: "tool_error",
-        result: { content: [{ type: "text", text }], isError: true },
-      },
-    ]);
+  ])(
+    "keeps the reviewer's chat when a send $name",
+    async ({ text, outcome, shown }) => {
+      const { reviews, calls } = await setup([
+        projects,
+        { outcome: "done", threadId: "review-chat" },
+        {
+          outcome: "tool_error",
+          result: { content: [{ type: "text", text }], isError: true },
+        },
+      ]);
 
-    await reviews.openReview("parent", "/work/harnexus", review("t1"));
-    const sent = await reviews.openReview(
-      "parent",
-      "/work/harnexus",
-      review("t2"),
-    );
+      await reviews.openReview("parent", "/work/harnexus", review("t1"));
+      const sent = await reviews.openReview(
+        "parent",
+        "/work/harnexus",
+        review("t2"),
+      );
 
-    expect(sent).toBe(outcome);
-    expect(calls).toHaveLength(3);
-    expect((await reviews.recordsOf("review-chat"))?.length).toBe(
-      shown ? 4 : 2,
-    );
-  });
+      expect(sent).toBe(outcome);
+      expect(calls).toHaveLength(3);
+      expect((await reviews.recordsOf("review-chat"))?.length).toBe(
+        shown ? 4 : 2,
+      );
+    },
+  );
 
   test("keeps a chat the app made whose first turn did not go as asked", async () => {
     const { reviews, calls } = await setup([

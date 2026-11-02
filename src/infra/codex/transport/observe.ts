@@ -100,17 +100,20 @@ export const createObserver = (
       record({ event: "rpc_unobserved", direction, reason: "invalid_json" });
       return;
     }
+
     // JSON.parse only produces JSON values.
     const message = parsed.value as Json;
     if (!isObject(message)) {
       record({ event: "rpc_unobserved", direction, reason: "not_object" });
       return;
     }
+
     const kind = classify(message);
     if (kind === null) {
       record({ event: "rpc_unobserved", direction, reason: "unknown_shape" });
       return;
     }
+
     const id = requestId(message.id);
     const method =
       kind === "response" || kind === "error_response"
@@ -276,6 +279,7 @@ const createRequestTracker = () => {
         const oldest = pending.keys().next();
         if (!oldest.done) pending.delete(oldest.value);
       }
+
       pending.set(key(direction, id), method);
     },
     takeMethod: (direction: Direction, id: RequestId | null) => {
@@ -292,6 +296,7 @@ const classify = (message: JsonObject): MessageKind | null => {
   if (typeof message.method === "string") {
     return "id" in message ? "request" : "notification";
   }
+
   if (!("id" in message)) return null;
   if ("error" in message) return "error_response";
   if ("result" in message) return "response";
@@ -308,10 +313,12 @@ const toolDefinitions = (
     const params = asObject(message.params);
     return dynamicTools(asArray(params?.dynamicTools), null, 0);
   }
+
   if (kind === "response" && method === "mcpServerStatus/list") {
     const servers = asArray(asObject(message.result)?.data);
     return servers.flatMap((server) => mcpServerTools(asObject(server)));
   }
+
   return [];
 };
 
@@ -323,6 +330,7 @@ const mcpStartupStatus = (
   if (kind !== "notification" || method !== "mcpServer/startupStatus/updated") {
     return null;
   }
+
   const params = asObject(message.params);
   const status = params?.status;
   const error = params?.error;
@@ -362,6 +370,7 @@ const threadOpenShape = (
       threadSource: threadSource(params.threadSource),
     };
   }
+
   if (kind === "response" && direction === "server_to_app") {
     const thread = asObject(asObject(message.result)?.thread);
     return {
@@ -371,6 +380,7 @@ const threadOpenShape = (
       hasParent: typeof thread?.parentThreadId === "string",
     };
   }
+
   return null;
 };
 
@@ -382,6 +392,7 @@ const startupFailure = (error: Json | undefined): McpStartup["failure"] => {
   if (error.includes("did not provide CODEX_APP_TOOLS_PIPE_PATH")) {
     return "pipe_missing";
   }
+
   return "other";
 };
 
@@ -400,6 +411,7 @@ const dynamicTools = (
     if (Array.isArray(spec.tools)) {
       return dynamicTools(spec.tools, name, depth + 1);
     }
+
     return [toolDefinition(name, spec.inputSchema)];
   });
 };
@@ -432,6 +444,7 @@ const sanitizeSchema = (value: Json, depth: number): SchemaShape => {
     const kept = sanitizeKeyword(key, child, depth + 1);
     if (kept !== undefined) shape[key] = kept;
   }
+
   return shape;
 };
 
@@ -481,6 +494,7 @@ const schemaTypes = (value: Json): SchemaShape | undefined => {
   if (typeof value === "string") {
     return SCHEMA_TYPES.has(value) ? value : undefined;
   }
+
   if (!Array.isArray(value)) return undefined;
   return value.filter(
     (type): type is string =>
@@ -494,6 +508,7 @@ const schemaMap = (value: Json, depth: number): SchemaShape | undefined => {
   for (const [name, schema] of Object.entries(value)) {
     if (IDENTIFIER.test(name)) entries[name] = sanitizeSchema(schema, depth);
   }
+
   return entries;
 };
 

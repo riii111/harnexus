@@ -68,21 +68,21 @@ describe("promptFor calls that must default to no", () => {
       call: call("ExitPlanMode", {}, null),
       expected: "Approve",
     },
-  ])("asks about $name as free text that approves only on typing $expected", ({
-    call,
-    expected,
-  }) => {
-    const prompt = promptFor({ ...call, defaultToNo: true }, TARGET);
+  ])(
+    "asks about $name as free text that approves only on typing $expected",
+    ({ call, expected }) => {
+      const prompt = promptFor({ ...call, defaultToNo: true }, TARGET);
 
-    expect(prompt.method).toBe("item/tool/requestUserInput");
-    expect(prompt.params.questions).toMatchObject([
-      {
-        question: expect.stringContaining(`Type "${expected}" to approve`),
-        isOther: true,
-        options: null,
-      },
-    ]);
-  });
+      expect(prompt.method).toBe("item/tool/requestUserInput");
+      expect(prompt.params.questions).toMatchObject([
+        {
+          question: expect.stringContaining(`Type "${expected}" to approve`),
+          isOther: true,
+          options: null,
+        },
+      ]);
+    },
+  );
 });
 
 describe("promptFor multi-select questions", () => {
@@ -152,24 +152,24 @@ describe("promptFor decisions", () => {
       expected: "default",
     },
     { name: "left unconfigured", target: TARGET, expected: "auto" },
-  ])("returns to $expected mode after an approved plan when $name", ({
-    target,
-    expected,
-  }) => {
-    const prompt = promptFor(
-      call("ExitPlanMode", { plan: "1. edit" }, null),
-      target,
-    );
+  ])(
+    "returns to $expected mode after an approved plan when $name",
+    ({ target, expected }) => {
+      const prompt = promptFor(
+        call("ExitPlanMode", { plan: "1. edit" }, null),
+        target,
+      );
 
-    expect(
-      prompt.decide({ answers: { plan: { answers: ["Approve"] } } }),
-    ).toEqual({
-      behavior: "allow",
-      updatedPermissions: [
-        { type: "setMode", mode: expected, destination: "session" },
-      ],
-    });
-  });
+      expect(
+        prompt.decide({ answers: { plan: { answers: ["Approve"] } } }),
+      ).toEqual({
+        behavior: "allow",
+        updatedPermissions: [
+          { type: "setMode", mode: expected, destination: "session" },
+        ],
+      });
+    },
+  );
 
   test.each([
     {
@@ -256,14 +256,14 @@ describe("promptFor remembering choices on a command", () => {
         updatedPermissions: [{ ...NPM_TEST, destination: "projectSettings" }],
       },
     },
-  ])("returns Claude's rules for $name to where the choice keeps them", ({
-    decision,
-    expected,
-  }) => {
-    const prompt = promptFor(suggested("Bash", COMMAND, [NPM_TEST]), TARGET);
+  ])(
+    "returns Claude's rules for $name to where the choice keeps them",
+    ({ decision, expected }) => {
+      const prompt = promptFor(suggested("Bash", COMMAND, [NPM_TEST]), TARGET);
 
-    expect(prompt.decide({ decision })).toEqual(expected);
-  });
+      expect(prompt.decide({ decision })).toEqual(expected);
+    },
+  );
 
   test("keeps only Claude's allow rules when always allowing", () => {
     const prompt = promptFor(
@@ -392,16 +392,19 @@ describe("promptFor remembering choices on another tool", () => {
         updatedPermissions: [{ ...WEB_FETCH, destination: "projectSettings" }],
       },
     },
-  ])("returns Claude's rules to where $name keeps them", ({
-    name,
-    expected,
-  }) => {
-    const prompt = promptFor(suggested("WebFetch", null, [WEB_FETCH]), TARGET);
+  ])(
+    "returns Claude's rules to where $name keeps them",
+    ({ name, expected }) => {
+      const prompt = promptFor(
+        suggested("WebFetch", null, [WEB_FETCH]),
+        TARGET,
+      );
 
-    expect(
-      prompt.decide({ answers: { approval: { answers: [name] } } }),
-    ).toEqual(expected);
-  });
+      expect(
+        prompt.decide({ answers: { approval: { answers: [name] } } }),
+      ).toEqual(expected);
+    },
+  );
 
   test.each([
     { name: "Deny", answer: { answers: { approval: { answers: ["Deny"] } } } },
@@ -418,24 +421,23 @@ describe("promptFor remembering choices on another tool", () => {
   test.each([
     { name: "a command", item: COMMAND, toolName: "Bash", rule: NPM_TEST },
     { name: "another tool", item: null, toolName: "WebFetch", rule: WEB_FETCH },
-  ])("never remembers $name that must default to no", ({
-    item,
-    toolName,
-    rule,
-  }) => {
-    const prompt = promptFor(
-      { ...suggested(toolName, item, [rule]), defaultToNo: true },
-      TARGET,
-    );
-    const typed = (word: string) =>
-      prompt.decide({ answers: { approval: { answers: [word] } } });
+  ])(
+    "never remembers $name that must default to no",
+    ({ item, toolName, rule }) => {
+      const prompt = promptFor(
+        { ...suggested(toolName, item, [rule]), defaultToNo: true },
+        TARGET,
+      );
+      const typed = (word: string) =>
+        prompt.decide({ answers: { approval: { answers: [word] } } });
 
-    expect(prompt.params.questions).toMatchObject([{ options: null }]);
-    expect(typed(" allow ")).toEqual({ behavior: "allow" });
-    expect(typed("2").behavior).toBe("deny");
-    expect(typed("Always allow").behavior).toBe("deny");
-    expect(typed("Allow for this session").behavior).toBe("deny");
-  });
+      expect(prompt.params.questions).toMatchObject([{ options: null }]);
+      expect(typed(" allow ")).toEqual({ behavior: "allow" });
+      expect(typed("2").behavior).toBe("deny");
+      expect(typed("Always allow").behavior).toBe("deny");
+      expect(typed("Allow for this session").behavior).toBe("deny");
+    },
+  );
 });
 
 describe("promptFor calls whose rule must not be saved", () => {

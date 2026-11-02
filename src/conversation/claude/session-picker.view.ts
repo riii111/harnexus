@@ -145,6 +145,7 @@ const distinctLabels = (labels: string[], reserved: string[]) => {
     for (let suffix = 2; taken.has(distinct); suffix += 1) {
       distinct = `${label} (${suffix})`;
     }
+
     taken.add(distinct);
     return distinct;
   });

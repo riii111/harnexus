@@ -6,10 +6,12 @@ export const waitForAbort = <T>(pending: Promise<T>, signal: AbortSignal) =>
       resolve(ABORTED);
       return;
     }
+
     const abort = () => {
       signal.removeEventListener("abort", abort);
       resolve(ABORTED);
     };
+
     signal.addEventListener("abort", abort, { once: true });
     pending.then(
       (value) => {

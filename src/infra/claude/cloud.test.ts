@@ -378,17 +378,17 @@ describe("copyCloudSession", () => {
       message:
         "Git working directory is not clean. Commit or stash your changes.",
     },
-  ])("fails with the reason teleport logged on $name", async ({
-    plays,
-    message,
-  }) => {
-    const copier = await copying(plays);
+  ])(
+    "fails with the reason teleport logged on $name",
+    async ({ plays, message }) => {
+      const copier = await copying(plays);
 
-    const copied = await copier.copy();
+      const copied = await copier.copy();
 
-    expect(copied.isErr() && copied.error.message).toBe(message);
-    expect(copier.calls).toHaveLength(plays.length);
-  });
+      expect(copied.isErr() && copied.error.message).toBe(message);
+      expect(copier.calls).toHaveLength(plays.length);
+    },
+  );
 
   test.each([
     { name: "ran a model turn", turns: 1, stopped: "ran_model" },
@@ -397,19 +397,19 @@ describe("copyCloudSession", () => {
       turns: undefined,
       stopped: "unchecked",
     },
-  ])("removes a copy that $name and says copies must stop", async ({
-    turns,
-    stopped,
-  }) => {
-    const copier = await copying([
-      { answer: { is_error: false, num_turns: turns, session_id: COPY } },
-    ]);
+  ])(
+    "removes a copy that $name and says copies must stop",
+    async ({ turns, stopped }) => {
+      const copier = await copying([
+        { answer: { is_error: false, num_turns: turns, session_id: COPY } },
+      ]);
 
-    const copied = await copier.copy();
+      const copied = await copier.copy();
 
-    expect(copied.isErr() && copied.error.stopped).toBe(stopped);
-    expect(await exists(copier.record)).toBe(false);
-  });
+      expect(copied.isErr() && copied.error.stopped).toBe(stopped);
+      expect(await exists(copier.record)).toBe(false);
+    },
+  );
 
   test.each([
     {
@@ -470,6 +470,7 @@ describe("copyCloudSession", () => {
             `${records.map((line) => JSON.stringify(line)).join("\n")}\n`,
           );
         }
+
         const stdout =
           play.answer === undefined
             ? ""

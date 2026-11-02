@@ -287,6 +287,7 @@ export const createClaudeRuntime = ({
       await answerCommand(turn, command, claude.command);
       return;
     }
+
     if (
       turn.recovering &&
       turn.record.sessionId === null &&
@@ -301,6 +302,7 @@ export const createClaudeRuntime = ({
       );
       return;
     }
+
     // Approvals open their turn only on a thread with no other turn accepted, so a turn of Claude's own starting while they wait for it is that one.
     const held =
       turn.input.startedBy === "claude"
@@ -312,6 +314,7 @@ export const createClaudeRuntime = ({
       await approvals.hold(turn, held);
       return;
     }
+
     runningTurns.set(turn.threadId, turn);
     if (turn.input.startedBy === "app") approvals.showTurn(turn.threadId);
     if (turn.input.startedBy === "claude") await streamOwn(turn, claude);
@@ -319,6 +322,7 @@ export const createClaudeRuntime = ({
     if (runningTurns.get(turn.threadId) === turn) {
       runningTurns.delete(turn.threadId);
     }
+
     // A turn cut short may still be writing records, which would read as the conversation continuing elsewhere.
     if (claude.completed) {
       await commands.remember(
@@ -339,6 +343,7 @@ export const createClaudeRuntime = ({
       turn.finish({ status: "interrupted" }, null);
       return;
     }
+
     let asked = 0;
     const nextItemId = () => `${turn.turnId}-resume-${++asked}`;
     const reply = await commands.answer(
@@ -423,6 +428,7 @@ export const createClaudeRuntime = ({
     if (skills.unreadable.length > 0) {
       log({ event: "claude_turn", step: "skill_unreadable" });
     }
+
     const images = await readImages(input.images, resizeImage);
     if (images.isErr()) {
       turn.fail({
@@ -431,11 +437,13 @@ export const createClaudeRuntime = ({
       });
       return;
     }
+
     await waitForPendingInterrupt(threadId);
     if (turn.state().interrupting) {
       turn.finish({ status: "interrupted" }, null);
       return;
     }
+
     // A session closes itself on its stream's end, and replacing it would drop what Claude said before the end while waiting for this turn; an end alone leaves nothing to show, so the turn runs on a new session.
     const stopped = slots.slotOf(threadId);
     if (
@@ -453,8 +461,10 @@ export const createClaudeRuntime = ({
       } finally {
         releaseReader(threadId, stopped, inbox);
       }
+
       return;
     }
+
     let startup: SessionStartup<Turn> | null = slots.beginStart(turn);
     // A running Claude holds the conversation as it was, so it restarts to resume from the records written elsewhere.
     const result = await waitForAbort(
@@ -465,17 +475,20 @@ export const createClaudeRuntime = ({
       endCancelledStart(turn);
       return;
     }
+
     const advanced = result;
     if (turn.state().interrupting) {
       slots.cancelStart(threadId, startup);
       turn.finish({ status: "interrupted" }, null);
       return;
     }
+
     if (closed) {
       slots.cancelStart(threadId, startup);
       turn.fail(bridgeClosingError());
       return;
     }
+
     if (advanced) {
       turn.apply(
         renderNotice(turn.state(), RECORD_ADVANCED, "commentary", now()),
@@ -483,11 +496,13 @@ export const createClaudeRuntime = ({
       const stale = slots.slotOf(threadId);
       if (stale !== undefined) slots.drop(threadId, stale);
     }
+
     const reused = slots.slotOf(threadId)?.model === model;
     if (reused) {
       slots.clearStart(threadId, startup);
       startup = null;
     }
+
     const sessionAskedAt = now();
     const slot = await sessionFor(record, model, turn, startup);
     if (startup !== null) slots.clearStart(threadId, startup);
@@ -497,8 +512,10 @@ export const createClaudeRuntime = ({
       } else {
         turn.fail(slot.error);
       }
+
       return;
     }
+
     const sessionStartMs = reused ? null : now() - sessionAskedAt;
     turn.useLink(slot.value.link);
     // Claude leaves plan mode when a plan is approved, so the mode the app asks for is set again on every turn.
@@ -510,6 +527,7 @@ export const createClaudeRuntime = ({
       turn.fail(mode.error);
       return;
     }
+
     // Set on every turn, even with none picked, so Claude runs at the level the app shows rather than at project settings, and a restarted session gets it again.
     const effort = effortRule(model, input.effort);
     if (effort !== null) {
@@ -519,12 +537,15 @@ export const createClaudeRuntime = ({
         turn.fail(applied.error);
         return;
       }
+
       log({ event: "claude_turn", step: "effort_applied", effort });
     }
+
     if (turn.state().interrupting) {
       turn.finish({ status: "interrupted" }, null);
       return;
     }
+
     slot.value.link.acceptWrites();
     // A new session has lost the skills an earlier one held, so they are attached again.
     const attached = slot.value.attachedSkills;
@@ -534,6 +555,7 @@ export const createClaudeRuntime = ({
     if (fresh.length < skills.skills.length) {
       log({ event: "claude_turn", step: "skill_link_only" });
     }
+
     // The turn reads the session before its prompt goes, so the reply cannot be taken for a turn of Claude's own.
     const inbox = claimReader(slot.value);
     try {
@@ -571,6 +593,7 @@ export const createClaudeRuntime = ({
       turn.fail(sent.error);
       return false;
     }
+
     turnRecords.note(turn.threadId, turn.turnId, sent.value);
     claude.sends.add(sent.value);
     for (const { path, body } of fresh) slot.attachedSkills.set(path, body);
@@ -583,6 +606,7 @@ export const createClaudeRuntime = ({
         return false;
       }
     }
+
     return true;
   };
 
@@ -601,6 +625,7 @@ export const createClaudeRuntime = ({
       );
       return;
     }
+
     slot.unclaimed = null;
     claude.own = true;
     claude.slot = slot;
@@ -654,6 +679,7 @@ export const createClaudeRuntime = ({
         turn.fail(received.error);
         return;
       }
+
       const current = received.value.session_id;
       // A fork that Claude kept in its source's conversation would write into it, so it stops before taking that conversation's id.
       if (current !== undefined && current === forkedFrom) {
@@ -666,6 +692,7 @@ export const createClaudeRuntime = ({
         );
         return;
       }
+
       if (current !== undefined && current !== sessionId) {
         sessionId = current;
         const saved = await threads.setSessionId(threadId, current);
@@ -684,6 +711,7 @@ export const createClaudeRuntime = ({
           return;
         }
       }
+
       const message = received.value;
       // Status and system messages follow the send at once, so the wait is measured to the first reply of the main conversation, not of a subagent.
       if (
@@ -692,6 +720,7 @@ export const createClaudeRuntime = ({
       ) {
         firstMessageMs ??= now() - sentAt;
       }
+
       // A compaction summarizes the skills attached so far and a reset such as /clear drops them, so the next turn attaches them again.
       if (
         (message.type === "system" && message.subtype === "compact_boundary") ||
@@ -699,6 +728,7 @@ export const createClaudeRuntime = ({
       ) {
         slot.attachedSkills.clear();
       }
+
       const foreign =
         message.type === "result" &&
         !claude.own &&
@@ -716,6 +746,7 @@ export const createClaudeRuntime = ({
           turnMs: now() - turn.startedAtMs,
         });
       }
+
       // Sent before the message is rendered, so a result's usage reaches the app ahead of turn/completed.
       display.show(turn, message);
       // A turn Claude started on its own just as this one sent its prompt reaches it ahead of its reply, and its items stay in this turn.
@@ -723,6 +754,7 @@ export const createClaudeRuntime = ({
         turn.apply(renderInterimResult(turn.state(), message, now()));
         continue;
       }
+
       const steers =
         message.type === "result"
           ? steersAfter(
@@ -742,6 +774,7 @@ export const createClaudeRuntime = ({
         );
         return;
       }
+
       turn.apply(renderSdkMessage(turn.state(), message, now()));
       if (message.type === "result") {
         claude.completed =
@@ -749,6 +782,7 @@ export const createClaudeRuntime = ({
           !message.is_error &&
           !turn.state().interrupting;
       }
+
       // A failed result leaves its steers unrun, so the session goes with them rather than run them into the next turn; after a stop, the interrupt receipt decides instead.
       const state = turn.state();
       if (
@@ -771,6 +805,7 @@ export const createClaudeRuntime = ({
         await paused.promise;
         if (slots.slotOf(threadId) !== slot) return;
       }
+
       track(threadId, slot, next);
       const inbox = route(threadId, slot, next);
       // The next message waits until the reader has handled this one, as a turn reading the session itself would.
@@ -789,6 +824,7 @@ export const createClaudeRuntime = ({
       slot.reader.push(next);
       return slot.reader;
     }
+
     if (slots.slotOf(threadId) !== slot) return null;
     const own = !busyThreads.has(threadId);
     // A turn holding approvals reads nothing, so while one is open or pending only a turn Claude starts waits for the next turn, even with one queued.
@@ -797,12 +833,15 @@ export const createClaudeRuntime = ({
         slots.drop(threadId, slot);
         return null;
       }
+
       if (slot.discarding) {
         slot.discarding = next.value.value.type !== "result";
         return null;
       }
+
       if (!startsTurn(next.value.value)) return null;
     }
+
     if (own && !startOwnTurn(threadId)) return null;
     if (own) log({ event: "claude_turn", step: "own_turn" });
     const inbox = createInbox<StreamedNext>();
@@ -828,6 +867,7 @@ export const createClaudeRuntime = ({
       subagents.message(threadId, message);
       return;
     }
+
     if (
       message.subtype === "task_started" &&
       message.task_type === "local_agent" &&
@@ -904,6 +944,7 @@ export const createClaudeRuntime = ({
       );
       return;
     }
+
     for (const next of left) route(threadId, slot, next);
   };
 
@@ -923,9 +964,11 @@ export const createClaudeRuntime = ({
     if (claude.holdsApprovals) {
       return Promise.resolve("approvals_not_steerable");
     }
+
     if (claude.steers >= MAX_STEERS_PER_TURN) {
       return Promise.resolve("too_many_steers");
     }
+
     claude.steers += 1;
     const previous = claude.steering;
     const steered = (async () => {
@@ -954,10 +997,12 @@ export const createClaudeRuntime = ({
     if (turns.get(turn) !== claude || state.finished || state.interrupting) {
       return "steer_not_sent";
     }
+
     if (claude.slot === null) {
       claude.unsentSteers.push(prompt);
       return null;
     }
+
     return sendSteer(claude, claude.slot, prompt).isErr()
       ? "steer_not_sent"
       : null;
@@ -969,6 +1014,7 @@ export const createClaudeRuntime = ({
       claude.pendingSteers.add(sent.value);
       claude.sends.add(sent.value);
     }
+
     return sent;
   };
 
@@ -981,6 +1027,7 @@ export const createClaudeRuntime = ({
       claude.command.abort();
       return;
     }
+
     const threadId = turn.threadId;
     const startup = slots.startingOf(threadId);
     const stoppingStartup = startup?.turn === turn;
@@ -992,14 +1039,17 @@ export const createClaudeRuntime = ({
         return;
       }
     }
+
     const slot = slots.slotOf(threadId);
     slot?.link.stopWrites();
     if (slot === undefined || repeated || slot.pendingInterrupt !== null) {
       if (stoppingStartup && slot === undefined) {
         turn.finish({ status: "interrupted" }, null);
       }
+
       return;
     }
+
     // A send still queued in Claude would run after the interrupt, and an old CLI cannot say whether one is, so either way the session is closed and the next turn resumes it.
     slot.pendingInterrupt = slot.session.interrupt().then((interrupted) => {
       slot.pendingInterrupt = null;
@@ -1012,6 +1062,7 @@ export const createClaudeRuntime = ({
       } else if (interrupted.value?.length === 0) {
         return;
       }
+
       slots.drop(threadId, slot);
       turn.finish({ status: "interrupted" }, null);
     });
@@ -1043,6 +1094,7 @@ export const createClaudeRuntime = ({
     if (existing?.model === model && !existing.session.isClosed()) {
       return Result.ok(existing);
     }
+
     if (existing !== undefined) slots.drop(record.threadId, existing);
     if (closed) return Result.err(bridgeClosingError());
     const pending = startup ?? slots.beginStart(turn);
@@ -1064,6 +1116,7 @@ export const createClaudeRuntime = ({
       if (found === ABORTED || !isCurrent()) {
         return Result.err(sessionStartCancelled());
       }
+
       if (!found) {
         slots.clearStart(record.threadId, pending);
         log({ event: "claude_turn", step: "session_missing" });
@@ -1077,6 +1130,7 @@ export const createClaudeRuntime = ({
             }),
           );
         }
+
         return Result.err(
           new SessionMissing({
             message:
@@ -1085,6 +1139,7 @@ export const createClaudeRuntime = ({
         );
       }
     }
+
     const forkFrom =
       resume === null ? threads.forkSourceOf(record.threadId) : null;
     const forkPoint =
@@ -1099,6 +1154,7 @@ export const createClaudeRuntime = ({
         }),
       );
     }
+
     const forkAt = forkPoint?.at ?? null;
     const forkFound =
       forkFrom === null || forkAt === null
@@ -1145,6 +1201,7 @@ export const createClaudeRuntime = ({
       );
       return Result.err(sessionStartCancelled());
     }
+
     const started = result;
     if (!isCurrent() || closed) {
       if (started.isOk()) started.value.close();
@@ -1152,11 +1209,13 @@ export const createClaudeRuntime = ({
         closed ? bridgeClosingError() : sessionStartCancelled(),
       );
     }
+
     if (started.isErr()) {
       slots.clearStart(record.threadId, pending);
       link.stopWrites();
       return Result.err(started.error);
     }
+
     slots.clearStart(record.threadId, pending);
     const slot: SessionSlot = {
       session: started.value,
@@ -1195,6 +1254,7 @@ export const createClaudeRuntime = ({
     ) {
       return;
     }
+
     turnRecords.forget(threadId);
     // An archived thread can come back to the same session, which still uses its plan, usage, agents and fork point.
     if (ended === "archived") return;

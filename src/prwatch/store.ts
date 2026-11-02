@@ -85,6 +85,7 @@ export const listLinks = (root: string, skip: ReadonlySet<string> = EMPTY) =>
       const link = linkOf(loaded.isOk() ? loaded.value : null);
       if (link !== null) links.push(link);
     }
+
     return Result.ok(links);
   });
 

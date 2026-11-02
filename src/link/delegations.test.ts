@@ -126,21 +126,22 @@ describe("createDelegationWatch first turn check", () => {
       name: "no effort",
       actual: { model: "gpt-worker", effort: null },
     },
-  ])("refuses a first turn that gives $name for one that was asked", async ({
-    actual,
-  }) => {
-    const watch = createDelegationWatch();
-    const created = expecting(watch, "th-codex", { expected: EXPECTED });
+  ])(
+    "refuses a first turn that gives $name for one that was asked",
+    async ({ actual }) => {
+      const watch = createDelegationWatch();
+      const created = expecting(watch, "th-codex", { expected: EXPECTED });
 
-    expect(watch.observe("th-codex", "th-worker", actual)).toBe(false);
-    expect(await created.wait(1_000)).toEqual({
-      threadId: "th-worker",
-      expected: EXPECTED,
-      actual,
-      refused: true,
-      refusal: null,
-    });
-  });
+      expect(watch.observe("th-codex", "th-worker", actual)).toBe(false);
+      expect(await created.wait(1_000)).toEqual({
+        threadId: "th-worker",
+        expected: EXPECTED,
+        actual,
+        refused: true,
+        refusal: null,
+      });
+    },
+  );
 
   test("checks nothing a create_thread did not ask for", () => {
     const watch = createDelegationWatch();
@@ -250,27 +251,25 @@ describe("concludeCreate", () => {
       keepArmed: false,
       expected: { unknown: true, armed: false },
     },
-  ])("leaves the check armed only while the thread may exist unseen after $name", async ({
-    answer,
-    mayExist,
-    keepArmed,
-    expected,
-  }) => {
-    const watch = createDelegationWatch();
-    const created = expecting(watch, "th-codex");
+  ])(
+    "leaves the check armed only while the thread may exist unseen after $name",
+    async ({ answer, mayExist, keepArmed, expected }) => {
+      const watch = createDelegationWatch();
+      const created = expecting(watch, "th-codex");
 
-    const outcome = await concludeCreate(created, {
-      answer,
-      waitMs: 0,
-      mayExist,
-      keepArmed,
-    });
+      const outcome = await concludeCreate(created, {
+        answer,
+        waitMs: 0,
+        mayExist,
+        keepArmed,
+      });
 
-    expect({
-      unknown: outcome.unknown,
-      armed: watch.expect("th-codex") === null,
-    }).toEqual(expected);
-  });
+      expect({
+        unknown: outcome.unknown,
+        armed: watch.expect("th-codex") === null,
+      }).toEqual(expected);
+    },
+  );
 
   test("names the thread of an answer without waiting for its first turn when told to", async () => {
     const watch = createDelegationWatch();

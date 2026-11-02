@@ -85,6 +85,7 @@ describe("createCodexLink tools", () => {
           delegations.observe("thread-elsewhere", OTHER_REVIEWER);
           delegations.observe(CALLER, REVIEWER);
         }
+
         return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
       },
     });
@@ -109,6 +110,7 @@ describe("createCodexLink tools", () => {
         if (creates === 1) {
           return Result.ok(textAnswer(JSON.stringify({ threadId: REVIEWER })));
         }
+
         delegations.observe(CALLER, REVIEWER);
         return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
       },
@@ -257,6 +259,7 @@ describe("createCodexLink tools", () => {
         "hostId",
       );
     }
+
     expect(requests[0]?.params.arguments).toEqual({
       targets: [{ threadId: CALLER }],
     });
@@ -377,18 +380,19 @@ describe("createCodexLink write outcomes", () => {
       answer: { content: [{ type: "text" }] },
     },
     { name: "no content", answer: { unexpected: true } },
-  ])("treats an answer to a write with $name as an unknown outcome", async ({
-    answer,
-  }) => {
-    const { client, link } = await connect({
-      answer: () => Result.ok(answer),
-    });
+  ])(
+    "treats an answer to a write with $name as an unknown outcome",
+    async ({ answer }) => {
+      const { client, link } = await connect({
+        answer: () => Result.ok(answer),
+      });
 
-    const sent = await send(client);
+      const sent = await send(client);
 
-    expect(sent.isError).toBe(true);
-    expect(link.hasUnsettledWrite()).toBe(true);
-  });
+      expect(sent.isError).toBe(true);
+      expect(link.hasUnsettledWrite()).toBe(true);
+    },
+  );
 
   test("lets a write that was never sent, or that the app refused, be tried again", async () => {
     let calls = 0;
@@ -421,26 +425,29 @@ describe("createCodexLink write outcomes", () => {
       body: JSON.stringify({ clientThreadId: REVIEWER, status: "queued" }),
     },
     { name: "no single thread id", body: "Created two: a and b" },
-  ])("stops writing when a created thread's answer has $name", async ({
-    body,
-  }) => {
-    const { client, link } = await connect({
-      answer: () => Result.ok(textAnswer(body)),
-    });
+  ])(
+    "stops writing when a created thread's answer has $name",
+    async ({ body }) => {
+      const { client, link } = await connect({
+        answer: () => Result.ok(textAnswer(body)),
+      });
 
-    const created = await client.callTool({
-      name: "create_thread",
-      arguments: { prompt: "review", target: TARGET },
-    });
+      const created = await client.callTool({
+        name: "create_thread",
+        arguments: { prompt: "review", target: TARGET },
+      });
 
-    expect(created.isError).toBe(true);
-    expect(created.structuredContent).toBeUndefined();
-    expect(link.hasUnsettledWrite()).toBe(true);
-  });
+      expect(created.isError).toBe(true);
+      expect(created.structuredContent).toBeUndefined();
+      expect(link.hasUnsettledWrite()).toBe(true);
+    },
+  );
 
   test("holds a second write until the first is decided and drops it when that was lost", async () => {
-    let release: (value: Result<unknown, ServerRequestError>) => void =
-      () => {};
+    let release: (
+      value: Result<unknown, ServerRequestError>,
+    ) => void = () => {};
+
     const { client, requests } = await connect({
       answer: () =>
         new Promise((resolve) => {
@@ -461,8 +468,10 @@ describe("createCodexLink write outcomes", () => {
   });
 
   test("drops a write queued before the turn stopped without sending it", async () => {
-    let release: (value: Result<unknown, ServerRequestError>) => void =
-      () => {};
+    let release: (
+      value: Result<unknown, ServerRequestError>,
+    ) => void = () => {};
+
     const { client, link, requests } = await connect({
       answer: () =>
         new Promise((resolve) => {
@@ -498,8 +507,10 @@ describe("createCodexLink write outcomes", () => {
   });
 
   test("reports a write still waiting for its answer as unsettled, as when a turn is stopped mid-call", async () => {
-    let release: (value: Result<unknown, ServerRequestError>) => void =
-      () => {};
+    let release: (
+      value: Result<unknown, ServerRequestError>,
+    ) => void = () => {};
+
     const { client, link, requests } = await connect({
       answer: () =>
         new Promise((resolve) => {
@@ -602,22 +613,22 @@ describe("createCodexLink automation_update", () => {
       args: { mode: "delete", id: "mine" },
       expected: { mode: "delete", id: "mine" },
     },
-  ])("sends a $name of a heartbeat that wakes the calling thread", async ({
-    args,
-    expected,
-  }) => {
-    const { client, requests } = await connect({ codexHome });
+  ])(
+    "sends a $name of a heartbeat that wakes the calling thread",
+    async ({ args, expected }) => {
+      const { client, requests } = await connect({ codexHome });
 
-    const result = await client.callTool({
-      name: "automation_update",
-      arguments: args,
-    });
+      const result = await client.callTool({
+        name: "automation_update",
+        arguments: args,
+      });
 
-    expect(result.isError).toBeFalsy();
-    expect(requests.map((request) => request.params.arguments)).toEqual([
-      expected,
-    ]);
-  });
+      expect(result.isError).toBeFalsy();
+      expect(requests.map((request) => request.params.arguments)).toEqual([
+        expected,
+      ]);
+    },
+  );
 
   test.each([
     { name: "a heartbeat of another thread", id: "theirs" },
@@ -767,25 +778,24 @@ describe("createCodexLink automation_update", () => {
       expected: { mode: "delete", id: "nightly" },
       kept: [],
     },
-  ])("sends a $name of a cron a Claude thread created", async ({
-    args,
-    expected,
-    kept,
-  }) => {
-    const cronRecord = createMemoryCronRecord(["nightly"]);
-    const { client, requests } = await connect({ codexHome, cronRecord });
+  ])(
+    "sends a $name of a cron a Claude thread created",
+    async ({ args, expected, kept }) => {
+      const cronRecord = createMemoryCronRecord(["nightly"]);
+      const { client, requests } = await connect({ codexHome, cronRecord });
 
-    const result = await client.callTool({
-      name: "automation_update",
-      arguments: args,
-    });
+      const result = await client.callTool({
+        name: "automation_update",
+        arguments: args,
+      });
 
-    expect(result.isError).toBeFalsy();
-    expect(requests.map((request) => request.params.arguments)).toEqual([
-      expected,
-    ]);
-    expect(cronRecord.ids()).toEqual(kept);
-  });
+      expect(result.isError).toBeFalsy();
+      expect(requests.map((request) => request.params.arguments)).toEqual([
+        expected,
+      ]);
+      expect(cronRecord.ids()).toEqual(kept);
+    },
+  );
 
   test.each([
     {
@@ -926,38 +936,38 @@ describe("createCodexLink createChecked", () => {
       actual: { model: "gpt-other", effort: "low" },
       refused: true,
     },
-  ])("names the created thread and reports $name", async ({
-    actual,
-    refused,
-  }) => {
-    const delegations = createDelegationWatch();
-    const runs: boolean[] = [];
-    const { link } = await connect({
-      delegations,
-      answer: () => {
-        runs.push(delegations.observe(CALLER, REVIEWER, actual));
-        return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
-      },
-    });
+  ])(
+    "names the created thread and reports $name",
+    async ({ actual, refused }) => {
+      const delegations = createDelegationWatch();
+      const runs: boolean[] = [];
+      const { link } = await connect({
+        delegations,
+        answer: () => {
+          runs.push(delegations.observe(CALLER, REVIEWER, actual));
+          return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
+        },
+      });
 
-    const created = await link.createChecked({
-      prompt: "review",
-      target: TARGET,
-      thinking: "low",
-    });
+      const created = await link.createChecked({
+        prompt: "review",
+        target: TARGET,
+        thinking: "low",
+      });
 
-    expect(runs).toEqual([!refused]);
-    expect(created.firstTurn).toEqual({
-      threadId: REVIEWER,
-      expected: { model: "gpt-fixture", effort: "low" },
-      actual,
-      refused,
-      refusal: null,
-    });
-    expect(created.result.isError === true).toBe(refused);
-    expect(created.unknown).toBe(false);
-    expect(created.threadId).toBe(REVIEWER);
-  });
+      expect(runs).toEqual([!refused]);
+      expect(created.firstTurn).toEqual({
+        threadId: REVIEWER,
+        expected: { model: "gpt-fixture", effort: "low" },
+        actual,
+        refused,
+        refusal: null,
+      });
+      expect(created.result.isError === true).toBe(refused);
+      expect(created.unknown).toBe(false);
+      expect(created.threadId).toBe(REVIEWER);
+    },
+  );
 
   test("reports the real id the app named as unknown while its first turn is unseen", async () => {
     const delegations = createDelegationWatch();
@@ -1182,10 +1192,12 @@ const connect = async ({
       modelLists.push(params);
       return models(params as Record<string, unknown>);
     }
+
     const call = params as CallParams;
     requests.push({ method, params: call, timeoutMs });
     return answer(call);
   };
+
   const link = createCodexLink({
     callerThreadId: CALLER,
     store,

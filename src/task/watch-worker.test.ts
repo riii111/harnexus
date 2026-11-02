@@ -226,6 +226,7 @@ const pagedApp = (pages: Fields[][]) => {
       page: { hasMore, nextCursor: hasMore ? `page:${index + 1}` : null },
     })();
   };
+
   return { call, cursors };
 };
 

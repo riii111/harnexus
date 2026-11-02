@@ -31,6 +31,7 @@ export const relayStreams = ({
       if (!serverInput.writableEnded && !serverInput.destroyed) {
         serverInput.end();
       }
+
       if (stopping) return;
       stopping = true;
       // A server that ignores EOF on stdin would otherwise keep running after the app has gone.
@@ -41,6 +42,7 @@ export const relayStreams = ({
         }, graceMs),
       );
     };
+
     const settle = () => {
       if (settled) return;
       settled = true;
@@ -49,11 +51,13 @@ export const relayStreams = ({
       appInput.pause();
       resolve();
     };
+
     const finish = () => {
       if (appOutput.destroyed || appOutput.writableEnded) {
         settle();
         return;
       }
+
       appOutput.write(new Uint8Array(0), settle);
     };
 

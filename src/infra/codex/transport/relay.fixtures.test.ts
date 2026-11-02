@@ -9,23 +9,24 @@ import { createObserver, serializeObservationEvent } from "./observe.ts";
 import { relayStreams } from "./relay.ts";
 
 describe("relay over recorded app-server shapes", () => {
-  test.each(
-    FIXTURES,
-  )("passes $name through both directions unchanged and logs every message", async ({
-    name,
-  }) => {
-    const path = join(FIXTURE_DIR, name);
-    const records = readFixture(path);
+  test.each(FIXTURES)(
+    "passes $name through both directions unchanged and logs every message",
+    async ({ name }) => {
+      const path = join(FIXTURE_DIR, name);
+      const records = readFixture(path);
 
-    const { exitCode, output, log } = await replay(path, records);
+      const { exitCode, output, log } = await replay(path, records);
 
-    expect(exitCode).toBe(0);
-    expect(output).toBe(wire(records, "server_to_app"));
-    const logged = log.map((line) => JSON.parse(line));
-    expect(logged.filter((entry) => entry.event !== "rpc_message")).toEqual([]);
-    expect(countByDirection(logged)).toEqual(countByDirection(records));
-    expect(log.join("")).not.toContain(SECRET_MARKER);
-  });
+      expect(exitCode).toBe(0);
+      expect(output).toBe(wire(records, "server_to_app"));
+      const logged = log.map((line) => JSON.parse(line));
+      expect(logged.filter((entry) => entry.event !== "rpc_message")).toEqual(
+        [],
+      );
+      expect(countByDirection(logged)).toEqual(countByDirection(records));
+      expect(log.join("")).not.toContain(SECRET_MARKER);
+    },
+  );
 });
 
 const FIXTURE_DIR = join(
@@ -77,9 +78,11 @@ const replay = async (path: string, records: FixtureRecord[]) => {
       expectedBytes += line.length;
       continue;
     }
+
     await Promise.race([output.reached(expectedBytes), relaying]);
     for (const chunk of split(line, CHUNK_BYTES)) input.write(chunk);
   }
+
   input.end();
   await relaying;
   const [exitCode] = await exited;
@@ -104,6 +107,7 @@ const collector = () => {
       await new Promise<void>((resolve) => waiters.push(resolve));
     }
   };
+
   return {
     stream,
     reached,

@@ -28,6 +28,7 @@ export const renderPlan = (
   if (sameSteps(plan.steps, next.steps)) {
     return { plan: next, notification: null };
   }
+
   return {
     plan: next,
     notification: {
@@ -48,6 +49,7 @@ const nextPlan = (plan: ThreadPlan, message: SDKMessage): ThreadPlan => {
   if (message.type === "assistant" && message.parent_tool_use_id === null) {
     return { ...plan, calls: { ...plan.calls, ...planCallsOf(message) } };
   }
+
   if (message.type === "user") return applyResults(plan, message);
   // A call left without a result when its turn ended never completes.
   if (message.type === "result") return { ...plan, calls: {} };
@@ -65,6 +67,7 @@ const planCallsOf = (
       calls[block.id] = { name: block.name, input: block.input };
     }
   }
+
   return calls;
 };
 
@@ -87,6 +90,7 @@ const applyResults = (
       steps = applyCall(steps, call, output, result.content) ?? steps;
     }
   }
+
   return { steps, calls };
 };
 
@@ -120,6 +124,7 @@ const todoStepsOf = (input: unknown): PlanStep[] | null => {
     if (status === undefined) return null;
     steps.push({ id: null, step: todo.content, status });
   }
+
   return steps;
 };
 
@@ -150,6 +155,7 @@ const updateTask = (
   if (input.status === "deleted") {
     return steps.filter((step) => step.id !== taskId);
   }
+
   const status = statusOf(input.status);
   return steps.map((step) =>
     step.id === taskId
@@ -173,10 +179,12 @@ const listedStepsOf = (output: unknown): PlanStep[] | null => {
     ) {
       return null;
     }
+
     const status = statusOf(task.status);
     if (status === undefined) return null;
     steps.push({ id: task.id, step: task.subject, status });
   }
+
   return steps;
 };
 

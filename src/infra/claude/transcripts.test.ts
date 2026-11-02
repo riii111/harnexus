@@ -69,6 +69,7 @@ describe("listClaudeConversations", () => {
     for (let i = 0; i < 35; i += 1) {
       await writeRecord(PROJECT_FOLDER, `se-${i}`, conversation(`ask ${i}`));
     }
+
     const files = await readdir(join(dir, "projects", PROJECT_FOLDER));
 
     const listed = await listClaudeConversations(PROJECT, {

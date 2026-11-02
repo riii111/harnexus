@@ -622,14 +622,14 @@ describe("refusals", () => {
       codexPath: () => join(dir, "none"),
       expected: "is not an executable file",
     },
-  ])("refuses a HARNEXUS_CODEX_PATH that is $name", async ({
-    codexPath,
-    expected,
-  }) => {
-    const { env } = setup({ HARNEXUS_CODEX_PATH: codexPath() });
+  ])(
+    "refuses a HARNEXUS_CODEX_PATH that is $name",
+    async ({ codexPath, expected }) => {
+      const { env } = setup({ HARNEXUS_CODEX_PATH: codexPath() });
 
-    await expectRefused(["exec"], env, expected);
-  });
+      await expectRefused(["exec"], env, expected);
+    },
+  );
 
   test("runs standard Codex when Bun is unavailable", async () => {
     const { env } = setup({ HARNEXUS_BUN_PATH: undefined });
@@ -678,6 +678,7 @@ const setup = (overrides: Record<string, string | undefined> = {}) => {
   for (const [key, value] of entries) {
     if (value !== undefined) env[key] = value;
   }
+
   return { env, reportPath };
 };
 
@@ -787,6 +788,7 @@ const readSlowly = async (stream: ReadableStream<Uint8Array>) => {
     chunks.push(chunk);
     await Bun.sleep(1);
   }
+
   return Buffer.concat(chunks).toString();
 };
 

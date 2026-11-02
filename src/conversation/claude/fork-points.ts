@@ -18,6 +18,7 @@ export const createForkPoints = ({
       points.set(threadId, { at: pinned });
       return;
     }
+
     const read = await lastRecordOf(source);
     if (read.isOk()) points.set(threadId, { at: read.value });
   };

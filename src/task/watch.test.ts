@@ -171,6 +171,7 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
           new GithubUnreachable({ cause: null, message: "GitHub is down" }),
         );
       }
+
       return Result.ok(detailOf(world.summary, world.comments, world.extra));
     },
     openPulls: async () => Result.ok([]),
@@ -200,6 +201,7 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
         result: { content: [{ type: "text", text: JSON.stringify(read) }] },
       };
     }
+
     calls.sent.push({ caller, tool, ...args });
     return { outcome: world.sendOutcome };
   };
@@ -216,6 +218,7 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
     });
     expect(ran.isOk()).toBe(true);
   };
+
   const state = async (): Promise<WatchState> =>
     (
       await loadWatchState(paths.state, { repo: "org/pay", number: 7 })
@@ -224,6 +227,7 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
     world.now = new Date(world.now.getTime() + minutes * 60_000);
     world.summary = { ...world.summary, updatedAt: world.now.toISOString() };
   };
+
   return { env, paths, world, calls, logs, cycle, state, later };
 };
 
@@ -583,50 +587,57 @@ describe("runCycle", () => {
       review: "OtherBotのレビュー完了",
       label: "[OtherBot]",
     },
-  ])("holds $name findings while its review runs and sends the rest at once", async ({
-    config,
-    bot,
-    running,
-    finished,
-    author,
-    held,
-    firstLabel,
-    review,
-    label,
-  }) => {
-    const { world, calls, cycle, later } = await fixture(config);
-    const botRun = (state: string, description: string, createdAt: string) => ({
-      [bot]: { state, description, createdAt },
-    });
-    world.summary = summary({
-      bots: botRun("PENDING", running, "2026-10-23T01:00:00Z"),
-    });
-    world.comments = [
-      comment(held),
-      comment({ id: "inline:9", author, url: `${PR}#discussion_r9` }),
-    ];
-    await cycle();
+  ])(
+    "holds $name findings while its review runs and sends the rest at once",
+    async ({
+      config,
+      bot,
+      running,
+      finished,
+      author,
+      held,
+      firstLabel,
+      review,
+      label,
+    }) => {
+      const { world, calls, cycle, later } = await fixture(config);
+      const botRun = (
+        state: string,
+        description: string,
+        createdAt: string,
+      ) => ({
+        [bot]: { state, description, createdAt },
+      });
+      world.summary = summary({
+        bots: botRun("PENDING", running, "2026-10-23T01:00:00Z"),
+      });
+      world.comments = [
+        comment(held),
+        comment({ id: "inline:9", author, url: `${PR}#discussion_r9` }),
+      ];
+      await cycle();
 
-    expect(calls.sent).toHaveLength(1);
-    expect(String(calls.sent[0]?.prompt)).toContain(firstLabel);
-    expect(String(calls.sent[0]?.prompt)).not.toContain("discussion_r1");
+      expect(calls.sent).toHaveLength(1);
+      expect(String(calls.sent[0]?.prompt)).toContain(firstLabel);
+      expect(String(calls.sent[0]?.prompt)).not.toContain("discussion_r1");
 
-    world.turns = [
-      delegatedTurn(NOON, calls.sent[0]?.prompt, `${PR}#discussion_r9`),
-    ];
-    world.summary = summary({
-      updatedAt: "2026-10-23T02:00:00Z",
-      bots: botRun("SUCCESS", finished, "2026-10-23T01:00:00Z"),
-    });
-    later(1);
-    await cycle();
+      world.turns = [
+        delegatedTurn(NOON, calls.sent[0]?.prompt, `${PR}#discussion_r9`),
+      ];
+      world.summary = summary({
+        updatedAt: "2026-10-23T02:00:00Z",
+        bots: botRun("SUCCESS", finished, "2026-10-23T01:00:00Z"),
+      });
+      later(1);
+      await cycle();
 
-    expect(calls.sent).toHaveLength(2);
-    expect(String(calls.sent[1]?.prompt)).toContain(review);
-    expect(String(calls.sent[1]?.prompt)).toContain(
-      `${label} src/pay.kt:42 ${PR}#discussion_r1`,
-    );
-  });
+      expect(calls.sent).toHaveLength(2);
+      expect(String(calls.sent[1]?.prompt)).toContain(review);
+      expect(String(calls.sent[1]?.prompt)).toContain(
+        `${label} src/pay.kt:42 ${PR}#discussion_r1`,
+      );
+    },
+  );
 
   test.each([
     {
@@ -964,35 +975,34 @@ describe("runCycle", () => {
       },
       stopped: "halted",
     },
-  ])("hands a PR $name over to the chat that takes it and sends what it still had to send", async ({
-    stop,
-    resume,
-    stopped,
-  }) => {
-    const { world, calls, cycle, state, later, paths } = await fixture();
-    world.comments = [comment({})];
-    stop(world);
-    await cycle();
-    expect((await state()).status).toBe(stopped);
+  ])(
+    "hands a PR $name over to the chat that takes it and sends what it still had to send",
+    async ({ stop, resume, stopped }) => {
+      const { world, calls, cycle, state, later, paths } = await fixture();
+      world.comments = [comment({})];
+      stop(world);
+      await cycle();
+      expect((await state()).status).toBe(stopped);
 
-    await recordLink(paths.state, {
-      repo: "org/pay",
-      number: 7,
-      url: PR,
-      worker: "next",
-      linkedAt: LINKED_AT,
-    });
-    resume(world);
-    world.sender = "sender";
-    later(1);
-    await cycle();
+      await recordLink(paths.state, {
+        repo: "org/pay",
+        number: 7,
+        url: PR,
+        worker: "next",
+        linkedAt: LINKED_AT,
+      });
+      resume(world);
+      world.sender = "sender";
+      later(1);
+      await cycle();
 
-    const saved = await state();
-    expect([saved.status, saved.halted, saved.worker]).toEqual([
-      "watching",
-      null,
-      "next",
-    ]);
-    expect(calls.sent.at(-1)?.threadId).toBe("next");
-  });
+      const saved = await state();
+      expect([saved.status, saved.halted, saved.worker]).toEqual([
+        "watching",
+        null,
+        "next",
+      ]);
+      expect(calls.sent.at(-1)?.threadId).toBe("next");
+    },
+  );
 });

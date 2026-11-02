@@ -36,12 +36,14 @@ export const createLineSplitter = (
           pendingBytes += end - start;
         }
       }
+
       if (newline === -1) return;
       if (skipping) {
         skipping = false;
       } else {
         emit();
       }
+
       start = newline + 1;
     }
   };

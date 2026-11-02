@@ -102,6 +102,7 @@ describe("/resume", () => {
     for (let n = 1; n <= 10; n += 1) {
       await writeClaudeRecord(`se-${n}`, conversationRecords(`ask ${n}`), n);
     }
+
     turns.startTurn(turnStart(10, "/resume"), undefined);
     const first = await pickQuestion(sent, 1);
 
@@ -134,19 +135,21 @@ describe("/resume", () => {
       typed: "LOGIN fix",
     },
     { name: "sent with /resume", command: "/resume login  fix", typed: null },
-  ])("narrows the list to the conversations whose title holds every word $name", async ({
-    command,
-    typed,
-  }) => {
-    const { turns, sent } = await harness([]);
-    await writeLoginRecords();
-    turns.startTurn(turnStart(10, command), undefined);
+  ])(
+    "narrows the list to the conversations whose title holds every word $name",
+    async ({ command, typed }) => {
+      const { turns, sent } = await harness([]);
+      await writeLoginRecords();
+      turns.startTurn(turnStart(10, command), undefined);
 
-    const asked = await askedAfter(turns, sent, typed);
+      const asked = await askedAfter(turns, sent, typed);
 
-    expect(optionLabels(asked)).toEqual(["fix the login bug", "Search"]);
-    expect(questionText(asked)).toMatch(/Only those matching ".+" are listed/);
-  });
+      expect(optionLabels(asked)).toEqual(["fix the login bug", "Search"]);
+      expect(questionText(asked)).toMatch(
+        /Only those matching ".+" are listed/,
+      );
+    },
+  );
 
   test("narrows the list to the conversation with a typed session id", async () => {
     const { turns, sent } = await harness([]);
@@ -323,18 +326,19 @@ describe("/resume", () => {
         },
       ],
     },
-  ])("renames the thread to $name of the picked conversation", async ({
-    records,
-  }) => {
-    const { turns, sent, renames } = await harness([]);
-    await writeClaudeRecord("se-a", records());
-    turns.startTurn(turnStart(10, "/resume"), undefined);
+  ])(
+    "renames the thread to $name of the picked conversation",
+    async ({ records }) => {
+      const { turns, sent, renames } = await harness([]);
+      await writeClaudeRecord("se-a", records());
+      turns.startTurn(turnStart(10, "/resume"), undefined);
 
-    answerPick(turns, await pickQuestion(sent, 1), "Fixture title");
-    await until(() => renames.length === 1);
+      answerPick(turns, await pickQuestion(sent, 1), "Fixture title");
+      await until(() => renames.length === 1);
 
-    expect(renames).toEqual([{ threadId: THREAD, name: "Fixture title" }]);
-  });
+      expect(renames).toEqual([{ threadId: THREAD, name: "Fixture title" }]);
+    },
+  );
 
   test("leaves the thread's name as it was for a conversation with no name", async () => {
     const { turns, sent, store, renames } = await harness([]);
@@ -400,6 +404,7 @@ describe("/resume", () => {
     for (const question of pickQuestions(sent)) {
       answerPick(turns, question, "fixture ask");
     }
+
     await until(() => completedTurnStatuses(sent).length === 2);
 
     const owners = [THREAD, OTHER_THREAD].filter(

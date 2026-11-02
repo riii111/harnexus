@@ -26,6 +26,7 @@ export const createAppRequests = ({
         resolve(null);
         return;
       }
+
       const id = `${ID_PREFIX}${++sequence}`;
       const settle = (answer: unknown) => {
         if (!pending.delete(id)) return;
@@ -38,6 +39,7 @@ export const createAppRequests = ({
         });
         resolve(answer);
       };
+
       const abort = () => settle(null);
       signal.addEventListener("abort", abort, { once: true });
       pending.set(id, { threadId, settle });

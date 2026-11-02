@@ -38,11 +38,13 @@ export const createRevertRequests =
         reject("there is no Claude conversation to rewind");
         return false;
       }
+
       // The conversation runs on claude.ai, so a rewind here would only cut the local copy.
       if (threads.cloudOf(threadId) !== null) {
         reject(refusalMessage("cloud_unsupported"));
         return false;
       }
+
       const read = await readSession(sessionId);
       if (read.isErr()) {
         reject(
@@ -50,6 +52,7 @@ export const createRevertRequests =
         );
         return false;
       }
+
       const rewind = threads.rewindOf(threadId);
       const end =
         rewind === undefined
@@ -61,6 +64,7 @@ export const createRevertRequests =
         reject("the retained Claude record is missing");
         return false;
       }
+
       const messages = read.value.slice(0, end);
       const history = buildHistory(messages, { threadId, cwd: thread.cwd });
       let target: string | null = null;
@@ -87,6 +91,7 @@ export const createRevertRequests =
             ) ?? null;
         }
       }
+
       const index =
         target === null
           ? -1
@@ -98,6 +103,7 @@ export const createRevertRequests =
         reject("the turn to rewind was not found in this Claude conversation");
         return false;
       }
+
       const metadata = await request(
         "thread/read",
         { threadId, includeTurns: false },
@@ -113,6 +119,7 @@ export const createRevertRequests =
         );
         return false;
       }
+
       const kept = messages.slice(0, index);
       const saved = await store.setRewind(threadId, {
         sessionId,
@@ -125,6 +132,7 @@ export const createRevertRequests =
       if (applied) {
         runtime.closeSession(threadId);
       }
+
       if (saved.isErr()) {
         reject(
           applied
@@ -133,6 +141,7 @@ export const createRevertRequests =
         );
         return false;
       }
+
       const cleared = await store.resolveOutcomeUnknown(threadId);
       if (cleared.isErr()) {
         reject(
@@ -140,6 +149,7 @@ export const createRevertRequests =
         );
         return false;
       }
+
       const retained = buildHistory(kept, { threadId, cwd: thread.cwd });
       const result = {
         thread: {

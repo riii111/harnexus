@@ -185,6 +185,7 @@ describe("ThreadStore", () => {
     for (let index = 0; index < 70; index += 1) {
       await store.addMessageId("thread-1", `message-${index}`);
     }
+
     await store.addMessageId("thread-1", "message-69");
 
     const ids = store.get("thread-1")?.messageIds ?? [];
@@ -792,13 +793,16 @@ const gatedWrite = () => {
       current.entered();
       await current.release;
     }
+
     return writeFileAtomic(target, content);
   };
+
   const hold = () => {
     const entered = deferred();
     const release = deferred();
     gate = { entered: entered.resolve, release: release.promise };
     return { entered: entered.promise, release: release.resolve };
   };
+
   return { write, hold };
 };

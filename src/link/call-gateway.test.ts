@@ -174,56 +174,57 @@ describe("createCallGateway", () => {
       threadId: "linked-chat",
     },
     { name: "one no chat shows", sessionId: "session_01Free", threadId: null },
-  ])("answers which chat shows $name, without the app", async ({
-    sessionId,
-    threadId,
-  }) => {
-    const { gateway, requests, linkCalls } = setup({ claude: [CLAUDE] });
+  ])(
+    "answers which chat shows $name, without the app",
+    async ({ sessionId, threadId }) => {
+      const { gateway, requests, linkCalls } = setup({ claude: [CLAUDE] });
 
-    const answer = await gateway.handle(
-      JSON.stringify({
-        threadId: CLAUDE,
-        tool: "cloud_chat",
-        arguments: { sessionId },
-      }),
-    );
+      const answer = await gateway.handle(
+        JSON.stringify({
+          threadId: CLAUDE,
+          tool: "cloud_chat",
+          arguments: { sessionId },
+        }),
+      );
 
-    expect(JSON.parse(answer)).toEqual({
-      outcome: "done",
-      result: { threadId },
-    });
-    expect([requests, linkCalls]).toEqual([[], []]);
-  });
+      expect(JSON.parse(answer)).toEqual({
+        outcome: "done",
+        result: { threadId },
+      });
+      expect([requests, linkCalls]).toEqual([[], []]);
+    },
+  );
 
   test.each([
     { kind: "Codex", threadId: CODEX },
     { kind: "Claude", threadId: CLAUDE },
-  ])("names the calling $kind thread through the app server", async ({
-    threadId,
-  }) => {
-    const { gateway, requests, linkCalls } = setup({ claude: [CLAUDE] });
+  ])(
+    "names the calling $kind thread through the app server",
+    async ({ threadId }) => {
+      const { gateway, requests, linkCalls } = setup({ claude: [CLAUDE] });
 
-    const answer = await gateway.handle(
-      JSON.stringify({
-        threadId,
-        tool: "name_thread",
-        arguments: { name: "Impl｜決済を再送する PR#12" },
-      }),
-    );
+      const answer = await gateway.handle(
+        JSON.stringify({
+          threadId,
+          tool: "name_thread",
+          arguments: { name: "Impl｜決済を再送する PR#12" },
+        }),
+      );
 
-    expect(JSON.parse(answer)).toEqual({
-      outcome: "done",
-      result: { content: [] },
-    });
-    expect(requests).toEqual([
-      {
-        method: "thread/name/set",
-        params: { threadId, name: "Impl｜決済を再送する PR#12" },
-        timeoutMs: 60_000,
-      },
-    ]);
-    expect(linkCalls).toEqual([]);
-  });
+      expect(JSON.parse(answer)).toEqual({
+        outcome: "done",
+        result: { content: [] },
+      });
+      expect(requests).toEqual([
+        {
+          method: "thread/name/set",
+          params: { threadId, name: "Impl｜決済を再送する PR#12" },
+          timeoutMs: 60_000,
+        },
+      ]);
+      expect(linkCalls).toEqual([]);
+    },
+  );
 
   test.each([
     { name: "an empty", value: " " },
@@ -359,22 +360,21 @@ describe("createCallGateway create_thread of a Codex thread", () => {
       seen: OTHER,
       expected: { outcome: "model_mismatch", threadId: "th-worker" },
     },
-  ])("answers from a first turn already seen when the call is $name", async ({
-    tag,
-    seen,
-    expected,
-  }) => {
-    const { gateway, watch } = setup({
-      answer: () => {
-        watch.observe(CODEX, "th-worker", seen);
-        return Result.err({ _tag: tag, message: "failed" });
-      },
-    });
+  ])(
+    "answers from a first turn already seen when the call is $name",
+    async ({ tag, seen, expected }) => {
+      const { gateway, watch } = setup({
+        answer: () => {
+          watch.observe(CODEX, "th-worker", seen);
+          return Result.err({ _tag: tag, message: "failed" });
+        },
+      });
 
-    const answer = JSON.parse(await gateway.handle(CREATE));
+      const answer = JSON.parse(await gateway.handle(CREATE));
 
-    expect(answer).toMatchObject(expected);
-  });
+      expect(answer).toMatchObject(expected);
+    },
+  );
 
   test("answers done for an accepted first turn even when the app answers with an error", async () => {
     const { gateway, watch } = setup({

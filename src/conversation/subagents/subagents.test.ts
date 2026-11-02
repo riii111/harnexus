@@ -361,6 +361,7 @@ describe("subagents in the parent thread's history", () => {
     for (const m of editBy("toolu-1", "toolu-edit", "/fixture/work/a.ts")) {
       subagents.message("th-1", m);
     }
+
     subagents.complete("th-1", "task-toolu-1", DONE);
     const record = [
       prompt("p1", "look around"),
@@ -461,6 +462,7 @@ describe("subagents edits", () => {
     for (const m of editBy("toolu-1", "toolu-ok", "/fixture/work/a.ts")) {
       subagents.message("th-1", m);
     }
+
     const [failedCall, failedResult] = editBy(
       "toolu-1",
       "toolu-failed",

@@ -190,6 +190,7 @@ const createThreadStore = (
             }),
           );
         }
+
         const next = new Map(mappings).set(threadId, changed);
         // The change is kept in memory only after the file holds it, so a write that fails before the rename leaves both unchanged.
         yield* Result.await(save(next));
@@ -222,6 +223,7 @@ const createThreadStore = (
         }),
       );
     }
+
     runStates.delete(threadId);
     return Result.ok();
   };
@@ -311,6 +313,7 @@ const createThreadStore = (
             }),
           );
         }
+
         const owner = ownerOfCloud(current, cloud.sessionId);
         return owner === undefined
           ? Result.ok({ ...withSession(mapping, copySessionId), cloud })
@@ -389,6 +392,7 @@ const createThreadStore = (
             }),
           );
         }
+
         // Recovery keeps the old marker until the new write settles, so a crash cannot lose the unknown outcome between markers.
         const marked = recovered
           ? Result.ok()
@@ -399,6 +403,7 @@ const createThreadStore = (
             const cleared = await clearMarker(threadId);
             if (cleared.isErr()) return Result.err(cleared.error);
           }
+
           return Result.err(
             new WriteNotStarted({
               threadId,
@@ -407,6 +412,7 @@ const createThreadStore = (
             }),
           );
         }
+
         runStates.set(threadId, "running");
         let outcomeKnown = false;
         try {

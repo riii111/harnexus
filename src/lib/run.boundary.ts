@@ -84,6 +84,7 @@ export const runProcess = (
             }, options.killGraceMs);
           }, options.killGraceMs);
         };
+
         const timer = setTimeout(() => stop("timeout"), options.timeoutMs);
         const collect = (sink: "out" | "err") => (chunk: Buffer) => {
           size += chunk.length;
@@ -91,9 +92,11 @@ export const runProcess = (
             stop("output-limit");
             return;
           }
+
           if (sink === "out") stdout += decoders.out.write(chunk);
           else stderr += decoders.err.write(chunk);
         };
+
         child.stdout.on("data", collect("out"));
         child.stderr.on("data", collect("err"));
         child.once("error", (error) => {

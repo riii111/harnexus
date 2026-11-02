@@ -181,7 +181,7 @@ export const SUBSCRIPTION: AccountInfo = {
   apiProvider: "firstParty",
 };
 
-// biome-ignore lint/suspicious/noExplicitAny: messages are checked by shape in each test.
+// oxlint-disable-next-line typescript/no-explicit-any -- messages are checked by shape in each test.
 export type Sent = any;
 
 export const harness = async (
@@ -252,6 +252,7 @@ export const harness = async (
     sent.push(message);
     onSend(message);
   };
+
   const log = (event: ClaudeLogEvent) => events.push(event);
   const threads = createThreadValues(store, log, effortRule);
   const subagents = createSubagents({ send, now });
@@ -310,6 +311,7 @@ export const harness = async (
       if (startSessionOverride !== undefined) {
         return startSessionOverride(session, signal, fake);
       }
+
       await beforeStart;
       return startClaudeSession(session, fake.runtime, signal);
     },
@@ -471,6 +473,7 @@ export const until = async (condition: () => boolean) => {
     if (performance.now() > deadline) {
       return expect.unreachable("condition never held");
     }
+
     await Bun.sleep(2);
   }
 };
@@ -504,6 +507,7 @@ export const readPrompts = async (
     if (next.done === true) break;
     read.push(next.value);
   }
+
   return read;
 };
 

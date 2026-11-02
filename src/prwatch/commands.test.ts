@@ -143,19 +143,20 @@ describe("dryRun", () => {
   test.each([
     { name: "a linked PR without watch state", linked: true },
     { name: "a PR no worker linked", linked: false },
-  ])("shows $name as a first read with no message and writes no state", async ({
-    linked,
-  }) => {
-    const { paths, root } = await fixture();
-    if (linked) await recordLink(root, LINK);
+  ])(
+    "shows $name as a first read with no message and writes no state",
+    async ({ linked }) => {
+      const { paths, root } = await fixture();
+      if (linked) await recordLink(root, LINK);
 
-    const ran = await dryRun({ paths, github: github([]) }, [PR]);
+      const ran = await dryRun({ paths, github: github([]) }, [PR]);
 
-    const [report] = ran.unwrap().prs as Record<string, unknown>[];
-    expect([report?.firstRead, report?.prompt]).toEqual([true, null]);
-    expect((report?.notified as unknown[]).length).toBe(1);
-    expect((await loadWatchState(root, REF)).unwrap()).toEqual(freshState());
-  });
+      const [report] = ran.unwrap().prs as Record<string, unknown>[];
+      expect([report?.firstRead, report?.prompt]).toEqual([true, null]);
+      expect(report?.notified).toHaveLength(1);
+      expect((await loadWatchState(root, REF)).unwrap()).toEqual(freshState());
+    },
+  );
 
   test("reads only the given PRs and refuses a repository outside the config", async () => {
     const { paths } = await fixture();

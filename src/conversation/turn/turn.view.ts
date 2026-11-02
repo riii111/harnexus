@@ -143,11 +143,13 @@ export const renderSdkMessage = (
         if (message.parent_tool_use_id === null && !draft.compaction) {
           renderStreamEvent(draft, message.event, now);
         }
+
         break;
       case "assistant":
         if (message.parent_tool_use_id === null && !draft.compaction) {
           renderAssistant(draft, message, now);
         }
+
         break;
       case "user":
         if (!("isReplay" in message)) renderToolResults(draft, message, now);
@@ -307,6 +309,7 @@ const renderSystem = (draft: Draft, message: SystemMessage, now: number) => {
       if (draft.compaction && message.compact_result === "failed") {
         draft.compactionError = message.compact_error ?? COMPACTION_FAILED;
       }
+
       break;
   }
 };
@@ -345,6 +348,7 @@ const renderStreamEvent = (draft: Draft, event: StreamEvent, now: number) => {
       if (event.delta.stop_reason !== null) {
         flushPending(draft, phaseOf(event.delta.stop_reason), now);
       }
+
       break;
     case "message_stop":
       closeBlocks(draft, now);
@@ -452,6 +456,7 @@ const renderAssistant = (
       renderWholeBlock(draft, block, now);
     }
   }
+
   if (phase !== null) flushPending(draft, phase, now);
 };
 
@@ -539,6 +544,7 @@ const resultOutcome = (draft: Draft, result: SDKResultMessage): TurnOutcome => {
   if (draft.compactionError !== null) {
     return { status: "failed", message: draft.compactionError };
   }
+
   const outcome = outcomeOf(result);
   // A compaction that reported neither its boundary nor a failure is not shown as done.
   return outcome.status === "completed" && draft.compaction && !draft.compacted
@@ -552,6 +558,7 @@ const outcomeOf = (result: SDKResultMessage): TurnOutcome => {
       ? { status: "failed", message: result.result }
       : { status: "completed" };
   }
+
   const message = result.errors.join("\n");
   return {
     status: "failed",
@@ -571,6 +578,7 @@ const finish = (draft: Draft, outcome: TurnOutcome, now: number) => {
     draft.tools[toolUseId] = { state: "closed" };
     itemCompleted(draft, declined ?? abandonToolItem(tool.item), now);
   }
+
   const error: TurnError | null =
     outcome.status === "failed"
       ? {
@@ -591,6 +599,7 @@ const finish = (draft: Draft, outcome: TurnOutcome, now: number) => {
       },
     });
   }
+
   notify(draft, now, {
     method: "thread/status/changed",
     params: { threadId: draft.threadId, status: { type: "idle" } },

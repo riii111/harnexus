@@ -180,37 +180,37 @@ describe("continuing a rewound conversation", () => {
         resumeAt: undefined,
       },
     },
-  ])("starts a separate session after rewinding to $name", async ({
-    at,
-    expected,
-  }) => {
-    const first = fakeClaude(SUBSCRIPTION);
-    const second = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, store, settings, runtime } = await harness([
-      first,
-      second,
-    ]);
-    await completeTurn(turns, sent, first, 10);
-    const saved = await store.setRewind(THREAD, { sessionId: "se-1", at });
-    expect(saved.isOk()).toBe(true);
-    runtime.closeSession(THREAD);
-    turns.startTurn(
-      withMessageId(turnStart(11, "edited prompt"), "edited-message"),
-      undefined,
-    );
-    await until(() => second.started());
-    expect(await firstPrompt(second.prompt())).toBe("edited prompt");
-    second.emit(sdk({ ...success(), session_id: "se-2" }));
-    await until(() => store.get(THREAD)?.runState === "idle");
-    expect({
-      resume: settings[1]?.resume,
-      forkSession: settings[1]?.forkSession,
-      resumeAt: settings[1]?.resumeAt,
-    }).toEqual(expected);
-    expect(store.get(THREAD)?.sessionId).toBe("se-2");
-    expect(store.get(THREAD)?.rewind).toBeUndefined();
-    expect(first.closes()).toBe(1);
-  });
+  ])(
+    "starts a separate session after rewinding to $name",
+    async ({ at, expected }) => {
+      const first = fakeClaude(SUBSCRIPTION);
+      const second = fakeClaude(SUBSCRIPTION);
+      const { turns, sent, store, settings, runtime } = await harness([
+        first,
+        second,
+      ]);
+      await completeTurn(turns, sent, first, 10);
+      const saved = await store.setRewind(THREAD, { sessionId: "se-1", at });
+      expect(saved.isOk()).toBe(true);
+      runtime.closeSession(THREAD);
+      turns.startTurn(
+        withMessageId(turnStart(11, "edited prompt"), "edited-message"),
+        undefined,
+      );
+      await until(() => second.started());
+      expect(await firstPrompt(second.prompt())).toBe("edited prompt");
+      second.emit(sdk({ ...success(), session_id: "se-2" }));
+      await until(() => store.get(THREAD)?.runState === "idle");
+      expect({
+        resume: settings[1]?.resume,
+        forkSession: settings[1]?.forkSession,
+        resumeAt: settings[1]?.resumeAt,
+      }).toEqual(expected);
+      expect(store.get(THREAD)?.sessionId).toBe("se-2");
+      expect(store.get(THREAD)?.rewind).toBeUndefined();
+      expect(first.closes()).toBe(1);
+    },
+  );
 
   test("blocks new turns while a conversation change is being saved", async () => {
     const first = fakeClaude(SUBSCRIPTION);
@@ -287,26 +287,27 @@ describe("a thread whose last turn has an unknown outcome", () => {
       name: "manually started queued message",
       trigger: "composer_queue_run_now",
     },
-  ])("resumes the saved Claude conversation on the first $name after a restart", async ({
-    trigger,
-  }) => {
-    const second = fakeClaude(SUBSCRIPTION);
-    const after = await restartedWithUnknownOutcome([second]);
+  ])(
+    "resumes the saved Claude conversation on the first $name after a restart",
+    async ({ trigger }) => {
+      const second = fakeClaude(SUBSCRIPTION);
+      const after = await restartedWithUnknownOutcome([second]);
 
-    const request = withMessageId(turnStart(11, "continue"), "m-1");
-    after.turns.startTurn(
-      { ...request, params: { ...request.params, turnTrigger: trigger } },
-      undefined,
-    );
-    await until(() => second.prompted());
-    second.emit(sdk(success()));
-    await until(() => after.store.get(THREAD)?.runState === "idle");
+      const request = withMessageId(turnStart(11, "continue"), "m-1");
+      after.turns.startTurn(
+        { ...request, params: { ...request.params, turnTrigger: trigger } },
+        undefined,
+      );
+      await until(() => second.prompted());
+      second.emit(sdk(success()));
+      await until(() => after.store.get(THREAD)?.runState === "idle");
 
-    expect(responseTo(after.sent, 11)?.error).toBeUndefined();
-    expect(responseTo(after.sent, 11)?.result.turn.id).toBeDefined();
-    expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
-    expect(after.settings[0]).toMatchObject({ resume: "se-1" });
-  });
+      expect(responseTo(after.sent, 11)?.error).toBeUndefined();
+      expect(responseTo(after.sent, 11)?.result.turn.id).toBeDefined();
+      expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
+      expect(after.settings[0]).toMatchObject({ resume: "se-1" });
+    },
+  );
 
   test.each([
     {
@@ -337,21 +338,22 @@ describe("a thread whose last turn has an unknown outcome", () => {
         };
       },
     },
-  ])("does not take $name as the user's decision to continue", async ({
-    request,
-  }) => {
-    const second = fakeClaude(SUBSCRIPTION);
-    const after = await restartedWithUnknownOutcome([second]);
-    after.turns.startTurn(request(), undefined);
-    await until(() => responseTo(after.sent, 12) !== undefined);
-    expect(after.store.get(THREAD)?.runState).toBe("outcomeUnknown");
-    expect(second.started()).toBe(false);
-    await completeTurn(after.turns, after.sent, second, 13, "m-3");
+  ])(
+    "does not take $name as the user's decision to continue",
+    async ({ request }) => {
+      const second = fakeClaude(SUBSCRIPTION);
+      const after = await restartedWithUnknownOutcome([second]);
+      after.turns.startTurn(request(), undefined);
+      await until(() => responseTo(after.sent, 12) !== undefined);
+      expect(after.store.get(THREAD)?.runState).toBe("outcomeUnknown");
+      expect(second.started()).toBe(false);
+      await completeTurn(after.turns, after.sent, second, 13, "m-3");
 
-    expect(responseTo(after.sent, 12)?.error.message).toBe(OUTCOME_UNKNOWN);
-    expect(after.settings).toHaveLength(1);
-    expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
-  });
+      expect(responseTo(after.sent, 12)?.error.message).toBe(OUTCOME_UNKNOWN);
+      expect(after.settings).toHaveLength(1);
+      expect(completedTurnStatuses(after.sent)).toEqual(["completed"]);
+    },
+  );
 
   test("blocks a retry of the original interrupted message and accepts a new instruction", async () => {
     const first = fakeClaude(SUBSCRIPTION);
@@ -631,53 +633,54 @@ describe("releaseThread", () => {
   test.each([
     { name: "archived", ended: "archived" as const, left: 1 },
     { name: "deleted", ended: "deleted" as const, left: 0 },
-  ])("leaves $left finished agents of a $name thread, since an archived one resumes the same session", async ({
-    ended,
-    left,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, subagents } = await harness([claude]);
-    subagents.start({
-      threadId: THREAD,
-      turnId: null,
-      toolUseId: "toolu-1",
-      taskId: "task-1",
-      description: "look",
-      agentType: "Explore",
-      cwd: dir,
-      prompt: "look",
-      depth: 1,
-    });
-    subagents.complete(THREAD, "task-1", { status: "completed" });
+  ])(
+    "leaves $left finished agents of a $name thread, since an archived one resumes the same session",
+    async ({ ended, left }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns, subagents } = await harness([claude]);
+      subagents.start({
+        threadId: THREAD,
+        turnId: null,
+        toolUseId: "toolu-1",
+        taskId: "task-1",
+        description: "look",
+        agentType: "Explore",
+        cwd: dir,
+        prompt: "look",
+        depth: 1,
+      });
+      subagents.complete(THREAD, "task-1", { status: "completed" });
 
-    turns.releaseThread(THREAD, ended);
+      turns.releaseThread(THREAD, ended);
 
-    expect(subagents.childrenOf(THREAD)).toHaveLength(left);
-  });
+      expect(subagents.childrenOf(THREAD)).toHaveLength(left);
+    },
+  );
 
   test.each([
     { name: "archived", ended: "archived" as const },
     { name: "deleted", ended: "deleted" as const },
-  ])("keeps the record and the session of a $name thread while its turn runs", async ({
-    ended,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, events, runtime } = await harness([claude]);
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => responseTo(sent, 10) !== undefined);
-    await firstPrompt(claude.prompt());
+  ])(
+    "keeps the record and the session of a $name thread while its turn runs",
+    async ({ ended }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns, sent, events, runtime } = await harness([claude]);
+      turns.startTurn(turnStart(10, "hello"), undefined);
+      await until(() => responseTo(sent, 10) !== undefined);
+      await firstPrompt(claude.prompt());
 
-    turns.releaseThread(THREAD, ended);
+      turns.releaseThread(THREAD, ended);
 
-    expect(runtime.recordOf(THREAD, "turn-1")).not.toBeNull();
-    expect(claude.closes()).toBe(0);
-    expect(events).toContainEqual({
-      event: "claude_turn",
-      step: "thread_released",
-      ended,
-      kept: true,
-    });
-  });
+      expect(runtime.recordOf(THREAD, "turn-1")).not.toBeNull();
+      expect(claude.closes()).toBe(0);
+      expect(events).toContainEqual({
+        event: "claude_turn",
+        step: "thread_released",
+        ended,
+        kept: true,
+      });
+    },
+  );
 });
 
 describe("turn/interrupt", () => {
@@ -709,20 +712,21 @@ describe("turn/interrupt", () => {
       name: "an error",
       options: { interruptError: new Error("no control channel") },
     },
-  ])("closes Claude after an interrupt that answers with $name", async ({
-    options,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION, options);
-    const { turns, sent } = await harness([claude]);
+  ])(
+    "closes Claude after an interrupt that answers with $name",
+    async ({ options }) => {
+      const claude = fakeClaude(SUBSCRIPTION, options);
+      const { turns, sent } = await harness([claude]);
 
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => claude.prompted());
-    turns.interruptTurn(interrupt(20, "turn-1"));
-    await until(() => turnCompleted(sent) !== undefined);
+      turns.startTurn(turnStart(10, "hello"), undefined);
+      await until(() => claude.prompted());
+      turns.interruptTurn(interrupt(20, "turn-1"));
+      await until(() => turnCompleted(sent) !== undefined);
 
-    expect(turnCompleted(sent)).toMatchObject({ status: "interrupted" });
-    expect(claude.closes()).toBe(1);
-  });
+      expect(turnCompleted(sent)).toMatchObject({ status: "interrupted" });
+      expect(claude.closes()).toBe(1);
+    },
+  );
 
   test("waits for a late interrupt receipt before the next turn reuses the session", async () => {
     const gate = createGate();
@@ -851,21 +855,21 @@ describe("turn/interrupt", () => {
       turnId: "turn-9",
       beforeInterrupt: async () => {},
     },
-  ])("refuses to stop $name without asking Claude", async ({
-    turnId,
-    beforeInterrupt,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent } = await harness([claude]);
-    turns.startTurn(turnStart(10, "hello"), undefined);
-    await until(() => responseTo(sent, 10) !== undefined);
-    await beforeInterrupt(claude, sent);
+  ])(
+    "refuses to stop $name without asking Claude",
+    async ({ turnId, beforeInterrupt }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns, sent } = await harness([claude]);
+      turns.startTurn(turnStart(10, "hello"), undefined);
+      await until(() => responseTo(sent, 10) !== undefined);
+      await beforeInterrupt(claude, sent);
 
-    turns.interruptTurn(interrupt(20, turnId));
+      turns.interruptTurn(interrupt(20, turnId));
 
-    expect(responseTo(sent, 20)?.error).toBeDefined();
-    expect(claude.interrupts()).toBe(0);
-  });
+      expect(responseTo(sent, 20)?.error).toBeDefined();
+      expect(claude.interrupts()).toBe(0);
+    },
+  );
 });
 
 describe("model changes", () => {
@@ -1042,23 +1046,24 @@ describe("refused requests", () => {
     },
     { name: "a Codex model", override: { model: "gpt-fixture" } },
     { name: "another working directory", override: { cwd: "/elsewhere" } },
-  ])("refuses $name without starting Claude or asking the server", async ({
-    override,
-  }) => {
-    const claude = fakeClaude(SUBSCRIPTION);
-    const { turns, sent, materialized } = await harness([claude]);
+  ])(
+    "refuses $name without starting Claude or asking the server",
+    async ({ override }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns, sent, materialized } = await harness([claude]);
 
-    const request = turnStart(10, "hello");
-    turns.startTurn(
-      { ...request, params: { ...request.params, ...override } },
-      undefined,
-    );
-    await settle();
+      const request = turnStart(10, "hello");
+      turns.startTurn(
+        { ...request, params: { ...request.params, ...override } },
+        undefined,
+      );
+      await settle();
 
-    expect(sent).toEqual([REFUSED(10)]);
-    expect(claude.started()).toBe(false);
-    expect(materialized).toEqual([]);
-  });
+      expect(sent).toEqual([REFUSED(10)]);
+      expect(claude.started()).toBe(false);
+      expect(materialized).toEqual([]);
+    },
+  );
 
   test("fails a turn asking for another directory that lost the race to register the thread", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -1561,6 +1566,7 @@ describe("another thread's message arriving on a busy thread", () => {
       claude.emit(sdk(success()));
       await until(() => completedTurnStatuses(sent).length === turn);
     }
+
     expect(startedTurns(sent)).toEqual(["turn-1", "turn-2", "turn-3"]);
     expect(await promptsUntil(claude, 3)).toEqual([
       "hello",
@@ -1668,6 +1674,7 @@ const registeredWorkers = async (fakes: ReturnType<typeof fakeClaude>[]) => {
     });
     expect(registered.isOk() && registered.value.threadId).toBe(threadId);
   }
+
   return started;
 };
 
@@ -1698,6 +1705,7 @@ const messageThreads = async (
   if (tools === undefined) {
     return expect.unreachable("Claude has no thread tool server");
   }
+
   const server = createSdkMcpServer({ name: "codex_link", tools });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
@@ -1713,6 +1721,7 @@ const messageThreads = async (
       }),
     );
   }
+
   return results;
 };
 

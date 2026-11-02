@@ -72,6 +72,7 @@ export const diffShapes = (
       uncovered.push(group);
       continue;
     }
+
     // A method carries variants told apart by the type of the object it carries, such as each item type of item/started, so each variant is compared with the fixtures' shapes of the same variant.
     for (const [variant, shapes] of variants) {
       const fixtures = tested.get(variant);
@@ -81,6 +82,7 @@ export const diffShapes = (
         changedVariants.add(`${group}|${variant}`);
         continue;
       }
+
       const fixturePaths = union(fixtures);
       const observedPaths = union(shapes);
       const extra = [...observedPaths].filter(
@@ -108,6 +110,7 @@ export const diffShapes = (
       });
     }
   }
+
   const unseen = unique(observed).filter(
     (shape) =>
       changedVariants.has(`${groupOf(shape)}|${variantOf(shape)}`) &&
@@ -171,15 +174,18 @@ export const formatProtocol = (
       left += 1;
       return;
     }
+
     out.push(line);
     used += line.length + 1;
   };
+
   for (const line of [...summary, ...changes, ...names]) add(line);
   if (shapes.length > 0) {
     add("");
     add("-- Shapes the fixtures lack --");
     for (const shape of shapes) add(shape);
   }
+
   return left > 0
     ? [...out, `${left} more lines left out to fit an issue`]
     : out;
@@ -214,6 +220,7 @@ const groupVariants = (shapes: readonly RecordedShape[]) => {
     variants.set(variant, [...(variants.get(variant) ?? []), shape]);
     groups.set(groupOf(shape), variants);
   }
+
   return groups;
 };
 

@@ -1,6 +1,10 @@
 pre-commit:
   commands:
-    biome:
-      glob: "*.{js,jsx,ts,tsx,json,jsonc,grit}"
-      run: bunx biome check --write --no-errors-on-unmatched --files-ignore-unknown=true {staged_files}
+    format:
+      glob: "*.{js,jsx,ts,tsx,json,jsonc,md,yml,yaml}"
+      run: bunx oxfmt --no-error-on-unmatched-pattern {staged_files}
+      stage_fixed: true
+    lint:
+      glob: "*.{js,jsx,ts,tsx}"
+      run: bunx oxlint --fix --deny-warnings {staged_files}
       stage_fixed: true

@@ -17,6 +17,7 @@ for (const record of records) {
     process.stdout.write(`${wire}\n`);
     continue;
   }
+
   const received = await lines.next();
   if (received.done || received.value !== wire) process.exit(2);
 }

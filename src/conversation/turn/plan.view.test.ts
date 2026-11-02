@@ -68,17 +68,18 @@ describe("renderPlan TodoWrite", () => {
         ],
       },
     },
-  ])("keeps the shown plan for $name once the call is answered", ({
-    input,
-  }) => {
-    const shown = feed(succeeded("tool-1", "TodoWrite", { todos: TODOS }));
+  ])(
+    "keeps the shown plan for $name once the call is answered",
+    ({ input }) => {
+      const shown = feed(succeeded("tool-1", "TodoWrite", { todos: TODOS }));
 
-    const out = feed(succeeded("tool-2", "TodoWrite", input), shown.plan);
+      const out = feed(succeeded("tool-2", "TodoWrite", input), shown.plan);
 
-    expect(shown.sent).toHaveLength(1);
-    expect(out.sent).toEqual([]);
-    expect(out.plan).toEqual({ steps: shown.plan.steps, calls: {} });
-  });
+      expect(shown.sent).toHaveLength(1);
+      expect(out.sent).toEqual([]);
+      expect(out.plan).toEqual({ steps: shown.plan.steps, calls: {} });
+    },
+  );
 });
 
 describe("renderPlan tasks", () => {
@@ -231,6 +232,7 @@ const feed = (messages: object[], start: ThreadPlan = NO_PLAN) => {
       sent.push(rendered.notification.params);
     }
   }
+
   return { plan, sent };
 };
 

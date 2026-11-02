@@ -61,6 +61,7 @@ const links = (template: string) => {
     marked += template.slice(last, start) + markerOf(index);
     last = end;
   }
+
   marked += template.slice(last);
   // A comment spanning blocks would be split by the parser, so its text is blanked first, keeping the lines.
   marked = marked.replace(/<!--[\s\S]*?-->/g, (comment) =>
@@ -71,6 +72,7 @@ const links = (template: string) => {
     seen.add(destination);
     return children;
   };
+
   // Markdown decides what is a link, so examples in code or comments and text that a block such as a heading splits are left alone.
   Bun.markdown.render(
     marked,
@@ -139,6 +141,7 @@ const resolveLinks = (
       text += template.slice(last, start) + escapeBraces(real + fragment);
       last = end;
     }
+
     return Result.ok(text + template.slice(last));
   });
 

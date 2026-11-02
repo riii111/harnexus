@@ -162,9 +162,11 @@ export const createTurnController = <Tag extends string>({
     if (typeof threadId === "string" && changingConversations.has(threadId)) {
       return refuse(id, "thread_busy");
     }
+
     if (typeof threadId !== "string") {
       return refuse(id, "missing_thread");
     }
+
     const checked = checkThread(
       params,
       threads.threadOf(threadId),
@@ -173,18 +175,22 @@ export const createTurnController = <Tag extends string>({
     if (checked.isErr()) {
       return refuse(id, checked.error.refusal);
     }
+
     const delegated = delegatedMessage(params);
     const input = messageInput(params.input, delegated);
     if (typeof input === "string") {
       return refuse(id, input);
     }
+
     if (closed) {
       return refuse(id, "bridge_closing");
     }
+
     const messageId = clientMessageId(params);
     if (messageId !== null && isDelivered(threadId, messageId)) {
       return refuse(id, "duplicate_message");
     }
+
     if (messageId !== null) acceptMessage(threadId, messageId);
     threads.changeModel(threadId, checked.value.model);
     const effort = requestedEffort(params);
@@ -207,6 +213,7 @@ export const createTurnController = <Tag extends string>({
       steerMessage(id, threadId, checked.value, turn);
       return null;
     }
+
     const allowRecovery =
       delegated === null &&
       messageId !== null &&
@@ -231,15 +238,18 @@ export const createTurnController = <Tag extends string>({
       refuse(id, "missing_thread");
       return;
     }
+
     const checked = checkThread(params, threads.threadOf(threadId), undefined);
     if (checked.isErr()) {
       refuse(id, checked.error.refusal);
       return;
     }
+
     if (closed) {
       refuse(id, "bridge_closing");
       return;
     }
+
     // Without a conversation Claude only reports there is nothing to compact; a turn already accepted may still start one, and a session whose record vanished is found only when the turn runs, since looking it up here would let a later request start first.
     if (
       threads.sessionIdOf(threadId) === null &&
@@ -248,6 +258,7 @@ export const createTurnController = <Tag extends string>({
       refuse(id, "nothing_to_compact");
       return;
     }
+
     const turn = {
       items: [],
       toolOutput: null,
@@ -279,6 +290,7 @@ export const createTurnController = <Tag extends string>({
     acceptTurn(null, threadId, thread, turn, null, false);
     return true;
   };
+
   runtime.listen(startOwnTurn);
 
   const acceptTurn = (
@@ -295,12 +307,14 @@ export const createTurnController = <Tag extends string>({
       forgetMessage(threadId, messageId);
       return;
     }
+
     runtime.threadBusy(threadId);
     let inFlight = turnsInFlight.get(threadId);
     if (inFlight === undefined) {
       inFlight = new Map();
       turnsInFlight.set(threadId, inFlight);
     }
+
     const queued = inFlight.size > 0;
     if (queued) log({ event: "claude_turn", step: "queued" });
     const request = {
@@ -329,6 +343,7 @@ export const createTurnController = <Tag extends string>({
       });
       send({ id, result: { turn: waiting.turn } });
     }
+
     void runTurn(request, thread, threadId, turn, messageId).then(() => {
       inFlight.delete(request.turnId);
       if (inFlight.size > 0) return;
@@ -361,15 +376,18 @@ export const createTurnController = <Tag extends string>({
         acceptTurn(id, threadId, thread, input, null, false);
         return;
       }
+
       if (closed) {
         refuse(id, "bridge_closing");
         return;
       }
+
       const refusal = await runtime.steer(active.turn, input);
       if (refusal !== null) {
         acceptTurn(id, threadId, thread, input, null, false);
         return;
       }
+
       send({ id, result: { turn: steeredTurn(active.state) } });
       log({ event: "claude_turn", step: "steered" });
       apply(active, renderInput(active.state, input, null));
@@ -398,23 +416,27 @@ export const createTurnController = <Tag extends string>({
       refuse(id, "no_running_turn");
       return;
     }
+
     const state = active.state;
     // Codex also takes no steer into a compaction, whose prompt Claude runs as a command rather than a conversation turn.
     if (state.compaction) {
       refuse(id, "compaction_not_steerable");
       return;
     }
+
     const input = messageInput(params.input, null);
     if (typeof input === "string") {
       refuse(id, input);
       return;
     }
+
     // Claude takes a steer at its next tool boundary, or as its next turn once the running one ends; the app turn stays open until then.
     const refusal = await runtime.steer(active.turn, input);
     if (refusal !== null) {
       refuse(id, refusal);
       return;
     }
+
     send({ id, result: { turnId: state.turnId } });
     log({ event: "claude_turn", step: "steered" });
     apply(active, renderUserInput(active.state, input.items, null, now()));
@@ -431,6 +453,7 @@ export const createTurnController = <Tag extends string>({
       stopWaitingTurn(id, threadId, params.turnId);
       return;
     }
+
     // A stop while the session already has an interrupt in flight, from this turn or an earlier one, is answered without asking Claude again; that interrupt decides the session, and a turn that has not sent yet stops before sending.
     const repeated = active.state.interrupting;
     active.state = markInterrupting(active.state);
@@ -453,6 +476,7 @@ export const createTurnController = <Tag extends string>({
       refuse(id, "no_running_turn");
       return;
     }
+
     // The running turn's prompts are left open, since the stop is for a turn behind it.
     waiting.request.stopped = true;
     send({ id, result: {} });
@@ -487,6 +511,7 @@ export const createTurnController = <Tag extends string>({
         refuseTurn(request, queued, "thread_not_saved", registered.error);
         return;
       }
+
       // A turn accepted just before this one may have registered the thread first, with its own model and directory.
       const saved = threads.threadOf(threadId);
       const change =
@@ -496,8 +521,10 @@ export const createTurnController = <Tag extends string>({
         refuseTurn(request, queued, change);
         return;
       }
+
       threads.markRegistered(threadId);
     }
+
     let responded = false;
     const ran = await store.runWrite(
       threadId,
@@ -513,6 +540,7 @@ export const createTurnController = <Tag extends string>({
               )
             : Result.ok();
         }
+
         // Without the saved id a restart could run the same message again, so the turn does not start.
         const saved = await recordMessage(threadId, messageId);
         if (saved.isErr()) {
@@ -526,6 +554,7 @@ export const createTurnController = <Tag extends string>({
               )
             : Result.ok();
         }
+
         responded = true;
         if (recovered) log({ event: "claude_turn", step: "outcome_cleared" });
         materialize(threadId);
@@ -548,6 +577,7 @@ export const createTurnController = <Tag extends string>({
             }),
           );
         }
+
         if (recovered && runtime.recordOf(threadId, request.turnId) === null)
           return Result.err(
             new TurnOutcomeUnknown({
@@ -576,9 +606,11 @@ export const createTurnController = <Tag extends string>({
         });
         return;
       }
+
       forgetMessage(threadId, messageId);
       refuseTurn(request, queued, "thread_busy", error, error.message);
     };
+
     matchError(ran.error, {
       TurnOutcomeUnknown: () =>
         log({ event: "claude_turn", step: "outcome_unknown" }),
@@ -628,6 +660,7 @@ export const createTurnController = <Tag extends string>({
       refuse(request.id, reason, cause, message);
       return;
     }
+
     const pending = turnsInFlight.get(threadId)?.get(request.turnId);
     if (pending !== undefined) pending.waiting = false;
     logRefusal(reason, cause);
@@ -718,9 +751,11 @@ export const createTurnController = <Tag extends string>({
       pending.waiting = false;
       pending.starting = false;
     }
+
     if (request.stopped) {
       active.state = markInterrupting(active.state);
     }
+
     await runtime.run(active.turn);
     return active;
   };
@@ -904,12 +939,14 @@ export const createTurnController = <Tag extends string>({
           startedAtMs,
         };
       }
+
       // A turn accepted but not yet started keeps the thread running between one turn's end and the next one's start.
       for (const [turnId, pending] of turnsInFlight.get(threadId) ?? []) {
         if (pending.starting) {
           return { turnId, record: null, startedAtMs: pending.acceptedAtMs };
         }
       }
+
       return null;
     },
     adoptFork: (threadId: string, thread: Thread, sourceId: string) => {
@@ -937,6 +974,7 @@ export const createTurnController = <Tag extends string>({
         runtime.forgetThread(threadId, ended);
         threads.forgetThread(threadId, ended);
       }
+
       log({ event: "claude_turn", step: "thread_released", ended, kept });
     },
   };
@@ -1011,11 +1049,13 @@ const messageInput = (
       if (typeof item.url !== "string" || !item.url.startsWith("data:")) {
         return "image_not_local";
       }
+
       images.push({ dataUrl: item.url });
     } else {
       return "unsupported_input";
     }
   }
+
   return {
     items: items as UserInput[],
     toolOutput: delegated?.toolOutput ?? null,

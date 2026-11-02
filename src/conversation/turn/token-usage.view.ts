@@ -67,6 +67,7 @@ const nextUsage = (
   ) {
     return { ...usage, last: breakdown(message.event.usage) };
   }
+
   // A result sums the requests of its turn.
   if (message.type === "result") {
     return {
@@ -78,6 +79,7 @@ const nextUsage = (
       }),
     };
   }
+
   return null;
 };
 
@@ -109,6 +111,7 @@ const contextWindowOf = (
   if (own !== undefined) {
     return { contextWindow: own.contextWindow, windowModel: model };
   }
+
   const windows = Object.values(modelUsage).map(
     ({ contextWindow }) => contextWindow,
   );

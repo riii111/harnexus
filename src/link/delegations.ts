@@ -65,6 +65,7 @@ export const createDelegationWatch = ({
       waiters.delete(sourceThreadId);
       return settle(waiter, threadId, actual, bridgeRuns);
     }
+
     if (claimed.has(threadId)) return true;
     claimed.add(threadId);
     // A thread nobody waits for is ignored.
@@ -110,8 +111,10 @@ export const createDelegationWatch = ({
       if (waiters.get(sourceThreadId) === waiter) {
         waiters.delete(sourceThreadId);
       }
+
       waiter.settle(null);
     };
+
     return {
       wait: async (timeoutMs: number) => {
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -146,6 +149,7 @@ export const createDelegationWatch = ({
     } else {
       waiter.settle({ ...turn, refusal: null });
     }
+
     return !refused;
   };
 
@@ -202,6 +206,7 @@ export const firstTurnRefusal = (
       difference: refusalOf(turn.expected, turn.actual),
     };
   }
+
   return turn.refusal === null
     ? null
     : { kind: "bridge", threadId: turn.threadId, reason: turn.refusal };
@@ -247,6 +252,7 @@ export const answeredThreadId = (answer: unknown) => {
     const threadId = parsed.isOk() ? threadIdField(parsed.value) : null;
     if (threadId !== null) return threadId;
   }
+
   return null;
 };
 
@@ -255,6 +261,7 @@ const threadIdField = (value: unknown): string | null => {
   if (typeof value.threadId === "string" && value.threadId !== "") {
     return value.threadId;
   }
+
   const nested = isObject(value.thread) ? value.thread.id : undefined;
   return typeof nested === "string" && nested !== "" ? nested : null;
 };
@@ -275,6 +282,7 @@ export const delegatedMessage = (params: Record<string, unknown>) => {
   ) {
     return null;
   }
+
   const texts = outputTexts(output.output);
   // Only an output made of text can reach Claude.
   if (texts === null) return null;
@@ -310,8 +318,10 @@ const outputTexts = (body: unknown) => {
     ) {
       return null;
     }
+
     texts.push(item.text);
   }
+
   return texts;
 };
 
@@ -329,6 +339,7 @@ const sourceThread = (text: string, strict: boolean) => {
     if (source !== undefined && (!strict || /^[0-9A-Za-z_-]+$/.test(source)))
       return source;
   }
+
   return null;
 };
 

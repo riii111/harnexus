@@ -123,6 +123,7 @@ if (
   claude.closeAll();
   process.exit(1);
 }
+
 for (const signal of BRIDGE_SIGNALS) {
   process.once(signal, () => {
     logger.log({ event: "bridge_signaled", signal });
@@ -130,6 +131,7 @@ for (const signal of BRIDGE_SIGNALS) {
     process.exit(128 + constants.signals[signal]);
   });
 }
+
 process.on(
   "unhandledRejection",
   exitOnUnhandledRejection({ log: logger.log, closeAll: claude.closeAll }),
@@ -158,6 +160,7 @@ async function withClaude(relay: {
     logger.log({ event: "claude_unavailable", reason: statePath.error._tag });
     return plain;
   }
+
   const [store] = await Promise.all([
     openThreadStore(statePath.value),
     sweepCloudLogs(join(dirname(statePath.value), CLOUD_COPY_FOLDER)),
@@ -167,6 +170,7 @@ async function withClaude(relay: {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
     return plain;
   }
+
   const permissionMode = loadPermissionMode(process.env);
   if (permissionMode.isErr()) {
     logger.log({
@@ -175,6 +179,7 @@ async function withClaude(relay: {
     });
     return plain;
   }
+
   const catalog = createModelCatalog();
   // Not awaited, since the app lists models before Claude Code can answer and holding that answer would hold every later server line; the app asks again later.
   void loadClaudeModels().then((loaded) => {
@@ -185,6 +190,7 @@ async function withClaude(relay: {
       });
       return;
     }
+
     catalog.replace(loaded.value);
     logger.log({ event: "claude_models_loaded", count: loaded.value.length });
   });
@@ -198,6 +204,7 @@ async function withClaude(relay: {
       });
       return;
     }
+
     effortSettings = loaded.value;
   });
   // The router consumes a Claude thread's requests and writes its own notifications, so the observer reads what the app sends before the router and everything the app is given, as the fixtures record a session.
@@ -284,6 +291,7 @@ async function openCallSocket(handle: (line: string) => Promise<string>) {
     logger.log({ event: "call_socket_unavailable", reason: path.error._tag });
     return false;
   }
+
   if (path.value === null) return false;
   const served = await serveLinesWhenFree(path.value, handle, {
     onInUse: () =>
@@ -297,6 +305,7 @@ async function openCallSocket(handle: (line: string) => Promise<string>) {
     });
     return false;
   }
+
   logger.log({ event: "call_socket_listening" });
   return true;
 }

@@ -124,6 +124,7 @@ function codexCheck(setup: DoctorSetup, codex: SetupFacts["codex"]): Check {
       detail: `cannot run ${codexPathOf(setup)}`,
     };
   }
+
   // The app bundles the Codex CLI the launcher hands over to, so its version is what the bridge's rewrites meet.
   return isVerifiedCodex(codex.version)
     ? { status: "ok", name: "Codex CLI", detail: `${codex.version}` }
@@ -170,6 +171,7 @@ async function stateChecks(setup: DoctorSetup): Promise<Check[]> {
   if (path.isErr()) {
     return [{ status: "fail", name: "State file", detail: path.error.message }];
   }
+
   const store = await openThreadStore(path.value);
   const writable = await checkAccess(dirname(path.value), "write");
   return [
@@ -218,6 +220,7 @@ async function logSummaryChecks(setup: DoctorSetup): Promise<Check[]> {
   if (path.isErr()) {
     return [{ status: "warn", name: "Log", detail: path.error.message }];
   }
+
   if (path.value === null) {
     return [
       {
@@ -228,6 +231,7 @@ async function logSummaryChecks(setup: DoctorSetup): Promise<Check[]> {
       },
     ];
   }
+
   const { path: logPath } = path.value;
   const text = await readLogTail(logPath);
   if (text === null) {
@@ -239,6 +243,7 @@ async function logSummaryChecks(setup: DoctorSetup): Promise<Check[]> {
       },
     ];
   }
+
   return logChecks(text, logPath, Date.now());
 }
 

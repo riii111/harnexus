@@ -79,7 +79,7 @@ describe("exitOnUnhandledRejection", () => {
       log: () => {},
       report: () => {},
       closeAll: () => {
-        // biome-ignore lint/plugin/no-throw-try-catch: a fault in the bridge throws.
+        // oxlint-disable-next-line harnexus/no-throw-try-catch -- a fault in the bridge throws.
         throw new Error("close failed");
       },
       exit: (code) => exits.push(code),

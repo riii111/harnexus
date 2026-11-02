@@ -54,6 +54,7 @@ export const listClaudeConversations = (
         for (const read of reads) if (read !== null) found.push(read);
       }
     }
+
     return Result.ok(found.sort((a, b) => b.updatedAtMs - a.updatedAtMs));
   });
 
@@ -104,6 +105,7 @@ export const findSessionFile = (sessionId: string, configDir: string) =>
         return Result.ok<string | null>(path);
       }
     }
+
     return Result.ok<string | null>(null);
   });
 
@@ -279,6 +281,7 @@ const firstPrompt = (records: Record<string, unknown>[]) => {
       if (line !== "" && !NOT_TYPED.test(line)) return line;
     }
   }
+
   return null;
 };
 
