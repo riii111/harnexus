@@ -89,37 +89,33 @@ export const renderToolOutput = (
   state: TurnState,
   output: Omit<FunctionCallOutputItem, "type" | "id">,
   now: number,
-): Rendered => {
-  if (state.finished) return { state, notifications: [] };
-  const draft = open(state);
-  const item: ThreadItem = {
-    type: "functionCallOutput",
-    id: nextItemId(draft),
-    ...output,
-  };
-  itemStarted(draft, item, now);
-  itemCompleted(draft, item, now);
-  return seal(draft);
-};
+): Rendered =>
+  withDraft(state, (draft) => {
+    const item: ThreadItem = {
+      type: "functionCallOutput",
+      id: nextItemId(draft),
+      ...output,
+    };
+    itemStarted(draft, item, now);
+    itemCompleted(draft, item, now);
+  });
 
 export const renderUserInput = (
   state: TurnState,
   input: UserInput[],
   clientId: string | null,
   now: number,
-): Rendered => {
-  if (state.finished) return { state, notifications: [] };
-  const draft = open(state);
-  const item: ThreadItem = {
-    type: "userMessage",
-    id: nextItemId(draft),
-    clientId,
-    content: input,
-  };
-  itemStarted(draft, item, now);
-  itemCompleted(draft, item, now);
-  return seal(draft);
-};
+): Rendered =>
+  withDraft(state, (draft) => {
+    const item: ThreadItem = {
+      type: "userMessage",
+      id: nextItemId(draft),
+      clientId,
+      content: input,
+    };
+    itemStarted(draft, item, now);
+    itemCompleted(draft, item, now);
+  });
 
 // Shows the bridge's own message, such as an answer to /session, as an agent message that never reaches Claude's record.
 export const renderNotice = (
@@ -127,70 +123,64 @@ export const renderNotice = (
   text: string,
   phase: "commentary" | "final_answer",
   now: number,
-): Rendered => {
-  if (state.finished) return { state, notifications: [] };
-  const draft = open(state);
-  const item = agentMessage(nextItemId(draft), text, phase);
-  itemStarted(draft, agentMessage(item.id, "", null), now);
-  completeMessage(draft, item, now);
-  return seal(draft);
-};
+): Rendered =>
+  withDraft(state, (draft) => {
+    const item = agentMessage(nextItemId(draft), text, phase);
+    itemStarted(draft, agentMessage(item.id, "", null), now);
+    completeMessage(draft, item, now);
+  });
 
 export const renderSdkMessage = (
   state: TurnState,
   message: SDKMessage,
   now: number,
-): Rendered => {
-  if (state.finished) return { state, notifications: [] };
-  const draft = open(state);
-  // A subagent's messages belong to its own thread, so only a result completing an item of this turn, such as a subagent's call asked about here, is taken from them.
-  switch (message.type) {
-    // A compaction's only text is the command's own report, which its outcome already carries.
-    case "stream_event":
-      if (message.parent_tool_use_id === null && !draft.compaction) {
-        renderStreamEvent(draft, message.event, now);
-      }
-      break;
-    case "assistant":
-      if (message.parent_tool_use_id === null && !draft.compaction) {
-        renderAssistant(draft, message, now);
-      }
-      break;
-    case "user":
-      if (!("isReplay" in message)) renderToolResults(draft, message, now);
-      break;
-    case "system":
-      renderSystem(draft, message, now);
-      break;
-    case "result":
-      correctDenials(
-        draft,
-        message.permission_denials.map((denial) => denial.tool_use_id),
-        now,
-      );
-      finish(draft, resultOutcome(draft, message), now);
-      break;
-  }
-  return seal(draft);
-};
+): Rendered =>
+  withDraft(state, (draft) => {
+    // A subagent's messages belong to its own thread, so only a result completing an item of this turn, such as a subagent's call asked about here, is taken from them.
+    switch (message.type) {
+      // A compaction's only text is the command's own report, which its outcome already carries.
+      case "stream_event":
+        if (message.parent_tool_use_id === null && !draft.compaction) {
+          renderStreamEvent(draft, message.event, now);
+        }
+        break;
+      case "assistant":
+        if (message.parent_tool_use_id === null && !draft.compaction) {
+          renderAssistant(draft, message, now);
+        }
+        break;
+      case "user":
+        if (!("isReplay" in message)) renderToolResults(draft, message, now);
+        break;
+      case "system":
+        renderSystem(draft, message, now);
+        break;
+      case "result":
+        correctDenials(
+          draft,
+          message.permission_denials.map((denial) => denial.tool_use_id),
+          now,
+        );
+        finish(draft, resultOutcome(draft, message), now);
+        break;
+    }
+  });
 
 // Renders a result after which the app turn goes on, as when a steer Claude had not taken runs as its next turn.
 export const renderInterimResult = (
   state: TurnState,
   result: SDKResultMessage,
   now: number,
-): Rendered => {
-  if (state.finished) return { state, notifications: [] };
-  const draft = open(state);
-  correctDenials(
-    draft,
-    result.permission_denials.map((denial) => denial.tool_use_id),
-    now,
-  );
-  closeBlocks(draft, now);
-  flushPending(draft, null, now);
-  return seal(draft);
-};
+): Rendered =>
+  withDraft(state, (draft) => {
+    correctDenials(
+      draft,
+      result.permission_denials.map((denial) => denial.tool_use_id),
+      now,
+    );
+    closeBlocks(draft, now);
+    flushPending(draft, null, now);
+  });
 
 export const renderTurnCompleted = (
   state: TurnState,
@@ -216,11 +206,19 @@ export const renderToolRequest = (
   block: { id: string; name: string; input: unknown },
   now: number,
   closesText = true,
+): Rendered =>
+  withDraft(state, (draft) => {
+    // A permission request can reach the bridge before the message carrying its tool call, and the app's prompt points at the tool's item, so the item starts here; the later tool call is skipped as already started.
+    startTool(draft, block, now, closesText);
+  });
+
+const withDraft = (
+  state: TurnState,
+  render: (draft: Draft) => void,
 ): Rendered => {
   if (state.finished) return { state, notifications: [] };
   const draft = open(state);
-  // A permission request can reach the bridge before the message carrying its tool call, and the app's prompt points at the tool's item, so the item starts here; the later tool call is skipped as already started.
-  startTool(draft, block, now, closesText);
+  render(draft);
   return seal(draft);
 };
 
