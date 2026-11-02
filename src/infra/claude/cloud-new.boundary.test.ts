@@ -97,7 +97,7 @@ describe("startCloudSession", () => {
 
     expect(run.unwrap().sessionId).toBe("session_01NfjPqrHtNPEcDZP4SkBFGT");
     expect(await readFile(join(root, "args"), "utf8")).toBe(
-      "--cloud it's a \\ test\n",
+      "--cloud it's a \\ test --permission-mode auto\n",
     );
   });
 

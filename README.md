@@ -62,7 +62,7 @@ To follow a [Claude Code cloud session](https://code.claude.com/docs/en/claude-c
 The conversation appears in the chat, and messages you send go to the Cloud session.
 The chat stays busy until the session is done, including while it waits for a message it scheduled to itself.
 Worker sessions it creates also open as chats in the same project.
-To start a new Cloud session instead, send `/cloud` followed by your request, or ask an agent in the app to do it in the Cloud. This needs `claude` signed in on this Mac.
+To start a new Cloud session instead, send `/cloud` followed by your request, or ask an agent in the app to do it in the Cloud. This needs `claude` signed in on this Mac. The session starts in Auto mode, so it and the workers it starts rarely stop for permission prompts.
 Updates may take a few minutes to appear when you are not sending messages.
 
 Cloud chats support text only. Rewind, compact, and side chats are unavailable.
