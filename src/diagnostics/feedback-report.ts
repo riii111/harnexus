@@ -81,7 +81,7 @@ export const findBridges = (
   repo: string,
   now: number,
 ) => {
-  const own = ` ${repo}/src/bootstrap/main.ts --launcher `;
+  const own = ` ${repo}/src/cli/bridge.ts --launcher `;
   const bridges = processes.filter(({ command }) =>
     ANY_BRIDGE.test(` ${command} `),
   );
@@ -92,12 +92,12 @@ export const findBridges = (
       pid,
       startedAtMs: elapsedMs === null ? null : now - elapsedMs,
     })),
-    // Another checkout's bridge runs main.ts with --launcher too, so it is counted, which tells a report run from the wrong checkout.
+    // Another checkout's bridge runs bridge.ts with --launcher too, so it is counted, which tells a report run from the wrong checkout.
     others: bridges.length - mine.length,
   };
 };
 
-const ANY_BRIDGE = /\/src\/bootstrap\/main\.ts --launcher\s/;
+const ANY_BRIDGE = /\/src\/cli\/bridge\.ts --launcher\s/;
 
 // When the app's main process started.
 export const appStartedAt = (

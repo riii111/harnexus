@@ -30,7 +30,7 @@ export const processChecks = (
   repo: string,
 ): Check[] => {
   // Only processes run from this checkout count, so another project's server or another tool's Claude is never offered for kill.
-  const bridge = `${repo}/src/bootstrap/main.ts`;
+  const bridge = `${repo}/src/cli/bridge.ts`;
   const claude = `${repo}/node_modules/@anthropic-ai/claude-agent-sdk-`;
   const bridges = processes.filter(({ command }) => runs(command, bridge));
   const bridgePids = new Set(bridges.map(({ pid }) => pid));

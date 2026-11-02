@@ -13,12 +13,12 @@ import {
 describe("parseProcesses", () => {
   test("reads each ps line into its pid, parent and command", () => {
     const processes = parseProcesses(
-      "  101     1 /usr/bin/codex app-server\n  102   101 bun src/bootstrap/main.ts\n",
+      "  101     1 /usr/bin/codex app-server\n  102   101 bun src/cli/bridge.ts\n",
     );
 
     expect(processes).toEqual([
       { pid: 101, ppid: 1, command: "/usr/bin/codex app-server" },
-      { pid: 102, ppid: 101, command: "bun src/bootstrap/main.ts" },
+      { pid: 102, ppid: 101, command: "bun src/cli/bridge.ts" },
     ]);
   });
 });
@@ -92,7 +92,7 @@ describe("processChecks", () => {
         {
           pid: 301,
           ppid: 1,
-          command: "bun /other/project/src/bootstrap/main.ts",
+          command: "bun /other/project/src/cli/bridge.ts",
         },
         {
           pid: 302,
@@ -130,7 +130,7 @@ describe("failed", () => {
 
 const REPO = "/work/harnexus";
 
-const BRIDGE = `/usr/bin/bun --no-env-file --config=/dev/null ${REPO}/src/bootstrap/main.ts`;
+const BRIDGE = `/usr/bin/bun --no-env-file --config=/dev/null ${REPO}/src/cli/bridge.ts`;
 
 const CLAUDE = `${REPO}/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`;
 

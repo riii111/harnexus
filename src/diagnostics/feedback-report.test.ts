@@ -57,10 +57,10 @@ describe("findBridges", () => {
   test("keeps this checkout's bridges with their start, and counts another checkout's", () => {
     const processes = parseTimedProcesses(
       [
-        `  100     1    10:00 /usr/bin/bun --no-env-file --config=/dev/null ${REPO}/src/bootstrap/main.ts --launcher`,
-        `  101     1    20:00 /usr/bin/bun --no-env-file --config=/dev/null /other/harnexus/src/bootstrap/main.ts --launcher`,
-        `  102     1    30:00 /usr/bin/bun ${REPO}/src/bootstrap/main.ts`,
-        "  103     1    40:00 bun /work/app/src/bootstrap/main.ts --launcher-mode secret-prompt",
+        `  100     1    10:00 /usr/bin/bun --no-env-file --config=/dev/null ${REPO}/src/cli/bridge.ts --launcher`,
+        `  101     1    20:00 /usr/bin/bun --no-env-file --config=/dev/null /other/harnexus/src/cli/bridge.ts --launcher`,
+        `  102     1    30:00 /usr/bin/bun ${REPO}/src/cli/bridge.ts`,
+        "  103     1    40:00 bun /work/app/src/cli/bridge.ts --launcher-mode secret-prompt",
       ].join("\n"),
     );
 
@@ -91,7 +91,7 @@ describe("classifyChanges", () => {
   test("names changed harnexus code and only counts the rest", () => {
     const changes = classifyChanges(
       [
-        " M src/bootstrap/main.ts",
+        " M src/cli/bridge.ts",
         "M  package.json",
         "R  src/new.ts",
         "src/old.ts",
@@ -103,7 +103,7 @@ describe("classifyChanges", () => {
     );
 
     expect(changes).toEqual({
-      code: ["src/bootstrap/main.ts", "package.json", "src/new.ts"],
+      code: ["src/cli/bridge.ts", "package.json", "src/new.ts"],
       otherTracked: 1,
       untracked: 2,
     });
