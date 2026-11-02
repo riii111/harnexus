@@ -9,12 +9,18 @@ import {
   serializeClaudeTurnEvent,
 } from "../conversation/claude/runtime.ts";
 import { serializeTurnEvent } from "../conversation/controller.ts";
-import { type RouteEvent, serializeRouteEvent } from "../conversation/route.ts";
+import {
+  isRouteEvent,
+  type RouteEvent,
+  serializeRouteEvent,
+} from "../conversation/route.ts";
+import type { BridgeIdentity } from "../diagnostics/bridge-identity.ts";
 import type {
   loadClaudeModels,
   loadEffortSettings,
 } from "../infra/claude/session.ts";
 import {
+  isObservationEvent,
   type ObservationEvent,
   serializeObservationEvent,
 } from "../infra/codex/observe.ts";
@@ -29,7 +35,6 @@ import { openLogSink } from "../runtime/fs.boundary.ts";
 import { createLogger } from "../runtime/logger.ts";
 import type { Signal } from "../runtime/process.boundary.ts";
 import type { serveLines } from "../runtime/socket.boundary.ts";
-import type { BridgeIdentity } from "./bridge-identity.ts";
 import {
   type BridgeFailedEvent,
   type ServerSignalEvent,
@@ -103,8 +108,10 @@ export const createBridgeLogger = (env: NodeJS.ProcessEnv) => {
   const keepsMessages = file.isOk() && file.value?.explicit === true;
   const logger = {
     log: (entry: LogEvent) => {
-      toStderr.log(entry);
-      if (entry.event !== "rpc_message" || keepsMessages) toFile?.log(entry);
+      if (entry.event !== "rpc_message" || keepsMessages) {
+        toStderr.log(entry);
+        toFile?.log(entry);
+      }
     },
   };
   if (file.isErr()) {
@@ -162,18 +169,10 @@ const serializeLogEvent = (entry: LogEvent) => {
       return isClaudeTurnEvent(entry)
         ? serializeClaudeTurnEvent(entry)
         : serializeTurnEvent(entry);
-    case "claude_request_refused":
-    case "model_id_collision":
-    case "codex_incompatible":
-    case "codex_version":
-    case "claude_history_served":
-    case "claude_history_answered":
-    case "claude_history_unreadable":
-    case "claude_subagents_unreadable":
-      return serializeRouteEvent(entry);
-    case "rpc_message":
-    case "rpc_unobserved":
-    case "rpc_shape":
-      return serializeObservationEvent(entry);
+    default:
+      if (isRouteEvent(entry)) return serializeRouteEvent(entry);
+      if (isObservationEvent(entry)) return serializeObservationEvent(entry);
+      entry satisfies never;
+      return { event: "unknown_log_event" };
   }
 };

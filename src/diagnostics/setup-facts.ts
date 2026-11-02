@@ -1,5 +1,7 @@
 import { join } from "node:path";
 import type { Result } from "better-result";
+import { readInstalledPackage, versionOf } from "../infra/checkout.ts";
+import type { readLaunchd } from "../infra/setup/launchd.boundary.ts";
 import { readTextFileIfExists } from "../runtime/fs.boundary.ts";
 import { parseJson } from "../runtime/json.boundary.ts";
 import { isObject } from "../runtime/object.ts";
@@ -8,9 +10,7 @@ import {
   readCommandOutput,
 } from "../runtime/process.boundary.ts";
 import { SDK_PACKAGE } from "./bridge-identity.ts";
-import { readInstalledPackage, versionOf } from "./checkout.ts";
 import { parseTimedProcesses, type TimedProcess } from "./feedback-report.ts";
-import type { readLaunchd } from "./launchd.boundary.ts";
 
 // What doctor and a feedback report both read, taken once so both show the same moment.
 export type SetupFacts = {

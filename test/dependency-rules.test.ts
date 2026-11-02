@@ -31,6 +31,8 @@ export type M = typeof import("../bootstrap/main.ts");`,
         "infra/thread-store.ts": "export const s = 1;",
         "task/t.ts": `import { a } from "../conversation/a.ts";
 export const t = a;`,
+        "diagnostics/d.ts": `import { a } from "../conversation/a.ts";
+export const d = a;`,
         "bootstrap/main.ts": "export const m = 1;",
       }),
     );
@@ -39,6 +41,7 @@ export const t = a;`,
 
     expect(problems).toEqual([
       "conversation/a.ts -> bootstrap/main.ts: conversation/ may not reference bootstrap/",
+      "diagnostics/d.ts -> conversation/a.ts: diagnostics/ may not reference conversation/",
       "infra/claude/s.ts -> infra/codex/c.ts: infra/claude/ may not reference infra/codex/",
       "infra/codex/c.ts -> conversation/a.ts: infra/ may not reference conversation/",
       "presentation/p.ts -> infra/thread-store.ts: presentation/ may not reference infra/",
@@ -196,6 +199,7 @@ export const l = m;`,
 type Area =
   | "bootstrap"
   | "conversation"
+  | "diagnostics"
   | "presentation"
   | "prwatch"
   | "task"
@@ -211,6 +215,7 @@ const ALLOWED: Record<Area, readonly Area[]> = {
   bootstrap: [
     "bootstrap",
     "conversation",
+    "diagnostics",
     "presentation",
     "prwatch",
     "task",
@@ -218,6 +223,7 @@ const ALLOWED: Record<Area, readonly Area[]> = {
     "runtime",
   ],
   conversation: ["conversation", "presentation", "infra", "runtime"],
+  diagnostics: ["diagnostics", "infra", "runtime"],
   presentation: ["presentation", "runtime"],
   // The PR watch stands apart from the conversation and is told how to reach workers, so it may be moved out whole.
   prwatch: ["prwatch", "infra", "runtime"],

@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { claudeCliFile } from "../infra/claude/cloud.ts";
 import { readClaudeLogin } from "../infra/claude/session.ts";
 import { isVerifiedCodex } from "../infra/codex/versions.ts";
+import { registeredEnvironment } from "../infra/setup/open-app-plan.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import { loadLogPath, loadStatePath } from "../runtime/config.ts";
 import {
@@ -21,8 +22,7 @@ import {
   processChecks,
   refusedCheck,
 } from "./doctor-report.ts";
-import { registrationChecks } from "./launchd-plan.ts";
-import { registeredEnvironment } from "./open-app-plan.ts";
+import { registrationChecks } from "./registration-checks.ts";
 import { REPO } from "./repo.ts";
 import type { SetupFacts } from "./setup-facts.ts";
 

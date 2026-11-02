@@ -1,6 +1,8 @@
 import { constants } from "node:os";
 import { dirname, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { readBridgeIdentity } from "../diagnostics/bridge-identity.ts";
+import { REPO } from "../diagnostics/repo.ts";
 import { cloudCli, sweepCloudLogs } from "../infra/claude/cloud.ts";
 import { createCloudCheckouts } from "../infra/claude/cloud-checkouts.ts";
 import {
@@ -45,11 +47,9 @@ import {
 } from "../runtime/process.boundary.ts";
 import { serveLinesWhenFree } from "../runtime/socket.boundary.ts";
 import { codexHome } from "../task/request.ts";
-import { readBridgeIdentity } from "./bridge-identity.ts";
 import { connectClaudeThreads } from "./claude-threads.ts";
 import { reportCompatibilityFailure } from "./compatibility.boundary.ts";
 import { createBridgeLogger } from "./logging.ts";
-import { REPO } from "./repo.ts";
 import {
   exitOnUnhandledRejection,
   serverFromEnv,
@@ -155,8 +155,10 @@ async function withClaude(relay: {
     logger.log({ event: "claude_unavailable", reason: statePath.error._tag });
     return plain;
   }
-  const store = await openThreadStore(statePath.value);
-  await sweepCloudLogs(join(dirname(statePath.value), CLOUD_COPY_FOLDER));
+  const [store] = await Promise.all([
+    openThreadStore(statePath.value),
+    sweepCloudLogs(join(dirname(statePath.value), CLOUD_COPY_FOLDER)),
+  ]);
   // Without its thread store the bridge offers no Claude model and relays everything, so Codex threads keep working.
   if (store.isErr()) {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });

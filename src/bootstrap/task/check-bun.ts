@@ -1,5 +1,5 @@
-import { REPO } from "../repo.ts";
-import { readPinnedBun } from "../setup-facts.ts";
+import { REPO } from "../../diagnostics/repo.ts";
+import { readPinnedBun } from "../../diagnostics/setup-facts.ts";
 import { unpinnedBun } from "./bun-pin.ts";
 
 // A compiled harnexus-task carries the Bun that built it, so a Bun other than the pinned one is stopped at the build rather than when a chat calls it.

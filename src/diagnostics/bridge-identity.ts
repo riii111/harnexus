@@ -1,3 +1,4 @@
+import { readCheckoutHead, readInstalledPackage } from "../infra/checkout.ts";
 import {
   loadCallSocketPath,
   loadLogPath,
@@ -5,7 +6,6 @@ import {
   loadStatePath,
   loadUnverifiedCodexPolicy,
 } from "../runtime/config.ts";
-import { readCheckoutHead, readInstalledPackage } from "./checkout.ts";
 
 // What code and settings a bridge runs with, so a report can tell a bridge started before a pull or bun install from current code; settings are kinds, never paths.
 export type BridgeIdentity = {

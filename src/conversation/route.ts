@@ -56,6 +56,20 @@ export type RouteEvent =
   | HistoryEvent
   | SubagentRestoreEvent<{ _tag: SubagentsReadTag }>;
 
+const ROUTE_EVENTS: Record<RouteEvent["event"], true> = {
+  claude_request_refused: true,
+  model_id_collision: true,
+  codex_incompatible: true,
+  codex_version: true,
+  claude_history_served: true,
+  claude_history_answered: true,
+  claude_history_unreadable: true,
+  claude_subagents_unreadable: true,
+};
+
+export const isRouteEvent = (entry: { event: string }): entry is RouteEvent =>
+  Object.hasOwn(ROUTE_EVENTS, entry.event);
+
 type Turns = {
   adoptFork: (
     threadId: string,
