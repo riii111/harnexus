@@ -92,6 +92,9 @@ export const createThreadValues = (
   const isClaudeThread = (threadId: unknown) =>
     typeof threadId === "string" && threadOf(threadId) !== undefined;
 
+  const isSavedClaudeThread = (threadId: string) =>
+    store.get(threadId) !== undefined;
+
   const effortOf = (threadId: string) => {
     const model = threadOf(threadId)?.model;
     return model === undefined
@@ -326,6 +329,7 @@ export const createThreadValues = (
   return {
     threadOf,
     isClaudeThread,
+    isSavedClaudeThread,
     pickedEffortOf,
     effortOf,
     sessionIdOf,

@@ -4,6 +4,20 @@ import type { EffortRule } from "../infra/claude/models.ts";
 import type { ThreadRecord, ThreadStore } from "../infra/thread-store.ts";
 import { createThreadValues } from "./thread-values.ts";
 
+describe("ThreadValues thread recognition", () => {
+  test("recognizes an adopted thread while only a stored thread is saved", () => {
+    const { values } = fixture();
+    values.adopt("th-new", { model: "model-a", cwd: "/work/tree" });
+
+    expect(values.isClaudeThread("th-new")).toBe(true);
+    expect(values.isSavedClaudeThread("th-new")).toBe(false);
+    expect(values.isClaudeThread("th-1")).toBe(true);
+    expect(values.isSavedClaudeThread("th-1")).toBe(true);
+    expect(values.isClaudeThread("unknown")).toBe(false);
+    expect(values.isSavedClaudeThread("unknown")).toBe(false);
+  });
+});
+
 describe("ThreadValues.forgetThread", () => {
   test("drops the model and session id the store already holds, so the store's later values show", () => {
     const { values, record } = fixture();

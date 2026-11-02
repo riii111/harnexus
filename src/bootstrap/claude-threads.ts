@@ -31,6 +31,7 @@ import { createCallGateway } from "../infra/codex/call-gateway.ts";
 import { createCodexLink } from "../infra/codex/codex-link.ts";
 import { createDelegationWatch } from "../infra/codex/delegations.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
+import { createThreadRequests } from "../infra/codex/thread-requests.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
 import { buildHistory, replayHistory } from "../presentation/history.ts";
 import { resizeImage } from "../runtime/image.boundary.ts";
@@ -94,6 +95,7 @@ export const connectClaudeThreads = ({
       cronRecord,
     });
   const threads = createThreadValues(store, log, effortRule);
+  const appThreads = createThreadRequests(request);
   const subagents = createSubagents({ send });
   const subagentRestore = createSubagentRestore({
     subagents,
@@ -122,12 +124,7 @@ export const connectClaudeThreads = ({
       Date.now(),
     );
   };
-  const renameThread = (threadId: string, name: string) =>
-    request(
-      "thread/name/set",
-      { threadId, name },
-      { timeoutMs: RENAME_TIMEOUT_MS },
-    );
+  const renameThread = appThreads.rename;
   const claude = createClaudeRuntime({
     threads,
     permissionMode,
@@ -145,7 +142,7 @@ export const connectClaudeThreads = ({
     resizeImage,
   });
   const callGateway = createCallGateway({
-    isClaudeThread: (threadId) => store.get(threadId) !== undefined,
+    isClaudeThread: threads.isSavedClaudeThread,
     openLink,
     request,
     delegations,
@@ -220,12 +217,7 @@ export const connectClaudeThreads = ({
     store,
     threads,
     runtime,
-    materializeThread: (threadId) =>
-      request(
-        "thread/inject_items",
-        { threadId, items: [THREAD_NOTE] },
-        { timeoutMs: INJECT_TIMEOUT_MS },
-      ),
+    materializeThread: (threadId) => appThreads.inject(threadId, [THREAD_NOTE]),
     send,
     log,
   });
@@ -246,8 +238,7 @@ export const connectClaudeThreads = ({
   const subagentRequests = createSubagentRequests({
     subagents,
     threads,
-    call: (method, params) =>
-      request(method, params, { timeoutMs: SUBAGENT_PARENT_TIMEOUT_MS }),
+    call: appThreads.subagentParent,
     history: history.load,
     send,
   });
@@ -256,18 +247,8 @@ export const connectClaudeThreads = ({
     rewindOf: threads.rewindOf,
     lastRecordOf,
     readSession,
-    listTurns: (threadId, page) =>
-      request(
-        "thread/turns/list",
-        { threadId, ...page, itemsView: "full" },
-        { timeoutMs: READ_TIMEOUT_MS },
-      ),
-    inject: (threadId, items) =>
-      request(
-        "thread/inject_items",
-        { threadId, items },
-        { timeoutMs: INJECT_TIMEOUT_MS },
-      ),
+    listTurns: appThreads.listTurns,
+    inject: appThreads.inject,
     isClaudeThread: threads.isClaudeThread,
     claudeBegun: turns.claudeBegun,
     dropFork: turns.dropFork,
@@ -309,11 +290,3 @@ const THREAD_NOTE = {
 };
 
 const CLOUD_OFF = "Cloud sessions are not set up for this bridge";
-
-const INJECT_TIMEOUT_MS = 30_000;
-
-const READ_TIMEOUT_MS = 30_000;
-
-const RENAME_TIMEOUT_MS = 10_000;
-
-const SUBAGENT_PARENT_TIMEOUT_MS = 10_000;
