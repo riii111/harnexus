@@ -66,6 +66,7 @@ export const listedTurns = (
     ) {
       return null;
     }
+
     const items = turn.items as ThreadItem[];
     turns.push({
       id: turn.id,
@@ -76,6 +77,7 @@ export const listedTurns = (
           : items.filter((item) => item.type === "userMessage"),
     });
   }
+
   return { turns, more: typeof result.nextCursor === "string" };
 };
 
@@ -99,6 +101,7 @@ const messagesOf = (history: readonly Turn[]) =>
           ? []
           : [{ turn, role: "assistant", text: item.text }];
       }
+
       if (item.type !== "userMessage") return [];
       const text = item.content
         .flatMap((input) =>
@@ -121,6 +124,7 @@ const fitBudget = (messages: Message[], budget: number): Fitted => {
   if (first === undefined || total <= budget) {
     return { blocks, omittedThrough: null };
   }
+
   // The first message often sets the task, so it keeps up to a share of the budget and the newest messages fill the rest.
   const head = cutBlock(first, Math.floor(budget * FIRST_SHARE), "start");
   let left = budget - (head?.length ?? 0) - SEPARATOR.length;
@@ -134,14 +138,17 @@ const fitBudget = (messages: Message[], budget: number): Fitted => {
       kept += 1;
       continue;
     }
+
     // The message at the edge is cut rather than dropped.
     const cut = cutBlock(message, left - SEPARATOR.length, "end");
     if (cut !== null) {
       tail.unshift(cut);
       kept += 1;
     }
+
     break;
   }
+
   const lastLeftOut = rest.at(rest.length - kept - 1);
   return {
     blocks: [...(head === null ? [] : [head]), ...tail],

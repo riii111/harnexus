@@ -16,6 +16,7 @@ export const createLineRewriter = (
         callback();
         return;
       }
+
       const bytes = Buffer.concat([...carry, incoming.subarray(0, end)]);
       carry = end < incoming.length ? [incoming.subarray(end)] : [];
       const pending = pushLines(splitLines(bytes), rewrite, (kept) =>
@@ -52,8 +53,10 @@ const pushLines = (
         await pushLines(lines.slice(index + 1), rewrite, push);
       });
     }
+
     if (rewritten !== null) kept.push(rewritten);
   }
+
   if (kept.length > 0) push(Buffer.concat(kept));
   // Every line was rewritten at once, so a chunk without a pending line still passes in the same tick.
   return null;
@@ -68,6 +71,7 @@ const splitLines = (bytes: Buffer) => {
   ) {
     lines.push(bytes.subarray(start, newline + 1));
   }
+
   return lines;
 };
 

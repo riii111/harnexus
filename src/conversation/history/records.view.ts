@@ -27,6 +27,7 @@ export const renderRecords = (
     current = next.state;
     notifications.push(...next.notifications);
   };
+
   for (const message of messages) {
     const at = timeOf(message) ?? now;
     const body = message.message;
@@ -42,5 +43,6 @@ export const renderRecords = (
       add(renderSdkMessage(current, assistantOf(message, body), at));
     }
   }
+
   return { state: current, notifications };
 };

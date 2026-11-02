@@ -35,6 +35,7 @@ export const createCloudCheckouts = (
     const release = () => {
       used.delete(slot);
     };
+
     const dir = join(root, ...repository.split("/"), String(slot));
     const made = prepared.has(dir)
       ? Result.ok()
@@ -45,6 +46,7 @@ export const createCloudCheckouts = (
       release();
       return Result.err(clean.error);
     }
+
     return Result.ok({ dir, release });
   };
 
@@ -78,6 +80,7 @@ const prepareCheckout = async (
     const ran = await git(dir, args, env);
     if (ran.isErr()) return failed(ran.error.message);
   }
+
   return Result.ok();
 };
 
@@ -96,6 +99,7 @@ const cleanCheckout = async (
     const reset = await git(dir, ["reset", "-q", "--hard"], env);
     if (reset.isErr()) return reset;
   }
+
   return git(dir, ["clean", "-q", "-f", "-d", "-x"], env);
 };
 
@@ -116,5 +120,6 @@ const git = async (
       }),
     );
   }
+
   return Result.ok();
 };

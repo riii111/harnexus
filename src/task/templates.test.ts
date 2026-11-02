@@ -298,6 +298,7 @@ const fixture = async () => {
     await mkdir(join(home, "harnexus"), { recursive: true });
     await writeFile(join(home, "harnexus/task.json"), JSON.stringify(config));
   };
+
   const useWorker = (template: string) =>
     configure({ templates: { worker: template } });
   const prompt = (

@@ -102,8 +102,10 @@ describe("canceling Claude session startup", () => {
           if (started.isOk()) {
             fake.emit(sdk(answer("msg-late", "stale startup output")));
           }
+
           return started;
         }
+
         return startClaudeSession(session, fake.runtime, signal);
       },
     });
@@ -149,6 +151,7 @@ describe("canceling Claude session startup", () => {
             advancedFinished.open();
             return Result.ok("record-after");
           }
+
           return Result.ok("record-before");
         },
         lookupSession: async () => Result.ok(true),
@@ -194,6 +197,7 @@ describe("canceling Claude session startup", () => {
           await resumeGate.promise;
           staleLookupFinished.open();
         }
+
         return Result.ok(true);
       },
     });
@@ -254,6 +258,7 @@ describe("canceling Claude session startup", () => {
               lookupEnded.open();
               return Result.ok("record-after");
             }
+
             return Result.ok("record-before");
           },
           lookupSession: async () => Result.ok(true),
@@ -1563,12 +1568,14 @@ const subagentEvents = (sent: Sent[]) =>
         `${params.threadId} ${params.turnId} ${params.item.kind} ${params.item.agentThreadId}`,
       ];
     }
+
     if (
       message.method === "thread/status/changed" &&
       message.params.threadId !== THREAD
     ) {
       return [`${message.params.threadId} ${message.params.status.type}`];
     }
+
     return [];
   });
 

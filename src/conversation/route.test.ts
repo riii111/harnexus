@@ -1582,6 +1582,7 @@ describe("Claude thread history", () => {
       await Bun.sleep(0);
       return { forwarded, page: responseTo(sent, id).result };
     };
+
     const opening = out.result.turnsBackwardsCursor;
     const newest = await askTurns(10, opening);
     const older = await askTurns(11, newest.page.nextCursor);

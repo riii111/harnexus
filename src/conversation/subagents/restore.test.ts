@@ -244,6 +244,7 @@ describe("agents read back after a restart", () => {
             // oxlint-disable-next-line harnexus/no-throw-try-catch -- a fault in the bridge throws.
             throw new Error("broken invariant");
           }
+
           registry.restore(agents);
         },
       }),

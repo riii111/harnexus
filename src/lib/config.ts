@@ -52,6 +52,7 @@ export const loadLogPath = (
       explicit: false,
     });
   }
+
   if (!isAbsolute(path)) {
     return Result.err(
       new LogPathNotAbsolute({
@@ -60,6 +61,7 @@ export const loadLogPath = (
       }),
     );
   }
+
   return Result.ok({ path, explicit: true });
 };
 
@@ -73,6 +75,7 @@ export const loadStatePath = (
   if (path === undefined || path === "") {
     return Result.ok(join(home(), DEFAULT_STATE_PATH));
   }
+
   if (!isAbsolute(path)) {
     return Result.err(
       new StatePathNotAbsolute({
@@ -81,6 +84,7 @@ export const loadStatePath = (
       }),
     );
   }
+
   return Result.ok(path);
 };
 
@@ -117,6 +121,7 @@ const callSocketSetting = (
   if (value === undefined || value === "" || value === "on") {
     return Result.ok({ kind: "default" });
   }
+
   if (value === "off") return Result.ok({ kind: "off" });
   if (!isAbsolute(value)) {
     return Result.err(
@@ -126,6 +131,7 @@ const callSocketSetting = (
       }),
     );
   }
+
   return Result.ok({ kind: "path", path: value });
 };
 

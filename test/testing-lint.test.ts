@@ -242,6 +242,7 @@ const lintAll = async (target: string) => {
       reports.get(source)?.push(toReported(diagnostic));
     }
   }
+
   return reports;
 };
 

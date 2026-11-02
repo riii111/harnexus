@@ -171,6 +171,7 @@ export const createRouter = ({
     if (typeof message.method !== "string") {
       return turns.answerRequest(message) ? null : line;
     }
+
     const { method } = message;
     const id = message.id;
     if (typeof id !== "string" && typeof id !== "number") return line;
@@ -185,6 +186,7 @@ export const createRouter = ({
     ) {
       return refuseIncompatible(method, request);
     }
+
     // A Claude subagent's thread exists only in the bridge.
     if (subagents.isChild(params.threadId)) {
       if (isHistoryMethod(method)) {
@@ -192,8 +194,10 @@ export const createRouter = ({
       } else {
         void subagents.answer(method, request);
       }
+
       return null;
     }
+
     const handler = appHandlers.get(method);
     return handler === undefined
       ? line
@@ -206,6 +210,7 @@ export const createRouter = ({
       refuse("turn/start", request, "model_mismatch");
       return null;
     }
+
     refuse(method, request, "codex_incompatible");
     if (method === "turn/start") noteStarted(params, "codex_incompatible");
     return null;
@@ -260,6 +265,7 @@ export const createRouter = ({
     ) {
       pending.set(id, { kind: "childList", params });
     }
+
     return call.line;
   };
 
@@ -276,6 +282,7 @@ export const createRouter = ({
         return null;
       });
     }
+
     const claude =
       isClaudeModel(requestedModel(params)) ||
       threads.isClaudeThread(params.threadId);
@@ -283,6 +290,7 @@ export const createRouter = ({
       refuse("turn/start", request, "model_mismatch");
       return null;
     }
+
     if (!claude) return line;
     noteStarted(params, turns.startTurn(request, cwdOf(params)));
     return null;
@@ -294,6 +302,7 @@ export const createRouter = ({
       refuse("turn/steer", request, "side_chat_stopped");
       return null;
     }
+
     if (!threads.isClaudeThread(params.threadId)) return line;
     turns.steerTurn(request);
     return null;
@@ -342,10 +351,12 @@ export const createRouter = ({
         refuse("thread/resume", request, checked.error.refusal);
         return null;
       }
+
       if (checked.value.model !== known.model) {
         threads.changeModel(threadId, checked.value.model);
       }
     }
+
     const created = method === "thread/start" && isClaudeModel(params.model);
     const reopened = threadId !== undefined && known !== undefined;
     awaitResponse(
@@ -360,6 +371,7 @@ export const createRouter = ({
         ? call.line
         : encode({ ...message, params });
     }
+
     // The server creates the thread on its default model, so a Claude model never reaches it.
     return encodeWithoutParams(message, params, ["model"]);
   };
@@ -379,23 +391,27 @@ export const createRouter = ({
       if (!sideChat || fromTurn || typeof params.threadId !== "string") {
         return line;
       }
+
       return routeCodexSideChat(call, {
         parentId: params.threadId,
         instructions,
         requested,
       });
     }
+
     const sourceId = String(params.threadId);
     // A Cloud thread's conversation runs on claude.ai, and a fork would continue its local copy here instead.
     if (threads.cloudOf(sourceId) !== null) {
       refuse("thread/fork", request, "cloud_unsupported");
       return null;
     }
+
     // Claude's conversation is forked whole, so a fork from an earlier turn would carry the turns after it.
     if (fromTurn) {
       refuse("thread/fork", request, "unsupported_request");
       return null;
     }
+
     const source = threads.threadOf(sourceId);
     // A side chat opened on a Codex model stays on Codex, and is handed where the Claude conversation stood with its first message.
     const codex =
@@ -410,6 +426,7 @@ export const createRouter = ({
         return null;
       }
     }
+
     const open = (opened: Opened | null) => {
       // The server copies its own record of the thread, which holds none of the Claude conversation, so the fork learns of it here.
       awaitResponse(
@@ -421,6 +438,7 @@ export const createRouter = ({
       );
       return forked === params ? line : encode({ ...message, params: forked });
     };
+
     if (!sideChat || source === undefined) return open(null);
     // A Claude side chat whose point is unread still runs on Claude, as before; only a Codex one would start without the conversation.
     return sideChats.pointOf(sourceId, source).then((point) => {
@@ -428,6 +446,7 @@ export const createRouter = ({
         refuse("thread/fork", request, "side_chat_unreadable");
         return null;
       }
+
       return open({
         parent: point.isOk()
           ? { agent: "Claude", point: point.value }
@@ -461,6 +480,7 @@ export const createRouter = ({
         refuse("thread/fork", request, "side_chat_unreadable");
         return null;
       }
+
       awaitResponse(
         call,
         openingThread(params, {
@@ -490,20 +510,24 @@ export const createRouter = ({
       refuse("thread/settings/update", request, sideChat);
       return null;
     }
+
     const known = threads.threadOf(threadId);
     if (known === undefined && !isClaudeModel(requestedModel(params))) {
       return line;
     }
+
     // Only what Claude would have to follow is checked; settings that do not reach Claude, such as the approval policy, still go to the server.
     const checked = checkThread(params, known, cwdOf(params));
     if (checked.isErr()) {
       refuse("thread/settings/update", request, checked.error.refusal);
       return null;
     }
+
     if (known === undefined) threads.adopt(threadId, checked.value);
     else if (checked.value.model !== known.model) {
       threads.changeModel(threadId, checked.value.model);
     }
+
     const mode = requestedMode(params);
     if (mode !== undefined) threads.selectMode(threadId, mode);
     const effort = requestedEffort(params);
@@ -516,6 +540,7 @@ export const createRouter = ({
     ) {
       return line;
     }
+
     return encodeWithoutParams(message, params, [
       "model",
       "collaborationMode",
@@ -599,6 +624,7 @@ export const createRouter = ({
     if (message.method === SETTINGS_UPDATED) {
       return responses.rewriteSettingsUpdated(message) ?? line;
     }
+
     // Server requests share ids with the app's, so only a line without a method is read as a response.
     if (message.method !== undefined) return line;
     const id = message.id;

@@ -1566,6 +1566,7 @@ describe("another thread's message arriving on a busy thread", () => {
       claude.emit(sdk(success()));
       await until(() => completedTurnStatuses(sent).length === turn);
     }
+
     expect(startedTurns(sent)).toEqual(["turn-1", "turn-2", "turn-3"]);
     expect(await promptsUntil(claude, 3)).toEqual([
       "hello",
@@ -1673,6 +1674,7 @@ const registeredWorkers = async (fakes: ReturnType<typeof fakeClaude>[]) => {
     });
     expect(registered.isOk() && registered.value.threadId).toBe(threadId);
   }
+
   return started;
 };
 
@@ -1703,6 +1705,7 @@ const messageThreads = async (
   if (tools === undefined) {
     return expect.unreachable("Claude has no thread tool server");
   }
+
   const server = createSdkMcpServer({ name: "codex_link", tools });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
@@ -1718,6 +1721,7 @@ const messageThreads = async (
       }),
     );
   }
+
   return results;
 };
 

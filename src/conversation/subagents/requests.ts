@@ -111,6 +111,7 @@ export const createSubagentRequests = ({
     if (request.params.includeTurns !== true) {
       return send({ id: request.id, result });
     }
+
     const turns = await history(child.id);
     if (turns.isErr()) return unreadable(request);
     send({ id: request.id, result: withTurns(result, turns.value) });

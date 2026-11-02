@@ -44,6 +44,7 @@ const reap = (lock: string, observed: string) =>
       if (dead(await heldBy(guard))) yield* Result.await(io(removeFile(guard)));
       return Result.ok(false);
     }
+
     const now = await heldBy(lock);
     const same = now !== null && now.token === observed && dead(now);
     if (same) yield* Result.await(io(removeFile(lock)));
@@ -77,6 +78,7 @@ export const acquire = (lock: string, holder: string) =>
       const taken = yield* Result.await(reap(lock, String(held.token)));
       if (!taken) return fail(`another ${holder} is taking over this session`);
     }
+
     return fail(`cannot take ${lock}`);
   });
 

@@ -66,10 +66,12 @@ const fixture = async () => {
     expect(ran.exitCode).toBe(0);
     return ran.stdout.toString().trim();
   };
+
   const commit = (message: string) => {
     git("commit", "--allow-empty", "-qm", message);
     return git("rev-parse", "HEAD");
   };
+
   git("init", "-q");
   const initial = commit("test: initial");
   git("branch", "base");
@@ -110,6 +112,7 @@ const fixture = async () => {
       err: done.stderr,
     };
   };
+
   const input = (n: number) => readFile(join(fake, `stdin.${n}`), "utf8");
   const cwd = async (n: number) =>
     (await readFile(join(fake, `cwd.${n}`), "utf8")).trim();

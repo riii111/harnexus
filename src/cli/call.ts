@@ -25,6 +25,7 @@ if (socket.isErr()) {
   process.stderr.write(`harnexus call: ${socket.error.message}\n`);
   process.exit(EXIT.invalid);
 }
+
 const path = socket.value;
 const line = (await Bun.stdin.text()).trim().replaceAll("\n", " ");
 const answer = await requestLine(path, line, ANSWER_TIMEOUT_MS);
@@ -36,6 +37,7 @@ if (answer.isErr()) {
   );
   process.exit(unreached ? EXIT.not_sent : EXIT.unknown);
 }
+
 process.stdout.write(`${answer.value}\n`);
 const parsed = parseJson(answer.value);
 const outcome =

@@ -103,8 +103,10 @@ export const stopLingeringServer = async ({
       if (Date.now() >= deadline) return false;
       await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
+
     return true;
   };
+
   if (await exitsWithin(graceMs)) return;
   signal("SIGTERM");
   if (await exitsWithin(graceMs)) return;

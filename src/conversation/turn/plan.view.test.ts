@@ -232,6 +232,7 @@ const feed = (messages: object[], start: ThreadPlan = NO_PLAN) => {
       sent.push(rendered.notification.params);
     }
   }
+
   return { plan, sent };
 };
 

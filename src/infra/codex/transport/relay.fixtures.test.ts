@@ -78,9 +78,11 @@ const replay = async (path: string, records: FixtureRecord[]) => {
       expectedBytes += line.length;
       continue;
     }
+
     await Promise.race([output.reached(expectedBytes), relaying]);
     for (const chunk of split(line, CHUNK_BYTES)) input.write(chunk);
   }
+
   input.end();
   await relaying;
   const [exitCode] = await exited;
@@ -105,6 +107,7 @@ const collector = () => {
       await new Promise<void>((resolve) => waiters.push(resolve));
     }
   };
+
   return {
     stream,
     reached,

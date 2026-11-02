@@ -37,6 +37,7 @@ if (problem !== null) {
   process.stderr.write(`harnexus: ${problem}\n`);
   process.exit(1);
 }
+
 const registered = await configureLaunchd(
   registeredEnvironment(paths, process.env),
   mode === "standard",
@@ -47,6 +48,7 @@ if (registered.isErr()) {
   );
   process.exit(1);
 }
+
 const opened = await readCommandOutput(
   "/usr/bin/open",
   openArguments(paths, mode, process.env),
@@ -55,6 +57,7 @@ if (opened.isErr()) {
   process.stderr.write(`harnexus: cannot open ${APP}\n`);
   process.exit(1);
 }
+
 process.stdout.write(
   mode === "standard"
     ? `Opened ${APP} without harnexus. Run bun run doctor to see that no bridge is left running.\n`
@@ -74,6 +77,7 @@ async function findProblem() {
   if (isAppRunning(parseProcesses(listed.value), APP)) {
     return `quit ${APP} first, since it reads its environment only when it starts`;
   }
+
   if (mode === "standard") return null;
   // The bridge and the launcher refuse a relative path where nobody sees it, so it is refused here first.
   const permissionMode = loadPermissionMode(process.env);
@@ -87,6 +91,7 @@ async function findProblem() {
   if (!isAbsolute(paths.codex)) {
     return "HARNEXUS_CODEX_PATH must be an absolute path";
   }
+
   for (const [name, path] of [
     ["the launcher", paths.launcher],
     ["the Codex CLI", paths.codex],
@@ -96,5 +101,6 @@ async function findProblem() {
       return `cannot run ${name} at ${path}`;
     }
   }
+
   return null;
 }

@@ -74,9 +74,11 @@ export const createApprovals = <Tag extends string>({
         held.answered = resolve;
       });
     }
+
     if (heldApprovals.get(turn.threadId) === held) {
       heldApprovals.delete(turn.threadId);
     }
+
     turn.finish(heldOutcome(turn, held), null);
   };
 
@@ -86,6 +88,7 @@ export const createApprovals = <Tag extends string>({
     if (held.ended.signal.aborted) {
       return { status: "failed", message: APPROVALS_UNANSWERED };
     }
+
     return { status: "completed" };
   };
 
@@ -110,6 +113,7 @@ export const createApprovals = <Tag extends string>({
     if (turn === undefined || turn.state().interrupting) {
       return declineTool(threadId, turn, options.toolUseID, NO_TURN);
     }
+
     const block = { id: options.toolUseID, name: toolName, input };
     // A subagent's call shows as its own item while its agent runs in the turn; one from a background agent would outlive the turn, which would close its item as failed, so its prompt carries an id of its own, as does every call a turn holding approvals shows.
     if (options.agentID === undefined && approval.held?.turn !== turn) {
@@ -118,6 +122,7 @@ export const createApprovals = <Tag extends string>({
       // A subagent asks only while its Agent call runs in the turn or after that call launched it in the background, so with an Agent call running the asking agent runs in the turn.
       turn.apply(renderToolRequest(turn.state(), block, now(), false));
     }
+
     const item = runningToolItem(turn.state(), options.toolUseID);
     const prompt = promptFor(
       {
@@ -158,11 +163,13 @@ export const createApprovals = <Tag extends string>({
         if (resumed === ABORTED) return undefined;
         continue;
       }
+
       const turn = openTurn(threadId);
       const held = heldApprovals.get(threadId);
       if (held !== undefined && (held.turn === null || held.turn === turn)) {
         joinHeld(approval, held);
       }
+
       // A turn the user stopped before the approval was shown cannot show it, while one asked as the user stops a turn showing it is declined with that turn.
       const stoppedAhead =
         waited &&
@@ -175,11 +182,13 @@ export const createApprovals = <Tag extends string>({
           return undefined;
         }
       }
+
       // Claude may ask for a tool before the app has been shown the turn the thread accepted, such as a turn of its own, so the approval waits until a turn is shown or the thread has none left.
       const shown = await waitForAbort(turnShown(threadId), approval.signal);
       if (shown === ABORTED) return undefined;
       waited = true;
     }
+
     return undefined;
   };
 
@@ -196,6 +205,7 @@ export const createApprovals = <Tag extends string>({
       log({ event: "claude_turn", step: "approval_turn" });
       return true;
     }
+
     heldApprovals.delete(threadId);
     approval.held = null;
     return false;
@@ -231,6 +241,7 @@ export const createApprovals = <Tag extends string>({
         notifications: [],
       });
     }
+
     return { behavior: "deny" as const, message };
   };
 

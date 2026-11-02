@@ -92,6 +92,7 @@ const sink = (delayMs = 0) => {
         chunks.push(Buffer.from(chunk));
         callback();
       };
+
       if (delayMs === 0) store();
       else setTimeout(store, delayMs);
     },

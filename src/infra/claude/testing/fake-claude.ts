@@ -58,6 +58,7 @@ export const fakeClaude = (
     if (resolve === null) queued.push(item);
     else resolve(item);
   };
+
   const claude: ClaudeQuery = {
     next: async () => {
       nextCalls += 1;
@@ -111,11 +112,13 @@ export const fakeClaude = (
     if (settingsEnv instanceof Error) throw settingsEnv;
     return { effective: { env: settingsEnv } };
   };
+
   const run: ClaudeSdk["query"] = (params) => {
     options = params.options;
     prompt = readAhead(params.prompt, received);
     return claude;
   };
+
   return {
     runtime: {
       query: run,
@@ -166,14 +169,17 @@ const readAhead = (
     wake = null;
     resolve?.();
   };
+
   void (async () => {
     for await (const message of source) {
       received.push(message);
       notify();
     }
+
     ended = true;
     notify();
   })();
+
   let next = 0;
   return {
     async *[Symbol.asyncIterator]() {
@@ -184,6 +190,7 @@ const readAhead = (
           yield message;
           continue;
         }
+
         if (ended) return;
         await new Promise<void>((resolve) => {
           wake = resolve;

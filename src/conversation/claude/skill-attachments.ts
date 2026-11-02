@@ -20,5 +20,6 @@ export const readSkills = async (text: string) => {
       });
     }
   }
+
   return { skills, unreadable };
 };

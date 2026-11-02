@@ -96,6 +96,7 @@ export const createHistoryRequests = ({
         ),
       );
     }
+
     const rewind = threads.rewindOf(threadId);
     // Rebuilt from Claude's own record on each request rather than stored by the bridge.
     const loaded: Promise<Loaded> = readSession(sessionId)
@@ -110,6 +111,7 @@ export const createHistoryRequests = ({
         if (read.isOk()) {
           await subagents.restore(threadId, sessionId, thread.cwd, read.value);
         }
+
         if (keyOf(threadId) !== key) return load(threadId);
         return read
           .tapError((error) =>
@@ -143,12 +145,14 @@ export const createHistoryRequests = ({
       });
       return;
     }
+
     // A live turn's id leaves the history once the turn ends, so a cursor or turn naming it then names the recorded turn its prompt opened.
     const known = new Set(history.value.map((entry) => entry.turn.id));
     const resolve = (turnId: string) => {
       const record = known.has(turnId) ? null : recordOf(threadId, turnId);
       return record === null ? turnId : historyTurnId(record);
     };
+
     const { cursor, turnId } = request.params;
     const result = pageFor(method, history.value, {
       ...request.params,
@@ -299,6 +303,7 @@ const pageFor = (
           }) ?? pageItems(history, { ...request, cursor: null }))
         : pageItems(history, { ...request, cursor });
     }
+
     case "thread/timeline/list": {
       const page = pageTimeline(history, { cursor, limit });
       return page === null
@@ -356,9 +361,11 @@ const returnedId = (entry: object) => {
   ) {
     return shortId(entry.item.id);
   }
+
   if ("turnId" in entry && typeof entry.turnId === "string") {
     return shortId(entry.turnId);
   }
+
   return "id" in entry && typeof entry.id === "string"
     ? shortId(entry.id)
     : "?";

@@ -49,6 +49,7 @@ export const watchForever = (
           }),
         );
       }
+
       const cycle = await runCycle(cycleDeps);
       // A failed cycle is logged and retried, so a config or network error never ends the watch.
       if (cycle.isErr())
@@ -101,6 +102,7 @@ export const dryRun = (
         reportOf(detail, state, link?.linkedAt ?? EPOCH, account, config),
       );
     }
+
     return Result.ok<Fields>({ dryRun: true, prs: reports });
   });
 
@@ -116,6 +118,7 @@ const dryRunTargets = (
       if (ref === null) return refuse("--pr must be a GitHub pull request URL");
       refs.push(ref);
     }
+
     if (urls.length > 0) return Result.ok(refs);
     // Without --pr, the open PRs each account wrote in the configured repositories.
 
@@ -228,6 +231,7 @@ export const status = (root: string) =>
         });
         continue;
       }
+
       const state = loaded.value;
       prs.push({
         pr: link.url,
@@ -242,6 +246,7 @@ export const status = (root: string) =>
         checkedAt: state.checkedAt,
       });
     }
+
     // An unreadable sender record is shown as such, like an unreadable PR record.
     const sender = await loadSender(root);
     return Result.ok<Fields>(

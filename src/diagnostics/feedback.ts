@@ -81,6 +81,7 @@ if (args.isErr()) {
   );
   process.exit(2);
 }
+
 const since = parseTimeArgument(
   "--since",
   optionText(args.value.since),
@@ -99,6 +100,7 @@ if (since.isErr() || until.isErr() || since.value > until.value) {
   );
   process.exit(2);
 }
+
 const window = { sinceMs: since.value, untilMs: until.value };
 process.stderr.write(
   "Collecting the report; asking Claude Code about the login can take up to half a minute.\n",
@@ -251,6 +253,7 @@ async function gitChanges(): Promise<GitChanges | null> {
     );
     if (tools.isErr() || tools.value.status !== 0) return null;
   }
+
   const status = await runCommand(
     git,
     ["-C", REPO, "status", "--porcelain=v1", "-z", "--untracked-files=normal"],
@@ -284,6 +287,7 @@ async function newestCodeChange() {
     const found = await statFileIfExists(path);
     times.push(found.isOk() ? (found.value?.modifiedMs ?? null) : null);
   }
+
   return maxOf(times);
 }
 
@@ -328,6 +332,7 @@ async function readAppLog(runningPids: ReadonlySet<number>) {
       parsed = parseLog(read.text);
     }
   }
+
   const oldest = parsed.lines[0]?.timeMs ?? null;
   const complete =
     read.reachedStart || (oldest !== null && oldest <= window.sinceMs);
@@ -377,9 +382,11 @@ async function readLogFiles(
         const found = await statFileIfExists(older);
         if (found.isErr() || found.value !== null) reachedStart = false;
       }
+
       break;
     }
   }
+
   return texts.length === 0 ? null : { text: texts.join(""), reachedStart };
 }
 
@@ -405,10 +412,12 @@ async function readBack(
       failed = true;
       break;
     }
+
     text = chunk.value + text;
     start = next;
     if (enough(wholeLines(text, start))) break;
   }
+
   const whole = wholeLines(text, start);
   return {
     text: whole,
@@ -476,6 +485,7 @@ async function testedShapes(): Promise<RecordedShape[]> {
       }
     }
   }
+
   return fixtureShapes(records);
 }
 

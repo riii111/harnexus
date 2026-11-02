@@ -19,10 +19,12 @@ export const createLineInjector = (
       ? target.write(bytes)
       : target.write(bytes, callback);
   };
+
   const flushPending = () => {
     for (const line of pending) write(line);
     pending = [];
   };
+
   const stream = new Writable({
     write(chunk: Uint8Array, _encoding, callback) {
       const bytes = Buffer.from(chunk);
@@ -31,6 +33,7 @@ export const createLineInjector = (
         target.write(bytes, (error) => callback(error ?? null));
         return;
       }
+
       const lastNewline = bytes.lastIndexOf(NEWLINE);
       if (pending.length > 0 && lastNewline !== -1) {
         write(bytes.subarray(0, lastNewline + 1));
@@ -40,6 +43,7 @@ export const createLineInjector = (
         write(rest, (error) => callback(error ?? null));
         return;
       }
+
       atBoundary = bytes[bytes.length - 1] === NEWLINE;
       write(bytes, (error) => callback(error ?? null));
     },

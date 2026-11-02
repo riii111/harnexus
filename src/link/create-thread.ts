@@ -77,6 +77,7 @@ export const createThreadTool = ({
     if (calls.wasStopped(queuedIn)) {
       return notCreated(notSentAfterStop("create_thread"));
     }
+
     const watch: CreateWatch = { created: null, outcome: null, busy: false };
     const result = await calls.write(
       "create_thread",
@@ -150,17 +151,20 @@ export const createThreadTool = ({
         "The thread was created, but its id could not be learned from the app, so it cannot be read or messaged from here. Do not create another; ask the user to check the app.",
       );
     }
+
     const refusal = firstTurnRefusal(outcome?.firstTurn ?? null);
     if (refusal?.kind === "settings") {
       return failure(
         `Thread ${threadId} was created, but its first turn ${refusal.difference}, so it was stopped before it ran.`,
       );
     }
+
     if (refusal?.kind === "bridge") {
       return failure(
         `Thread ${threadId} was created, but the bridge refused its first turn (${refusal.reason}), so it never ran.`,
       );
     }
+
     // The app's own answer carries only a provisional id, so the real one is what the model must use from here on.
     return {
       content: [
@@ -193,11 +197,13 @@ export const createThreadTool = ({
           }),
         );
       }
+
       const models = readModelPage(listed.value);
       if (models.defaultModel !== null) return Result.ok(models.defaultModel);
       if (models.nextCursor === null) break;
       cursor = models.nextCursor;
     }
+
     return Result.err(
       new NoDefaultModel({ message: "the Codex app lists no default model" }),
     );
@@ -228,6 +234,7 @@ export const createThreadTool = ({
         failure(`Invalid arguments for create_thread: ${parsed.error.message}`),
       );
     }
+
     return createThread(parsed.data, true);
   };
 

@@ -53,6 +53,7 @@ export const runCycle = (deps: WatchDeps) =>
         );
       if (isOver(entry.state)) deps.over?.add(keyOf(entry.link));
     }
+
     return Result.ok(config);
   });
 
@@ -93,6 +94,7 @@ const openEntry = (deps: WatchDeps, config: WatchConfig, link: PrLink) =>
         yield* Result.await(saveWatchState(deps.paths.state, link, state));
       return Result.ok(null);
     }
+
     return Result.ok<Entry | null>({ link, state, account, before });
   });
 
@@ -127,6 +129,7 @@ const handOver = (deps: WatchDeps, state: WatchState, link: PrLink) => {
     state.status = "watching";
     state.reason = null;
   }
+
   deps.log({
     event: "handed_over",
     pr: link.url,
@@ -152,6 +155,7 @@ const dueByAccount = (
     if (!isDue(entry.state, now, config)) continue;
     due.set(entry.account, [...(due.get(entry.account) ?? []), entry]);
   }
+
   return due;
 };
 
@@ -213,6 +217,7 @@ const applySummary = async (
     deps.log({ event: "ended", pr, reason: state.reason });
     return;
   }
+
   if (summary.isDraft) {
     if (state.status !== "draft") deps.log({ event: "paused", pr });
     state.status = "draft";
@@ -285,6 +290,7 @@ const deliver = async (
     deps.log({ event: "stopped", pr, reason: state.reason });
     return;
   }
+
   state.reason = null;
 
   if (state.delivered !== null) {
@@ -381,6 +387,7 @@ const send = async (
     deps.log({ event: "state_unwritable", pr, error: marked.error._tag });
     return;
   }
+
   // Compared against the mark, so whatever the outcome the state is written again.
   entry.before = sending;
 
@@ -402,6 +409,7 @@ const send = async (
     });
     return;
   }
+
   if (result.outcome === "not_sent") {
     deps.log({ event: "send_not_sent", pr, outcome });
     return;

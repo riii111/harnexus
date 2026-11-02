@@ -45,12 +45,14 @@ export const promptFor = (call: ToolCall, target: PromptTarget): AppPrompt => {
     const questions = askedQuestions(call.input);
     if (questions !== null) return questionsPrompt(call, questions, target);
   }
+
   if (call.toolName === EXIT_PLAN_MODE) return planPrompt(call, target);
   // The app's approval prompts choose their own default, so a call that must default to no asks a question instead.
   if (call.defaultToNo) return toolPrompt(call, target);
   if (call.item?.type === "commandExecution") {
     return commandPrompt(call, call.item, target);
   }
+
   if (call.item?.type === "fileChange") return fileChangePrompt(call, target);
   // The app's permission request carries only network and file system grants, so other tools ask a yes/no question.
   return toolPrompt(call, target);
@@ -171,6 +173,7 @@ const planPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => ({
         ],
       };
     }
+
     return {
       behavior: "deny",
       message: isChoice(chosen, KEEP_PLANNING)
@@ -229,9 +232,11 @@ const toolPrompt = (call: ToolCall, target: PromptTarget): AppPrompt => {
       if (isChoice(chosen, ALLOW_FOR_SESSION) && sessionUpdates.length > 0) {
         return allowSaving(sessionUpdates, "session");
       }
+
       if (isChoice(chosen, ALWAYS_ALLOW) && alwaysRules.length > 0) {
         return allowSaving(alwaysRules, "projectSettings");
       }
+
       return declined(call);
     },
   };
@@ -245,15 +250,18 @@ const decideApproval = (
   if (!isObject(answer) || answer.decision === undefined) {
     return unanswered(call);
   }
+
   const decision = answer.decision;
   if (decision === "accept") return { behavior: "allow" };
   // The bridge writes no files: on the user's choice it hands Claude its own suggestions, and Claude saves them.
   if (decision === "acceptForSession") {
     return allowSaving(call.suggestions, "session");
   }
+
   if (isObject(decision) && "acceptWithExecpolicyAmendment" in decision) {
     return allowSaving(alwaysRules, "projectSettings");
   }
+
   return declined(call);
 };
 
@@ -346,6 +354,7 @@ const askedQuestions = (input: Record<string, unknown>) => {
     ) {
       return null;
     }
+
     asked.push({
       question: question.question,
       header: question.header,
@@ -357,6 +366,7 @@ const askedQuestions = (input: Record<string, unknown>) => {
       })),
     });
   }
+
   return asked;
 };
 

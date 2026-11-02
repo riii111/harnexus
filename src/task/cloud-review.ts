@@ -81,6 +81,7 @@ const replyOf = (stdout: string): Reply => {
         ? asText(event.error.message)
         : "the turn failed";
   }
+
   return reply;
 };
 
@@ -114,6 +115,7 @@ const locked = (
         if (!jsonEqual(before, await sessionValue(data, key)))
           return fail(`review session must keep the original ${key}`);
       }
+
       // A head the reviewer could not judge is sent again once what it lacked is given, such as a document it could not read.
       // A state saved before verdicts were kept has none, and counts as judged.
       const judged = state?.verdict !== "判定保留" && state?.verdict !== null;
@@ -122,6 +124,7 @@ const locked = (
           `head ${asText(data.head)} was already reviewed by ${asText(state?.reviewer)}; commit a fix before asking again`,
         );
     }
+
     const fields = yield* Result.await(reviewFields(data, REPLY_TO));
     const prompt = yield* Result.await(
       taskPrompt(deps.env, "reviewer", fields),
@@ -208,6 +211,7 @@ const locked = (
           : ran.error.message,
       );
     }
+
     const { status, stdout, stderr, ended } = ran.value;
     // A stopped run may have started its reviewer, which is named so it can be checked.
     if (ended !== "exit") {
@@ -216,6 +220,7 @@ const locked = (
         `codex was stopped (${ended === "timeout" ? "timeout" : "output over the limit"})${started === null ? "" : ` in reviewer ${started}`}; ${recoveryHint}`,
       );
     }
+
     const reply = replyOf(stdout);
     // A run that failed or never named its thread reviewed nothing, so the candidate can be sent again.
     if (status !== 0 || reply.failure !== null || reply.answer === null) {
@@ -233,15 +238,18 @@ const locked = (
           `reviewer ${reviewer} is gone from this machine; run review again to start a new reviewer`,
         );
       }
+
       return fail(
         `codex did not review (exit ${status}): ${detail(reply.failure ?? stderr)}`,
       );
     }
+
     const threadId = reply.threadId ?? reviewer;
     if (threadId === null) {
       yield* Result.await(unsent());
       return fail("codex answered without naming its thread");
     }
+
     const heads = Array.isArray(state?.heads) ? state.heads : [];
     const verdict = VERDICT.exec(reply.answer)?.[1] ?? null;
     const saved = await deps.saveJson(

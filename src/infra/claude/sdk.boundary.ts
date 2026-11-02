@@ -312,6 +312,7 @@ const withinAbortSignal = <T>(pending: Promise<T>, signal: AbortSignal) =>
       signal.removeEventListener("abort", abort);
       action();
     };
+
     const abort = () => finish(() => reject(new Error("operation aborted")));
     signal.addEventListener("abort", abort, { once: true });
     pending.then(

@@ -37,6 +37,7 @@ export const serveLines = (
         }),
       );
     }
+
     const server = yield* Result.await(
       Result.tryPromise({
         try: async () => {
@@ -54,6 +55,7 @@ export const serveLines = (
                 if (buffered.length > LINE_LIMIT) socket.destroy();
                 return;
               }
+
               socket.pause();
               void handle(buffered.slice(0, end)).then((answer) =>
                 socket.end(`${answer}\n`),
@@ -94,8 +96,10 @@ export const serveLinesWhenFree = (
         setTimeout(attempt, retryMs).unref();
         return;
       }
+
       resolve(served);
     };
+
     void attempt();
   });
 
@@ -120,6 +124,7 @@ export const requestLine = (path: string, line: string, timeoutMs: number) => {
             resolve("");
             return;
           }
+
           socket.write(`${line}\n`);
         });
         socket.on("data", (chunk: string) => {

@@ -166,6 +166,7 @@ const recordResize = (output: Uint8Array = pngBytes(10, 10)) => {
     calls.push({ longEdge, format });
     return Result.ok(output);
   };
+
   return { calls, run };
 };
 

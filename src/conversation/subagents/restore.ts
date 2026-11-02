@@ -57,6 +57,7 @@ export const createSubagentRestore = <E extends { _tag: string }>({
         log({ event: "claude_subagents_unreadable", error: read.error._tag });
         return;
       }
+
       subagents.restore(rebuild(threadId, cwd, read.value, messages, now()));
     });
     restored.set(key, reading);
@@ -121,6 +122,7 @@ const rebuild = (
       updatedAtMs: startedAtMs,
     });
   }
+
   const resumes = resumesOf(
     [messages, ...started.map(({ record }) => record.messages)],
     started.map(({ record }) => record),
@@ -138,6 +140,7 @@ const rebuild = (
       toolUseId: all.at(-1) ?? thread.toolUseId,
     });
   }
+
   const edits = new Map<string, FileChangeItem[]>();
   const refOf = (toolUseId: string): AgentRef | undefined => {
     const agent = [...threads.values()].find((thread) =>
@@ -152,6 +155,7 @@ const rebuild = (
           edits: edits.get(toolUseId) ?? [],
         };
   };
+
   // Agents that resume each other each need the other's edits first, so the histories are rebuilt until no run gains an edit.
   const histories = new Map<string, HistoryTurn[]>();
   const runCount = [...threads.values()].reduce(
@@ -178,8 +182,10 @@ const rebuild = (
         edits.set(call, applied);
       }
     }
+
     if (editIds(edits) === before) break;
   }
+
   return started.flatMap(({ record }) => {
     const thread = threads.get(record.agentId);
     const history = histories.get(record.agentId);
@@ -227,6 +233,7 @@ const editsByRun = (
         );
     }
   }
+
   return byCall;
 };
 
@@ -245,6 +252,7 @@ const usable = <T extends { record: SubagentRecord }>(
     if (agentIds.has(record.agentId) || calls.has(record.toolUseId)) {
       return false;
     }
+
     agentIds.add(record.agentId);
     calls.add(record.toolUseId);
     return true;
@@ -262,6 +270,7 @@ const resumesOf = (
       byAddress.set(record.name, record.agentId);
     }
   }
+
   for (const record of records) byAddress.set(record.agentId, record.agentId);
   const resumed = new Map<string, AgentResume[]>();
   const found: AgentResume[] = conversations
@@ -275,6 +284,7 @@ const resumesOf = (
     if (agentId === undefined) continue;
     resumed.set(agentId, [...(resumed.get(agentId) ?? []), resume]);
   }
+
   return resumed;
 };
 

@@ -84,6 +84,7 @@ const resolveRef = async (gitDir: string, commonDir: string, ref: string) => {
     const loose = await readTextFileIfExists(join(dir, ref));
     if (loose.isOk() && loose.value !== null) return commitOf(loose.value);
   }
+
   // A ref git has packed is a line of packed-refs rather than a loose file.
   const packed = await readTextFileIfExists(join(commonDir, "packed-refs"));
   if (packed.isErr() || packed.value === null) return null;
@@ -91,6 +92,7 @@ const resolveRef = async (gitDir: string, commonDir: string, ref: string) => {
     const [sha, name] = line.split(" ");
     if (name === ref && sha !== undefined) return commitOf(sha);
   }
+
   return null;
 };
 

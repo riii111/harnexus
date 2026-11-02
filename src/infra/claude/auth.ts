@@ -57,6 +57,7 @@ export const checkSubscription = (account: AccountInfo) => {
   ) {
     return Result.ok();
   }
+
   return Result.err(
     new ClaudeNotSubscription({
       apiProvider: account.apiProvider ?? null,

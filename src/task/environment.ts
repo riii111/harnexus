@@ -44,6 +44,7 @@ export const declaredEnvironment = (
       note: `set by ${EXECUTION_ENV}`,
     });
   }
+
   const host = hostOf(env);
   if (host === "codex")
     return Result.ok({
@@ -85,6 +86,7 @@ export const detectEnvironment = async (
         note: "the harnexus call socket accepted a connection",
       });
   }
+
   return Result.ok({
     environment: "unknown",
     source: "none",

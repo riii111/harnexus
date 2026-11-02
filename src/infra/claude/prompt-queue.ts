@@ -19,6 +19,7 @@ export const createPromptQueue = () => {
     wake = null;
     resolve?.();
   };
+
   return {
     stream: {
       async *[Symbol.asyncIterator]() {
@@ -28,6 +29,7 @@ export const createPromptQueue = () => {
             yield message;
             continue;
           }
+
           if (ended) return;
           await new Promise<void>((resolve) => {
             wake = resolve;

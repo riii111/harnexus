@@ -161,6 +161,7 @@ const launch = (args: LaunchArgs, deps: TaskDeps) =>
         state: session.statePath,
       });
     }
+
     const target = worktreeTarget(data.projectId);
     const fields = yield* Result.await(workerFields(data));
     const prompt = yield* Result.await(taskPrompt(deps.env, "worker", fields));
@@ -237,12 +238,14 @@ const review = (args: ReviewArgs, deps: TaskDeps) =>
         if (!jsonEqual(before, await sessionValue(data, key)))
           return fail(`review session must keep the original ${key}`);
       }
+
       if (jsonEqual(previous.head ?? null, data.head))
         return fail(
           `head ${asText(data.head)} was already sent to reviewer ` +
             `${asText(session.state?.reviewer)}; wait for its result`,
         );
     }
+
     const fields = yield* Result.await(reviewFields(data));
     const sent: Fields = {
       prompt: yield* Result.await(taskPrompt(deps.env, "reviewer", fields)),
@@ -268,6 +271,7 @@ const review = (args: ReviewArgs, deps: TaskDeps) =>
         thinking: args.thinking || "medium",
       });
     }
+
     return await session.send(String(data.workerChatId), tool, sent, {
       candidate: data,
       workspace: data.checkout,
@@ -281,6 +285,7 @@ const requestedSession = (path: string, deps: TaskDeps) =>
       const data = yield* Result.await(launchRequest(path));
       return await launchSession(data, deps);
     }
+
     const git = gitIn(deps.runGit, deps.env);
     const data = yield* Result.await(reviewRequest(path, deps.env, git));
     data.workerChatId = yield* callerId(deps.env);
@@ -499,6 +504,7 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
       sessionId = started.value.sessionId;
       title ??= started.value.title;
     }
+
     if (sessionId === null)
       return fail(
         "--link must be a Cloud session id or its claude.ai/code URL",
@@ -540,6 +546,7 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
           : `a chat for Cloud session ${sessionId} is being opened, or its opening did not report back; check the app, then remove ${opened} to open one`,
       );
     }
+
     const answer = await callApp(deps.env, caller, "create_thread", {
       prompt: `/cloud ${sessionId}`,
       target: {
@@ -560,6 +567,7 @@ const cloud = (args: CloudArgs, deps: TaskDeps) =>
         `create_thread ${asText(answer.outcome)} for Cloud session ${sessionId}: ${asText(answer.error ?? answer)}`,
       );
     }
+
     yield* Result.await(
       deps.saveJson(
         opened,
@@ -597,6 +605,7 @@ const projectWhere = async (
     )
       return Result.ok({ projectId, folder: project.path });
   }
+
   return fail(`no project ${projectId} in the app`);
 };
 
@@ -846,6 +855,7 @@ export const runTask = async (
       ? { code, stdout: `${usage}${FEEDBACK_HINT}\n`, stderr: "" }
       : { code, stdout: "", stderr: `${usage}${NAME}: ${message}\n` };
   }
+
   return await parsed.value(deps);
 };
 
@@ -876,6 +886,7 @@ const parseCommand = (
       }),
     );
   }
+
   const usage = usageOf([command]);
   const shown = (message: string, code = 2) =>
     Result.err(new UsageShown({ message, usage, code }));

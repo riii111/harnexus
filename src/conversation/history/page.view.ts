@@ -141,6 +141,7 @@ const timeline = (history: readonly HistoryTurn[]): TimelineEntry[] => {
         item,
       });
     }
+
     // A running agent's turn gets its completion entry only once it ends; it is always the last turn, so no earlier position moves.
     if (turn.status === "inProgress") continue;
     entries.push({
@@ -154,6 +155,7 @@ const timeline = (history: readonly HistoryTurn[]): TimelineEntry[] => {
       durationMs: turn.durationMs,
     });
   }
+
   return entries;
 };
 

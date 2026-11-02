@@ -31,6 +31,7 @@ export const parseLog = (text: string): ParsedLog => {
     if (line === null) unreadable += 1;
     else lines.push(line);
   }
+
   return { lines, unreadable, leftOutFields };
 };
 
@@ -50,6 +51,7 @@ const readLine = (row: string, leftOut: Set<string>): LogLine | null => {
       fields[key] = kept;
     }
   }
+
   return {
     time,
     timeMs: Date.parse(time),
@@ -133,11 +135,13 @@ export const selectLog = (
       inWindow.push(line);
     }
   }
+
   const latest = new Map<string, LogLine>();
   for (const line of lines) {
     if (line.timeMs >= sinceMs || !STARTUP_EVENTS.has(line.event)) continue;
     if (pids.has(line.pid)) latest.set(`${line.pid}:${line.event}`, line);
   }
+
   const startup = collapse(
     [...latest.values()].sort((a, b) => a.timeMs - b.timeMs),
   );
@@ -180,6 +184,7 @@ const shapesOf = (
     });
     byPid.set(line.pid, shapes);
   }
+
   return [...byPid.values()].flat();
 };
 
@@ -201,6 +206,7 @@ const collapse = (lines: readonly LogLine[]): Row[] => {
       rows.push({ line, key, count: 1, last: line.time });
     }
   }
+
   return rows.map(({ line, count, last }) => ({
     line,
     text: `${render(line)}${count > 1 ? ` x${count} until ${last}` : ""}`,
@@ -225,6 +231,7 @@ const keepWithin = (rows: readonly Row[], room: number) => {
     kept.add(row);
     used += cost;
   }
+
   return rows.filter((row) => kept.has(row));
 };
 
@@ -255,6 +262,7 @@ export const loggedStarts = (lines: readonly LogLine[]): LoggedStart[] => {
       if (start !== undefined) start.codex = stringOrNull(line.fields.version);
     }
   }
+
   return [...starts.values()];
 };
 

@@ -16,6 +16,7 @@ export const withClaudeModels = (
   if (!Array.isArray(data) || (result.nextCursor ?? null) !== null) {
     return { result, collisions: [] };
   }
+
   const listed = new Set(data.map((model) => modelId(model)));
   const models = [
     ...offered.map((model) => ({ model, hidden: false })),

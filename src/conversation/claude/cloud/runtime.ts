@@ -262,6 +262,7 @@ export const createCloudRuntime = <Tag extends string>(
       await showReview(turn, reviewKey);
       return;
     }
+
     // A message typed in a reviewer's chat, which holds no conversation of Claude's, goes to that reviewer.
     if (
       turn.input.startedBy === "app" &&
@@ -276,6 +277,7 @@ export const createCloudRuntime = <Tag extends string>(
         return;
       }
     }
+
     const typedText = sessionCommandTextOf(turn.input);
     const typed = typedText !== null;
     const empty =
@@ -290,6 +292,7 @@ export const createCloudRuntime = <Tag extends string>(
       await link(turn, picked, true);
       return;
     }
+
     const command =
       turn.input.startedBy === "app"
         ? cloudCommandOf(commandText(turn.input))
@@ -300,15 +303,18 @@ export const createCloudRuntime = <Tag extends string>(
       await link(turn, command, typed);
       return;
     }
+
     const cloud = threads.cloudOf(turn.threadId);
     if (cloud === null) {
       await inner.run(turn as RunningTurn<Tag>);
       return;
     }
+
     if (turn.input.startedBy === "claude") {
       await showOwn(turn, cloud);
       return;
     }
+
     await sendAndFollow(turn, cloud);
   };
 
@@ -329,6 +335,7 @@ export const createCloudRuntime = <Tag extends string>(
       log({ event: "claude_cloud", step: "link_refused" });
       reply(turn, text);
     };
+
     const named = parseCloudSessionId(argument);
     // Typed with a request rather than a session, /cloud starts a new session for it.
     const request =
@@ -343,6 +350,7 @@ export const createCloudRuntime = <Tag extends string>(
       refuse(LINK_USAGE);
       return;
     }
+
     if (
       threads.sessionIdOf(threadId) !== null ||
       threads.cloudOf(threadId) !== null
@@ -350,6 +358,7 @@ export const createCloudRuntime = <Tag extends string>(
       refuse(LINK_HAS_CONVERSATION);
       return;
     }
+
     // A Cloud session takes text only, so a request with images starts nothing rather than one without them.
     if (request !== null && turn.input.images.length > 0) {
       turn.fail({
@@ -358,6 +367,7 @@ export const createCloudRuntime = <Tag extends string>(
       });
       return;
     }
+
     let cloudSessionId = named;
     let startedTitle: string | null = null;
     if (request !== null && startCloud !== undefined) {
@@ -367,15 +377,18 @@ export const createCloudRuntime = <Tag extends string>(
         refuse(`${START_FAILED}: ${started.error.message}`);
         return;
       }
+
       log({ event: "claude_cloud", step: "started" });
       cloudSessionId = started.value.sessionId;
       startedTitle = started.value.title;
     }
+
     if (cloudSessionId === null) return;
     if (threads.cloudOwner(cloudSessionId) !== undefined) {
       refuse(LINK_TAKEN);
       return;
     }
+
     // A session started here keeps running whatever happens next, so a refusal names it for /cloud to link later.
     const startedNote =
       request === null ? "" : ` ${STARTED_UNLINKED(cloudSessionId)}`;
@@ -384,6 +397,7 @@ export const createCloudRuntime = <Tag extends string>(
       refuse(`${LINK_NOT_COPIED}: ${copied.error.message}.${startedNote}`);
       return;
     }
+
     const shown = keyOfLast(copied.value.records);
     const linked = await threads.linkCloud(
       threadId,
@@ -403,6 +417,7 @@ export const createCloudRuntime = <Tag extends string>(
       );
       return;
     }
+
     log({ event: "claude_cloud", step: "linked" });
     // Stopping while a session starts cannot undo it, so the chat still shows the session it started.
     reply(
@@ -463,6 +478,7 @@ export const createCloudRuntime = <Tag extends string>(
       });
       return;
     }
+
     // The answer comes back only through a chat linked to that session, so without one nothing is sent.
     const owner =
       chat.session === null ? undefined : threads.cloudOwner(chat.session);
@@ -470,6 +486,7 @@ export const createCloudRuntime = <Tag extends string>(
       reply(turn, REVIEW_ASK_UNROUTED);
       return;
     }
+
     const text = turn.input.text;
     const sent = await sendToCloud(
       chat.session,
@@ -491,6 +508,7 @@ export const createCloudRuntime = <Tag extends string>(
       );
       return;
     }
+
     log({ event: "claude_cloud", step: "review_asked" });
     await noteReviewAsk?.(turn.threadId, text);
     reply(turn, REVIEW_ASK_SENT);
@@ -507,6 +525,7 @@ export const createCloudRuntime = <Tag extends string>(
       });
       return;
     }
+
     if (turn.input.images.length > 0) {
       turn.fail({
         _tag: "CloudInputUnsupported",
@@ -514,10 +533,12 @@ export const createCloudRuntime = <Tag extends string>(
       });
       return;
     }
+
     if (turn.state().interrupting) {
       turn.finish({ status: "interrupted" }, null);
       return;
     }
+
     const sent = await sendMessage(turn, cloud, turn.input.text);
     if (sent.isErr()) {
       turn.fail(
@@ -534,6 +555,7 @@ export const createCloudRuntime = <Tag extends string>(
       );
       return;
     }
+
     const follow = newFollow(turn.input.text, cloud.shown);
     keep(threadId, { follow });
     try {
@@ -541,6 +563,7 @@ export const createCloudRuntime = <Tag extends string>(
     } finally {
       if (stateOf(threadId).follow === follow) keep(threadId, { follow: null });
     }
+
     // The session may go on after its reply, so the idle copies watch it closely for a while; a halted thread is not copied again.
     if (!stateOf(threadId).halted) hurry(threadId);
   };
@@ -557,6 +580,7 @@ export const createCloudRuntime = <Tag extends string>(
       log({ event: "claude_cloud", step: "send_unknown" });
       turn.markOutcomeUnknown();
     }
+
     return sent;
   };
 
@@ -595,6 +619,7 @@ export const createCloudRuntime = <Tag extends string>(
           turn.finish({ status: "interrupted" }, null);
           return;
         }
+
         const ended = await copies.next(failingSince !== null);
         if (ended === null) continue;
         const { copied } = ended;
@@ -610,6 +635,7 @@ export const createCloudRuntime = <Tag extends string>(
           if (copied.isOk()) await discardCopy(copied.value.copy);
           continue;
         }
+
         if (copied.isErr()) {
           failingSince ??= now();
           if (
@@ -618,12 +644,14 @@ export const createCloudRuntime = <Tag extends string>(
           ) {
             continue;
           }
+
           turn.fail({
             _tag: "CloudCopyFailed",
             message: `${COPY_FAILED}: ${copied.error.message}`,
           });
           return;
         }
+
         failingSince = null;
         copies.succeeded();
         shownAt = ended.started.at;
@@ -633,6 +661,7 @@ export const createCloudRuntime = <Tag extends string>(
           movedAt = now();
           turn.apply(renderRecords(turn.state(), progress.shown, now()));
         }
+
         // The history the app reads is built from the latest copy, so the turn names its prompt by that copy's uuid.
         if (follow.name === null && progress.shown[0] !== undefined)
           follow.name = progress.shown[0].uuid;
@@ -646,6 +675,7 @@ export const createCloudRuntime = <Tag extends string>(
         if (prompt !== undefined) {
           turnRecords.note(threadId, turn.turnId, prompt.uuid);
         }
+
         await keepCopy(
           threadId,
           copied.value.copy,
@@ -660,6 +690,7 @@ export const createCloudRuntime = <Tag extends string>(
           turn.finish({ status: "completed" }, null);
           return;
         }
+
         // A session waiting for a message it scheduled is not done however long it waits; one that shows nothing new for the limit while in its turn is left to the idle copies.
         if (!waiting && now() - movedAt >= waitLimitMs) {
           park(threadId, follow);
@@ -690,6 +721,7 @@ export const createCloudRuntime = <Tag extends string>(
           break;
         }
       }
+
       if (found === -1) return { shown: [], ended: false, waiting: false };
       // What the session did before the message that the app was not shown, such as a reply still running when the chat was linked.
       shown.push(...all.slice(from, found));
@@ -697,6 +729,7 @@ export const createCloudRuntime = <Tag extends string>(
       follow.matched = 1;
       follow.last = follow.record;
     }
+
     const start = indexAfter(all, follow.last);
     let lastPrompt = indexOf(all, follow.record);
     for (let index = start; index < all.length; index++) {
@@ -710,8 +743,10 @@ export const createCloudRuntime = <Tag extends string>(
       } else {
         shown.push(message);
       }
+
       follow.last = message.uuid;
     }
+
     const ended = done(all) && all.length - 1 > lastPrompt;
     const last = all.at(-1);
     // Only a session that ended its turn waits; one in its turn is followed closely.
@@ -731,6 +766,7 @@ export const createCloudRuntime = <Tag extends string>(
       turn.finish({ status: "completed" }, null);
       return;
     }
+
     const all = copied.value.records;
     const shown = all.slice(indexAfter(all, cloud.shown));
     log({ event: "claude_cloud", step: "own_turn" });
@@ -741,6 +777,7 @@ export const createCloudRuntime = <Tag extends string>(
         turnRecords.note(threadId, turn.turnId, first.uuid);
       }
     }
+
     await keepCopy(threadId, copied.value.copy, keyOfLast(all) ?? cloud.shown);
     // A session still working, or waiting for a message it scheduled, keeps the turn running until it is done, as a turn sent from the app does.
     const last = keyOfLast(all);
@@ -748,6 +785,7 @@ export const createCloudRuntime = <Tag extends string>(
       turn.finish({ status: "completed" }, null);
       return;
     }
+
     const follow = newFollow(null, last);
     // Only what comes after the last record ends the turn.
     follow.record = last;
@@ -759,6 +797,7 @@ export const createCloudRuntime = <Tag extends string>(
     } finally {
       if (stateOf(threadId).follow === follow) keep(threadId, { follow: null });
     }
+
     if (!stateOf(threadId).halted) hurry(threadId);
   };
 
@@ -772,6 +811,7 @@ export const createCloudRuntime = <Tag extends string>(
     if (stateOf(threadId).halted) {
       return Result.err(new CloudCopyStopped({ message: COPY_STOPPED }));
     }
+
     const startedAt = now();
     const copied = await copy(cloudSessionId);
     if (copied.isErr()) {
@@ -792,6 +832,7 @@ export const createCloudRuntime = <Tag extends string>(
       );
       return Result.err(copied.error);
     }
+
     const read = await readCopy(copied.value);
     if (read.isErr()) {
       await discardCopy(copied.value);
@@ -807,6 +848,7 @@ export const createCloudRuntime = <Tag extends string>(
         }),
       );
     }
+
     const all = mainRecords(read.value);
     log({
       event: "claude_cloud",
@@ -839,6 +881,7 @@ export const createCloudRuntime = <Tag extends string>(
           } else {
             unsentReviews.delete(review.key);
           }
+
           log({ event: "claude_cloud", step: "review", outcome });
         });
     }
@@ -861,6 +904,7 @@ export const createCloudRuntime = <Tag extends string>(
         unsentChildren.delete(child.sessionId);
         continue;
       }
+
       openedChildren.add(child.sessionId);
       void openChild(threadId, child)
         .catch(() => "threw")
@@ -872,6 +916,7 @@ export const createCloudRuntime = <Tag extends string>(
           } else {
             unsentChildren.delete(child.sessionId);
           }
+
           log({ event: "claude_cloud", step: "child", outcome });
         });
     }
@@ -903,6 +948,7 @@ export const createCloudRuntime = <Tag extends string>(
       dueAt.delete(threadId);
       parked.delete(threadId);
     }
+
     for (const threadId of linked) {
       if (closed) return;
       if ((dueAt.get(threadId) ?? 0) > now()) continue;
@@ -930,6 +976,7 @@ export const createCloudRuntime = <Tag extends string>(
       await discardCopy(copied.value.copy);
       return "skipped";
     }
+
     const all = copied.value.records;
     const last = all.at(-1);
     const recordAt = last === undefined ? null : timeOf(last);
@@ -944,6 +991,7 @@ export const createCloudRuntime = <Tag extends string>(
     if (cloud.shown !== null && at === -1) {
       log({ event: "claude_cloud", step: "compacted" });
     }
+
     // A session not done, such as one linked or followed again after a restart while it waits for a message it scheduled, is followed by a turn of Claude's own even with nothing new to show.
     const unfinished =
       all.length > 0 && !done(all) && parked.get(threadId) !== keyOfLast(all);
@@ -956,6 +1004,7 @@ export const createCloudRuntime = <Tag extends string>(
         await keepCopy(threadId, copied.value.copy, cloud.shown);
       }
     }
+
     return working ? "working" : "idle";
   };
 
@@ -966,6 +1015,7 @@ export const createCloudRuntime = <Tag extends string>(
     for (const threadId of threads.cloudThreadIds()) {
       wait = Math.min(wait, (dueAt.get(threadId) ?? 0) - now());
     }
+
     return Math.max(POLL_MS, wait);
   };
 
@@ -988,6 +1038,7 @@ export const createCloudRuntime = <Tag extends string>(
       soon = true;
       return;
     }
+
     if (closed) return;
     cancelTick?.();
     plan(POLL_MS);
@@ -1019,6 +1070,7 @@ export const createCloudRuntime = <Tag extends string>(
     if (sent.isErr() && sent.error._tag === "CloudSendRejected") {
       return "cloud_not_sent";
     }
+
     // The message may have reached the session, so it is taken rather than refused, which would run it again as a turn; the thread is left with an unknown outcome to check before going on.
     if (sent.isErr()) {
       turn.apply(
@@ -1030,6 +1082,7 @@ export const createCloudRuntime = <Tag extends string>(
         ),
       );
     }
+
     return null;
   };
 
@@ -1048,6 +1101,7 @@ export const createCloudRuntime = <Tag extends string>(
         stopFollowing(turn.threadId);
         return;
       }
+
       inner.interrupt(turn as RunningTurn<Tag>, repeated);
     },
     dropSession: (threadId, link) => inner.dropSession(threadId, link),
@@ -1063,9 +1117,11 @@ export const createCloudRuntime = <Tag extends string>(
         for (const [sessionId, entry] of unsentChildren) {
           if (entry.threadId === threadId) unsentChildren.delete(sessionId);
         }
+
         for (const [key, entry] of unsentReviews) {
           if (entry.threadId === threadId) unsentReviews.delete(key);
         }
+
         // A deleted thread cannot return, so its session is no longer copied and is free for another thread; an archived one keeps it.
         if (threads.cloudOf(threadId) !== null) {
           const copy = threads.sessionIdOf(threadId);
@@ -1075,6 +1131,7 @@ export const createCloudRuntime = <Tag extends string>(
           });
         }
       }
+
       inner.forgetThread(threadId, ended);
     },
     threadBusy: (threadId) => {
@@ -1154,6 +1211,7 @@ const scheduleCopies = (
       lastAt = now();
       running.push({ at: lastAt, overlapped, copied: fetch() });
     }
+
     const due =
       running.length > 0 && overlapping(failing)
         ? sleep(Math.max(0, lastAt + OVERLAP_MS - now()), woken)

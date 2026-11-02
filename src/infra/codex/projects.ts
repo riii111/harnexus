@@ -33,6 +33,7 @@ export const projectOf = async (result: unknown, folder: string) => {
         path: await realPathOrSelf(project.path),
       });
   }
+
   const holding = projects
     .filter(({ path }) => real === path || real.startsWith(`${path}/`))
     .sort((a, b) => b.path.length - a.path.length);

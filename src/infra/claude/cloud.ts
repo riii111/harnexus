@@ -88,6 +88,7 @@ export const sendToCloud = async (
         : new CloudSendRejected({ message }),
     );
   }
+
   return sendOutcome(ran.value);
 };
 
@@ -97,6 +98,7 @@ const sendOutcome = (run: ProcessRun): Result<void, CloudSendFailure> => {
       new CloudSendUnknown({ message: `claude --cloud ended by ${run.ended}` }),
     );
   }
+
   const answer = printAnswer(run.stdout);
   if (answer !== null && answer.ok === true) return Result.ok();
   if (answer !== null && answer.ok === false) {
@@ -107,6 +109,7 @@ const sendOutcome = (run: ProcessRun): Result<void, CloudSendFailure> => {
       }),
     );
   }
+
   // A configuration error, such as a disabled organization policy, is printed to stderr without JSON before anything is sent.
   if (run.status !== 0 && run.stdout.trim() === "") {
     return Result.err(
@@ -115,6 +118,7 @@ const sendOutcome = (run: ProcessRun): Result<void, CloudSendFailure> => {
       }),
     );
   }
+
   return Result.err(
     new CloudSendUnknown({
       message: "claude --cloud answered without a result",
@@ -159,6 +163,7 @@ export const copyCloudSession = async (
     checkouts.remember(cloudSessionId, named);
     ran = await teleport(cli, cloudSessionId, named, { cwd, checkouts });
   }
+
   if (ran.isErr()) return copyFailed(ran.error.message);
   const { run, refusal, copiedAt } = ran.value;
   const answer = printAnswer(run.stdout);
@@ -177,6 +182,7 @@ export const copyCloudSession = async (
         "claude --teleport answered without a copy",
     );
   }
+
   const turns = answer.num_turns;
   if (turns !== 0) {
     await removeCloudCopy(sessionId, configDir);
@@ -184,12 +190,14 @@ export const copyCloudSession = async (
       ? copyFailed(COPY_RAN_MODEL, "ran_model")
       : copyFailed(COPY_UNCHECKED, "unchecked");
   }
+
   const stable = await stabilizeCopy(sessionId, copiedAt, configDir);
   // A copy whose uuids cannot be made stable would change what the app holds, so it is removed.
   if (stable.isErr()) {
     await removeCloudCopy(sessionId, configDir);
     return copyFailed(stable.error.message);
   }
+
   return Result.ok(sessionId);
 };
 
@@ -296,10 +304,12 @@ const stabilizeCopy = async (
   if (found.isErr() || found.value === null) {
     return unstable("the copy of the Cloud session was not found");
   }
+
   const text = await readTextFileIfExists(found.value);
   if (text.isErr() || text.value === null) {
     return unstable("the copy of the Cloud session could not be read");
   }
+
   // Each teleport copy gives the records new uuids, which would change the turn ids, pages and cursors the app holds.
   const renamed = new Map<string, string>();
   const seen = new Map<string, number>();
@@ -325,6 +335,7 @@ const stabilizeCopy = async (
     seen.set(key, count + 1);
     renamed.set(uuid, uuidFrom(`${key}#${count}`));
   }
+
   // Every occurrence of an old uuid is replaced, so the links between records, such as parentUuid, follow.
   const stable = kept
     .join("\n")

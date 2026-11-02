@@ -116,6 +116,7 @@ export const createSessionCommands = ({
     if (threads.sessionIdOf(threadId) !== null) {
       return answered({ kind: "hasConversation" });
     }
+
     const found = await listConversations(cwd, now() - MAX_AGE_MS);
     if (found.isErr()) {
       return {
@@ -123,9 +124,11 @@ export const createSessionCommands = ({
         error: found.error._tag,
       };
     }
+
     if (found.value.length === 0) {
       return answered({ kind: "noneFound", cwd, maxAgeDays: MAX_AGE_DAYS });
     }
+
     return pick(
       threadId,
       cwd,
@@ -180,6 +183,7 @@ export const createSessionCommands = ({
     if (threads.sessionIdOf(threadId) !== null) {
       return answered({ kind: "hasConversation" });
     }
+
     // Another thread may have taken the conversation, or Claude may have lost its record, since the list was shown.
     if (threads.isBound(chosen.sessionId)) return answered({ kind: "taken" });
     const found = await findSession(chosen.sessionId);
@@ -193,6 +197,7 @@ export const createSessionCommands = ({
         error === "SessionTaken" ? { kind: "taken" } : { kind: "notSaved" };
       return { reply, error };
     }
+
     await remember(threadId, chosen.sessionId);
     return {
       reply: {

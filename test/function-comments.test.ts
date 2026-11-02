@@ -123,10 +123,13 @@ const findCommentedShortFunctions = async (root: string) => {
             found.push({ id: `${relative(src, file)}#${name}` });
           }
         }
+
         node.forEachChild(visit);
       };
+
       visit(source);
     }
+
     return found;
   } finally {
     await api.close();
@@ -137,6 +140,7 @@ const functionNameOf = (node: Node): string | undefined => {
   if (node.kind === SyntaxKind.FunctionDeclaration) {
     return (node as Node & { name?: { text: string } }).name?.text;
   }
+
   if (node.kind !== SyntaxKind.VariableStatement) return undefined;
   const { declarations } = (
     node as Node & {
@@ -182,6 +186,7 @@ const lineIndex = (lineStarts: readonly number[], offset: number) => {
     if ((lineStarts[middle] ?? 0) <= offset) low = middle;
     else high = middle - 1;
   }
+
   return low;
 };
 
@@ -192,6 +197,7 @@ const sourceFiles = async (src: string) => {
   })) {
     if (!isTestCode(path)) files.push(join(src, path));
   }
+
   return files.sort();
 };
 
@@ -230,5 +236,6 @@ const writeProject = async (files: Record<string, string>) => {
     await mkdir(dirname(join(src, path)), { recursive: true });
     await writeFile(join(src, path), `${text}\n`);
   }
+
   return root;
 };

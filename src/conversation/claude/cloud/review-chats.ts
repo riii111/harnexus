@@ -105,6 +105,7 @@ export const createCloudReviews = (
         [review.reviewer]: { threadId, session: workerSession },
       });
     };
+
     if (chat !== null) {
       const sent = await answerOf(
         call,
@@ -119,6 +120,7 @@ export const createCloudReviews = (
         return { outcome, threadId: chat };
       }
     }
+
     const listed = await answerOf(call, parentThreadId, "list_projects", {});
     if (listed.outcome !== "done") return NO_PROJECT;
     // Like a reviewer in the app, the chat opens in the empty review project when there is one, and in the worker's project otherwise.
@@ -147,6 +149,7 @@ export const createCloudReviews = (
       if (chat?.threadId === threadId)
         return { reviewer, session: chat.session };
     }
+
     return null;
   };
 
@@ -181,10 +184,12 @@ export const createCloudReviews = (
           });
         continue;
       }
+
       const review = await reviewOf(name.slice(0, -".json".length));
       if (review !== null)
         shown.push({ at, asked: false, records: reviewRecords(review, at) });
     }
+
     if (shown.length === 0) return null;
     // A message is sent after the review it answers, so within one millisecond the review comes first rather than in the order the folder lists them.
     shown.sort(
@@ -297,6 +302,7 @@ const projectAt = async (result: unknown, folder: string) => {
     )
       return project.projectId;
   }
+
   return null;
 };
 

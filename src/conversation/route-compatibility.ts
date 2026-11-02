@@ -32,6 +32,7 @@ export const createCompatibility = (
         incompatible = true;
         log({ event: "codex_incompatible", reason, version: serverVersion });
       }
+
       return true;
     },
     noteInitialized: (result: Record<string, unknown>) => {

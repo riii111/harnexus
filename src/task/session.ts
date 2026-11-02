@@ -67,6 +67,7 @@ export const callApp = async (
           error: `${path.value}: ${reason}; ${socketHint(answer.error.code)}`,
         };
   }
+
   const parsed = parseJson(answer.value);
   if (parsed.isErr())
     return { outcome: "unknown", error: "no answer: invalid JSON" };
@@ -91,6 +92,7 @@ export const reviewProject = async (
     if (typeof path !== "string" || typeof projectId !== "string") continue;
     if ((await realPathOrSelf(path)) === home) return Result.ok(projectId);
   }
+
   return fail(
     `add ${home} to the Codex app as a project, so reviewers run there instead of in a worktree of their own`,
   );
@@ -166,6 +168,7 @@ const openSession = (
             `another ${NAME} run changed the state; rerun to check it`,
           );
         }
+
         const answer = await callApp(deps.env, caller, tool, args);
         const outcome = answer.outcome;
         const thread = truthy(answer.threadId)
@@ -184,8 +187,10 @@ const openSession = (
               save(pendingPath, record, { exclusive: false }),
             );
           }
+
           return confirmed;
         }
+
         // Either way the thread exists but never ran, so it is kept for resolve rather than sent again.
         const refusal =
           outcome === ("model_mismatch" satisfies CallOutcome)
@@ -207,6 +212,7 @@ const openSession = (
           pending = record;
           yield* checkIdle(pending);
         }
+
         const text = JSON.stringify(answer);
         // A lost send_message answer reaches Claude callers as tool_error.
         if (
@@ -218,6 +224,7 @@ const openSession = (
           yield* Result.await(removeRecord(pendingPath));
           return fail(`${tool} was not sent: ${text}`);
         }
+
         Object.assign(record, { status: "unknown", threadId: thread, answer });
         yield* Result.await(save(pendingPath, record, { exclusive: false }));
         return fail(
@@ -236,12 +243,14 @@ const openSession = (
               save(historyPath, [...kept, pending], { exclusive: false }),
             );
           }
+
           yield* Result.await(removeRecord(pendingPath));
           return Result.ok({
             released: pending.tool ?? null,
             status: pending.status ?? null,
           });
         }
+
         if (pending.status === "refused")
           return fail("a refused first turn never ran; use --not-sent");
         return await confirm(
@@ -425,10 +434,12 @@ export const listState = (env: Env) =>
         }
       }
     }
+
     const listed: Fields = {};
     for (const path of paths.sort()) {
       listed[path] = yield* Result.await(load(path));
     }
+
     return Result.ok(listed);
   });
 
@@ -449,6 +460,7 @@ export const launchOfThread = (env: Env, thread: string) =>
       )
         return Result.ok<Fields | null>(state.request);
     }
+
     return Result.ok<Fields | null>(null);
   });
 

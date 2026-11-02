@@ -28,6 +28,7 @@ export const parseTimeArgument = (
     if (!Number.isNaN(time) && time <= now && now - time <= MAX_WINDOW_MS)
       return Result.ok(time);
   }
+
   return Result.err(
     new TimeArgumentInvalid({
       message: `${name} must be a duration such as 30m, 2h or 3d, or a time such as 2026-10-24T18:30 or 2026-10-24T18:30+09:00, within the last 7 days`,
@@ -135,6 +136,7 @@ export const classifyChanges = (porcelain: string): GitChanges => {
     else if (isCode(path)) code.push(path);
     else otherTracked += 1;
   }
+
   return { code: code.slice(0, MAX_LISTED_CHANGES), otherTracked, untracked };
 };
 
@@ -334,6 +336,7 @@ const bridgeChecks = (facts: FeedbackFacts): Check[] => {
       changed.some((time) => time !== null && startedAtMs < time)
     );
   };
+
   // A bridge keeps the code it loaded, so one started before a pull, an edit or bun install runs older code than this checkout.
   const stale = mine.filter(isStale);
   const listed = mine.map(({ pid, startedAtMs }) => {
@@ -487,6 +490,7 @@ export const redactPaths = (
     .sort((a, b) => b.path.length - a.path.length)) {
     redacted = redacted.replaceAll(path, name);
   }
+
   return redacted
     .replace(/\/Users\/[^/\s"',;)]+/g, "/Users/<user>")
     .replace(/\/Volumes\/[^/\n"',;]+(?=\/)/g, "/Volumes/<volume>")

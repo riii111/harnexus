@@ -80,6 +80,7 @@ export const openLogSink = (path: string, rotateAbove = LOG_ROTATE_BYTES) =>
           renameSync(path, `${path}.1`);
         } catch {}
       }
+
       appendFileSync(path, "", { mode: OWNER_ONLY });
       // The mode applies only to a new file, so an existing one is narrowed too.
       chmodSync(path, OWNER_ONLY);
@@ -116,6 +117,7 @@ export const readRegularTextFile = (path: string) =>
       if (!(await stat(path)).isFile()) {
         throw new Error(`${path} is not a regular file`);
       }
+
       return await readFile(path, "utf8");
     },
     catch: (cause) =>
@@ -234,6 +236,7 @@ const writeTemporary = async (path: string, content: string) => {
     await rm(temporary, { force: true }).catch(() => {});
     throw cause;
   }
+
   return temporary;
 };
 
@@ -339,6 +342,7 @@ export const listFilesDeepIfExists = (path: string) =>
           }
         }
       };
+
       await walk(top, []);
       return files;
     },
@@ -377,6 +381,7 @@ export const createEmptyFile = (path: string) =>
           } finally {
             await file.close();
           }
+
           await syncDirectory(dirname(path));
         },
         catch: (cause) =>

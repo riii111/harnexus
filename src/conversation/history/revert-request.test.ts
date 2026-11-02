@@ -267,6 +267,7 @@ const setup = async ({
   } else {
     await store.setSessionId(THREAD, "se-1");
   }
+
   fail = failSave || failSync;
   const threads = createThreadValues(store, () => {}, NO_EFFORT);
   const sent: Sent[] = [];

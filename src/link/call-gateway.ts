@@ -86,6 +86,7 @@ export const createCallGateway = ({
         message: `expected {"threadId","tool","arguments"} with tool one of ${TOOLS.join(", ")}`,
       };
     }
+
     const { threadId, tool, arguments: args } = call.data;
     if (tool === "name_thread") return nameThread(threadId, args);
     if (tool === "cloud_chat") {
@@ -97,9 +98,11 @@ export const createCallGateway = ({
           }
         : { outcome: "invalid", message: "cloud_chat expects a sessionId" };
     }
+
     if (tool === "create_thread") {
       return creates.run(threadId, () => createThread(threadId, args));
     }
+
     if (isClaudeThread(threadId)) {
       const result = await linkOf(threadId).call(tool, args);
       return {
@@ -107,6 +110,7 @@ export const createCallGateway = ({
         result,
       };
     }
+
     const answered = await callApp(threadId, tool, args);
     if (answered.isOk()) {
       const result = answered.value;
@@ -116,6 +120,7 @@ export const createCallGateway = ({
         result,
       };
     }
+
     return failedCall(answered.error);
   };
 
@@ -148,6 +153,7 @@ export const createCallGateway = ({
       const created = await linkOf(threadId).createChecked(args);
       return created.busy ? BUSY : createdAnswer(created);
     }
+
     // Registered before the call is sent, since the new thread's first turn can reach the bridge before the tool answer.
     const created = delegations.expect(threadId, {
       expected: {
@@ -165,6 +171,7 @@ export const createCallGateway = ({
         }),
       );
     }
+
     const lost = await concludeCreate(created, {
       answer: null,
       waitMs: 0,
@@ -247,6 +254,7 @@ const createdAnswer = ({
       actual: refusal.actual,
     };
   }
+
   if (refusal?.kind === "bridge") {
     return {
       outcome: "first_turn_refused",
@@ -254,6 +262,7 @@ const createdAnswer = ({
       reason: refusal.reason,
     };
   }
+
   if (unknown) {
     return {
       outcome: "unknown",
@@ -263,6 +272,7 @@ const createdAnswer = ({
       ...(threadId !== null && { threadId }),
     };
   }
+
   if (firstTurn === null) return { outcome: "tool_error", result };
   return {
     outcome: "done",
@@ -280,6 +290,7 @@ const timeoutOf = (tool: AppTool, args: Record<string, unknown>) => {
     const asked = args.timeoutMs;
     return (typeof asked === "number" ? asked : MAX_WAIT_MS) + WAIT_MARGIN_MS;
   }
+
   return tool === "create_thread" || tool === "send_message_to_thread"
     ? WRITE_TIMEOUT_MS
     : CALL_TIMEOUT_MS;

@@ -85,6 +85,7 @@ describe("createCodexLink tools", () => {
           delegations.observe("thread-elsewhere", OTHER_REVIEWER);
           delegations.observe(CALLER, REVIEWER);
         }
+
         return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
       },
     });
@@ -109,6 +110,7 @@ describe("createCodexLink tools", () => {
         if (creates === 1) {
           return Result.ok(textAnswer(JSON.stringify({ threadId: REVIEWER })));
         }
+
         delegations.observe(CALLER, REVIEWER);
         return Result.ok(textAnswer(JSON.stringify(PROVISIONAL)));
       },
@@ -257,6 +259,7 @@ describe("createCodexLink tools", () => {
         "hostId",
       );
     }
+
     expect(requests[0]?.params.arguments).toEqual({
       targets: [{ threadId: CALLER }],
     });
@@ -444,6 +447,7 @@ describe("createCodexLink write outcomes", () => {
     let release: (
       value: Result<unknown, ServerRequestError>,
     ) => void = () => {};
+
     const { client, requests } = await connect({
       answer: () =>
         new Promise((resolve) => {
@@ -467,6 +471,7 @@ describe("createCodexLink write outcomes", () => {
     let release: (
       value: Result<unknown, ServerRequestError>,
     ) => void = () => {};
+
     const { client, link, requests } = await connect({
       answer: () =>
         new Promise((resolve) => {
@@ -505,6 +510,7 @@ describe("createCodexLink write outcomes", () => {
     let release: (
       value: Result<unknown, ServerRequestError>,
     ) => void = () => {};
+
     const { client, link, requests } = await connect({
       answer: () =>
         new Promise((resolve) => {
@@ -1186,10 +1192,12 @@ const connect = async ({
       modelLists.push(params);
       return models(params as Record<string, unknown>);
     }
+
     const call = params as CallParams;
     requests.push({ method, params: call, timeoutMs });
     return answer(call);
   };
+
   const link = createCodexLink({
     callerThreadId: CALLER,
     store,

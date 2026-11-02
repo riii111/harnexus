@@ -35,6 +35,7 @@ export const promptOf = (body: unknown): Prompt | null => {
   ) {
     return null;
   }
+
   // The first text block is what was typed; later ones are files the bridge attached.
   const typed = content.find(
     (block) =>
@@ -69,6 +70,7 @@ const imageUrlOf = (block: unknown) => {
   ) {
     return `data:${source.media_type};base64,${source.data}`;
   }
+
   return source.type === "url" && typeof source.url === "string"
     ? source.url
     : null;
@@ -111,6 +113,7 @@ export const startOfRecord = (messages: readonly SessionMessage[]) => {
     const at = timeOf(message);
     if (at !== null) return at;
   }
+
   return null;
 };
 

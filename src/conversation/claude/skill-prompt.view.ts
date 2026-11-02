@@ -6,6 +6,7 @@ export const skillLinks = (text: string) => {
     seen.add(path);
     links.push({ name, path });
   }
+
   return links;
 };
 

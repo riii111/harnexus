@@ -678,6 +678,7 @@ const setup = (overrides: Record<string, string | undefined> = {}) => {
   for (const [key, value] of entries) {
     if (value !== undefined) env[key] = value;
   }
+
   return { env, reportPath };
 };
 
@@ -787,6 +788,7 @@ const readSlowly = async (stream: ReadableStream<Uint8Array>) => {
     chunks.push(chunk);
     await Bun.sleep(1);
   }
+
   return Buffer.concat(chunks).toString();
 };
 

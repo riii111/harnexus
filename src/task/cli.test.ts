@@ -76,6 +76,7 @@ const fakeHarnexus = async (path: string) => {
         );
         return;
       }
+
       calls.push(call);
       const answer = answers.shift();
       if (answer === undefined) unplanned.push(call);
@@ -144,11 +145,13 @@ const fixture = async () => {
       stdout: run.stdout,
     };
   };
+
   const write = async (data: unknown) => {
     const path = join(root, "request.json");
     await writeFile(path, JSON.stringify(data));
     return path;
   };
+
   return { root, codex, socket, env, harnexus, invoke, write };
 };
 
@@ -1240,10 +1243,12 @@ const reviewFixture = async () => {
     ]);
     return ran.stdout.toString().trim();
   };
+
   const commit = (message: string) => {
     git("commit", "--allow-empty", "-qm", message);
     return git("rev-parse", "HEAD");
   };
+
   git("init", "-q");
   const initial = commit("test: initial");
   git("branch", "base");
@@ -1618,6 +1623,7 @@ describe("harnexus-task review", () => {
       );
       expect(env.GIT_NO_LAZY_FETCH).toBe("1");
     }
+
     const outside = join(root, "outside");
     await mkdir(outside);
     data.checkout = outside;

@@ -62,6 +62,7 @@ const nestedDescribe = (node) => {
       return { node, messageId: "nested" };
     }
   }
+
   return undefined;
 };
 
@@ -79,6 +80,7 @@ const badTitle = (node, sourceCode) => {
   if (node.callee.type !== "CallExpression" || !isEach(node.callee.callee)) {
     return undefined;
   }
+
   const [title] = node.arguments;
   const text = staticTitle(title, sourceCode);
   if (text === undefined) return undefined;

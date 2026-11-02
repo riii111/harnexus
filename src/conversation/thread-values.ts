@@ -60,6 +60,7 @@ export const createThreadValues = (
       values = {};
       overrides.set(threadId, values);
     }
+
     return values;
   };
 
@@ -123,8 +124,10 @@ export const createThreadValues = (
           at: rewind.at,
         };
       }
+
       return;
     }
+
     const sourceSession = sessionIdOf(sourceId);
     if (sourceSession !== null) {
       valuesOf(threadId).forkSource = { sessionId: sourceSession, at: null };
@@ -160,6 +163,7 @@ export const createThreadValues = (
       overrides.delete(threadId);
       return;
     }
+
     // An archived thread can return, so only an override the store already holds goes, and what the app picked or gave the thread stays.
     const values = overrides.get(threadId);
     if (record === undefined || values === undefined) return;
@@ -171,6 +175,7 @@ export const createThreadValues = (
     ) {
       delete values.sessionId;
     }
+
     prune(threadId);
   };
 
@@ -186,6 +191,7 @@ export const createThreadValues = (
     for (const values of overrides.values()) {
       if (values.sessionId === sessionId) return true;
     }
+
     const owner = store.sessionOwner(sessionId);
     // An id set here but not saved wins over the store's.
     return owner !== undefined && overrides.get(owner)?.sessionId === undefined;
@@ -206,6 +212,7 @@ export const createThreadValues = (
         thread: threadId.slice(0, 8),
       });
     }
+
     return { bound, error: saved.isErr() ? saved.error._tag : null };
   };
 
@@ -217,10 +224,12 @@ export const createThreadValues = (
     if (picked !== undefined && picked !== store.get(threadId)?.model) {
       saveModel(threadId, picked);
     }
+
     const effort = overrides.get(threadId)?.effort;
     if (effort !== undefined && effort !== store.get(threadId)?.effort) {
       saveEffort(threadId, effort);
     }
+
     prune(threadId);
   };
 
@@ -252,6 +261,7 @@ export const createThreadValues = (
       log({ event: "claude_turn", step: "effort_unsupported" });
       return;
     }
+
     changeEffort(threadId, effort);
   };
 
@@ -271,6 +281,7 @@ export const createThreadValues = (
     if (saved.isErr()) {
       log({ event: "claude_turn", step, error: saved.error._tag });
     }
+
     return saved;
   };
 

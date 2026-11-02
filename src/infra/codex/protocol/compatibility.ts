@@ -21,6 +21,7 @@ export const responseCompatibility = (
       ? null
       : "InitializeResponseChanged";
   }
+
   if (
     !isObject(result) ||
     !Array.isArray(result.data) ||

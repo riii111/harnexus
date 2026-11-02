@@ -548,6 +548,7 @@ const observe = (
   for (const { direction, line } of messages) {
     observer.chunk(direction, encode(line));
   }
+
   observer.end("app_to_server");
   observer.end("server_to_app");
   const log = lines.join("");

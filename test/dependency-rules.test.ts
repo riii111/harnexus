@@ -277,23 +277,27 @@ const checkDependencies = (
         problems.push(`${reference.file}: lies outside the areas of src/`);
       continue;
     }
+
     const { from, specifier, to } = reference;
     if (to === undefined) {
       problems.push(`${from} -> "${specifier}": cannot be resolved`);
       continue;
     }
+
     const broken = brokenRule(from, to);
     if (broken === undefined) continue;
     const exception = exceptions.find((e) => e.from === from && e.to === to);
     if (exception === undefined) problems.push(`${from} -> ${to}: ${broken}`);
     else used.add(exception);
   }
+
   for (const exception of exceptions) {
     if (!used.has(exception))
       problems.push(
         `exception ${exception.from} -> ${exception.to} is no longer needed`,
       );
   }
+
   return problems;
 };
 
@@ -313,6 +317,7 @@ const brokenRule = (from: string, to: string) => {
     if (!isViewTarget(to))
       return "a view may reference only views, infra/codex/protocol/ and lib/";
   }
+
   if (
     fromArea === "prwatch" &&
     toArea === "infra" &&
@@ -372,6 +377,7 @@ const collectReferences = async (root: string) => {
         });
         continue;
       }
+
       for (const call of requireCalls(source)) {
         references.push({
           kind: "import",
@@ -380,6 +386,7 @@ const collectReferences = async (root: string) => {
           to: undefined,
         });
       }
+
       const symbols = await project.checker.getSymbolAtLocation([
         ...source.imports,
       ]);
@@ -398,6 +405,7 @@ const collectReferences = async (root: string) => {
         });
       });
     }
+
     return references;
   } finally {
     await api.close();
@@ -417,8 +425,10 @@ const requireCalls = (source: Node) => {
       )
         calls.push(`require(${sourceText(source, node)})`);
     }
+
     node.forEachChild(visit);
   };
+
   visit(source);
   return calls;
 };
@@ -439,6 +449,7 @@ const sourceFiles = async (src: string) => {
   })) {
     if (!isTestCode(path)) files.push(join(src, path));
   }
+
   return files.sort();
 };
 
@@ -488,5 +499,6 @@ const writeProject = async (files: Record<string, string>) => {
     await mkdir(dirname(join(src, path)), { recursive: true });
     await writeFile(join(src, path), `${text}\n`);
   }
+
   return root;
 };

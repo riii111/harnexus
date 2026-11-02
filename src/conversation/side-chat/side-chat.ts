@@ -90,6 +90,7 @@ export const createSideChats = ({
             },
       );
     }
+
     const sessionId = sessionIdOf(sourceId);
     if (sessionId === null) return Result.ok<ForkPoint>(null);
     const last = await lastRecordOf(sessionId);
@@ -110,6 +111,7 @@ export const createSideChats = ({
           sideChatReference(recent, { agent: "Codex", model: null }),
         );
       }
+
       const oldest = yield* Result.await(readPage(parentId, OLDEST));
       const first = oldest.turns[0];
       // An oldest page with no turn though more were said to exist fails the read rather than hand over a mix.
@@ -120,12 +122,14 @@ export const createSideChats = ({
           }),
         );
       }
+
       // A turn both pages hold is taken from the newest page, which then reaches the oldest turn and leaves nothing unread.
       if (recent.some(({ id }) => id === first.id)) {
         return Result.ok(
           sideChatReference(recent, { agent: "Codex", model: null }),
         );
       }
+
       return Result.ok(
         sideChatReference([first, ...recent], {
           agent: "Codex",
@@ -180,10 +184,12 @@ export const createSideChats = ({
     if (sideChat.ranOnCodex) {
       return claude ? Promise.resolve("side_chat_model_fixed") : null;
     }
+
     const { parent } = sideChat;
     if (movesAway(parent, claude) && "unread" in parent) {
       return Promise.resolve("side_chat_main_unread");
     }
+
     if (claude) return null;
     if ("point" in parent) return handOver(threadId, sideChat, parent.point);
     sideChat.ranOnCodex = true;
@@ -203,6 +209,7 @@ export const createSideChats = ({
     if (movesAway(sideChat.parent, claude) && "unread" in sideChat.parent) {
       return "side_chat_main_unread";
     }
+
     // A model picked before the first message only marks the choice, so picking the other agent again leaves the side chat as it was.
     sideChat.choice = requested;
     if (claude || !isClaudeThread(threadId)) return null;
@@ -246,10 +253,12 @@ export const createSideChats = ({
         if (injected.error._tag !== "ServerRequestUnanswered") {
           return "side_chat_not_briefed" as const;
         }
+
         sideChat.stopped = true;
         return "side_chat_stopped" as const;
       }
     }
+
     sideChat.ranOnCodex = true;
     dropFork(threadId);
     return null;

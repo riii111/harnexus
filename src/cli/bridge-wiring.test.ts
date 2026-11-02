@@ -379,6 +379,7 @@ const workerA = async () => {
       content: [{ type: "text", text: JSON.stringify(PROVISIONAL) }],
     });
   };
+
   const threads = connect(store, sent, {
     request,
     startSession: async (session) => {
@@ -405,6 +406,7 @@ const workerA = async () => {
     threads.closeAll();
     return created;
   };
+
   return {
     store,
     sent,

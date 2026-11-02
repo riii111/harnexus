@@ -79,6 +79,7 @@ export const saveJson: SaveJson = (path, data, { exclusive }) =>
       yield* Result.await(io(writeFileAtomic(path, content)));
       return Result.ok();
     }
+
     const created = yield* Result.await(io(writeFileExclusive(path, content)));
     return created
       ? Result.ok()

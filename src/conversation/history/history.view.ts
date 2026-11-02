@@ -84,6 +84,7 @@ export const buildHistory = (
       replay = noteAgents(replay, body, agentThreadOf, at);
     }
   }
+
   if (replay !== null) turns.push(close(replay));
   return turns;
 };
@@ -137,6 +138,7 @@ export const withLiveTurn = (
       },
     ];
   }
+
   return [
     ...history.slice(0, opened),
     {
@@ -244,6 +246,7 @@ const noteAgents = (
     ) {
       continue;
     }
+
     const agent = agentThreadOf(block.id);
     if (agent === undefined) continue;
     const items: ThreadItem[] = [
@@ -262,6 +265,7 @@ const noteAgents = (
       });
     }
   }
+
   return replay;
 };
 

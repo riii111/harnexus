@@ -236,6 +236,7 @@ export const createGitHub = (
         nodes.push(...nodesOf(connection));
         info = pageInfoOf(connection);
       }
+
       return Result.ok(nodes);
     });
 

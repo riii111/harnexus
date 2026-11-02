@@ -171,6 +171,7 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
           new GithubUnreachable({ cause: null, message: "GitHub is down" }),
         );
       }
+
       return Result.ok(detailOf(world.summary, world.comments, world.extra));
     },
     openPulls: async () => Result.ok([]),
@@ -200,6 +201,7 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
         result: { content: [{ type: "text", text: JSON.stringify(read) }] },
       };
     }
+
     calls.sent.push({ caller, tool, ...args });
     return { outcome: world.sendOutcome };
   };
@@ -216,6 +218,7 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
     });
     expect(ran.isOk()).toBe(true);
   };
+
   const state = async (): Promise<WatchState> =>
     (
       await loadWatchState(paths.state, { repo: "org/pay", number: 7 })
@@ -224,6 +227,7 @@ const fixture = async (config: Fields = {}, { firstRead = false } = {}) => {
     world.now = new Date(world.now.getTime() + minutes * 60_000);
     world.summary = { ...world.summary, updatedAt: world.now.toISOString() };
   };
+
   return { env, paths, world, calls, logs, cycle, state, later };
 };
 

@@ -470,6 +470,7 @@ describe("copyCloudSession", () => {
             `${records.map((line) => JSON.stringify(line)).join("\n")}\n`,
           );
         }
+
         const stdout =
           play.answer === undefined
             ? ""

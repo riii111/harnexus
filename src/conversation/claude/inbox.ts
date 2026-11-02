@@ -8,6 +8,7 @@ export const createInbox = <T>() => {
     settlers = [];
     for (const resolve of resolved) resolve();
   };
+
   return {
     push: (item: T) => {
       const resolve = waiting;

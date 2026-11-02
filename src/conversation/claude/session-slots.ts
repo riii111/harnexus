@@ -92,6 +92,7 @@ export const createSessionSlots = <Turn extends { threadId: string }>({
         scheduleIdleClose(threadId);
         return;
       }
+
       drop(threadId, slot);
       log({ event: "claude_turn", step: "idle_closed" });
     }, idleSessionMs);
@@ -109,6 +110,7 @@ export const createSessionSlots = <Turn extends { threadId: string }>({
       sessions.delete(threadId);
       onDropped(threadId);
     }
+
     slot.session.close();
   };
 
@@ -117,6 +119,7 @@ export const createSessionSlots = <Turn extends { threadId: string }>({
     for (const [threadId, startup] of [...starting]) {
       cancelStart(threadId, startup);
     }
+
     for (const [threadId, slot] of sessions) drop(threadId, slot);
   };
 

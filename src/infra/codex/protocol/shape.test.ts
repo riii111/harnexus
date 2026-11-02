@@ -210,6 +210,7 @@ describe("PROTOCOL_FIELDS", () => {
           collect(child);
         }
     };
+
     for (const name of readdirSync(FIXTURES).filter((file) =>
       file.endsWith(".jsonl"),
     ))

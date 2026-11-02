@@ -44,6 +44,7 @@ export const findAgentResumes = (
       }
     }
   }
+
   // Only Claude's answer tells a resume from a message queued for an agent still running.
   return calls.flatMap((call) => {
     const answer = answers.get(call.toolUseId);

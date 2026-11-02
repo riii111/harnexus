@@ -64,20 +64,24 @@ export const createAutomationTool = ({
         `runSettings cannot hold ${reserved.join(", ")}; give the schedule and its text as their own arguments.`,
       );
     }
+
     if (mode === "create") {
       if (id !== undefined) {
         return failure(
           "Leave id out to create an automation; it names an existing one to view, update or delete.",
         );
       }
+
       if (kind === "cron") {
         if (fields.name === undefined || fields.prompt === undefined) {
           return failure(
             "A cron automation needs a name and a prompt, by which the new automation is told apart from others; nothing was sent.",
           );
         }
+
         return createCron({ ...runSettings, ...fields }, queuedIn);
       }
+
       if (runSettings !== undefined) return failure(RUN_SETTINGS_ONLY_FOR_CRON);
       return write(
         "automation_update",
@@ -86,11 +90,13 @@ export const createAutomationTool = ({
         { queuedIn },
       );
     }
+
     if (id === undefined) {
       return failure(
         `mode=${mode} needs the id of a heartbeat of this thread or of a cron automation created from a Claude thread.`,
       );
     }
+
     const reachable = await reachAutomation(id);
     if (reachable.isErr()) return failure(unreachableText(reachable.error));
     const reached = reachable.value;
@@ -99,6 +105,7 @@ export const createAutomationTool = ({
         `Automation ${id} is a ${reached.kind}, and an existing automation keeps its kind; nothing was sent.`,
       );
     }
+
     if (
       runSettings !== undefined &&
       (reached.kind === "heartbeat" || mode !== "update")
@@ -109,6 +116,7 @@ export const createAutomationTool = ({
           : `runSettings applies only to create and update; leave it out for mode=${mode}.`,
       );
     }
+
     if (mode === "view") return read("automation_update", { mode, id }, []);
     if (mode === "delete") {
       return write("automation_update", { mode, id }, [], {
@@ -125,6 +133,7 @@ export const createAutomationTool = ({
         },
       });
     }
+
     return write(
       "automation_update",
       reached.kind === "cron"
@@ -158,6 +167,7 @@ export const createAutomationTool = ({
           if (before.isErr()) {
             return `Cannot list the automations to record the new one (${before.error.message}); nothing was sent.`;
           }
+
           existing = new Set(before.value);
           return null;
         },
@@ -191,6 +201,7 @@ export const createAutomationTool = ({
         }),
       );
     }
+
     const added = after.value.filter((name) => !existing.has(name));
     const saved = await Promise.all(
       added.map((id) => readAutomation(codexHome, id)),
@@ -233,12 +244,14 @@ export const createAutomationTool = ({
         }),
       );
     }
+
     if (
       saved.value?.kind !== "cron" &&
       saved.value?.targetThreadId === callerThreadId
     ) {
       return Result.ok({ kind: "heartbeat" });
     }
+
     // A recorded id whose automation is gone is dropped, so a later automation the app gives the same id is not taken for it.
     if (saved.value === null) await cronRecord.remove(id);
     if (saved.value?.kind === "cron") {
@@ -251,8 +264,10 @@ export const createAutomationTool = ({
           }),
         );
       }
+
       if (recorded.value) return Result.ok({ kind: "cron" });
     }
+
     return Result.err(
       new AutomationNotReachable({
         id,

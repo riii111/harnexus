@@ -54,6 +54,7 @@ export const checkThread = (
       ? refused("directory_change")
       : Result.ok({ model, cwd: known.cwd });
   }
+
   const cwd = typeof params.cwd === "string" ? params.cwd : fallbackCwd;
   return cwd === undefined
     ? refused("directory_unknown")

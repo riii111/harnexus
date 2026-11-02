@@ -477,6 +477,7 @@ describe("renderSdkMessage turn end", () => {
       rendered = renderSdkMessage(rendered.state, sdk(message), NOW);
       all.push(...rendered.notifications);
     }
+
     const state = markInterrupting(rendered.state);
     rendered = renderSdkMessage(
       state,
@@ -772,6 +773,7 @@ describe("turn rendering against recorded app-server sessions", () => {
       ({ state, notifications } = renderSdkMessage(state, sdk(message), NOW));
       all.push(...notifications);
     }
+
     all.push(
       ...renderSdkMessage(
         markInterrupting(state),
@@ -876,6 +878,7 @@ const runCompaction = (messages: object[]) => {
     ));
     all.push(...notifications);
   }
+
   return { state, notifications: all };
 };
 
@@ -885,6 +888,7 @@ const deepFreeze = <T>(value: T): T => {
     Object.freeze(value);
     for (const child of Object.values(value)) deepFreeze(child);
   }
+
   return value;
 };
 
@@ -900,6 +904,7 @@ const runRecorded = (turnId: string, messages: object[]) => {
     ({ state, notifications } = renderSdkMessage(state, sdk(message), NOW));
     all.push(...notifications);
   }
+
   return all;
 };
 
@@ -1085,9 +1090,11 @@ const normalize = (notifications: unknown[]) => {
         Object.entries(value).map(([k, v]) => [k, walk(v, k)]),
       );
     }
+
     if (key !== null && TIME_KEYS.has(key) && typeof value === "number") {
       return 0;
     }
+
     if (
       (key === "id" || key === "itemId" || key === "rootTurnId") &&
       typeof value === "string"
@@ -1095,8 +1102,10 @@ const normalize = (notifications: unknown[]) => {
       if (!ids.has(value)) ids.set(value, `id-${ids.size + 1}`);
       return ids.get(value);
     }
+
     return value;
   };
+
   return notifications.map((notification) => walk(notification, null));
 };
 

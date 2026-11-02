@@ -102,6 +102,7 @@ describe("/resume", () => {
     for (let n = 1; n <= 10; n += 1) {
       await writeClaudeRecord(`se-${n}`, conversationRecords(`ask ${n}`), n);
     }
+
     turns.startTurn(turnStart(10, "/resume"), undefined);
     const first = await pickQuestion(sent, 1);
 
@@ -403,6 +404,7 @@ describe("/resume", () => {
     for (const question of pickQuestions(sent)) {
       answerPick(turns, question, "fixture ask");
     }
+
     await until(() => completedTurnStatuses(sent).length === 2);
 
     const owners = [THREAD, OTHER_THREAD].filter(

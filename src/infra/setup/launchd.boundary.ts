@@ -40,9 +40,11 @@ export const configureLaunchd = (
       yield* Result.await(prepareDirectory(agentDirectory()));
       yield* Result.await(writeFileAtomic(agentPath(), launchAgent(env)));
     }
+
     for (const args of environmentCommands(standard ? {} : env)) {
       yield* Result.await(readCommandOutput("/bin/launchctl", args));
     }
+
     return Result.ok();
   });
 
@@ -62,6 +64,7 @@ export const readLaunchd = () =>
           }),
         );
     }
+
     const agent = yield* Result.await(readTextFileIfExists(agentPath()));
     return Result.ok({ env, agent });
   });

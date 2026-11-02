@@ -1219,6 +1219,7 @@ describe("createCloudRuntime turns", () => {
           })
         : Promise.resolve();
     };
+
     const turn = env.turn("hi");
 
     await env.runtime.run(turn.running);
@@ -1253,8 +1254,10 @@ describe("createCloudRuntime turns", () => {
         release();
         return new Promise<void>((resolve) => setTimeout(resolve, 5));
       }
+
       return Promise.resolve();
     };
+
     const turn = env.turn("hi");
 
     await env.runtime.run(turn.running);
@@ -1736,6 +1739,7 @@ const setup = ({
     owners.set(link.sessionId, "thread-1");
     sessionIds.set("thread-1", "copy-0");
   }
+
   const env = {
     sessionIds,
     owners,
@@ -1801,6 +1805,7 @@ const setup = ({
           resolve();
           return;
         }
+
         copyWaiters.push(() => {
           if (env.copyCalls < count) return false;
           resolve();
@@ -1814,6 +1819,7 @@ const setup = ({
           setTimeout(resolve, 0);
           return;
         }
+
         sendWaiters.push(() => {
           if (sends.length < count) return false;
           resolve();
@@ -1858,6 +1864,7 @@ const setup = ({
         if (env.linkFails) {
           return Result.err({ _tag: "StatePersistFailed" }) as never;
         }
+
         links.push({ threadId, cloud, copy });
         clouds.set(threadId, cloud);
         owners.set(cloud.sessionId, threadId);
@@ -1878,6 +1885,7 @@ const setup = ({
         if (env.saveFails) {
           return Result.err({ _tag: "StatePersistFailed" }) as never;
         }
+
         const cloud = clouds.get(threadId);
         if (cloud !== undefined) clouds.set(threadId, { ...cloud, shown });
         return Result.ok({} as never);
@@ -1907,6 +1915,7 @@ const setup = ({
           new CloudCopyFailed({ stopped: null, message: env.copyFailure }),
         );
       }
+
       const sessionId = `copy-${call}`;
       contents.set(sessionId, copies[Math.min(call, copies.length) - 1] ?? []);
       if (env.copyStop !== null) {
@@ -1917,6 +1926,7 @@ const setup = ({
           }),
         );
       }
+
       return Result.ok(sessionId);
     },
     readCopy: async (copy) => Result.ok(contents.get(copy) ?? []),
@@ -2087,6 +2097,7 @@ const fakeTurn = (
     state = rendered.state;
     notifications.push(...rendered.notifications);
   };
+
   result.running = {
     threadId: "thread-1",
     turnId,
