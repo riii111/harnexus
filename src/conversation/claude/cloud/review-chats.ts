@@ -164,7 +164,8 @@ export const createCloudReviews = (
   const recordsOf = async (threadId: string) => {
     const names = await listDirectoryIfExists(dir);
     if (names.isErr() || names.value === null) return null;
-    const shown: { at: string; records: SessionMessage[] }[] = [];
+    const shown: { at: string; asked: boolean; records: SessionMessage[] }[] =
+      [];
     for (const name of names.value) {
       if (!name.endsWith(".json") || name === "chats.json") continue;
       const kept = await readJson(join(dir, name));
@@ -173,15 +174,22 @@ export const createCloudReviews = (
       const at = kept.shownAt;
       if (name.startsWith(ASKED)) {
         if (typeof kept.asked === "string")
-          shown.push({ at, records: askedRecords(name, kept.asked, at) });
+          shown.push({
+            at,
+            asked: true,
+            records: askedRecords(name, kept.asked, at),
+          });
         continue;
       }
       const review = await reviewOf(name.slice(0, -".json".length));
       if (review !== null)
-        shown.push({ at, records: reviewRecords(review, at) });
+        shown.push({ at, asked: false, records: reviewRecords(review, at) });
     }
     if (shown.length === 0) return null;
-    shown.sort((a, b) => a.at.localeCompare(b.at));
+    // A message is sent after the review it answers, so within one millisecond the review comes first rather than in the order the folder lists them.
+    shown.sort(
+      (a, b) => a.at.localeCompare(b.at) || Number(a.asked) - Number(b.asked),
+    );
     return shown.flatMap((entry) => entry.records);
   };
 
