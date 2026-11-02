@@ -26,6 +26,16 @@ export type ObservationEvent =
       paths: readonly ShapePath[];
     };
 
+const OBSERVATION_EVENTS: Record<ObservationEvent["event"], true> = {
+  rpc_message: true,
+  rpc_unobserved: true,
+  rpc_shape: true,
+};
+
+export const isObservationEvent = (entry: {
+  event: string;
+}): entry is ObservationEvent => Object.hasOwn(OBSERVATION_EVENTS, entry.event);
+
 type MessageKind = "request" | "notification" | "response" | "error_response";
 
 type UnobservedReason =

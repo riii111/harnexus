@@ -155,8 +155,10 @@ async function withClaude(relay: {
     logger.log({ event: "claude_unavailable", reason: statePath.error._tag });
     return plain;
   }
-  const store = await openThreadStore(statePath.value);
-  await sweepCloudLogs(join(dirname(statePath.value), CLOUD_COPY_FOLDER));
+  const [store] = await Promise.all([
+    openThreadStore(statePath.value),
+    sweepCloudLogs(join(dirname(statePath.value), CLOUD_COPY_FOLDER)),
+  ]);
   // Without its thread store the bridge offers no Claude model and relays everything, so Codex threads keep working.
   if (store.isErr()) {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
