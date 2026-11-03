@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { unpinnedBun } from "./bun-pin.ts";
 
 describe("unpinnedBun", () => {

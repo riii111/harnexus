@@ -9,10 +9,13 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
 import { Result } from "better-result";
+
 import { runCommand } from "../../lib/process.boundary.ts";
 import { type ProcessRun, ProcessRunFailed } from "../../lib/run.boundary.ts";
 import { bundledClaude } from "./bundled-claude.boundary.ts";
+import { createCloudCheckouts } from "./cloud-checkouts.ts";
 import {
   type CloudCli,
   claudeCliFile,
@@ -21,7 +24,6 @@ import {
   sendToCloud,
   sweepCloudLogs,
 } from "./cloud.ts";
-import { createCloudCheckouts } from "./cloud-checkouts.ts";
 
 const COPY = "467614f6-4ec9-44b7-a282-e2c79981140d";
 

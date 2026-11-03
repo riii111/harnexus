@@ -1,5 +1,7 @@
 import { join } from "node:path";
+
 import type { Result } from "better-result";
+
 import { readInstalledPackage, versionOf } from "../infra/checkout.ts";
 import type { readLaunchd } from "../infra/setup/launchd.boundary.ts";
 import { readTextFileIfExists } from "../lib/fs.boundary.ts";

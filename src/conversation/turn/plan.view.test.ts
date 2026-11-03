@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+
 import { NO_PLAN, renderPlan, type ThreadPlan } from "./plan.view.ts";
 
 describe("renderPlan TodoWrite", () => {

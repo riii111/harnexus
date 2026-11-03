@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { checkSubscription, withoutApiBilling } from "./auth.ts";
 
 describe("withoutApiBilling", () => {

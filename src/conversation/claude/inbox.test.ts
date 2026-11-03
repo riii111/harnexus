@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { createInbox } from "./inbox.ts";
 
 describe("inbox", () => {

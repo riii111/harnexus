@@ -1,4 +1,5 @@
 import { Result } from "better-result";
+
 import type { CronRecord } from "../automations.boundary.ts";
 
 // An in-memory stand-in for the record file, starting with the given ids.

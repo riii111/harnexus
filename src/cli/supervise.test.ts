@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+
 import { type InferErr, Result } from "better-result";
+
 import type { signalProcess } from "../lib/process.boundary.ts";
 import {
   exitOnUnhandledRejection,

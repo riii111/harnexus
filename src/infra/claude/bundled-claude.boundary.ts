@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+
 import { Result } from "better-result";
 
 // The claude binary the SDK ships for this platform, which the bridge already runs signed in.

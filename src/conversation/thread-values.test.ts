@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+
 import { Result } from "better-result";
+
 import type { EffortRule } from "../infra/claude/models.ts";
 import type { ThreadRecord, ThreadStore } from "../infra/thread-store.ts";
 import { createThreadValues } from "./thread-values.ts";

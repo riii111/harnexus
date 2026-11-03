@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { classify } from "./classify.ts";
 import type { IgnoreRule } from "./config.ts";
 import type { PrComment } from "./github.ts";

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { followUpOf, messageOf, missingFrom } from "./message.ts";
 import type { Finding } from "./state.ts";
 

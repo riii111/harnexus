@@ -1,4 +1,5 @@
 import { Result, TaggedError } from "better-result";
+
 import { isObject } from "../lib/object.ts";
 
 export class TaskFailed extends TaggedError("TaskFailed")<{

@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
 import { Result } from "better-result";
+
 import type { Fields } from "../lib/object.ts";
 import { GithubUnreachable } from "../prwatch/failure.ts";
 import type { GitHub, PrComment, PrDetail } from "../prwatch/github.ts";

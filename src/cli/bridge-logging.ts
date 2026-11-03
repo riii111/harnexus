@@ -1,4 +1,5 @@
 import { type InferErr, Result } from "better-result";
+
 import {
   type CloudLogEvent,
   serializeCloudEvent,

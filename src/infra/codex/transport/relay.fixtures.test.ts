@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
+
 import { createLogger } from "../../../lib/logger.ts";
 import { createObserver, serializeObservationEvent } from "./observe.ts";
 import { relayStreams } from "./relay.ts";

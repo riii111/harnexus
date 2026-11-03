@@ -1,5 +1,6 @@
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { type InferErr, Result } from "better-result";
+
 import { ClaudeRecordUnreadable } from "../../infra/claude/sdk.boundary.ts";
 import type { readClaudeSession } from "../../infra/claude/session.ts";
 import { isObject } from "../../lib/object.ts";

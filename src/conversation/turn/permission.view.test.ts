@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+
 import type {
   PermissionResult,
   PermissionUpdate,
 } from "@anthropic-ai/claude-agent-sdk";
+
 import type { ToolItem } from "../../infra/codex/protocol/messages.ts";
 import { promptFor, type ToolCall } from "./permission.view.ts";
 

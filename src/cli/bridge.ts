@@ -1,10 +1,11 @@
 import { constants } from "node:os";
 import { dirname, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
+
 import { readBridgeIdentity } from "../diagnostics/bridge-identity.ts";
 import { REPO } from "../diagnostics/repo.ts";
-import { cloudCli, sweepCloudLogs } from "../infra/claude/cloud.ts";
 import { createCloudCheckouts } from "../infra/claude/cloud-checkouts.ts";
+import { cloudCli, sweepCloudLogs } from "../infra/claude/cloud.ts";
 import {
   createModelCatalog,
   type EffortSettings,

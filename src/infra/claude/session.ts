@@ -1,4 +1,5 @@
 import { basename, dirname, join } from "node:path";
+
 import type {
   CanUseTool,
   EffortLevel,
@@ -10,6 +11,7 @@ import type {
   SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result, TaggedError } from "better-result";
+
 import {
   listFilesDeepIfExists,
   readTextFileIfExists,

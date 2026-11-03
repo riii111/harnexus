@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+
 import { Result } from "better-result";
+
 import type { Fields } from "../lib/object.ts";
 import { codexWorkers } from "./watch-worker.ts";
 

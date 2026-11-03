@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
+
 import { resizeImage } from "./image.boundary.ts";
 
 // sips ships only with macOS, which is where the bridge runs.

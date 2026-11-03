@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { once } from "node:events";
 import { PassThrough, Readable, Writable } from "node:stream";
+
 import { createLogger } from "../../../lib/logger.ts";
 import { createLineInjector } from "./inject.ts";
 import { createObserver, serializeObservationEvent } from "./observe.ts";

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Result, TaggedError } from "better-result";
+
 import type { SubagentRecord } from "../../infra/claude/session.ts";
 import type { FileChangeItem } from "../../infra/codex/protocol/messages.ts";
 import { delegatedEditIn, type HistoryTurn } from "../history/history.view.ts";

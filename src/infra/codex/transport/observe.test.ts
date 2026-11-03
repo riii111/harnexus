@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { createLogger } from "../../../lib/logger.ts";
 import { createObserver, serializeObservationEvent } from "./observe.ts";
 import type { Direction } from "./relay.ts";

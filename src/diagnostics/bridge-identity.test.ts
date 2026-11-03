@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { bridgeSettings } from "./bridge-identity.ts";
 
 describe("bridgeSettings", () => {

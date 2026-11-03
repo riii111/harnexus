@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { responseCompatibility } from "./compatibility.ts";
 
 describe("responseCompatibility", () => {

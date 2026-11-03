@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+
 import { realPathOrSelf } from "../../lib/fs.boundary.ts";
 import { parseJson } from "../../lib/json.boundary.ts";
 import { isObject } from "../../lib/object.ts";

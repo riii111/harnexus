@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
 import {
   type AccountInfo,
   resolveSettings,
@@ -18,6 +19,7 @@ import {
   type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { Result } from "better-result";
+
 import {
   type ClaudeSessionSettings,
   claudeSessionExists,

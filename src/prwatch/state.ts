@@ -1,4 +1,5 @@
 import { z } from "zod";
+
 import { ITEM_KINDS } from "./config.ts";
 
 export type WatchState = z.infer<typeof WATCH_STATE>;

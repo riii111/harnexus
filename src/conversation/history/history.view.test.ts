@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+
 import type { ThreadItem, Turn } from "../../infra/codex/protocol/messages.ts";
 import {
   conversation,

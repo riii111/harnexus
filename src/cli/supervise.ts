@@ -1,4 +1,5 @@
 import { Result } from "better-result";
+
 import { type Signal, signalProcess } from "../lib/process.boundary.ts";
 
 const SERVER_PID_ENV = "HARNEXUS_SERVER_PID";
