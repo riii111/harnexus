@@ -819,7 +819,7 @@ describe("Claude's own turns", () => {
 
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => claude.started());
-    turns.steerTurn(steer(30, "turn-1", "also this"));
+    await turns.steerTurn(steer(30, "turn-1", "also this"));
     const [prompt, steered] = await readPrompts(claude, 2);
     claude.emit(sdk(answer("msg-1", "first")));
     claude.emit(sdk(success([prompt?.uuid], 1)));

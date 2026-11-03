@@ -33,7 +33,7 @@ describe("createRouter compatibility", () => {
   test("returns a definite incompatibility refusal through the gateway without leaving the creator busy", async () => {
     const watch = createDelegationWatch();
     const { router, calls } = setup([], { delegationWatch: watch });
-    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
     await router.fromServer(encode({ id: 1, result: { userAgent: null } }));
     let sequence = 0;
     const gateway = createCallGateway({
@@ -94,7 +94,7 @@ describe("createRouter compatibility", () => {
     async ({ actual, expected }) => {
       const watch = createDelegationWatch();
       const { router, calls } = setup([], { delegationWatch: watch });
-      router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+      await router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
       await router.fromServer(encode({ id: 1, result: { userAgent: null } }));
       const pending = watch.expect("th-codex", {
         expected: { model: "claude-sonnet-5", effort: "low" },
@@ -133,17 +133,17 @@ describe("createRouter compatibility", () => {
     async ({ method, result, reason }) => {
       const { router, events, calls } = setup(["th-claude"]);
       const response = encode({ id: 100, result });
-      router.fromApp(encode({ id: 100, method, params: {} }));
+      await router.fromApp(encode({ id: 100, method, params: {} }));
       expect(await router.fromServer(response)).toEqual(response);
-      router.fromApp(encode({ id: 101, method, params: {} }));
+      await router.fromApp(encode({ id: 101, method, params: {} }));
       await router.fromServer(encode({ id: 101, result }));
       expect(
         events.filter(({ event }) => event === "codex_incompatible"),
       ).toEqual([{ event: "codex_incompatible", reason, version: null }]);
 
-      router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+      await router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
       await router.fromServer(initializeAnswer(VERIFIED_AGENT));
-      router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+      await router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
       const models = modelList(2, null);
       expect(await router.fromServer(models)).toEqual(models);
       expect(
@@ -171,9 +171,9 @@ describe("createRouter compatibility", () => {
 
   test("retains the initialized CLI version in a later incompatibility event", async () => {
     const { router, events } = setup();
-    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
     await router.fromServer(initializeAnswer(VERIFIED_AGENT));
-    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    await router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
     await router.fromServer(encode({ id: 2, result: { data: null } }));
     expect(events).toContainEqual({
       event: "codex_incompatible",
@@ -184,12 +184,12 @@ describe("createRouter compatibility", () => {
 
   test("keeps Claude enabled after an RPC error and an unrelated malformed response", async () => {
     const { router, events } = setup();
-    router.fromApp(encode({ id: 100, method: "initialize", params: {} }));
+    await router.fromApp(encode({ id: 100, method: "initialize", params: {} }));
     await router.fromServer(
       encode({ id: 100, error: { code: -32603, message: "not ready" } }),
     );
     await router.fromServer(encode({ id: 99, result: { data: null } }));
-    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    await router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
     expect(
       parse(await router.fromServer(modelList(2, null))).result.data.length,
     ).toBeGreaterThan(1);
@@ -311,7 +311,7 @@ describe("turn/start of a thread created by create_thread", () => {
     ({ asked, expected }) => {
       const { router, calls } = setup();
 
-      router.fromApp(delegatedTurn(asked));
+      void router.fromApp(delegatedTurn(asked));
 
       expect(calls).toEqual([["delegated", "th-codex", "th-worker", expected]]);
     },
@@ -352,10 +352,10 @@ describe("turn/start of a thread created by create_thread", () => {
       const { router, starts } = setup([], {
         startRefusal: "directory_unknown",
       });
-      router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+      await router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
       await router.fromServer(encode({ id: 1, result: { userAgent } }));
 
-      router.fromApp(delegatedTurn({ model: CLAUDE }));
+      await router.fromApp(delegatedTurn({ model: CLAUDE }));
 
       expect(starts).toEqual([["th-worker", expected]]);
     },
@@ -364,7 +364,7 @@ describe("turn/start of a thread created by create_thread", () => {
   test("reports no start of a Codex first turn, whose outcome only the server knows", () => {
     const { router, starts } = setup();
 
-    router.fromApp(delegatedTurn({ model: "gpt-fixture" }));
+    void router.fromApp(delegatedTurn({ model: "gpt-fixture" }));
 
     expect(starts).toEqual([]);
   });
@@ -372,7 +372,7 @@ describe("turn/start of a thread created by create_thread", () => {
   test("reports nothing for a message sent by send_message_to_thread", () => {
     const { router, calls } = setup();
 
-    router.fromApp(
+    void router.fromApp(
       encode({
         id: 7,
         method: "turn/start",
@@ -427,7 +427,7 @@ describe("Codex CLI version", () => {
       const { router, events } = setup();
       const answer = initializeAnswer(agent);
 
-      router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+      await router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
       const out = await router.fromServer(answer);
 
       expect(out).toEqual(answer);
@@ -437,9 +437,9 @@ describe("Codex CLI version", () => {
 
   test("appends the Claude models to model/list on an unverified version", async () => {
     const { router } = setup();
-    router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+    await router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
     await router.fromServer(initializeAnswer(UNVERIFIED_AGENT));
-    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    await router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
 
     const out = await router.fromServer(modelList(2, null));
 
@@ -475,7 +475,7 @@ describe("Codex CLI version", () => {
     "refuses $name with the reason after an incompatible initialize answer",
     async ({ id, method, params }) => {
       const { router, calls, events } = setup(["th-claude"]);
-      router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
+      await router.fromApp(encode({ id: 1, method: "initialize", params: {} }));
       await router.fromServer(encode({ id: 1, result: { userAgent: null } }));
 
       const routed = router.fromApp(encode({ id, method, params }));
@@ -498,7 +498,7 @@ describe("model/list", () => {
     const { router } = setup();
     const levels = [{ reasoningEffort: "ultra", description: "fixture" }];
 
-    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    await router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
     const out = parse(
       await router.fromServer(
         encode({
@@ -540,7 +540,7 @@ describe("model/list", () => {
   test("lists the single medium level as the default of a Claude model without effort", async () => {
     const { router } = setup();
 
-    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    await router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
     const out = parse(await router.fromServer(modelList(2, null)));
 
     const entry = out.result.data.find(
@@ -565,7 +565,7 @@ describe("model/list", () => {
       },
     ]);
 
-    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    await router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
     const out = parse(await router.fromServer(modelList(2, null)));
 
     expect(
@@ -594,7 +594,7 @@ describe("model/list", () => {
   test("leaves earlier pages alone", () => {
     const { router } = setup();
 
-    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    void router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
     const line = modelList(2, "next");
 
     expect(router.fromServer(line)).toEqual(line);
@@ -603,7 +603,7 @@ describe("model/list", () => {
   test("logs a server model with a Claude id and adds an already listed one only once", async () => {
     const { router, events } = setup();
 
-    router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
+    await router.fromApp(encode({ id: 2, method: "model/list", params: {} }));
     const out = parse(
       await router.fromServer(
         modelList(2, null, ["gpt-fixture", "claude-sonnet-5", "claude-custom"]),
@@ -623,7 +623,7 @@ describe("model/list", () => {
   test("does not read a server request that reuses the pending id", () => {
     const { router } = setup();
 
-    router.fromApp(encode({ id: 0, method: "model/list", params: {} }));
+    void router.fromApp(encode({ id: 0, method: "model/list", params: {} }));
     const request = encode({ id: 0, method: "item/tool/call", params: {} });
 
     expect(router.fromServer(request)).toEqual(request);
@@ -696,7 +696,7 @@ describe("threads with a Claude model", () => {
 
   test("holds the fork's response until where its source stood is fixed", async () => {
     const { router, pinFork } = setup(["th-claude"], { holdForks: true });
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 9,
         method: "thread/fork",
@@ -836,9 +836,9 @@ describe("threads with a Claude model", () => {
 
   test("reports the Claude thread's effort in the resume response", async () => {
     const { router } = setup(["th-claude"]);
-    router.fromApp(settingsUpdate({ effort: "max" }));
+    await router.fromApp(settingsUpdate({ effort: "max" }));
 
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 4,
         method: "thread/resume",
@@ -855,7 +855,7 @@ describe("threads with a Claude model", () => {
 
   test("leaves the resume response of a Codex thread as the same bytes", async () => {
     const { router } = setup(["th-claude"]);
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 4,
         method: "thread/resume",
@@ -898,14 +898,14 @@ describe("threads with a Claude model", () => {
   test("switches a Codex thread by turn/start with the directory the server reported", () => {
     const { router, calls } = setup();
 
-    router.fromApp(
+    void router.fromApp(
       encode({
         id: 3,
         method: "thread/start",
         params: { cwd: "/fixture/work" },
       }),
     );
-    router.fromServer(threadResponse(3, "th-codex"));
+    void router.fromServer(threadResponse(3, "th-codex"));
     const routed = router.fromApp(
       encode({
         id: 7,
@@ -997,7 +997,7 @@ describe("Claude subagent threads", () => {
         result: { data: [], nextCursor: null },
       });
 
-      router.fromApp(encode({ id: 31, method: "thread/list", params }));
+      await router.fromApp(encode({ id: 31, method: "thread/list", params }));
 
       expect(await router.fromServer(response)).toEqual(response);
     },
@@ -1035,7 +1035,7 @@ describe("Claude subagent threads", () => {
     startAgent(subagents);
     const [child] = subagents.childrenOf("th-claude");
 
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 33,
         method: "thread/resume",
@@ -1063,7 +1063,7 @@ describe("Claude subagent threads", () => {
 
   test("answers an agent's resume and list from the answer that opened its parent", async () => {
     const { router, subagents, sent, serverCalls } = setup(["th-claude"]);
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 40,
         method: "thread/resume",
@@ -1079,14 +1079,14 @@ describe("Claude subagent threads", () => {
     startAgent(subagents);
     const [child] = subagents.childrenOf("th-claude");
 
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 41,
         method: "thread/resume",
         params: { threadId: child?.id, excludeTurns: true },
       }),
     );
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 42,
         method: "thread/list",
@@ -1135,7 +1135,7 @@ describe("Claude subagent threads", () => {
       depth: 2,
     });
 
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 44,
         method: "thread/list",
@@ -1161,14 +1161,14 @@ describe("Claude subagent threads", () => {
     startAgent(subagents);
     const [child] = subagents.childrenOf("th-claude");
 
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 34,
         method: "thread/turns/list",
         params: { threadId: child?.id, limit: 5 },
       }),
     );
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 35,
         method: "thread/goal/get",
@@ -1226,7 +1226,7 @@ describe("Claude subagent threads", () => {
     let id = 40;
     const timeline = async (params: object) => {
       id += 1;
-      router.fromApp(
+      await router.fromApp(
         encode({
           id,
           method: "thread/timeline/list",
@@ -1326,7 +1326,7 @@ describe("thread/archive and thread/delete of a Claude thread", () => {
     "keeps the thread when the server refuses the $name",
     async ({ method }) => {
       const { router, calls } = setup(["th-claude"]);
-      router.fromApp(request(method, "th-claude"));
+      await router.fromApp(request(method, "th-claude"));
       const refusal = encode({
         id: 7,
         error: {
@@ -1401,14 +1401,14 @@ describe("thread/settings/update", () => {
   test("switches a Codex thread to Claude without telling the server", () => {
     const { router, calls } = setup();
 
-    router.fromApp(
+    void router.fromApp(
       encode({
         id: 3,
         method: "thread/start",
         params: { cwd: "/fixture/work" },
       }),
     );
-    router.fromServer(threadResponse(3, "th-claude"));
+    void router.fromServer(threadResponse(3, "th-claude"));
     const forwarded = router.fromApp(settingsUpdate({ model: CLAUDE }));
 
     expect(parse(forwarded).params).toEqual({ threadId: "th-claude" });
@@ -1447,7 +1447,7 @@ describe("thread/settings/update", () => {
   test("reads a Claude thread's effort from the collaboration mode when the update has none", () => {
     const { router, calls } = setup(["th-claude"]);
 
-    router.fromApp(
+    void router.fromApp(
       settingsUpdate({
         collaborationMode: {
           mode: "default",
@@ -1462,7 +1462,7 @@ describe("thread/settings/update", () => {
   test("reports the Claude model on resume even when the history mentions the settings notice", async () => {
     const { router } = setup(["th-claude"]);
 
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 4,
         method: "thread/resume",
@@ -1508,7 +1508,7 @@ describe("thread/settings/update", () => {
     "reports the model and the level a Claude thread with $name runs at in the settings notice",
     async ({ change, model, expected }) => {
       const { router } = setup(["th-claude"]);
-      router.fromApp(settingsUpdate(change));
+      await router.fromApp(settingsUpdate(change));
 
       const out = parse(await router.fromServer(settingsNotice()));
 
@@ -1550,7 +1550,7 @@ describe("Claude thread history", () => {
       },
     });
 
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 4,
         method: "thread/resume",
@@ -1586,7 +1586,7 @@ describe("Claude thread history", () => {
     const opening = out.result.turnsBackwardsCursor;
     const newest = await askTurns(10, opening);
     const older = await askTurns(11, newest.page.nextCursor);
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 20,
         method: "thread/turns/list",
@@ -1635,7 +1635,7 @@ describe("Claude thread history", () => {
       },
     });
 
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 4,
         method: "thread/resume",
@@ -1643,7 +1643,7 @@ describe("Claude thread history", () => {
       }),
     );
     const out = parse(await router.fromServer(threadResponse(4, "th-claude")));
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 5,
         method: "thread/items/list",
@@ -1673,7 +1673,7 @@ describe("Claude thread history", () => {
       records: { "th-claude": conversation() },
     });
 
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 4,
         method: "thread/resume",
@@ -1710,11 +1710,11 @@ describe("Claude thread history", () => {
         }),
       );
 
-    resume(4);
+    await resume(4);
     await router.fromServer(
       encode({ id: 4, error: { code: -32600, message: "not loaded" } }),
     );
-    resume(5);
+    await resume(5);
     const out = parse(await router.fromServer(threadResponse(5, "th-claude")));
 
     expect(out.result.thread.turns).toHaveLength(2);
@@ -1727,8 +1727,8 @@ describe("Claude thread history", () => {
       },
     });
     picked.add("th-claude");
-    const resume = (id: number) => {
-      router.fromApp(
+    const resume = async (id: number) => {
+      await router.fromApp(
         encode({
           id,
           method: "thread/resume",
@@ -1753,7 +1753,7 @@ describe("Claude thread history", () => {
       },
     });
 
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 4,
         method: "thread/resume",
@@ -1761,7 +1761,7 @@ describe("Claude thread history", () => {
       }),
     );
     await router.fromServer(threadResponse(4, "th-claude"));
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 5,
         method: "thread/read",
@@ -1801,7 +1801,7 @@ describe("Claude thread history", () => {
       },
     });
 
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 4,
         method: "thread/resume",
@@ -1877,7 +1877,7 @@ describe("a Claude thread with a running turn", () => {
       },
     });
     const read = async (id: number) => {
-      router.fromApp(
+      await router.fromApp(
         encode({
           id,
           method: "thread/read",
@@ -1926,7 +1926,7 @@ describe("a Claude thread with a running turn", () => {
     });
     live.set("th-claude", LIVE);
 
-    router.fromApp(
+    await router.fromApp(
       encode({ id: 9, method, params: { threadId: "th-claude", ...params } }),
     );
     const out = parse(await router.fromServer(idleThread(9)));
@@ -1955,7 +1955,7 @@ describe("a Claude thread with a running turn", () => {
     });
     live.set("th-claude", LIVE);
 
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 6,
         method: "thread/read",
@@ -1988,7 +1988,7 @@ describe("a Claude thread with a running turn", () => {
     });
     live.set("th-claude", LIVE);
 
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 6,
         method: "thread/read",
@@ -2013,7 +2013,7 @@ describe("a Claude thread with a running turn", () => {
     });
     const answer = idleThread(9);
 
-    router.fromApp(
+    await router.fromApp(
       encode({
         id: 9,
         method: "thread/read",
@@ -2214,7 +2214,7 @@ describe("side chats of a Codex thread moved to Claude", () => {
 
     const forwarded = await router.fromApp(fork);
     const opened = await router.fromServer(response);
-    router.fromApp(sideChatTurn({ model: CLAUDE }));
+    await router.fromApp(sideChatTurn({ model: CLAUDE }));
 
     expect(forwarded).toBe(fork);
     expect(opened).toBe(response);

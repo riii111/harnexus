@@ -93,7 +93,7 @@ export const serveLinesWhenFree = (
         if (!reported) onInUse?.();
         reported = true;
         // The bridge that took the socket may be a short-lived one the app started beside this one, so the socket is checked again until it is gone.
-        setTimeout(attempt, retryMs).unref();
+        setTimeout(() => void attempt(), retryMs).unref();
         return;
       }
 

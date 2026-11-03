@@ -54,7 +54,7 @@ describe("turn/steer", () => {
 
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => claude.started());
-    turns.steerTurn(steer(30, "turn-1", "also this"));
+    await turns.steerTurn(steer(30, "turn-1", "also this"));
     const [prompt, steered] = await readPrompts(claude, 2);
     claude.emit(sdk(answer("msg-1", "ok")));
     claude.emit(sdk(success([prompt?.uuid, steered?.uuid])));
@@ -97,7 +97,7 @@ describe("turn/steer", () => {
 
       turns.startTurn(turnStart(10, "hello"), undefined);
       await until(() => claude.started());
-      turns.steerTurn(steer(30, "turn-1", "also this"));
+      await turns.steerTurn(steer(30, "turn-1", "also this"));
       const [prompt, steered] = await readPrompts(claude, 2);
       claude.emit(sdk(answer("msg-1", "first")));
       claude.emit(sdk(success(taken(prompt?.uuid), queued)));
@@ -134,7 +134,7 @@ describe("turn/steer", () => {
 
       turns.startTurn(turnStart(10, "hello"), undefined);
       await until(() => claude.started());
-      turns.steerTurn(steer(30, "turn-1", "also this"));
+      await turns.steerTurn(steer(30, "turn-1", "also this"));
       const [prompt] = await readPrompts(claude, 2);
       claude.emit(sdk(answer("msg-1", "ok")));
       claude.emit(
@@ -167,7 +167,7 @@ describe("turn/steer", () => {
 
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => claude.started());
-    turns.steerTurn(steer(30, "turn-1", "also this"));
+    await turns.steerTurn(steer(30, "turn-1", "also this"));
     const [, steered] = await readPrompts(claude, 2);
     claude.emit(sdk(answer("msg-1", "ok")));
     claude.emit(
@@ -212,7 +212,7 @@ describe("turn/steer", () => {
 
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => claude.started());
-    turns.steerTurn(steer(30, "turn-1", "also this"));
+    await turns.steerTurn(steer(30, "turn-1", "also this"));
     const [prompt] = await readPrompts(claude, 2);
     claude.emit(
       sdk(
@@ -240,7 +240,7 @@ describe("turn/steer", () => {
 
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => claude.started());
-    turns.steerTurn(steer(30, "turn-1", "also this"));
+    await turns.steerTurn(steer(30, "turn-1", "also this"));
     const [prompt, steered] = await readPrompts(claude, 2);
     claude.emit(sdk(success([prompt?.uuid], 1)));
     await until(() => claude.drained());
@@ -272,7 +272,7 @@ describe("turn/steer", () => {
 
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => responseTo(sent, 10) !== undefined);
-    turns.steerTurn(steer(30, "turn-1", "also this"));
+    await turns.steerTurn(steer(30, "turn-1", "also this"));
     start();
     await until(() => claude.started());
     const prompts = await readPrompts(claude, 2);
@@ -305,7 +305,7 @@ describe("turn/steer", () => {
 
       turns.startTurn(turnStart(10, "hello"), undefined);
       await until(() => claude.started());
-      turns.steerTurn(request);
+      await turns.steerTurn(request);
       const [prompt] = await readPrompts(claude, 1);
       claude.emit(sdk(success([prompt?.uuid])));
       await until(() => turnCompleted(sent) !== undefined);
@@ -323,7 +323,7 @@ describe("turn/steer", () => {
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => claude.started());
     turns.interruptTurn(interrupt(20, "turn-1"));
-    turns.steerTurn(steer(30, "turn-1", "also this"));
+    await turns.steerTurn(steer(30, "turn-1", "also this"));
 
     expect(responseTo(sent, 20)).toEqual({ id: 20, result: {} });
     expect(responseTo(sent, 30)).toEqual(REFUSED(30));
@@ -423,7 +423,7 @@ describe("skill links in Claude input", () => {
 
     turns.startTurn(turnStart(10, "hello"), undefined);
     await until(() => claude.started());
-    turns.steerTurn(steer(30, "turn-1", `[$demo](${skill})`));
+    await turns.steerTurn(steer(30, "turn-1", `[$demo](${skill})`));
     const [, steered] = await readPrompts(claude, 2);
 
     expect(steered?.message.content).toBe(`[$demo](${skill})`);
@@ -779,7 +779,7 @@ describe("thread/compact/start on a Claude thread", () => {
     turns.compactThread(compactStart(20));
     await until(() => startedTurns(sent).length === 2);
 
-    turns.steerTurn(steer(21, "turn-2", "more"));
+    await turns.steerTurn(steer(21, "turn-2", "more"));
 
     expect(responseTo(sent, 21)).toEqual(REFUSED(21));
     expect((await promptsUntil(claude, 2))[1]).toBe("/compact");
