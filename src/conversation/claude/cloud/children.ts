@@ -80,7 +80,7 @@ const createdIn = (content: unknown): CloudChild | null => {
   return null;
 };
 
-// Whether a Cloud session that ended its turn is still watching for something, and so is not done: a message it scheduled to itself that has not arrived. A session it started tells it of its work by a message of its own, so it is not waited for.
+// Whether a Cloud session that ended its turn is still watching for something, and so is not done: a message it scheduled to itself that has not arrived, or work it left running in the background, such as a review, whose end starts its next turn by itself. A session it started tells it of its work by a message of its own, so it is not waited for.
 export const waitingIn = (records: readonly SessionMessage[]) => {
   const cancelled = new Set<string>();
   const calls = new Map<string, Record<string, unknown>>();
@@ -90,8 +90,16 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
     message: string | null;
     came: boolean;
   }[] = [];
+  // Background work is over once the notice of its end comes, which Claude Code writes as a prompt.
+  const running = new Set<string>();
   for (const record of records) {
     const at = timeOfRecord(record);
+    if (running.size > 0 && record.type === "user") {
+      const notice = openingTextOf(record) ?? "";
+      for (const ended of notice.matchAll(ENDED))
+        running.delete(ended[1] ?? "");
+    }
+
     // A scheduled message comes as a prompt of its own; one the user typed counts only when it is that message and nothing else.
     const opening = record.type === "user" ? openingTextOf(record) : null;
     if (opening !== null)
@@ -121,6 +129,10 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
         arrive(scheduled, at, (message) => read.includes(message));
       }
 
+      const background = BACKGROUND.exec(
+        textsOf(block.content).join("\n"),
+      )?.[1];
+      if (background !== undefined) running.add(background);
       if (DELETE_TRIGGER.test(name) && typeof input.trigger_id === "string")
         cancelled.add(input.trigger_id);
       if (SEND_LATER.test(name))
@@ -137,9 +149,12 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
     }
   }
 
-  return scheduled.some(
-    ({ trigger, came }) =>
-      !came && (trigger === null || !cancelled.has(trigger)),
+  return (
+    running.size > 0 ||
+    scheduled.some(
+      ({ trigger, came }) =>
+        !came && (trigger === null || !cancelled.has(trigger)),
+    )
   );
 };
 
@@ -192,6 +207,12 @@ const openingTextOf = (record: SessionMessage) => {
 
 const SEND_LATER = /(?:^|__)send_later$/;
 const DELETE_TRIGGER = /(?:^|__)delete_trigger$/;
+// What Claude Code answers when it starts a command or an agent in the background, naming it.
+const BACKGROUND =
+  /(?:running in background with ID|agentId): ([A-Za-z0-9_-]{4,})/;
+// The notice Claude Code gives the session when background work ends, however it ended.
+const ENDED =
+  /<task-id>([A-Za-z0-9_-]+)<\/task-id>[\s\S]*?<status>(?:completed|failed|killed|stopped)<\/status>/g;
 const READ_NOTIFICATIONS = /(?:^|__)ReadNotifications$/;
 const TRIGGER_ID = /trig_[A-Za-z0-9]+/;
 // The scheduler fires by the minute, so a message may come up to a minute before its time.
