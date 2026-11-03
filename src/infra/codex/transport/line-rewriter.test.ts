@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
+
 import { createLineRewriter } from "./line-rewriter.ts";
 
 describe("createLineRewriter", () => {

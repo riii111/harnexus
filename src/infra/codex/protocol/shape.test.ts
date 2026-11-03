@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+
 import { PROTOCOL_FIELDS } from "./fields.ts";
 import { isShapePath, shapeOf } from "./shape.ts";
 

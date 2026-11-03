@@ -1,4 +1,5 @@
 import { Result } from "better-result";
+
 import type { Fields } from "../lib/object.ts";
 import { loadConfig, type WatchConfig } from "./config.ts";
 import { nextEvents } from "./events.ts";

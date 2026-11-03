@@ -1,4 +1,5 @@
 import { isAbsolute, join, resolve } from "node:path";
+
 import { parseProcesses } from "../diagnostics/doctor-report.ts";
 import { REPO } from "../diagnostics/repo.ts";
 import { configureLaunchd } from "../infra/setup/launchd.boundary.ts";

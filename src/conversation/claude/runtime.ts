@@ -4,6 +4,7 @@ import type {
   SDKResultMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { type InferErr, Result, TaggedError } from "better-result";
+
 import type { ImageBlock, ResizeImage } from "../../infra/claude/images.ts";
 import type { EffortRule } from "../../infra/claude/models.ts";
 import type { Prompt } from "../../infra/claude/prompt-queue.ts";
@@ -21,12 +22,6 @@ import type { ThreadValues } from "../thread-values.ts";
 import type { TurnEvent } from "../turn/controller.ts";
 import { RECOVERY_CONTEXT } from "../turn/recovery.view.ts";
 import { breakdown } from "../turn/token-usage.view.ts";
-import {
-  renderInterimResult,
-  renderNotice,
-  renderSdkMessage,
-  type TurnOutcome,
-} from "../turn/turn.view.ts";
 import type {
   ErrorTag,
   RunningTurn,
@@ -34,6 +29,12 @@ import type {
   TurnLink,
   TurnRuntime,
 } from "../turn/turn-runtime.ts";
+import {
+  renderInterimResult,
+  renderNotice,
+  renderSdkMessage,
+  type TurnOutcome,
+} from "../turn/turn.view.ts";
 import { createApprovals } from "./approvals.ts";
 import { createForkPoints } from "./fork-points.ts";
 import { readImages } from "./image-attachments.ts";

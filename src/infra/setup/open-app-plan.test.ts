@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { isAppRunning, openArguments } from "./open-app-plan.ts";
 
 describe("openArguments", () => {

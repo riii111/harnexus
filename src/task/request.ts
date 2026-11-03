@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+
 import { Result } from "better-result";
+
 import {
   isDirectory,
   pathExists,

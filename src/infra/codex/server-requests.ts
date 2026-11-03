@@ -1,5 +1,7 @@
 import type { Readable, Writable } from "node:stream";
+
 import { Result, TaggedError } from "better-result";
+
 import { parseJson } from "../../lib/json.boundary.ts";
 import { createLineInjector } from "./transport/inject.ts";
 import { createLineRewriter } from "./transport/line-rewriter.ts";

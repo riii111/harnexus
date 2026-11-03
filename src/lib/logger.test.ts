@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { createLogger } from "./logger.ts";
 
 describe("createLogger", () => {

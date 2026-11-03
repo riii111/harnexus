@@ -1,4 +1,5 @@
 import type { Result } from "better-result";
+
 import { parseJson } from "../lib/json.boundary.ts";
 import { type Fields, isObject } from "../lib/object.ts";
 import { delegationFields, isDelegatingTool } from "../link/delegations.ts";

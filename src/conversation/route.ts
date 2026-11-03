@@ -1,4 +1,5 @@
 import type { InferErr } from "better-result";
+
 import {
   type EffortRule,
   isClaudeModel,

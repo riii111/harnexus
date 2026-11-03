@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+
 import type {
   PermissionResult,
   PermissionUpdate,
 } from "@anthropic-ai/claude-agent-sdk";
+
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
 import { createEmptyFile } from "../../lib/fs.boundary.ts";
 import {

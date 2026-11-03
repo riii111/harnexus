@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { compileRegex } from "./regex.boundary.ts";
 
 describe("compileRegex", () => {

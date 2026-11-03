@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+
 import type {
   AppNotification,
   FileChangeItem,

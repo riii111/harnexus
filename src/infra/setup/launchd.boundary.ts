@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+
 import { Result, TaggedError } from "better-result";
+
 import {
   prepareDirectory,
   readTextFileIfExists,

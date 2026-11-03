@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+
 import type { ImageBlock } from "./images.ts";
 
 // attachments are text the bridge adds after what was typed, such as a skill's body.

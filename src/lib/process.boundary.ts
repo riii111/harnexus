@@ -1,6 +1,8 @@
 import { type ExecFileException, execFile, spawn } from "node:child_process";
 import { createReadStream, createWriteStream, writeSync } from "node:fs";
+
 import { Result, TaggedError } from "better-result";
+
 import { isObject } from "./object.ts";
 
 export type Signal = NodeJS.Signals;

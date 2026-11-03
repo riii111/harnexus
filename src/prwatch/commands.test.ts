@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
 import { Result } from "better-result";
+
 import { holdProcessLock } from "../lib/fs.boundary.ts";
 import { dryRun, release, status, watchForever } from "./commands.ts";
 import type { GitHub, PrDetail } from "./github.ts";

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { createLineSplitter } from "./line-splitter.ts";
 
 describe("createLineSplitter", () => {

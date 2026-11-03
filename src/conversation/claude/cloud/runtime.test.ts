@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
+
 import {
   CloudCopyFailed,
   CloudSendRejected,
@@ -18,6 +20,11 @@ import {
   toolUse,
 } from "../../testing/session-record.ts";
 import { refusalMessage } from "../../thread-request.ts";
+import type {
+  RunningTurn,
+  TurnInput,
+  TurnRuntime,
+} from "../../turn/turn-runtime.ts";
 import {
   markInterrupting,
   type Rendered,
@@ -25,11 +32,6 @@ import {
   type TurnOutcome,
   type TurnState,
 } from "../../turn/turn.view.ts";
-import type {
-  RunningTurn,
-  TurnInput,
-  TurnRuntime,
-} from "../../turn/turn-runtime.ts";
 import type { CloudReview } from "./reviews.ts";
 import {
   type CloudDeps,

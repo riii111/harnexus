@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
 import type {
   AccountInfo,
   CanUseTool,
@@ -10,6 +11,7 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { Result } from "better-result";
+
 import type { ResizeImage } from "../../infra/claude/images.ts";
 import {
   createModelCatalog,
@@ -32,7 +34,6 @@ import { openThreadStore } from "../../infra/thread-store.ts";
 import { FileWriteFailed } from "../../lib/fs.boundary.ts";
 import { createCodexLink } from "../../link/codex-link.ts";
 import { createDelegationWatch } from "../../link/delegations.ts";
-
 import { type ClaudeLogEvent, createClaudeRuntime } from "../claude/runtime.ts";
 import { createSubagents } from "../subagents/subagents.ts";
 import { createThreadValues } from "../thread-values.ts";

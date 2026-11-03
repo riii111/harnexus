@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { once } from "node:events";
 import { PassThrough, type Readable, Writable } from "node:stream";
+
 import { attachServerRequests } from "./server-requests.ts";
 
 describe("attachServerRequests", () => {

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { createSessionSlots, type SessionSlot } from "./session-slots.ts";
 
 describe("createSessionSlots", () => {

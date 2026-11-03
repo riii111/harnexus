@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+
 import { projectOf, projectsIn } from "../../../infra/codex/projects.ts";
 import {
   listDirectoryIfExists,

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { createSerialQueue } from "./serial-queue.ts";
 
 describe("createSerialQueue", () => {

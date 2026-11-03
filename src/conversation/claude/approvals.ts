@@ -1,7 +1,9 @@
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
+
 import { ABORTED, waitForAbort } from "../../lib/wait-for-abort.ts";
 import type { Subagents } from "../subagents/subagents.ts";
 import { promptFor } from "../turn/permission.view.ts";
+import type { RunningTurn } from "../turn/turn-runtime.ts";
 import {
   markToolDeclined,
   renderToolRequest,
@@ -9,7 +11,6 @@ import {
   runsAgent,
   type TurnOutcome,
 } from "../turn/turn.view.ts";
-import type { RunningTurn } from "../turn/turn-runtime.ts";
 
 type HeldApprovals<Tag extends string> = {
   turn: RunningTurn<Tag> | null;

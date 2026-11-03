@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+
 import type { EffortLevel, ModelInfo } from "@anthropic-ai/claude-agent-sdk";
+
 import {
   type ClaudeModel,
   createModelCatalog,

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+
 import { Result } from "better-result";
+
 import { createForkPoints } from "./fork-points.ts";
 
 describe("createForkPoints", () => {

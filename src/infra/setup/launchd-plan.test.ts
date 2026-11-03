@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { environmentCommands, launchAgent } from "./launchd-plan.ts";
 import { registeredEnvironment } from "./open-app-plan.ts";
 

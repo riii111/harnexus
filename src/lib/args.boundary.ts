@@ -1,4 +1,5 @@
 import { parseArgs } from "node:util";
+
 import { Result, TaggedError } from "better-result";
 
 class ArgumentsInvalid extends TaggedError("ArgumentsInvalid")<{

@@ -25,7 +25,9 @@ import {
   unlink,
 } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+
 import { Result, TaggedError } from "better-result";
+
 import { isObject } from "./object.ts";
 
 class LogFileOpenFailed extends TaggedError("LogFileOpenFailed")<{

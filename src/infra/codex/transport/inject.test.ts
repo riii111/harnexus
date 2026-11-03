@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Writable } from "node:stream";
+
 import { createLineInjector } from "./inject.ts";
 
 describe("createLineInjector", () => {

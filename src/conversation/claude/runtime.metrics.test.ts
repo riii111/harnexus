@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
+
 import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+
 import { effortRule } from "../../infra/claude/models.ts";
 import { fakeClaude } from "../../infra/claude/testing/fake-claude.ts";
 import { writeFileAtomic } from "../../lib/fs.boundary.ts";

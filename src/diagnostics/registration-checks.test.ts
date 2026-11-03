@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+
 import { launchAgent } from "../infra/setup/launchd-plan.ts";
 import { registrationChecks } from "./registration-checks.ts";
 

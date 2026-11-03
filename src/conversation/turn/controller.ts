@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+
 import { matchError, Result, TaggedError } from "better-result";
+
 import type { ImageSource } from "../../infra/claude/images.ts";
 import { createAppRequests } from "../../infra/codex/app-requests.ts";
 import type { UserInput } from "../../infra/codex/protocol/messages.ts";
@@ -25,6 +27,16 @@ import type {
   ThreadValues,
 } from "../thread-values.ts";
 import { RECOVERY_NOTICE } from "./recovery.view.ts";
+import type {
+  ErrorTag,
+  MessageInput,
+  RunningTurn,
+  ThreadEnd,
+  ToolOutput,
+  TurnInput,
+  TurnLink,
+  TurnRuntime,
+} from "./turn-runtime.ts";
 import {
   markInterrupting,
   type Rendered,
@@ -37,16 +49,6 @@ import {
   type TurnOutcome,
   type TurnState,
 } from "./turn.view.ts";
-import type {
-  ErrorTag,
-  MessageInput,
-  RunningTurn,
-  ThreadEnd,
-  ToolOutput,
-  TurnInput,
-  TurnLink,
-  TurnRuntime,
-} from "./turn-runtime.ts";
 
 // Only steps, turn statuses, models, effort levels, token counts, durations, refusal reasons and error tags are logged, never thread ids or text.
 export type TurnEvent<

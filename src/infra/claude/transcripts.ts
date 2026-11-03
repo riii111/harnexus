@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+
 import { Result } from "better-result";
+
 import {
   listDirectoryIfExists,
   readFileSlice,
