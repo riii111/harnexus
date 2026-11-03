@@ -342,7 +342,7 @@ const answersTo = (answer: unknown, id: string): string[] =>
     (value): value is string => typeof value === "string" && value !== "",
   );
 
-const askedQuestions = (input: Record<string, unknown>) => {
+export const askedQuestions = (input: Record<string, unknown>) => {
   const { questions } = input;
   if (!Array.isArray(questions) || questions.length === 0) return null;
   const asked: AskedQuestion[] = [];

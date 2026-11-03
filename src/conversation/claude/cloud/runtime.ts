@@ -7,13 +7,8 @@ import {
   parseCloudSessionId,
 } from "../../../infra/claude/cloud.ts";
 import type { CloudLink } from "../../../infra/thread-store.ts";
-import { isObject } from "../../../lib/object.ts";
 import { createSerialQueue } from "../../../lib/serial-queue.ts";
-import {
-  endsTurn,
-  mainRecords,
-  turnOpeningTextOf,
-} from "../../history/history.view.ts";
+import { mainRecords, turnOpeningTextOf } from "../../history/history.view.ts";
 import { timeOf } from "../../history/message.view.ts";
 import { renderRecords } from "../../history/records.view.ts";
 import { type Refusal, refusalMessage } from "../../thread-request.ts";
@@ -28,8 +23,19 @@ import { renderNotice } from "../../turn/turn.view.ts";
 import { sessionCommandTextOf } from "../runtime.ts";
 import { skillLinks, withoutSkillLinks } from "../skill-prompt.view.ts";
 import { createTurnRecords } from "../turn-records.ts";
-import { type CloudChild, childSessionsIn, waitingIn } from "./children.ts";
+import { type CloudChild, childSessionsIn } from "./children.ts";
 import { type CloudReview, reviewsIn } from "./reviews.ts";
+import {
+  answersAskWith,
+  type CloudSessionState,
+  handsBack,
+  sessionStateOf,
+} from "./session-state.ts";
+import {
+  askNotice,
+  ERRORED_NOTICE,
+  INTERRUPTED_NOTICE,
+} from "./session-state.view.ts";
 
 // A Cloud thread's turns log their failure tags beside the Claude runtime's, so the log takes any tag a runtime writes.
 export type CloudLogEvent = CloudEvent | TurnEvent;
@@ -38,7 +44,8 @@ type CloudFailureTag =
   | "CloudInputUnsupported"
   | "CloudSendRejected"
   | "CloudSendUnknown"
-  | "CloudCopyFailed";
+  | "CloudCopyFailed"
+  | "CloudSessionErrored";
 
 // Only steps, counts, durations and error tags are logged, never a session id or text.
 type CloudEvent =
@@ -62,6 +69,11 @@ type CloudEvent =
     }
   | { event: "claude_cloud"; step: "sent"; ms: number }
   | { event: "claude_cloud"; step: "child" | "review"; outcome: string }
+  | {
+      event: "claude_cloud";
+      step: "handed_back";
+      state: CloudSessionState["kind"];
+    }
   | { event: "claude_cloud"; step: "copied"; records: number; ms: number }
   | { event: "claude_cloud"; step: "copy_failed"; error: string }
   | { event: "claude_cloud"; step: "thread_not_renamed"; error: string };
@@ -430,8 +442,8 @@ export const createCloudRuntime = <Tag extends string>(
         : LINKED,
     );
     // A session still running its turn, such as one just started, is copied again soon rather than after the idle wait.
-    const last = copied.value.records.at(-1);
-    if (last === undefined || !replied(last)) hurry(threadId);
+    const { kind } = sessionStateOf(copied.value.records);
+    if (kind === "starting" || kind === "working") hurry(threadId);
     // A chat another chat opened has the name it was given; a failed rename leaves the name as it was.
     if (typed && renameThread !== undefined)
       void renameThread(
@@ -690,7 +702,7 @@ export const createCloudRuntime = <Tag extends string>(
           follow.sending === 0 &&
           follow.matched === follow.texts.length
         ) {
-          turn.finish({ status: "completed" }, null);
+          handBack(turn, progress.state);
           return;
         }
 
@@ -712,6 +724,7 @@ export const createCloudRuntime = <Tag extends string>(
 
   // The records of a copy past what the turn showed, and whether its reply ended.
   const advance = (follow: Follow, all: readonly SessionMessage[]) => {
+    const state = sessionStateOf(all);
     const from = indexAfter(all, follow.after);
     const shown: SessionMessage[] = [];
     if (follow.record === null) {
@@ -719,13 +732,14 @@ export const createCloudRuntime = <Tag extends string>(
       let found = -1;
       for (let index = all.length - 1; index >= from; index--) {
         const message = all[index];
-        if (message !== undefined && samePrompt(message, first)) {
+        if (message !== undefined && sentAs(all, message, first)) {
           found = index;
           break;
         }
       }
 
-      if (found === -1) return { shown: [], ended: false, waiting: false };
+      if (found === -1)
+        return { shown: [], ended: false, waiting: false, state };
       // What the session did before the message that the app was not shown, such as a reply still running when the chat was linked.
       shown.push(...all.slice(from, found));
       follow.record = keyOf(all[found]);
@@ -740,7 +754,7 @@ export const createCloudRuntime = <Tag extends string>(
       if (message === undefined) continue;
       const next = follow.texts[follow.matched];
       // A prompt this turn sent is shown by the app already, so only replies and prompts typed elsewhere are rendered.
-      if (next !== undefined && samePrompt(message, next)) {
+      if (next !== undefined && sentAs(all, message, next)) {
         follow.matched += 1;
         lastPrompt = index;
       } else {
@@ -750,11 +764,40 @@ export const createCloudRuntime = <Tag extends string>(
       follow.last = message.uuid;
     }
 
-    const ended = done(all) && all.length - 1 > lastPrompt;
-    const last = all.at(-1);
+    const ended = handsBack(state) && all.length - 1 > lastPrompt;
     // Only a session that ended its turn waits; one in its turn is followed closely.
-    const waiting = last !== undefined && replied(last) && waitingIn(all);
-    return { shown, ended, waiting };
+    const waiting = state.kind === "resumes_later";
+    return { shown, ended, waiting, state };
+  };
+
+  // Ends a turn the session handed back, telling the user what it waits for when it did not simply reply.
+  const handBack = (turn: Turn, state: CloudSessionState) => {
+    if (state.kind !== "replied") {
+      log({ event: "claude_cloud", step: "handed_back", state: state.kind });
+    }
+
+    if (state.kind === "errored") {
+      turn.fail({ _tag: "CloudSessionErrored", message: ERRORED_NOTICE });
+      return;
+    }
+
+    const notice =
+      state.kind === "awaiting_input"
+        ? askNotice(state.ask, state.input)
+        : state.kind === "interrupted"
+          ? INTERRUPTED_NOTICE
+          : null;
+
+    if (notice !== null) {
+      turn.apply(renderNotice(turn.state(), notice, "final_answer", now()));
+    }
+
+    turn.finish(
+      state.kind === "interrupted"
+        ? { status: "interrupted" }
+        : { status: "completed" },
+      null,
+    );
   };
 
   const showOwn = async (turn: Turn, cloud: CloudLink) => {
@@ -782,10 +825,16 @@ export const createCloudRuntime = <Tag extends string>(
     }
 
     await keepCopy(threadId, copied.value.copy, keyOfLast(all) ?? cloud.shown);
-    // A session still working, or waiting for a message it scheduled, keeps the turn running until it is done, as a turn sent from the app does.
+    // A session still working, or waiting for a message it scheduled, keeps the turn running until it hands the next move back, as a turn sent from the app does.
     const last = keyOfLast(all);
-    if (last === null || done(all) || stateOf(threadId).halted) {
+    const state = sessionStateOf(all);
+    if (last === null || stateOf(threadId).halted) {
       turn.finish({ status: "completed" }, null);
+      return;
+    }
+
+    if (handsBack(state)) {
+      handBack(turn, state);
       return;
     }
 
@@ -993,20 +1042,23 @@ export const createCloudRuntime = <Tag extends string>(
     const recordAt = last === undefined ? null : timeOf(last);
     // A session that just replied may go on by itself, such as when work it left running in the background ends.
     const age = recordAt === null ? null : now() - recordAt;
+    const state = sessionStateOf(all);
     const working =
       (last === undefined && starting) ||
       (last !== undefined &&
         age !== null &&
-        (age < ACTIVE_FOR_MS || (!replied(last) && age < WORKING_FOR_MS)));
+        (age < ACTIVE_FOR_MS ||
+          (state.kind === "working" && age < WORKING_FOR_MS)));
     const at = indexOf(all, cloud.shown);
     // Claude compacted the session past the record the app was shown, so everything the copy holds came after it and is shown.
     if (cloud.shown !== null && at === -1) {
       log({ event: "claude_cloud", step: "compacted" });
     }
 
-    // A session not done, such as one linked or followed again after a restart while it waits for a message it scheduled, is followed by a turn of Claude's own even with nothing new to show.
+    // A session still in its work, such as one linked or followed again after a restart while it waits for a message it scheduled, is followed by a turn of Claude's own even with nothing new to show; one that handed the next move back is shown only for what is new.
     const unfinished =
-      all.length > 0 && !done(all) && parked.get(threadId) !== keyOfLast(all);
+      (state.kind === "working" || state.kind === "resumes_later") &&
+      parked.get(threadId) !== keyOfLast(all);
     if ((at === all.length - 1 || all.length === 0) && !unfinished) {
       await discardCopy(copied.value.copy);
     } else {
@@ -1359,24 +1411,6 @@ const cloudChatName = (
 const NAME_LENGTH = 60;
 const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-// A record that ends Claude's turn with something to read; a copy may mark the thinking that opens the reply as the end too, before the reply's text arrives.
-const replied = (message: SessionMessage) =>
-  endsTurn(message) &&
-  isObject(message.message) &&
-  Array.isArray(message.message.content) &&
-  message.message.content.some(
-    (block) =>
-      isObject(block) &&
-      block.type !== "thinking" &&
-      block.type !== "redacted_thinking",
-  );
-
-// A session done with what it was asked: its turn ended with a reply, and it waits for no message it scheduled.
-const done = (all: readonly SessionMessage[]) => {
-  const last = all.at(-1);
-  return last !== undefined && replied(last) && !waitingIn(all);
-};
-
 const UNSENT_OUTCOMES = new Set(["not_sent", "no_project", "no_parent"]);
 
 // Stops waiting for a message whose send failed.
@@ -1386,8 +1420,14 @@ const forget = (follow: Follow, text: string) => {
   if (at >= follow.matched) follow.texts.splice(at, 1);
 };
 
-const samePrompt = (message: SessionMessage, text: string) =>
-  turnOpeningTextOf(message)?.trim() === text.trim();
+// A record holding a message sent from the app: a prompt with its text, or the answer it gave a question the session was waiting on.
+const sentAs = (
+  all: readonly SessionMessage[],
+  message: SessionMessage,
+  text: string,
+) =>
+  turnOpeningTextOf(message)?.trim() === text.trim() ||
+  answersAskWith(all, message, text);
 
 const keyOf = (message: SessionMessage | undefined) => message?.uuid ?? null;
 
@@ -1424,6 +1464,8 @@ export const serializeCloudEvent = (entry: CloudEvent) => {
     case "child":
     case "review":
       return { event: entry.event, step: entry.step, outcome: entry.outcome };
+    case "handed_back":
+      return { event: entry.event, step: entry.step, state: entry.state };
     case "copied":
       return {
         event: entry.event,

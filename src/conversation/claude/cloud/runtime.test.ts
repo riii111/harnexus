@@ -1130,6 +1130,81 @@ describe("createCloudRuntime turns", () => {
     expect(turn.texts().at(-1)).toContain("still working");
   });
 
+  test("ends the turn once the session asks a question, showing it and how to answer", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "fix it"), askQuestion("a1", "q1")]],
+      shown: null,
+    });
+    const turn = env.turn("fix it");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(turn.texts().at(-1)).toContain(
+      "**Pick**: Which one?\n- first\n- second",
+    );
+    expect(turn.texts().at(-1)).toContain("Reply here to answer");
+    expect(env.events).toContainEqual({
+      event: "claude_cloud",
+      step: "handed_back",
+      state: "awaiting_input",
+    });
+  });
+
+  test("takes a message sent while the session waits on its question as the answer, then follows the reply", async () => {
+    const asked = [prompt("p1", "fix it"), askQuestion("a1", "q1")];
+    const env = linked({
+      copies: [
+        asked,
+        [
+          ...asked,
+          toolResult("r1", "q1", 'The user answered: "second"'),
+          endReply("a2", "went with the second"),
+        ],
+      ],
+      shown: "a1",
+    });
+    const turn = env.turn("second");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(turn.texts()).toEqual(["went with the second"]);
+  });
+
+  test("ends a turn the session was stopped in on claude.ai as interrupted", async () => {
+    const env = linked({
+      copies: [
+        [
+          prompt("p1", "fix it"),
+          reply("a1", "m1", toolUse("t1", "Bash", {}), "tool_use"),
+          prompt("i1", "[Request interrupted by user]"),
+        ],
+      ],
+      shown: null,
+    });
+    const turn = env.turn("fix it");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.outcome).toEqual({ status: "interrupted" });
+    expect(turn.texts().at(-1)).toContain("stopped on claude.ai");
+  });
+
+  test("fails a turn the session ended on an API error, after showing the error", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "fix it"), apiError("e1")]],
+      shown: null,
+    });
+    const turn = env.turn("fix it");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts()).toEqual(["Login expired · Please run /login"]);
+    expect(turn.failure?._tag).toBe("CloudSessionErrored");
+    expect(turn.outcome).toBeNull();
+  });
+
   test("after the first copy, starts a copy every 1.5 seconds for 20 seconds, then waits 3 seconds between copies until a minute, then 10 seconds", async () => {
     const env = linked({
       copies: [
@@ -1714,6 +1789,30 @@ describe("createCloudRuntime idle copies", () => {
     });
   });
 
+  test("shows a question the session asked while no turn waited in a turn of Claude's own that ends, and opens no turn for it again", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "first"), endReply("a1", "one"), askQuestion("a2", "q1")],
+      ],
+      shown: "a1",
+    });
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+
+    await env.tick();
+    const turn = env.turn("", { startedBy: "claude" });
+    await env.runtime.run(turn.running);
+    await env.tick();
+
+    expect(env.ownStarts).toEqual(["thread-1"]);
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(turn.texts().at(-1)).toContain("Which one?");
+    expect(env.cloudOf("thread-1")?.shown).toBe("a2");
+    expect(env.copyCalls).toBe(2);
+  });
+
   test("leaves a thread with a running turn alone", async () => {
     const env = linked({ copies: [[prompt("p1", "x")]], shown: null });
     env.runtime.listen(() => true);
@@ -1729,6 +1828,37 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const endReply = (uuid: string, value: string) =>
   reply(uuid, `m-${uuid}`, text(value), "end_turn");
+
+const askQuestion = (uuid: string, id: string) =>
+  reply(
+    uuid,
+    `m-${uuid}`,
+    toolUse(id, "AskUserQuestion", {
+      questions: [
+        {
+          question: "Which one?",
+          header: "Pick",
+          multiSelect: false,
+          options: [{ label: "first" }, { label: "second" }],
+        },
+      ],
+    }),
+    "tool_use",
+  );
+
+// Claude Code writes an API error as a reply from no model, which the SDK hands over without its error flag.
+const apiError = (uuid: string): SessionMessage => {
+  const record = reply(
+    uuid,
+    `m-${uuid}`,
+    text("Login expired · Please run /login"),
+    "stop_sequence",
+  );
+  return {
+    ...record,
+    message: { ...(record.message as object), model: "<synthetic>" },
+  };
+};
 
 type Env = ReturnType<typeof setup>;
 
