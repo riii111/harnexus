@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { Result } from "better-result";
+import { z } from "zod";
 import {
   isDirectory,
   listDirectoryIfExists,
@@ -9,16 +10,15 @@ import {
   writeFileAtomic,
 } from "../lib/fs.boundary.ts";
 import { parseJson } from "../lib/json.boundary.ts";
-import { type Fields, isObject } from "../lib/object.ts";
-import type { Finding } from "./classify.ts";
-import type { WatchEvent } from "./events.ts";
+import { isObject } from "../lib/object.ts";
 import {
   StateUnreadable,
   type StateUnwritable,
   stateUnreadable,
   stateUnwritable,
 } from "./failure.ts";
-import type { PrRef, PrSummary } from "./github.ts";
+import type { PrRef } from "./github.ts";
+import { parseWatchState, type WatchState } from "./state.ts";
 
 // Every path below is under the root the caller gives, so the watch never decides where its records live.
 export type PrLink = PrRef & { url: string; worker: string; linkedAt: string };
@@ -107,32 +107,6 @@ const linkOf = (value: unknown): PrLink | null =>
       }
     : null;
 
-export type WatchState = {
-  status: "watching" | "draft" | "ended" | "stopped" | "halted";
-  reason: string | null;
-  summary: PrSummary | null;
-  checkedAt: string | null;
-  changedAt: string | null;
-  // Keys of every event already queued or sent, so none is sent twice.
-  seen: string[];
-  pending: WatchEvent[];
-  followUp: Finding[];
-  conflictHead: string | null;
-  delivered: Delivered | null;
-  // The chat the delivery fields belong to; a different chat in the link means the PR was handed over.
-  worker: string | null;
-  // The message whose delivery could not be confirmed; nothing more is sent for the PR until it is released.
-  halted: Fields | null;
-};
-
-type Delivered = {
-  at: string;
-  sender: string;
-  prompt: string;
-  findings: Finding[];
-  followUp: boolean;
-};
-
 export const freshState = (): WatchState => ({
   status: "watching",
   reason: null,
@@ -154,78 +128,21 @@ export const isOver = (state: WatchState) =>
 
 export const loadWatchState = (root: string, ref: PrRef) =>
   Result.gen(async function* () {
-    const loaded = yield* Result.await(loadJson(statePath(root, ref)));
-    return Result.ok<WatchState>(
-      isObject(loaded)
-        ? upgraded({ ...freshState(), ...(loaded as Partial<WatchState>) })
-        : freshState(),
-    );
+    const path = statePath(root, ref);
+    const loaded = yield* Result.await(loadJson(path));
+    if (loaded === undefined) return Result.ok(freshState());
+
+    const parsed = parseWatchState(loaded);
+    // A damaged record is refused rather than read as empty, so the tracking in it is never reset by the next save.
+    if (!parsed.success)
+      return Result.err(
+        new StateUnreadable({
+          cause: parsed.error,
+          message: `${path} is invalid: ${z.prettifyError(parsed.error)}`,
+        }),
+      );
+    return Result.ok<WatchState>(parsed.data);
   });
-
-// Reads a state written before review bots were configurable, which names CodeRabbit in its own fields, as the coderabbit preset.
-const upgraded = (state: WatchState): WatchState => ({
-  ...state,
-  summary: state.summary === null ? null : upgradedSummary(state.summary),
-  // Its CodeRabbit key is taken as the bot already known, so the watch does not read CodeRabbit as newly added.
-  seen:
-    state.summary !== null && !state.seen.some((key) => key.startsWith(BOT_KEY))
-      ? [...state.seen, botKey("coderabbit")]
-      : state.seen,
-  pending: state.pending.map(upgradedEvent),
-  followUp: state.followUp.map(upgradedFinding),
-  delivered:
-    state.delivered === null
-      ? null
-      : {
-          ...state.delivered,
-          findings: state.delivered.findings.map(upgradedFinding),
-        },
-});
-
-const upgradedSummary = (summary: PrSummary): PrSummary => {
-  const { coderabbit, ...rest } = summary as PrSummary & {
-    coderabbit?: PrSummary["bots"][string];
-  };
-  return "bots" in summary
-    ? summary
-    : { ...rest, bots: { coderabbit: coderabbit ?? null } };
-};
-
-// Marks a bot whose reviews the watch has taken in.
-export const botKey = (id: string) => `${BOT_KEY}${id}`;
-
-const BOT_KEY = "bot:";
-
-const upgradedEvent = (event: WatchEvent): WatchEvent => {
-  const old = event as WatchEvent | (Fields & { type: "coderabbit_done" });
-  if (old.type === "coderabbit_done")
-    return {
-      type: "review_done",
-      bot: "coderabbit",
-      name: "CodeRabbit",
-      head: String(old.head),
-      findings: Number(old.findings),
-      summaryAgrees: old.summaryAgrees === true,
-    };
-  return old.type === "finding"
-    ? { ...old, finding: upgradedFinding(old.finding) }
-    : old;
-};
-
-const upgradedFinding = (finding: Finding): Finding => {
-  const { coderabbit, ...rest } = finding as Finding & { coderabbit?: boolean };
-  return {
-    ...rest,
-    bot:
-      finding.bot !== undefined
-        ? finding.bot
-        : coderabbit === true
-          ? "coderabbit"
-          : null,
-    // A finding written before approvals were told is never one.
-    approval: finding.approval ?? null,
-  };
-};
 
 export const saveWatchState = (
   root: string,
@@ -267,7 +184,8 @@ const loadJson = (path: string) =>
     const text = yield* Result.await(
       readTextFileIfExists(path).then((read) => read.mapError(stateUnreadable)),
     );
-    if (text === null) return Result.ok(null);
+    // A missing file is undefined, so a stored JSON null is still a record to check.
+    if (text === null) return Result.ok(undefined);
     return parseJson(text).mapError(
       (cause) =>
         new StateUnreadable({ cause, message: `${path} is not valid JSON` }),

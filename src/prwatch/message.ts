@@ -1,5 +1,4 @@
-import type { Finding } from "./classify.ts";
-import type { WatchEvent } from "./events.ts";
+import type { Finding, WatchEvent } from "./state.ts";
 
 // The one message a worker gets for everything that happened on a PR since the last one, answered in a single turn.
 export const messageOf = (

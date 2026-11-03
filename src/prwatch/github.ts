@@ -14,6 +14,7 @@ import {
   type WatchFailure,
 } from "./failure.ts";
 import { botOf, type ReviewBot } from "./reviewers.ts";
+import type { BotStatus, FailedCheck, PrSummary } from "./state.ts";
 
 // The review bots are passed on every read, since the config is read again each cycle.
 export type GitHub = {
@@ -42,25 +43,6 @@ type RunCommand = (
 
 export type PrRef = { repo: string; number: number };
 
-// What the light poll reads; a change in any of it is what makes the full read worth its cost.
-export type PrSummary = {
-  state: string;
-  isDraft: boolean;
-  head: string;
-  updatedAt: string;
-  mergeable: string;
-  // The progress of each review bot that keeps one, by the bot's id.
-  bots: Record<string, BotStatus | null>;
-  rollup: string | null;
-};
-
-// A check run is read into a commit status's terms: PENDING until it completes, then its conclusion, with an empty description.
-type BotStatus = {
-  state: string;
-  description: string;
-  createdAt: string;
-};
-
 export type PrDetail = PrSummary & {
   url: string;
   title: string;
@@ -69,8 +51,6 @@ export type PrDetail = PrSummary & {
   // The ids of the bots whose PR comment says they found nothing.
   noActionable: string[];
 };
-
-export type FailedCheck = { name: string; url: string | null };
 
 export type PrComment = {
   id: string;

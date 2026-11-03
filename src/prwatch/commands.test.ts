@@ -6,8 +6,8 @@ import { Result } from "better-result";
 import { holdProcessLock } from "../lib/fs.boundary.ts";
 import { dryRun, release, status, watchForever } from "./commands.ts";
 import type { GitHub, PrDetail } from "./github.ts";
+import { botKey, type PrSummary } from "./state.ts";
 import {
-  botKey,
   freshState,
   keyOf,
   loadWatchState,
@@ -48,7 +48,7 @@ const fixture = async () => {
   return { paths, root: paths.state };
 };
 
-const detail: PrDetail = {
+const summary: PrSummary = {
   state: "OPEN",
   isDraft: false,
   head: "a".repeat(40),
@@ -62,6 +62,10 @@ const detail: PrDetail = {
     },
   },
   rollup: "SUCCESS",
+};
+
+const detail: PrDetail = {
+  ...summary,
   url: PR,
   title: "Pay",
   failedRequired: [],
@@ -114,7 +118,7 @@ describe("dryRun", () => {
     await recordLink(root, LINK);
     const read = {
       ...freshState(),
-      summary: detail,
+      summary,
       seen: [botKey("coderabbit")],
     };
     await saveWatchState(root, REF, read);

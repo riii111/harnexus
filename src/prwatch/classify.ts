@@ -1,26 +1,11 @@
-import type { IgnoreRule, ItemKind } from "./config.ts";
+import type { IgnoreRule } from "./config.ts";
 import type { PrComment } from "./github.ts";
 import { botOf, type ReviewBot, severityOf } from "./reviewers.ts";
+import type { Finding } from "./state.ts";
 
 export type Verdict =
   | { comment: PrComment; finding: Finding }
   | { comment: PrComment; ignored: string };
-
-export type Finding = {
-  id: string;
-  kind: ItemKind;
-  // The id of the review bot that wrote it, or null for a person.
-  bot: string | null;
-  label: string;
-  path: string | null;
-  line: number | null;
-  url: string;
-  createdAt: string;
-  // A person's approval, which is told even without a body; null for any other finding.
-  approval: Approval | null;
-};
-
-type Approval = "with_body" | "without_body";
 
 export const classify = (
   comments: readonly PrComment[],
@@ -95,7 +80,7 @@ const isApproval = (comment: PrComment, bot: ReviewBot | null) =>
 const approvalOf = (
   comment: PrComment,
   bot: ReviewBot | null,
-): Approval | null => {
+): Finding["approval"] => {
   if (!isApproval(comment, bot)) return null;
   return comment.body.trim() === "" ? "without_body" : "with_body";
 };

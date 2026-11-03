@@ -1,11 +1,11 @@
 import { Result } from "better-result";
 import type { Fields } from "../lib/object.ts";
-import type { Finding } from "./classify.ts";
 import { loadConfig, type WatchConfig } from "./config.ts";
-import { nextEvents, type WatchEvent } from "./events.ts";
+import { nextEvents } from "./events.ts";
 import { jsonEqual } from "./failure.ts";
-import type { GitHub, PrSummary } from "./github.ts";
+import type { GitHub } from "./github.ts";
 import { followUpOf, messageOf, missingFrom } from "./message.ts";
+import type { Finding, PrSummary, WatchEvent, WatchState } from "./state.ts";
 import {
   isOver,
   keyOf,
@@ -13,7 +13,6 @@ import {
   loadWatchState,
   type PrLink,
   saveWatchState,
-  type WatchState,
 } from "./store.ts";
 import type { Answer, Workers } from "./worker.ts";
 
