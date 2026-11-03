@@ -6,6 +6,7 @@
   "packageManager": "bun@1.4.4",
   "scripts": {
     "check": "oxfmt --check && oxlint --deny-warnings",
+    "diagnose:complexity": "oxlint -c .oxlintrc.complexity.json src",
     "check:readme": "bash scripts/check-readme.sh",
     "format": "oxfmt && oxlint --fix",
     "typecheck": "tsc --noEmit -p tsconfig.json",

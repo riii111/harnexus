@@ -5,8 +5,12 @@ import { Result } from "better-result";
 import { prepareDirectory, removeFile } from "../lib/fs.boundary.ts";
 import { parseJson } from "../lib/json.boundary.ts";
 import { type Fields, isObject } from "../lib/object.ts";
-import { runProcess } from "../lib/run.boundary.ts";
-import { asText, detail, fail, jsonEqual } from "./format.ts";
+import {
+  type ProcessRun,
+  type ProcessRunFailed,
+  runProcess,
+} from "../lib/run.boundary.ts";
+import { asText, detail, fail, jsonEqual, type TaskFailed } from "./format.ts";
 import {
   readRecords,
   type SaveJson,
@@ -90,121 +94,99 @@ const replyOf = (stdout: string): Reply => {
 const recoveryHint =
   "its result is unknown, so it is not sent again on its own. Check the reviewer, then rerun with --recover discard to send the candidate again";
 
-const locked = (
-  args: CloudReviewArgs,
-  deps: CloudReviewDeps,
-  dir: string,
-  requested: Fields,
-) =>
-  Result.gen(async function* () {
-    const records = yield* Result.await(readRecords(dir));
-    const { statePath, pendingPath, state } = records;
-    yield* Result.await(
-      settlePending(records, args.recover, {
-        blocked: (pending) =>
-          `the review of head ${asText(pending.head)} did not report back: ${recoveryHint}`,
-        nothingPending: "--recover applies only when a review is pending",
-      }),
-    );
+type CodexLaunch = { bin: string; timeoutMs: number; killGraceMs: number };
 
-    const previous = isObject(state?.candidate) ? state.candidate : null;
-    const data = yield* Result.await(
-      candidate(requested, previous, args.updateBase, deps.git),
-    );
-    if (previous !== null) {
-      for (const key of ["taskId", "workerAI", "checkout"]) {
-        const before = await sessionValue(previous, key);
-        if (!jsonEqual(before, await sessionValue(data, key)))
-          return fail(`review session must keep the original ${key}`);
-      }
-
-      // A head the reviewer could not judge is sent again once what it lacked is given, such as a document it could not read.
-      // A state saved before verdicts were kept has none, and counts as judged.
-      const judged = state?.verdict !== "判定保留" && state?.verdict !== null;
-      if (judged && jsonEqual(previous.head ?? null, data.head))
-        return fail(
-          `head ${asText(data.head)} was already reviewed by ${asText(state?.reviewer)}; commit a fix before asking again`,
-        );
-    }
-
-    const fields = yield* Result.await(reviewFields(data, REPLY_TO));
-    const prompt = yield* Result.await(
-      taskPrompt(deps.env, "reviewer", fields),
-    );
-    const bin = yield* configuredBinary(
-      deps.env,
-      "HARNEXUS_CODEX_BIN",
-      "codex",
-    );
+const codexLaunch = (env: Env) =>
+  Result.gen(function* () {
+    const bin = yield* configuredBinary(env, "HARNEXUS_CODEX_BIN", "codex");
     const timeoutMs = yield* milliseconds(
-      deps.env,
+      env,
       "HARNEXUS_REVIEW_TIMEOUT_MS",
       DEFAULT_TIMEOUT_MS,
     );
     const killGraceMs = yield* milliseconds(
-      deps.env,
+      env,
       "HARNEXUS_REVIEW_KILL_GRACE_MS",
       DEFAULT_KILL_GRACE_MS,
     );
+    return Result.ok<CodexLaunch>({ bin, timeoutMs, killGraceMs });
+  });
 
-    const reviewer =
-      typeof state?.reviewer === "string" && THREAD_ID.test(state.reviewer)
-        ? state.reviewer
-        : null;
-    const checkout = String(data.checkout);
-    // An empty value falls back like a missing one, as for a reviewer chat in the app.
-    const model = args.model || (reviewer === null ? DEFAULT_MODEL : undefined);
-    const thinking =
-      args.thinking || (reviewer === null ? DEFAULT_THINKING : undefined);
-    const chosen = [
-      ...(model === undefined ? [] : ["-m", model]),
-      ...(thinking === undefined
-        ? []
-        : ["-c", `model_reasoning_effort=${JSON.stringify(thinking)}`]),
-    ];
-    // The reviewer only reads; resume has no --sandbox or --cd, so it takes the setting and runs in the checkout.
-    const argv =
-      reviewer === null
-        ? [
-            "exec",
-            "--json",
-            "--sandbox",
-            "read-only",
-            "-C",
-            checkout,
-            ...chosen,
-            "-",
-          ]
-        : [
-            "exec",
-            "resume",
-            reviewer,
-            "--json",
-            "-c",
-            'sandbox_mode="read-only"',
-            ...chosen,
-            "-",
-          ];
+const reviewerOf = (state: Fields | null) =>
+  typeof state?.reviewer === "string" && THREAD_ID.test(state.reviewer)
+    ? state.reviewer
+    : null;
 
-    yield* Result.await(
-      deps.saveJson(
-        pendingPath,
-        {
-          reviewer,
-          base: data.base,
-          head: data.head,
-          startedAt: new Date().toISOString(),
-        },
-        { exclusive: false },
-      ),
+const checkContinuation = async (
+  state: Fields | null,
+  previous: Fields,
+  data: Fields,
+): Promise<Result<void, TaskFailed>> => {
+  for (const key of ["taskId", "workerAI", "checkout"]) {
+    const before = await sessionValue(previous, key);
+    if (!jsonEqual(before, await sessionValue(data, key)))
+      return fail(`review session must keep the original ${key}`);
+  }
+
+  // A head the reviewer could not judge is sent again once what it lacked is given, such as a document it could not read.
+  // A state saved before verdicts were kept has none, and counts as judged.
+  const judged = state?.verdict !== "判定保留" && state?.verdict !== null;
+  if (judged && jsonEqual(previous.head ?? null, data.head))
+    return fail(
+      `head ${asText(data.head)} was already reviewed by ${asText(state?.reviewer)}; commit a fix before asking again`,
     );
-    const unsent = () => io(removeFile(pendingPath));
-    const ran = await runProcess(bin, argv, prompt, {
-      cwd: checkout,
-      env: deps.env,
-      timeoutMs,
-      killGraceMs,
-    });
+
+  return Result.ok();
+};
+
+const reviewArgv = (
+  reviewer: string | null,
+  checkout: string,
+  { model, thinking }: Pick<CloudReviewArgs, "model" | "thinking">,
+) => {
+  // An empty value falls back like a missing one, as for a reviewer chat in the app.
+  const chosenModel = model || (reviewer === null ? DEFAULT_MODEL : undefined);
+  const chosenThinking =
+    thinking || (reviewer === null ? DEFAULT_THINKING : undefined);
+  const chosen = [
+    ...(chosenModel === undefined ? [] : ["-m", chosenModel]),
+    ...(chosenThinking === undefined
+      ? []
+      : ["-c", `model_reasoning_effort=${JSON.stringify(chosenThinking)}`]),
+  ];
+  // The reviewer only reads; resume has no --sandbox or --cd, so it takes the setting and runs in the checkout.
+  return reviewer === null
+    ? [
+        "exec",
+        "--json",
+        "--sandbox",
+        "read-only",
+        "-C",
+        checkout,
+        ...chosen,
+        "-",
+      ]
+    : [
+        "exec",
+        "resume",
+        reviewer,
+        "--json",
+        "-c",
+        'sandbox_mode="read-only"',
+        ...chosen,
+        "-",
+      ];
+};
+
+type Cleanup = () => Promise<Result<void, TaskFailed>>;
+
+// What a finished codex run answered. A run that reviewed nothing clears the pending record so the candidate can be sent again; one whose result is unknown leaves it.
+const reviewReply = (
+  ran: Result<ProcessRun, ProcessRunFailed>,
+  reviewer: string | null,
+  { unsent, forgetReviewer }: { unsent: Cleanup; forgetReviewer: Cleanup },
+) =>
+  Result.gen(async function* () {
     if (ran.isErr()) {
       if (!ran.error.started) yield* Result.await(unsent());
       return fail(
@@ -229,13 +211,7 @@ const locked = (
       yield* Result.await(unsent());
       // The reviewer's record lives in this machine's Codex home, which a rebuilt Cloud machine no longer has.
       if (reviewer !== null && stderr.includes(NO_ROLLOUT)) {
-        yield* Result.await(
-          deps.saveJson(
-            statePath,
-            { ...state, reviewer: null, updatedAt: new Date().toISOString() },
-            { exclusive: false },
-          ),
-        );
+        yield* Result.await(forgetReviewer());
         return fail(
           `reviewer ${reviewer} is gone from this machine; run review again to start a new reviewer`,
         );
@@ -252,8 +228,75 @@ const locked = (
       return fail("codex answered without naming its thread");
     }
 
+    return Result.ok({ threadId, answer: reply.answer });
+  });
+
+const locked = (
+  args: CloudReviewArgs,
+  deps: CloudReviewDeps,
+  dir: string,
+  requested: Fields,
+) =>
+  Result.gen(async function* () {
+    const records = yield* Result.await(readRecords(dir));
+    const { statePath, pendingPath, state } = records;
+    yield* Result.await(
+      settlePending(records, args.recover, {
+        blocked: (pending) =>
+          `the review of head ${asText(pending.head)} did not report back: ${recoveryHint}`,
+        nothingPending: "--recover applies only when a review is pending",
+      }),
+    );
+
+    const previous = isObject(state?.candidate) ? state.candidate : null;
+    const data = yield* Result.await(
+      candidate(requested, previous, args.updateBase, deps.git),
+    );
+    if (previous !== null)
+      yield* Result.await(checkContinuation(state, previous, data));
+
+    const fields = yield* Result.await(reviewFields(data, REPLY_TO));
+    const prompt = yield* Result.await(
+      taskPrompt(deps.env, "reviewer", fields),
+    );
+    const { bin, ...limits } = yield* codexLaunch(deps.env);
+
+    const reviewer = reviewerOf(state);
+    const checkout = String(data.checkout);
+    const argv = reviewArgv(reviewer, checkout, args);
+
+    yield* Result.await(
+      deps.saveJson(
+        pendingPath,
+        {
+          reviewer,
+          base: data.base,
+          head: data.head,
+          startedAt: new Date().toISOString(),
+        },
+        { exclusive: false },
+      ),
+    );
+    const unsent = () => io(removeFile(pendingPath));
+    const ran = await runProcess(bin, argv, prompt, {
+      cwd: checkout,
+      env: deps.env,
+      ...limits,
+    });
+    const { threadId, answer } = yield* Result.await(
+      reviewReply(ran, reviewer, {
+        unsent,
+        forgetReviewer: () =>
+          deps.saveJson(
+            statePath,
+            { ...state, reviewer: null, updatedAt: new Date().toISOString() },
+            { exclusive: false },
+          ),
+      }),
+    );
+
     const heads: unknown[] = Array.isArray(state?.heads) ? state.heads : [];
-    const verdict = VERDICT.exec(reply.answer)?.[1] ?? null;
+    const verdict = VERDICT.exec(answer)?.[1] ?? null;
     const saved = await deps.saveJson(
       statePath,
       {
@@ -268,7 +311,7 @@ const locked = (
     // The pending record stays, so the review is not taken as done; its answer is still shown.
     if (saved.isErr())
       return fail(
-        `${saved.error.message}; reviewer ${threadId} answered, but it was not recorded, ${recoveryHint}. Its answer:\n${reply.answer}`,
+        `${saved.error.message}; reviewer ${threadId} answered, but it was not recorded, ${recoveryHint}. Its answer:\n${answer}`,
       );
     yield* Result.await(unsent());
     return Result.ok<Fields>({
@@ -278,7 +321,7 @@ const locked = (
       base: data.base,
       head: data.head,
       reviewer: threadId,
-      answer: reply.answer,
+      answer,
       state: statePath,
     });
   });
@@ -294,27 +337,10 @@ const asked = (
     const message = yield* Result.await(readText(ask));
     if (message.trim() === "") return fail("the --ask file is empty");
     const { state } = yield* Result.await(readRecords(dir));
-    const reviewer =
-      typeof state?.reviewer === "string" && THREAD_ID.test(state.reviewer)
-        ? state.reviewer
-        : null;
+    const reviewer = reviewerOf(state);
     if (reviewer === null)
       return fail("this task has no reviewer yet; run review first");
-    const bin = yield* configuredBinary(
-      deps.env,
-      "HARNEXUS_CODEX_BIN",
-      "codex",
-    );
-    const timeoutMs = yield* milliseconds(
-      deps.env,
-      "HARNEXUS_REVIEW_TIMEOUT_MS",
-      DEFAULT_TIMEOUT_MS,
-    );
-    const killGraceMs = yield* milliseconds(
-      deps.env,
-      "HARNEXUS_REVIEW_KILL_GRACE_MS",
-      DEFAULT_KILL_GRACE_MS,
-    );
+    const { bin, ...limits } = yield* codexLaunch(deps.env);
     const ran = await runProcess(
       bin,
       [
@@ -330,8 +356,7 @@ const asked = (
       {
         cwd: String(requested.checkout),
         env: deps.env,
-        timeoutMs,
-        killGraceMs,
+        ...limits,
       },
     );
     if (ran.isErr()) return fail(ran.error.message);
