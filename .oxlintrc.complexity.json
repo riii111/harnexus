@@ -1,0 +1,7 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // A diagnostic for choosing refactoring candidates, kept apart from .oxlintrc.json because check runs with --deny-warnings and would fail on every finding.
+  "categories": { "correctness": "off" },
+  "ignorePatterns": [".claude/**", "src/**/*.test.ts", "src/**/testing/**"],
+  "rules": { "complexity": ["warn", { "max": 20, "variant": "modified" }] }
+}
