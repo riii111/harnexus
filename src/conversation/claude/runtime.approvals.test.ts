@@ -229,7 +229,7 @@ describe("tool approval", () => {
     );
     await until(() => claude.drained());
 
-    askTool(claude, "Bash", { command: "ls" }, { agentID: "agent-1" });
+    void askTool(claude, "Bash", { command: "ls" }, { agentID: "agent-1" });
     const request = await appRequest(sent);
 
     const started = sent.find(
@@ -247,7 +247,7 @@ describe("tool approval", () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { sent } = await startedTurn(claude);
 
-    askTool(claude, "Bash", { command: "ls" }, { agentID: "agent-1" });
+    void askTool(claude, "Bash", { command: "ls" }, { agentID: "agent-1" });
     const request = await appRequest(sent);
 
     expect(request.method).toBe("item/tool/requestUserInput");
@@ -349,7 +349,7 @@ describe("tool approval that must default to no", () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { sent } = await startedTurn(claude);
 
-    askTool(claude, "Bash", { command: "ls" }, { defaultToNo: true });
+    void askTool(claude, "Bash", { command: "ls" }, { defaultToNo: true });
     const request = await appRequest(sent);
 
     expect(request.method).toBe("item/tool/requestUserInput");
@@ -851,7 +851,7 @@ describe("approvals no turn could show", () => {
     const { turns, sent } = await harness([claude]);
     await completeTurn(turns, sent, claude, 10);
 
-    agentAsks(claude, "tool-1");
+    void agentAsks(claude, "tool-1");
     await appRequest(sent);
     await turns.steerTurn(steer(30, "turn-2", "also this"));
 

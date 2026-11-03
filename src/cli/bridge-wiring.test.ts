@@ -102,7 +102,7 @@ describe("connectClaudeThreads", () => {
   test("lets Claude threads coordinate their own and each other's workers and reviews after reopening the store", async () => {
     const { threads, sessions, calls, start, call } = await orchestration();
     try {
-      start();
+      await start();
       await until(() => sessions.has(WORKER_A));
       const first = await call(WORKER_A, "create_thread", {
         prompt: "work",
@@ -237,9 +237,9 @@ describe("connectClaudeThreads", () => {
     const fromApp = (message: object) =>
       threads.router.fromApp(Buffer.from(`${JSON.stringify(message)}\n`));
 
-    fromApp(turnOf(1, "/resume"));
+    await fromApp(turnOf(1, "/resume"));
     await until(() => question(sent) !== undefined);
-    fromApp({
+    await fromApp({
       id: question(sent).id,
       result: { answers: { conversation: { answers: ["Fixture title"] } } },
     });
@@ -282,7 +282,7 @@ const orchestration = async () => {
         entry.tool === "create_thread"
           ? `child-${++child}`
           : String(args.threadId);
-      threads.router.fromApp(
+      await threads.router.fromApp(
         Buffer.from(
           `${JSON.stringify({
             id: ++sequence,
@@ -390,7 +390,7 @@ const workerA = async () => {
   });
   const fromApp = (message: object) =>
     threads.router.fromApp(Buffer.from(`${JSON.stringify(message)}\n`));
-  fromApp(turnOf(1, "work"));
+  await fromApp(turnOf(1, "work"));
   const createThreadAfter = async (
     lines: object[],
     beforeClose: () => Promise<void> = async () => {},

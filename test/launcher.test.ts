@@ -509,7 +509,7 @@ describe("app-server shutdown", () => {
         stderr: "pipe",
       });
       await readReport(reportPath);
-      proc.stdin.end();
+      await proc.stdin.end();
       const result = await finish(proc);
 
       expect(result).toMatchObject({ exitCode: null, signal: "SIGKILL" });
@@ -540,7 +540,7 @@ describe("app-server shutdown", () => {
 
       const stderr = await new Response(proc.stderr).text();
       await proc.exited;
-      proc.stdin.end();
+      await proc.stdin.end();
 
       expect(proc.signalCode).toBe("SIGKILL");
       expect(serverEvents(stderr)).toEqual([

@@ -19,10 +19,10 @@ describe("ThreadValues thread recognition", () => {
 });
 
 describe("ThreadValues.forgetThread", () => {
-  test("drops the model and session id the store already holds, so the store's later values show", () => {
+  test("drops the model and session id the store already holds, so the store's later values show", async () => {
     const { values, record } = fixture();
     values.changeModel("th-1", "model-b");
-    values.setSessionId("th-1", "se-2");
+    await values.setSessionId("th-1", "se-2");
     record.model = "model-b";
     record.sessionId = "se-2";
 
@@ -34,10 +34,10 @@ describe("ThreadValues.forgetThread", () => {
     expect(values.sessionIdOf("th-1")).toBe("se-3");
   });
 
-  test("keeps a model and session id the store does not hold, since a failed save still applies", () => {
+  test("keeps a model and session id the store does not hold, since a failed save still applies", async () => {
     const { values } = fixture();
     values.changeModel("th-1", "model-b");
-    values.setSessionId("th-1", "se-2");
+    await values.setSessionId("th-1", "se-2");
 
     values.forgetThread("th-1", "archived");
 
@@ -56,10 +56,10 @@ describe("ThreadValues.forgetThread", () => {
     expect(values.instructionsOf("th-1")).toBe("aside");
   });
 
-  test("drops everything a deleted thread held, even what the store lacks", () => {
+  test("drops everything a deleted thread held, even what the store lacks", async () => {
     const { values } = fixture();
     values.changeModel("th-1", "model-b");
-    values.setSessionId("th-1", "se-2");
+    await values.setSessionId("th-1", "se-2");
     values.selectMode("th-1", "plan");
     values.noteSideChat("th-1", { instructions: "aside", reference: null });
 
