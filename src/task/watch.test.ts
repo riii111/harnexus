@@ -1,23 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Result } from "better-result";
 import type { Fields } from "../lib/object.ts";
 import { GithubUnreachable } from "../prwatch/failure.ts";
-import type {
-  GitHub,
-  PrComment,
-  PrDetail,
-  PrSummary,
-} from "../prwatch/github.ts";
+import type { GitHub, PrComment, PrDetail } from "../prwatch/github.ts";
+import { botKey, type PrSummary, type WatchState } from "../prwatch/state.ts";
 import {
   freshState,
   keyOf,
   loadWatchState,
   recordLink,
   saveWatchState,
-  type WatchState,
 } from "../prwatch/store.ts";
 import { runCycle } from "../prwatch/watcher.ts";
 import { watchPaths } from "./cli.ts";
@@ -855,6 +850,30 @@ describe("runCycle", () => {
     const read = logs.filter((log) => log.event === "state_unreadable");
 
     expect([over.size, skipped.length, read.length]).toEqual([1, 0, 1]);
+  });
+
+  test("leaves a record it cannot read as it is, polling and sending nothing from it", async () => {
+    const { calls, logs, cycle, paths } = await fixture();
+    const path = join(paths.state, keyOf(REF), "state.json");
+    await saveWatchState(paths.state, REF, {
+      ...freshState(),
+      summary: summary(),
+      seen: [botKey("coderabbit"), "inline:1"],
+      pending: [{ type: "conflict", head: HEAD }],
+    });
+    const damaged = (await readFile(path, "utf8")).replace(
+      '"type": "conflict"',
+      '"type": "merged"',
+    );
+    await writeFile(path, damaged);
+
+    await cycle();
+
+    expect(await readFile(path, "utf8")).toBe(damaged);
+    expect([calls.summaries, calls.sent]).toEqual([0, []]);
+    expect(logs.filter((log) => log.event === "state_unreadable")).toHaveLength(
+      1,
+    );
   });
 
   test("starts a bot added to the config later from the reviews it already finished", async () => {

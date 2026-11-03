@@ -56,7 +56,7 @@ export const loadConfig = (
 // Zod builds each schema from the ones it names, so they are declared from the leaves up.
 const LOGIN = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*(\[bot\])?$/);
 
-const ITEM_KINDS = ["inline", "review", "issue_comment"] as const;
+export const ITEM_KINDS = ["inline", "review", "issue_comment"] as const;
 
 const IGNORE_RULE = z.strictObject({
   author: LOGIN,

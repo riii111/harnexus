@@ -1,22 +1,8 @@
-import { classify, type Finding } from "./classify.ts";
+import { classify } from "./classify.ts";
 import type { WatchConfig } from "./config.ts";
-import type { FailedCheck, PrDetail } from "./github.ts";
+import type { PrDetail } from "./github.ts";
 import type { ReviewBot } from "./reviewers.ts";
-import { botKey, type WatchState } from "./store.ts";
-
-export type WatchEvent =
-  | { type: "finding"; finding: Finding }
-  | {
-      type: "review_done";
-      // The bot's id and the name shown to the worker.
-      bot: string;
-      name: string;
-      head: string;
-      findings: number;
-      summaryAgrees: boolean;
-    }
-  | { type: "conflict"; head: string }
-  | { type: "ci_failed"; head: string; check: FailedCheck };
+import { botKey, type WatchEvent, type WatchState } from "./state.ts";
 
 export const nextEvents = (
   detail: PrDetail,

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { Finding } from "./classify.ts";
 import { followUpOf, messageOf, missingFrom } from "./message.ts";
+import type { Finding } from "./state.ts";
 
 const PR = "https://github.com/org/pay/pull/7";
 const INSTRUCTIONS = "$task-worker\ntask-workerの手順で報告してください。";

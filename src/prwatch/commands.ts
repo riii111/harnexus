@@ -13,6 +13,7 @@ import {
 } from "./failure.ts";
 import type { GitHub, PrDetail, PrRef } from "./github.ts";
 import { messageOf } from "./message.ts";
+import type { WatchState } from "./state.ts";
 import {
   freshState,
   githubPr,
@@ -22,7 +23,6 @@ import {
   lockPath,
   samePr,
   saveWatchState,
-  type WatchState,
 } from "./store.ts";
 import { runCycle, type WatchDeps, type WatchPaths } from "./watcher.ts";
 

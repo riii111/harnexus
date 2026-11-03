@@ -94,7 +94,6 @@ const SHORT_LINES = 2;
 // The functions below were written before this check; move the comment to the line it explains, or into a name, and delete the entry. An entry that no longer matches fails the test.
 const EXISTING: string[] = [
   "conversation/turn/turn.view.ts#steeredTurn",
-  "prwatch/store.ts#botKey",
   "prwatch/store.ts#recordSender",
 ];
 
