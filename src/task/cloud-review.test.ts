@@ -3,6 +3,8 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { runTask, TASK_DEPS } from "./cli.ts";
+import { fail } from "./format.ts";
+import { saveJson } from "./records.ts";
 import { createFakeCli } from "./testing/fake-cli.ts";
 
 const SKILLS = join(import.meta.dir, "../../test/fixtures/task-skills");
@@ -102,9 +104,11 @@ const fixture = async () => {
   const review = async (
     extra: string[] = [],
     more: Record<string, string> = {},
+    deps: Partial<typeof TASK_DEPS> = {},
   ) => {
     const done = await runTask(["review", "--request", request, ...extra], {
       ...TASK_DEPS,
+      ...deps,
       env: { ...env, ...more },
     });
     return {
@@ -411,6 +415,92 @@ describe("harnexus-task review in a Claude Code cloud session", () => {
     await plan(3, { out: events(OTHER, "判定: LGTM") });
     expect((await review()).out.reviewer).toBe(OTHER);
     expect((await args(3)).slice(0, 2)).toEqual(["exec", "--json"]);
+  });
+
+  test("refuses to continue a review session under a different worker AI", async () => {
+    const { root, commit, plan, review, calls } = await fixture();
+    commit("test: candidate");
+    await plan(1, { out: events(REVIEWER, "判定: 修正必要") });
+    await review();
+    commit("fix: candidate");
+    const request = JSON.parse(
+      await readFile(join(root, "request.json"), "utf8"),
+    );
+    await writeFile(
+      join(root, "request.json"),
+      JSON.stringify({ ...request, workerAI: "Codex" }),
+    );
+
+    const changed = await review();
+
+    expect([changed.code, changed.err]).toEqual([
+      1,
+      expect.stringContaining("must keep the original workerAI"),
+    ]);
+    expect(await calls()).toBe(1);
+  });
+
+  test("sends the head again when codex could not be started", async () => {
+    const { root, commit, plan, review } = await fixture();
+    commit("test: candidate");
+
+    const missing = await review([], {
+      HARNEXUS_CODEX_BIN: join(root, "missing-codex"),
+    });
+
+    expect(missing.code).toBe(1);
+    expect(missing.err).toContain("missing-codex");
+    expect(missing.err).not.toContain("--recover discard");
+    await plan(1, { out: events(REVIEWER, "判定: LGTM") });
+    expect((await review()).out.verdict).toBe("LGTM");
+  });
+
+  test("sends the head again after an answer that named no thread", async () => {
+    const { commit, plan, review } = await fixture();
+    commit("test: candidate");
+    await plan(1, {
+      out: JSON.stringify({
+        type: "item.completed",
+        item: { id: "item_0", type: "agent_message", text: "判定: LGTM" },
+      }),
+    });
+
+    const unnamed = await review();
+
+    expect([unnamed.code, unnamed.err]).toEqual([
+      1,
+      expect.stringContaining("without naming its thread"),
+    ]);
+    await plan(2, { out: events(REVIEWER, "判定: LGTM") });
+    expect((await review()).out.reviewer).toBe(REVIEWER);
+  });
+
+  test("keeps a review pending, and shows its answer, when the verdict could not be recorded", async () => {
+    const { commit, plan, review, calls } = await fixture();
+    commit("test: candidate");
+    await plan(1, { out: events(REVIEWER, "判定: LGTM") });
+
+    const unrecorded = await review(
+      [],
+      {},
+      {
+        saveJson: async (path, content, options) =>
+          path.endsWith("state.json")
+            ? fail("disk full")
+            : saveJson(path, content, options),
+      },
+    );
+
+    expect(unrecorded.code).toBe(1);
+    expect(unrecorded.err).toContain("disk full");
+    expect(unrecorded.err).toContain("--recover discard");
+    expect(unrecorded.err).toContain("Its answer:\n判定: LGTM");
+    const held = await review();
+    expect([held.code, held.err]).toEqual([
+      1,
+      expect.stringContaining("did not report back"),
+    ]);
+    expect(await calls()).toBe(1);
   });
 
   test("keeps a review whose result is unknown pending until it is discarded", async () => {
