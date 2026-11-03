@@ -1604,6 +1604,30 @@ describe("createCloudRuntime idle copies", () => {
     expect(env.planned).toEqual([15_000, 10_000, 10_000, 300_000]);
   });
 
+  test("copies a session soon while it has no records yet after linking it, as one whose container is still starting", async () => {
+    const env = setup({ copies: [[]] });
+    env.runtime.listen(() => true);
+
+    await env.runtime.run(env.turn(`/cloud ${CLOUD_ID}`).running);
+    await env.tick();
+    await env.tick();
+
+    expect(env.planned).toEqual([15_000, 10_000, 10_000, 10_000]);
+  });
+
+  test("copies a session soon after linking it when a copy fails, and after the idle wait once linking is long past", async () => {
+    const env = setup({ copies: [[]] });
+    env.runtime.listen(() => true);
+
+    await env.runtime.run(env.turn(`/cloud ${CLOUD_ID}`).running);
+    env.copyFailure = "teleport failed";
+    await env.tick();
+    env.clock += 10 * 60_000;
+    await env.tick();
+
+    expect(env.planned).toEqual([15_000, 10_000, 10_000, 300_000]);
+  });
+
   test("copies soon only the thread whose session is working, and the others after the idle wait", async () => {
     const at = "2026-11-01T00:00:00Z";
     const working = [
