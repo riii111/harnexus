@@ -779,7 +779,9 @@ const COMMANDS = {
     args: (values) => {
       const args: WatchArgs = {
         dryRun: values["dry-run"] === true,
-        prs: Array.isArray(values.pr) ? values.pr : [],
+        prs: Array.isArray(values.pr)
+          ? values.pr.filter((pr) => typeof pr === "string")
+          : [],
         release: text(values, "release"),
         status: values.status === true,
         sender: values.sender === true,

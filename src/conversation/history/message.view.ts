@@ -37,7 +37,7 @@ export const promptOf = (body: unknown): Prompt | null => {
   }
 
   // The first text block is what was typed; later ones are files the bridge attached.
-  const typed = content.find(
+  const typed: unknown = content.find(
     (block) =>
       isObject(block) &&
       block.type === "text" &&

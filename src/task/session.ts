@@ -238,7 +238,7 @@ const openSession = (
         if (!sent) {
           if (pending.status === "refused") {
             const history = yield* Result.await(load(historyPath));
-            const kept = Array.isArray(history) ? history : [];
+            const kept: unknown[] = Array.isArray(history) ? history : [];
             yield* Result.await(
               save(historyPath, [...kept, pending], { exclusive: false }),
             );

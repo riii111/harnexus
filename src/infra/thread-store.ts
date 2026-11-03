@@ -510,8 +510,9 @@ const serializeState = (mappings: ReadonlyMap<string, ThreadMapping>) =>
 const readState = (value: unknown): ThreadMapping[] | null => {
   if (!isObject(value) || value.version !== STATE_VERSION) return null;
   if (!Array.isArray(value.threads)) return null;
+  const stored: unknown[] = value.threads;
   // Files written before message ids or efforts were kept have none.
-  const threads = value.threads.map((thread) =>
+  const threads = stored.map((thread) =>
     isObject(thread)
       ? {
           ...thread,

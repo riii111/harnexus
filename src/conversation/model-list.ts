@@ -17,14 +17,15 @@ export const withClaudeModels = (
     return { result, collisions: [] };
   }
 
-  const listed = new Set(data.map((model) => modelId(model)));
+  const served: unknown[] = data;
+  const listed = new Set(served.map((model) => modelId(model)));
   const models = [
     ...offered.map((model) => ({ model, hidden: false })),
     // A retired model is listed hidden, so the app can still name the model of a thread already on it.
     ...retired.map((model) => ({ model, hidden: true })),
   ];
   // A server id with the Claude prefix is reported, since requests for it go to Claude.
-  const collisions = data
+  const collisions = served
     .map((model) => modelId(model))
     .filter((id) => isClaudeModel(id));
   const added = models
@@ -32,7 +33,7 @@ export const withClaudeModels = (
     .map(({ model, hidden }) =>
       modelEntry(model, hidden, rule(model.id, null)),
     );
-  return { result: { ...result, data: [...data, ...added] }, collisions };
+  return { result: { ...result, data: [...served, ...added] }, collisions };
 };
 
 export const shownEffort = (effort: EffortLevel | null) =>

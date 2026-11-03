@@ -215,7 +215,8 @@ const VARIANT_TYPES = [
 const groupVariants = (shapes: readonly RecordedShape[]) => {
   const groups = new Map<string, Map<string, RecordedShape[]>>();
   for (const shape of shapes) {
-    const variants = groups.get(groupOf(shape)) ?? new Map();
+    const variants =
+      groups.get(groupOf(shape)) ?? new Map<string, RecordedShape[]>();
     const variant = variantOf(shape);
     variants.set(variant, [...(variants.get(variant) ?? []), shape]);
     groups.set(groupOf(shape), variants);

@@ -250,7 +250,7 @@ const locked = (
       return fail("codex answered without naming its thread");
     }
 
-    const heads = Array.isArray(state?.heads) ? state.heads : [];
+    const heads: unknown[] = Array.isArray(state?.heads) ? state.heads : [];
     const verdict = VERDICT.exec(reply.answer)?.[1] ?? null;
     const saved = await deps.saveJson(
       statePath,

@@ -213,12 +213,13 @@ const delegationOf = (first: unknown) => {
     isDelegatingTool(String(first.name))
   )
     return parseDelegation(isObject(first.output) ? first.output.text : null);
-  if (first.type === "userMessage" && Array.isArray(first.content))
-    return parseDelegation(
-      first.content.find(
-        (part) => isObject(part) && typeof part.text === "string",
-      )?.text,
+  if (first.type === "userMessage" && Array.isArray(first.content)) {
+    const found: unknown = first.content.find(
+      (part) => isObject(part) && typeof part.text === "string",
     );
+    return parseDelegation(isObject(found) ? found.text : null);
+  }
+
   return null;
 };
 

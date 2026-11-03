@@ -69,7 +69,7 @@ const recipientOf = (input: unknown) => {
 };
 
 const resumeAnswer = (content: unknown) => {
-  const first = Array.isArray(content)
+  const first: unknown = Array.isArray(content)
     ? content.find((block) => isObject(block) && block.type === "text")
     : { text: content };
   const text =
