@@ -157,8 +157,9 @@ export const createSubagentRequests = ({
       id: rootThreadId,
       cwd: threads.threadOf(rootThreadId)?.cwd ?? null,
     };
+    const served: unknown[] = result.data;
     const listed = new Set(
-      result.data.flatMap((thread) =>
+      served.flatMap((thread) =>
         isObject(thread) && typeof thread.id === "string" ? [thread.id] : [],
       ),
     );
@@ -166,7 +167,7 @@ export const createSubagentRequests = ({
       .filter((child) => !listed.has(child.id))
       .sort((a, b) => b.createdAtMs - a.createdAtMs)
       .map((child) => viewOf(child, parentThread));
-    return { ...result, data: [...added, ...result.data] };
+    return { ...result, data: [...added, ...served] };
   };
 
   const unreadable = (request: AppRequest) =>

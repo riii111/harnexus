@@ -12,7 +12,7 @@ export const printAnswer = (stdout: string): Record<string, unknown> | null => {
     return isObject(parsed.value) ? parsed.value : null;
   }
 
-  const result = parsed.value
+  const result: unknown = parsed.value
     .filter((event) => isObject(event) && event.type === "result")
     .at(-1);
   return isObject(result) ? result : null;

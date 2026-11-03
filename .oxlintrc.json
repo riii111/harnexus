@@ -48,6 +48,18 @@
       "rules": { "harnexus/no-throw-try-catch": "error" }
     },
     {
+      "files": ["src/**"],
+      "excludeFiles": ["src/**/*.test.ts", "src/**/testing/**"],
+      // Array.isArray narrows unknown to any[], so any reaches production code unseen; tests and testing helpers build synthetic data and stay out.
+      "rules": {
+        "typescript/no-unsafe-argument": "error",
+        "typescript/no-unsafe-assignment": "error",
+        "typescript/no-unsafe-call": "error",
+        "typescript/no-unsafe-member-access": "error",
+        "typescript/no-unsafe-return": "error"
+      }
+    },
+    {
       "files": ["**/*.test.ts"],
       "rules": { "harnexus/testing": "error" }
     }
