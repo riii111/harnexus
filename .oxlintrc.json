@@ -8,6 +8,7 @@
     "no-console": "error",
     "typescript/no-floating-promises": "error",
     "typescript/no-misused-promises": "error",
+    "typescript/consistent-type-imports": "error",
     // The correctness category also switches on these type-aware rules, which stay off until their findings are handled one rule at a time.
     "typescript/await-thenable": "off",
     "typescript/no-array-delete": "off",
