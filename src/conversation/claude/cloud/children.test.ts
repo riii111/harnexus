@@ -4,6 +4,7 @@ import {
   prompt,
   reply,
   text,
+  thinking,
   toolResult,
   toolUse,
 } from "../../testing/session-record.ts";
@@ -213,6 +214,44 @@ describe("waitingIn", () => {
         reply("a4", "m4", text("LGTM"), "end_turn"),
       ],
       expected: false,
+    },
+    {
+      name: "stops waiting once a turn opens without a prompt, as one the notice of the background work's end opens while the session waits",
+      records: [
+        ...background,
+        reply("a3", "m3", toolUse("t2", "Read", {}), "tool_use"),
+        toolResult("r2", "t2", "LGTM"),
+        reply("a4", "m4", text("LGTM"), "end_turn"),
+      ],
+      expected: false,
+    },
+    {
+      name: "keeps waiting when the reply that ended the turn goes on in a record of the same message",
+      records: [
+        ...background.slice(0, -1),
+        reply("a2", "m2", thinking("done for now"), "end_turn"),
+        reply("a3", "m2", text("Asked Codex."), "end_turn"),
+      ],
+      expected: true,
+    },
+    {
+      name: "keeps waiting for background work started after the turn that opened without a prompt",
+      records: [
+        ...background,
+        reply(
+          "a3",
+          "m3",
+          toolUse("t2", "Bash", { run_in_background: true }),
+          "tool_use",
+        ),
+        toolResult(
+          "r2",
+          "t2",
+          "Command running in background with ID: c53u82zcx. Output is being written to: /tmp/tasks/c53u82zcx.output.",
+        ),
+        reply("a4", "m4", text("Asked again."), "end_turn"),
+      ],
+      expected: true,
     },
     {
       name: "stops waiting for a message it cancelled",

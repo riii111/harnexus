@@ -2,6 +2,7 @@ import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import { parseJson } from "../../../lib/json.boundary.ts";
 import { isObject } from "../../../lib/object.ts";
+import { endsTurn } from "../../history/history.view.ts";
 
 export type CloudChild = { sessionId: string; title: string | null };
 
@@ -93,8 +94,19 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
   }[] = [];
   // Background work is over once the notice of its end comes, which Claude Code writes as a prompt.
   const running = new Set<string>();
+  // The message that ended the last turn, while no prompt has come since.
+  let endedBy: unknown = null;
   for (const record of records) {
     const at = timeOfRecord(record);
+    // A notice that comes while the session waits between turns is not in its records, so a turn that opens without a prompt is taken as that notice, and the background work started before it as over.
+    if (record.type === "assistant") {
+      const id = messageIdOf(record);
+      if (endedBy !== null && id !== endedBy) running.clear();
+      endedBy = endsTurn(record) ? id : null;
+    } else {
+      endedBy = null;
+    }
+
     if (running.size > 0 && record.type === "user") {
       const notice = openingTextOf(record) ?? "";
       for (const ended of notice.matchAll(ENDED))
@@ -184,6 +196,13 @@ const dueOf = (input: Record<string, unknown>, calledAt: number | null) => {
       ? Date.parse(input.at.replace(/\[[^\]]*\]$/, ""))
       : Number.NaN;
   return Number.isNaN(at) ? from : at;
+};
+
+const messageIdOf = (record: SessionMessage) => {
+  const message = isObject(record) ? record.message : null;
+  return isObject(message) && typeof message.id === "string"
+    ? message.id
+    : record.uuid;
 };
 
 const timeOfRecord = (record: SessionMessage) => {

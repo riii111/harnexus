@@ -230,6 +230,8 @@ export const createCloudRuntime = <Tag extends string>(
   let ticking = false;
   // When each linked thread's next idle copy is due: soon while its session is in the middle of a recent turn, or was just linked, and after the idle wait otherwise.
   const dueAt = new Map<string, number>();
+  // When each thread's idle copy was last brought forward, such as when its chat was linked or a turn ended.
+  const hurriedAt = new Map<string, number>();
   // The last record of a session whose unfinished turn the user stopped following, or that showed nothing new for the wait limit, so the idle copies do not follow it again until it moves.
   const parked = new Map<string, string | null>();
   const park = (threadId: string, follow: Follow) =>
@@ -947,6 +949,7 @@ export const createCloudRuntime = <Tag extends string>(
     for (const threadId of dueAt.keys()) {
       if (linked.includes(threadId)) continue;
       dueAt.delete(threadId);
+      hurriedAt.delete(threadId);
       parked.delete(threadId);
     }
 
@@ -971,7 +974,14 @@ export const createCloudRuntime = <Tag extends string>(
     if (cloud === null) return "skipped";
     const reading = threads.sessionIdOf(threadId);
     const copied = await copyOf(threadId, cloud.sessionId);
-    if (copied.isErr()) return "idle";
+    // A session just started may have no records to copy until its container runs, so a copy soon after the thread was hurried is tried again soon.
+    const starting =
+      now() - (hurriedAt.get(threadId) ?? Number.NEGATIVE_INFINITY) <
+      WORKING_FOR_MS;
+    if (copied.isErr()) {
+      return starting && !stateOf(threadId).halted ? "working" : "idle";
+    }
+
     // A turn that ran while this copy was made saved a newer one, which this copy may be older than.
     if (stateOf(threadId).busy || threads.sessionIdOf(threadId) !== reading) {
       await discardCopy(copied.value.copy);
@@ -984,9 +994,10 @@ export const createCloudRuntime = <Tag extends string>(
     // A session that just replied may go on by itself, such as when work it left running in the background ends.
     const age = recordAt === null ? null : now() - recordAt;
     const working =
-      last !== undefined &&
-      age !== null &&
-      (age < ACTIVE_FOR_MS || (!replied(last) && age < WORKING_FOR_MS));
+      (last === undefined && starting) ||
+      (last !== undefined &&
+        age !== null &&
+        (age < ACTIVE_FOR_MS || (!replied(last) && age < WORKING_FOR_MS)));
     const at = indexOf(all, cloud.shown);
     // Claude compacted the session past the record the app was shown, so everything the copy holds came after it and is shown.
     if (cloud.shown !== null && at === -1) {
@@ -1035,6 +1046,7 @@ export const createCloudRuntime = <Tag extends string>(
   // Brings a thread's idle copy forward; a copy already running plans the next one itself.
   const hurry = (threadId: string) => {
     dueAt.set(threadId, 0);
+    hurriedAt.set(threadId, now());
     if (ticking) {
       soon = true;
       return;
