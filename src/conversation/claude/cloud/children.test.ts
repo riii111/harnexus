@@ -188,18 +188,27 @@ describe("waitingIn", () => {
       expected: true,
     },
     {
-      name: "stops waiting once a later record names the background work, such as the session reading its output",
+      name: "keeps waiting while the session only mentions the background work, such as checking on it",
       records: [
         ...background,
+        prompt("p2", "how is it"),
         reply(
           "a3",
           "m3",
-          toolUse("t2", "Bash", {
-            command: "cat /tmp/tasks/b42t71ybw.output",
-          }),
-          "tool_use",
+          text("Review b42t71ybw is still running."),
+          "end_turn",
         ),
-        toolResult("r2", "t2", '{"verdict":"LGTM"}'),
+      ],
+      expected: true,
+    },
+    {
+      name: "stops waiting once the notice of the background work's end comes",
+      records: [
+        ...background,
+        prompt(
+          "p2",
+          "<task-notification>\n<task-id>b42t71ybw</task-id>\n<status>completed</status>\n</task-notification>",
+        ),
         reply("a4", "m4", text("LGTM"), "end_turn"),
       ],
       expected: false,
