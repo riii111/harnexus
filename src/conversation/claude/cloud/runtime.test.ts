@@ -1839,6 +1839,35 @@ describe("createCloudRuntime idle copies", () => {
     expect(turn.texts().at(-1)).toContain("Which one?");
   });
 
+  test("shows what arrives beside a question already shown without asking it again, and asks a new question", async () => {
+    const asked = [prompt("p1", "first"), askQuestion("a1", "q1")];
+    const beside = [
+      ...asked,
+      reply("a2", "m-a2", toolUse("t1", "Bash", { command: "ls" }), "tool_use"),
+      toolResult("r1", "t1", "ok"),
+    ];
+    const env = linked({
+      copies: [asked, beside, [...beside, askQuestion("a3", "q2")]],
+      shown: "a1",
+    });
+    env.runtime.listen(() => true);
+    const ownTurn = async () => {
+      await env.tick();
+      const turn = env.turn("", { startedBy: "claude" });
+      await env.runtime.run(turn.running);
+      return turn;
+    };
+
+    const first = await ownTurn();
+    const second = await ownTurn();
+    const third = await ownTurn();
+
+    expect(first.texts().at(-1)).toContain("Which one?");
+    expect(second.itemTypes()).toContain("commandExecution");
+    expect(second.texts()).toEqual([]);
+    expect(third.texts().at(-1)).toContain("Which one?");
+  });
+
   test("opens no turn for a question a turn sent from the app already showed", async () => {
     const env = linked({
       copies: [[prompt("p1", "fix it"), askQuestion("a1", "q1")]],

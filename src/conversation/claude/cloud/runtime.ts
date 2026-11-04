@@ -808,7 +808,14 @@ export const createCloudRuntime = <Tag extends string>(
     all: readonly SessionMessage[],
   ) => {
     if (state.kind !== "replied") {
-      seen.set(turn.threadId, stateKeyOf(all, state));
+      const key = stateKeyOf(all, state);
+      // A question already shown stays unanswered while other records arrive, such as results of tools called beside it, so those are shown without asking again.
+      if (seen.get(turn.threadId) === key) {
+        turn.finish({ status: "completed" }, null);
+        return;
+      }
+
+      seen.set(turn.threadId, key);
       log({ event: "claude_cloud", step: "handed_back", state: state.kind });
     }
 
