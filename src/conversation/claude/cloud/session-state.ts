@@ -65,14 +65,14 @@ export const answersAskWith = (
 ) => {
   if (message.type !== "user") return false;
   const asks = askIdsIn(records);
-  // Claude Code quotes each answer whole, so only the whole text in quotes counts and a longer answer that starts with it does not.
-  const wanted = `"${text.trim()}"`;
+  // Claude Code writes answers as "question"="answer" pairs ending in a comma or period, so the text counts only whole and in the answer's place, never as a question or part of a longer answer.
+  const wanted = `="${text.trim()}"`;
   return contentOf(message).some(
     (block) =>
       block.type === "tool_result" &&
       typeof block.tool_use_id === "string" &&
       asks.has(block.tool_use_id) &&
-      textsOf(block.content).some((answer) => answer.includes(wanted)),
+      textsOf(block.content).some((answer) => holdsAnswer(answer, wanted)),
   );
 };
 
@@ -113,6 +113,19 @@ const pendingAsk = (
 
   const found = [...pending.values()].at(-1);
   return found === undefined ? null : { kind: "awaiting_input", ...found };
+};
+
+const holdsAnswer = (result: string, wanted: string) => {
+  for (
+    let at = result.indexOf(wanted);
+    at !== -1;
+    at = result.indexOf(wanted, at + 1)
+  ) {
+    const next = result[at + wanted.length];
+    if (next === undefined || next === "," || next === ".") return true;
+  }
+
+  return false;
 };
 
 const askIdsIn = (records: readonly SessionMessage[]) => {

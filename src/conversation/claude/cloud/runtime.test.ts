@@ -1158,7 +1158,11 @@ describe("createCloudRuntime turns", () => {
         asked,
         [
           ...asked,
-          toolResult("r1", "q1", 'The user answered: "second"'),
+          toolResult(
+            "r1",
+            "q1",
+            'The user answered: "Which one?"="second". Read the answers carefully.',
+          ),
           endReply("a2", "went with the second"),
         ],
       ],

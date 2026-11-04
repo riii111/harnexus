@@ -149,13 +149,30 @@ describe("answersAskWith", () => {
     prompt("p1", "fix it"),
     ask("a1", "q1"),
     bash("a2", "t1"),
-    toolResult("r1", "t1", "the second option"),
-    toolResult("r2", "q1", 'The user answered: "the second option"'),
+    toolResult("r1", "t1", '="the second option".'),
+    toolResult(
+      "r2",
+      "q1",
+      'The user answered: "Which one?"="the second option". Read the answers carefully.',
+    ),
   ];
 
-  test("takes the answer to a question that holds the sent text", () => {
+  test.each([
+    {
+      name: "typed in the app",
+      result:
+        'The user answered: "Which one?"="the second option". Read the answers carefully.',
+    },
+    {
+      name: "given on claude.ai's form among others",
+      result:
+        'Your questions have been answered: "Which one?"="the second option", "Why?"="speed". You can now continue.',
+    },
+  ])("takes the sent text as the answer $name", ({ result }) => {
+    const answered = [ask("a1", "q1"), toolResult("r1", "q1", result)];
+
     expect(
-      answersAskWith(records, recordAt(records, 4), "the second option"),
+      answersAskWith(answered, recordAt(answered, 1), "the second option"),
     ).toBe(true);
   });
 
@@ -171,6 +188,7 @@ describe("answersAskWith", () => {
   test.each([
     { name: "another answer", sent: "the first option" },
     { name: "the start of a longer answer", sent: "the second" },
+    { name: "the question it answers", sent: "Which one?" },
   ])(
     "leaves an answer that differs from the sent text, such as $name",
     ({ sent }) => {
@@ -180,21 +198,6 @@ describe("answersAskWith", () => {
       ).toBe(true);
     },
   );
-
-  test("takes an answer given on claude.ai's form, quoted beside its question", () => {
-    const answered = [
-      ask("a1", "q1"),
-      toolResult(
-        "r1",
-        "q1",
-        'Your questions have been answered: "Which one?"="second".',
-      ),
-    ];
-
-    expect(answersAskWith(answered, recordAt(answered, 1), "second")).toBe(
-      true,
-    );
-  });
 });
 
 const SEND_LATER = "mcp__claude-code-remote__send_later";
