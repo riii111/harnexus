@@ -99,6 +99,7 @@ describe("sessionStateOf", () => {
     expect(sessionStateOf(records)).toEqual({
       kind: "awaiting_input",
       ask: "question",
+      toolUseId: "q1",
       input: QUESTION_INPUT,
     });
   });
@@ -117,6 +118,7 @@ describe("sessionStateOf", () => {
     expect(state).toEqual({
       kind: "awaiting_input",
       ask: "plan",
+      toolUseId: "t1",
       input: { plan: "1. do it" },
     });
   });

@@ -1114,12 +1114,12 @@ describe("createCloudRuntime turns", () => {
     expect(env.discarded).toEqual([]);
   });
 
-  test("ends the wait at the limit and leaves later replies to the idle copies", async () => {
+  test("ends the wait at the limit saying the session's state cannot be told, with the tool it last ran, and leaves later replies to the idle copies", async () => {
     const env = linked({
       copies: [
         [
           prompt("p1", "long job"),
-          reply("a1", "m1", text("working"), "tool_use"),
+          reply("a1", "m1", toolUse("t1", "Bash", {}), "tool_use"),
         ],
       ],
       shown: null,
@@ -1130,7 +1130,10 @@ describe("createCloudRuntime turns", () => {
     await env.runtime.run(turn.running);
 
     expect(turn.outcome).toEqual({ status: "completed" });
-    expect(turn.texts().at(-1)).toContain("still working");
+    expect(turn.texts().at(-1)).toContain(
+      "cannot tell what the Cloud session is doing",
+    );
+    expect(turn.texts().at(-1)).toContain("last running `Bash`");
   });
 
   test("ends the turn once the session asks a question, showing it and how to answer", async () => {
@@ -1818,6 +1821,209 @@ describe("createCloudRuntime idle copies", () => {
     expect(turn.texts().at(-1)).toContain("Which one?");
     expect(env.cloudOf("thread-1")?.shown).toBe("a2");
     expect(env.copyCalls).toBe(2);
+  });
+
+  test("shows a question the chat was not shown before a restart once, then opens no turn for it again", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "first"), askQuestion("a1", "q1")]],
+      shown: "a1",
+    });
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+
+    await env.tick();
+    const turn = env.turn("", { startedBy: "claude" });
+    await env.runtime.run(turn.running);
+    await env.tick();
+
+    expect(env.ownStarts).toEqual(["thread-1"]);
+    expect(turn.texts().at(-1)).toContain("Which one?");
+  });
+
+  test("shows what arrives beside a question already shown without asking it again, and asks a new question", async () => {
+    const asked = [prompt("p1", "first"), askQuestion("a1", "q1")];
+    const beside = [
+      ...asked,
+      reply("a2", "m-a2", toolUse("t1", "Bash", { command: "ls" }), "tool_use"),
+      toolResult("r1", "t1", "ok"),
+    ];
+    const env = linked({
+      copies: [asked, beside, [...beside, askQuestion("a3", "q2")]],
+      shown: "a1",
+    });
+    env.runtime.listen(() => true);
+    const ownTurn = async () => {
+      await env.tick();
+      const turn = env.turn("", { startedBy: "claude" });
+      await env.runtime.run(turn.running);
+      return turn;
+    };
+
+    const first = await ownTurn();
+    const second = await ownTurn();
+    const third = await ownTurn();
+
+    expect(first.texts().at(-1)).toContain("Which one?");
+    expect(second.itemTypes()).toContain("commandExecution");
+    expect(second.texts()).toEqual([]);
+    expect(third.texts().at(-1)).toContain("Which one?");
+  });
+
+  test("opens no turn for a question a turn sent from the app already showed", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "fix it"), askQuestion("a1", "q1")]],
+      shown: null,
+    });
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+    const turn = env.turn("fix it");
+
+    await env.runtime.run(turn.running);
+    await env.tick();
+
+    expect(turn.texts().at(-1)).toContain("Which one?");
+    expect(env.ownStarts).toEqual([]);
+  });
+
+  test.each([
+    {
+      name: "copies have kept failing",
+      copyFailure: "network down",
+      expected: "could not be copied for a while (network down)",
+    },
+    {
+      name: "the session has stayed empty",
+      copyFailure: null,
+      expected: "has shown nothing yet",
+    },
+  ])(
+    "tells the chat once when $name for ten minutes",
+    async ({ copyFailure, expected }) => {
+      const env = linked({ copies: [[]], shown: null });
+      env.copyFailure = copyFailure;
+      env.runtime.listen((threadId) => {
+        env.ownStarts.push(threadId);
+        return true;
+      });
+
+      await env.tick();
+      expect(env.ownStarts).toEqual([]);
+      env.clock += 10 * 60_000;
+      await env.tick();
+      const turn = env.turn("", { startedBy: "claude" });
+      await env.runtime.run(turn.running);
+      env.clock += 10 * 60_000;
+      await env.tick();
+
+      expect(env.ownStarts).toEqual(["thread-1"]);
+      expect(turn.texts()).toEqual([expect.stringContaining(expected)]);
+      expect(turn.outcome).toEqual({ status: "completed" });
+    },
+  );
+
+  test("tells the chat once that copies stopped when an idle copy may have run a model turn", async () => {
+    const env = linked({ copies: [[prompt("p1", "first")]], shown: null });
+    env.copyStop = "ran_model";
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+
+    await env.tick();
+    const turn = env.turn("", { startedBy: "claude" });
+    await env.runtime.run(turn.running);
+    await env.tick();
+
+    expect(env.ownStarts).toEqual(["thread-1"]);
+    expect(turn.texts()).toEqual([
+      expect.stringContaining("stopped copying this Cloud session"),
+    ]);
+  });
+
+  test("tells the chat that copies stopped on a later copy when the chat could not take the turn at first", async () => {
+    const env = linked({ copies: [[prompt("p1", "first")]], shown: null });
+    env.copyStop = "ran_model";
+    let accepts = false;
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return accepts;
+    });
+
+    await env.tick();
+    accepts = true;
+    await env.tick();
+    const turn = env.turn("", { startedBy: "claude" });
+    await env.runtime.run(turn.running);
+    await env.tick();
+
+    expect(env.ownStarts).toEqual(["thread-1", "thread-1"]);
+    expect(turn.texts()).toEqual([
+      expect.stringContaining("stopped copying this Cloud session"),
+    ]);
+  });
+
+  test("tells the chat of failing copies again after a turn sent from the app copied the session", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "first"), endReply("a1", "one")],
+        [
+          prompt("p1", "first"),
+          endReply("a1", "one"),
+          prompt("p2", "again"),
+          endReply("a2", "two"),
+        ],
+      ],
+      shown: "a1",
+    });
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+    const failFor = async (ms: number) => {
+      env.copyFailure = "network down";
+      await env.tick();
+      env.clock += ms;
+      await env.tick();
+      await env.runtime.run(env.turn("", { startedBy: "claude" }).running);
+    };
+
+    await failFor(10 * 60_000);
+    env.copyFailure = null;
+    const turn = env.turn("again");
+    await env.runtime.run(turn.running);
+    await failFor(10 * 60_000);
+
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(env.ownStarts).toEqual(["thread-1", "thread-1"]);
+  });
+
+  test("tells the chat of failing copies again after they recovered and failed once more", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "first"), endReply("a1", "one")]],
+      shown: "a1",
+    });
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+    const failFor = async (ms: number) => {
+      env.copyFailure = "network down";
+      await env.tick();
+      env.clock += ms;
+      await env.tick();
+      await env.runtime.run(env.turn("", { startedBy: "claude" }).running);
+    };
+
+    await failFor(10 * 60_000);
+    env.copyFailure = null;
+    await env.tick();
+    await failFor(10 * 60_000);
+
+    expect(env.ownStarts).toEqual(["thread-1", "thread-1"]);
   });
 
   test("leaves a thread with a running turn alone", async () => {

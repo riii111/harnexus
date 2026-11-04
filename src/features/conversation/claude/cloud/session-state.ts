@@ -12,6 +12,7 @@ export type CloudSessionState =
   | {
       kind: "awaiting_input";
       ask: "question" | "plan";
+      toolUseId: string;
       input: Record<string, unknown>;
     }
   | { kind: "resumes_later" }
@@ -48,6 +49,23 @@ export const sessionStateOf = (
   }
 
   return { kind: "working" };
+};
+
+// What a chat was left at in this state, so the same question or stop is shown once and a new one again: the question asked, or else the session's last record.
+export const stateKeyOf = (
+  records: readonly SessionMessage[],
+  state: CloudSessionState,
+) =>
+  state.kind === "awaiting_input"
+    ? state.toolUseId
+    : (records.at(-1)?.uuid ?? null);
+
+// The tool the session's last record called, which tells what it was doing when it went quiet.
+export const runningToolOf = (records: readonly SessionMessage[]) => {
+  const last = records.at(-1);
+  if (last === undefined || last.type !== "assistant") return null;
+  const call = contentOf(last).find((block) => block.type === "tool_use");
+  return typeof call?.name === "string" ? call.name : null;
 };
 
 // Whether the session has handed the next move to the user, so a chat following it stops waiting.
@@ -111,8 +129,10 @@ const pendingAsk = (
     }
   }
 
-  const found = [...pending.values()].at(-1);
-  return found === undefined ? null : { kind: "awaiting_input", ...found };
+  const found = [...pending].at(-1);
+  return found === undefined
+    ? null
+    : { kind: "awaiting_input", toolUseId: found[0], ...found[1] };
 };
 
 const holdsAnswer = (result: string, wanted: string) => {

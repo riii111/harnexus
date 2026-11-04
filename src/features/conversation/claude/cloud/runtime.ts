@@ -29,12 +29,18 @@ import {
   answersAskWith,
   type CloudSessionState,
   handsBack,
+  runningToolOf,
   sessionStateOf,
+  stateKeyOf,
 } from "./session-state.ts";
 import {
   askNotice,
+  copyFailingNotice,
   ERRORED_NOTICE,
+  HALTED_NOTICE,
   INTERRUPTED_NOTICE,
+  NOT_STARTED_NOTICE,
+  unconfirmedNotice,
 } from "./session-state.view.ts";
 
 // A Cloud thread's turns log their failure tags beside the Claude runtime's, so the log takes any tag a runtime writes.
@@ -74,6 +80,7 @@ type CloudEvent =
       step: "handed_back";
       state: CloudSessionState["kind"];
     }
+  | { event: "claude_cloud"; step: "link_notice"; kind: LinkNotice }
   | { event: "claude_cloud"; step: "copied"; records: number; ms: number }
   | { event: "claude_cloud"; step: "copy_failed"; error: string }
   | { event: "claude_cloud"; step: "thread_not_renamed"; error: string };
@@ -170,11 +177,16 @@ type Started = {
   copied: Promise<Result<Copied, CopyFailure>>;
 };
 
+// What the chat is told, once, of a link that stopped showing the session while no turn ran.
+type LinkNotice = "copy_failing" | "halted" | "not_started";
+
 // What the runtime holds of a thread while it is in use; a thread with none of it set has no entry.
 type CloudThread = {
   busy: boolean;
   follow: Follow | null;
   pendingOwn: Copied | null;
+  // A notice a turn of Claude's own shows by itself, about the link rather than the session.
+  pendingNotice: string | null;
   // A thread whose copy may have run a model turn is not copied again until the bridge restarts, so the cost is not repeated.
   halted: boolean;
 };
@@ -244,10 +256,14 @@ export const createCloudRuntime = <Tag extends string>(
   const dueAt = new Map<string, number>();
   // When each thread's idle copy was last brought forward, such as when its chat was linked or a turn ended.
   const hurriedAt = new Map<string, number>();
-  // The last record of a session whose unfinished turn the user stopped following, or that showed nothing new for the wait limit, so the idle copies do not follow it again until it moves.
-  const parked = new Map<string, string | null>();
+  // Where the chat was last left with each session: the question or stop it was shown, or the last record of a turn the user stopped following or that showed nothing new for the wait limit. The idle copies open a turn for the session again only once it moves past that; kept in memory, so after a restart the chat is told once more.
+  const seen = new Map<string, string | null>();
   const park = (threadId: string, follow: Follow) =>
-    parked.set(threadId, follow.last ?? follow.after);
+    seen.set(threadId, follow.last ?? follow.after);
+  // Since when each thread's idle copies have failed, or found the session empty, and which notice of its link the chat was given.
+  const failingSince = new Map<string, number>();
+  const emptySince = new Map<string, number>();
+  const linkNoticed = new Map<string, LinkNotice>();
   let soon = false;
   let closed = false;
 
@@ -256,12 +272,19 @@ export const createCloudRuntime = <Tag extends string>(
       busy: false,
       follow: null,
       pendingOwn: null,
+      pendingNotice: null,
       halted: false,
     };
 
   const keep = (threadId: string, change: Partial<CloudThread>) => {
     const next = { ...stateOf(threadId), ...change };
-    if (next.busy || next.halted || next.follow || next.pendingOwn) {
+    if (
+      next.busy ||
+      next.halted ||
+      next.follow ||
+      next.pendingOwn ||
+      next.pendingNotice !== null
+    ) {
       states.set(threadId, next);
     } else {
       states.delete(threadId);
@@ -606,7 +629,7 @@ export const createCloudRuntime = <Tag extends string>(
   ) => {
     const { threadId } = turn;
     const startedAt = now();
-    let failingSince: number | null = null;
+    let copyFailingSince: number | null = null;
     const copies = scheduleCopies(
       () => fetchCopy(threadId, cloudSessionId),
       follow.woken,
@@ -623,7 +646,7 @@ export const createCloudRuntime = <Tag extends string>(
     // Copies still running are removed once written, however the wait ends.
     try {
       for (;;) {
-        const delay = copies.wait(waiting, failingSince !== null);
+        const delay = copies.wait(waiting, copyFailingSince !== null);
         if (delay !== null) await delay;
         if (follow.stop || closed || turn.state().interrupting) {
           park(threadId, follow);
@@ -635,7 +658,7 @@ export const createCloudRuntime = <Tag extends string>(
           return;
         }
 
-        const ended = await copies.next(failingSince !== null);
+        const ended = await copies.next(copyFailingSince !== null);
         if (ended === null) continue;
         const { copied } = ended;
         // The session only grows between compactions, so an overlapping copy without the last record shown read it before that record arrived; a compaction is taken by the next copy that does not overlap.
@@ -652,14 +675,17 @@ export const createCloudRuntime = <Tag extends string>(
         }
 
         if (copied.isErr()) {
-          failingSince ??= now();
+          copyFailingSince ??= now();
           if (
             stoppedBy(copied.error) === null &&
-            now() - failingSince < COPY_FAILING_LIMIT_MS
+            now() - copyFailingSince < COPY_FAILING_LIMIT_MS
           ) {
             continue;
           }
 
+          // A turn that fails on a halt says so itself, so the idle copies do not tell the chat again.
+          if (stoppedBy(copied.error) !== null)
+            linkNoticed.set(threadId, "halted");
           turn.fail({
             _tag: "CloudCopyFailed",
             message: `${COPY_FAILED}: ${copied.error.message}`,
@@ -667,7 +693,7 @@ export const createCloudRuntime = <Tag extends string>(
           return;
         }
 
-        failingSince = null;
+        copyFailingSince = null;
         copies.succeeded();
         shownAt = ended.started.at;
         const progress = advance(follow, copied.value.records);
@@ -702,7 +728,7 @@ export const createCloudRuntime = <Tag extends string>(
           follow.sending === 0 &&
           follow.matched === follow.texts.length
         ) {
-          handBack(turn, progress.state);
+          handBack(turn, progress.state, copied.value.records);
           return;
         }
 
@@ -711,7 +737,12 @@ export const createCloudRuntime = <Tag extends string>(
           park(threadId, follow);
           log({ event: "claude_cloud", step: "wait_limit" });
           turn.apply(
-            renderNotice(turn.state(), WAIT_LIMIT_REACHED, "commentary", now()),
+            renderNotice(
+              turn.state(),
+              unconfirmedNotice(runningToolOf(copied.value.records)),
+              "commentary",
+              now(),
+            ),
           );
           turn.finish({ status: "completed" }, null);
           return;
@@ -771,8 +802,20 @@ export const createCloudRuntime = <Tag extends string>(
   };
 
   // Ends a turn the session handed back, telling the user what it waits for when it did not simply reply.
-  const handBack = (turn: Turn, state: CloudSessionState) => {
+  const handBack = (
+    turn: Turn,
+    state: CloudSessionState,
+    all: readonly SessionMessage[],
+  ) => {
     if (state.kind !== "replied") {
+      const key = stateKeyOf(all, state);
+      // A question already shown stays unanswered while other records arrive, such as results of tools called beside it, so those are shown without asking again.
+      if (seen.get(turn.threadId) === key) {
+        turn.finish({ status: "completed" }, null);
+        return;
+      }
+
+      seen.set(turn.threadId, key);
       log({ event: "claude_cloud", step: "handed_back", state: state.kind });
     }
 
@@ -802,8 +845,16 @@ export const createCloudRuntime = <Tag extends string>(
 
   const showOwn = async (turn: Turn, cloud: CloudLink) => {
     const { threadId } = turn;
-    const { pendingOwn: taken } = stateOf(threadId);
-    keep(threadId, { pendingOwn: null });
+    const { pendingOwn: taken, pendingNotice } = stateOf(threadId);
+    keep(threadId, { pendingOwn: null, pendingNotice: null });
+    if (pendingNotice !== null) {
+      turn.apply(
+        renderNotice(turn.state(), pendingNotice, "final_answer", now()),
+      );
+      turn.finish({ status: "completed" }, null);
+      return;
+    }
+
     const copied =
       taken === null
         ? await copyOf(threadId, cloud.sessionId)
@@ -834,7 +885,7 @@ export const createCloudRuntime = <Tag extends string>(
     }
 
     if (handsBack(state)) {
-      handBack(turn, state);
+      handBack(turn, state, all);
       return;
     }
 
@@ -901,6 +952,10 @@ export const createCloudRuntime = <Tag extends string>(
       );
     }
 
+    // Any copy that reads ends a failing spell, whether a turn or an idle copy made it, so a later one is told of afresh.
+    failingSince.delete(threadId);
+    if (linkNoticed.get(threadId) === "copy_failing")
+      linkNoticed.delete(threadId);
     const all = mainRecords(read.value);
     log({
       event: "claude_cloud",
@@ -999,7 +1054,10 @@ export const createCloudRuntime = <Tag extends string>(
       if (linked.includes(threadId)) continue;
       dueAt.delete(threadId);
       hurriedAt.delete(threadId);
-      parked.delete(threadId);
+      seen.delete(threadId);
+      failingSince.delete(threadId);
+      emptySince.delete(threadId);
+      linkNoticed.delete(threadId);
     }
 
     for (const threadId of linked) {
@@ -1016,8 +1074,12 @@ export const createCloudRuntime = <Tag extends string>(
     threadId: string,
   ): Promise<"working" | "idle" | "skipped"> => {
     const { busy, halted } = stateOf(threadId);
-    // A halted thread is never copied again, so it waits like an idle one rather than waking the copies every POLL_MS.
-    if (halted) return "idle";
+    // A halted thread is never copied again, so it waits like an idle one rather than waking the copies every POLL_MS; its notice is tried again until the chat takes it.
+    if (halted) {
+      noticeLink(threadId, "halted", HALTED_NOTICE);
+      return "idle";
+    }
+
     if (busy) return "skipped";
     const cloud = threads.cloudOf(threadId);
     if (cloud === null) return "skipped";
@@ -1028,6 +1090,18 @@ export const createCloudRuntime = <Tag extends string>(
       now() - (hurriedAt.get(threadId) ?? Number.NEGATIVE_INFINITY) <
       WORKING_FOR_MS;
     if (copied.isErr()) {
+      const since = failingSince.get(threadId) ?? now();
+      failingSince.set(threadId, since);
+      if (stateOf(threadId).halted) {
+        noticeLink(threadId, "halted", HALTED_NOTICE);
+      } else if (now() - since >= NOTICE_AFTER_MS) {
+        noticeLink(
+          threadId,
+          "copy_failing",
+          copyFailingNotice(copied.error.message),
+        );
+      }
+
       return starting && !stateOf(threadId).halted ? "working" : "idle";
     }
 
@@ -1055,11 +1129,23 @@ export const createCloudRuntime = <Tag extends string>(
       log({ event: "claude_cloud", step: "compacted" });
     }
 
-    // A session still in its work, such as one linked or followed again after a restart while it waits for a message it scheduled, is followed by a turn of Claude's own even with nothing new to show; one that handed the next move back is shown only for what is new.
-    const unfinished =
-      (state.kind === "working" || state.kind === "resumes_later") &&
-      parked.get(threadId) !== keyOfLast(all);
-    if ((at === all.length - 1 || all.length === 0) && !unfinished) {
+    // A session still in its work, such as one linked or followed again after a restart while it waits for a message it scheduled, is followed by a turn of Claude's own even with nothing new to show, and a question or stop the chat was not shown yet is shown.
+    const unseen =
+      state.kind !== "starting" &&
+      state.kind !== "replied" &&
+      seen.get(threadId) !== stateKeyOf(all, state);
+    if (all.length > 0) {
+      emptySince.delete(threadId);
+      if (linkNoticed.get(threadId) === "not_started")
+        linkNoticed.delete(threadId);
+    } else {
+      const since = emptySince.get(threadId) ?? now();
+      emptySince.set(threadId, since);
+      if (now() - since >= NOTICE_AFTER_MS)
+        noticeLink(threadId, "not_started", NOT_STARTED_NOTICE);
+    }
+
+    if ((at === all.length - 1 || all.length === 0) && !unseen) {
       await discardCopy(copied.value.copy);
     } else {
       keep(threadId, { pendingOwn: copied.value });
@@ -1070,6 +1156,19 @@ export const createCloudRuntime = <Tag extends string>(
     }
 
     return working ? "working" : "idle";
+  };
+
+  // Opens a turn of Claude's own that tells the chat of its link, once until the link changes; a thread that cannot take a turn now is told on a later copy.
+  const noticeLink = (threadId: string, kind: LinkNotice, text: string) => {
+    if (linkNoticed.get(threadId) === kind) return;
+    keep(threadId, { pendingNotice: text });
+    if (!startOwnTurn(threadId)) {
+      keep(threadId, { pendingNotice: null });
+      return;
+    }
+
+    linkNoticed.set(threadId, kind);
+    log({ event: "claude_cloud", step: "link_notice", kind });
   };
 
   // The wait until the earliest idle copy is due, kept between POLL_MS and IDLE_MS.
@@ -1173,8 +1272,14 @@ export const createCloudRuntime = <Tag extends string>(
     noteFork: (threadId) => inner.noteFork(threadId),
     dropFork: (threadId) => inner.dropFork(threadId),
     forgetThread: (threadId, ended) => {
-      const { busy, follow, pendingOwn } = stateOf(threadId);
-      if (busy || follow !== null || pendingOwn !== null) return;
+      const { busy, follow, pendingOwn, pendingNotice } = stateOf(threadId);
+      if (
+        busy ||
+        follow !== null ||
+        pendingOwn !== null ||
+        pendingNotice !== null
+      )
+        return;
       // The copies of a linked thread go on while the store holds it, so only the turn records go and halted stays.
       turnRecords.forget(threadId);
       // A child chat not yet opened is dropped only with a deleted parent.
@@ -1466,6 +1571,8 @@ export const serializeCloudEvent = (entry: CloudEvent) => {
       return { event: entry.event, step: entry.step, outcome: entry.outcome };
     case "handed_back":
       return { event: entry.event, step: entry.step, state: entry.state };
+    case "link_notice":
+      return { event: entry.event, step: entry.step, kind: entry.kind };
     case "copied":
       return {
         event: entry.event,
@@ -1518,9 +1625,6 @@ const LINKED = [
 const STOPPED_WAITING =
   "Stopped waiting here. The Cloud session keeps working; stop it on claude.ai if needed. Later replies appear here when they are copied.";
 
-const WAIT_LIMIT_REACHED =
-  "The Cloud session is still working. Its later replies appear here when they are copied.";
-
 const COPY_FAILED =
   "The message reached the Cloud session, but its replies could not be copied; the session keeps working, so check it on claude.ai rather than sending again";
 
@@ -1552,6 +1656,9 @@ const ACTIVE_FOR_MS = 2 * 60_000;
 const FIRST_TICK_MS = 15_000;
 
 const WAIT_LIMIT_MS = 60 * 60_000;
+
+// How long idle copies keep failing, or find the session empty, before the chat is told.
+const NOTICE_AFTER_MS = 10 * 60_000;
 
 // Measured in time rather than tries, since the wait between copies changes.
 const COPY_FAILING_LIMIT_MS = 20_000;
