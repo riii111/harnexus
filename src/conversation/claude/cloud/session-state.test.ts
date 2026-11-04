@@ -168,10 +168,32 @@ describe("answersAskWith", () => {
     ).toBe(true);
   });
 
-  test("leaves an answer that does not hold the sent text", () => {
-    expect(
-      answersAskWith(records, recordAt(records, 4), "the first option"),
-    ).toBe(false);
+  test.each([
+    { name: "another answer", sent: "the first option" },
+    { name: "the start of a longer answer", sent: "the second" },
+  ])(
+    "leaves an answer that differs from the sent text, such as $name",
+    ({ sent }) => {
+      expect(answersAskWith(records, recordAt(records, 4), sent)).toBe(false);
+      expect(
+        answersAskWith(records, recordAt(records, 4), "the second option"),
+      ).toBe(true);
+    },
+  );
+
+  test("takes an answer given on claude.ai's form, quoted beside its question", () => {
+    const answered = [
+      ask("a1", "q1"),
+      toolResult(
+        "r1",
+        "q1",
+        'Your questions have been answered: "Which one?"="second".',
+      ),
+    ];
+
+    expect(answersAskWith(answered, recordAt(answered, 1), "second")).toBe(
+      true,
+    );
   });
 });
 

@@ -33,6 +33,7 @@ export type CloudSessionState =
 export const sessionStateOf = (
   records: readonly SessionMessage[],
 ): CloudSessionState => {
+  // Claude Code's own notices, such as a worker restart, are meta records the SDK never hands over, so the last record is the session's own.
   const last = records.at(-1);
   if (last === undefined) return { kind: "starting" };
   if (isSynthetic(last) && !endsTurn(last)) {
@@ -64,7 +65,8 @@ export const answersAskWith = (
 ) => {
   if (message.type !== "user") return false;
   const asks = askIdsIn(records);
-  const wanted = text.trim();
+  // Claude Code quotes each answer whole, so only the whole text in quotes counts and a longer answer that starts with it does not.
+  const wanted = `"${text.trim()}"`;
   return contentOf(message).some(
     (block) =>
       block.type === "tool_result" &&
