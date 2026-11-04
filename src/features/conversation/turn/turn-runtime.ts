@@ -1,0 +1,89 @@
+import type { EffortLevel } from "@anthropic-ai/claude-agent-sdk";
+import type { InferErr } from "better-result";
+
+import type { ImageSource } from "../../../infra/claude/images.ts";
+import type { UserInput } from "../../../infra/codex/protocol/messages.ts";
+import type { ThreadRecord } from "../../../infra/thread-store.ts";
+import type { createCodexLink } from "../../link/codex-link.ts";
+import type { delegatedMessage } from "../../link/delegations.ts";
+import type { Mode, Refusal } from "../thread-request.ts";
+import type { Rendered, TurnOutcome, TurnState } from "./turn.view.ts";
+
+// A runtime reads the turn's state and moves it only through apply, finish and fail, so the order in which the app is told stays with the controller.
+export type RunningTurn<Tag extends string> = {
+  threadId: string;
+  turnId: string;
+  record: ThreadRecord;
+  model: string;
+  input: TurnInput;
+  compaction: boolean;
+  recovering?: boolean;
+  startedAtMs: number;
+  state: () => TurnState;
+  apply: (rendered: Rendered, error?: Tag | null) => void;
+  finish: (outcome: TurnOutcome, error: Tag | null) => void;
+  fail: (error: { _tag: Tag; message: string }) => void;
+  markOutcomeUnknown: () => void;
+  isOpen: () => boolean;
+  useLink: (link: TurnLink) => void;
+  ask: (
+    method: string,
+    params: Record<string, unknown>,
+    signal: AbortSignal,
+  ) => Promise<unknown>;
+};
+
+export type TurnRuntime<Tag extends string> = {
+  compactPrompt: string;
+  closeSession: (threadId: string) => void;
+  pauseMessages: (threadId: string) => () => void;
+  recordOf: (threadId: string, turnId: string) => string | null;
+  run: (turn: RunningTurn<Tag>) => Promise<void>;
+  // Settles once the steer reaches the agent or is refused, which for an attached image waits for the image to be read.
+  steer: (
+    turn: RunningTurn<Tag>,
+    input: Pick<MessageInput, "text" | "images">,
+  ) => Promise<Refusal | null>;
+  interrupt: (turn: RunningTurn<Tag>, repeated: boolean) => void;
+  dropSession: (threadId: string, link: TurnLink) => void;
+  // Called when a thread forked from another is adopted, and settles once the fork is pinned to where the source stood.
+  noteFork: (threadId: string) => Promise<void>;
+  // Called when a fork is handed back to Codex, which ends what noteFork pinned.
+  dropFork: (threadId: string) => void;
+  // Called once the server answered that it archived or deleted the thread; a thread with work in progress keeps its state.
+  forgetThread: (threadId: string, ended: ThreadEnd) => void;
+  threadBusy: (threadId: string) => void;
+  threadIdle: (threadId: string) => void;
+  listen: (startOwnTurn: (threadId: string) => boolean) => void;
+  closeAll: () => void;
+};
+
+// An archived thread can be unarchived, a deleted one cannot.
+export type ThreadEnd = "archived" | "deleted";
+
+export type TurnLink = Pick<
+  ReturnType<typeof createCodexLink>,
+  "hasUnsettledWrite" | "stopWrites"
+>;
+
+// items are what the app shows as the user's message; text and images are what the agent is sent.
+export type MessageInput = {
+  items: UserInput[];
+  toolOutput: ToolOutput | null;
+  text: string;
+  images: ImageSource[];
+};
+
+export type ToolOutput = NonNullable<
+  ReturnType<typeof delegatedMessage>
+>["toolOutput"];
+
+// effort is the thread's level when the turn was accepted, so a change made while it waits or runs applies to the next turn.
+export type TurnInput = MessageInput & {
+  permissionMode: Mode;
+  effort: EffortLevel | null;
+  startedBy: "app" | "claude";
+};
+
+export type ErrorTag<R> =
+  InferErr<Awaited<R>> extends { _tag: infer T } ? T : never;

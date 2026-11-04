@@ -1,1 +1,1 @@
-import "../diagnostics/feedback.ts";
+import "../features/diagnostics/feedback.ts";

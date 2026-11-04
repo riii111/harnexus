@@ -5,7 +5,7 @@ import { Result } from "better-result";
 import {
   compatibilityNotification,
   compatibilityRecord,
-} from "../diagnostics/compatibility-report.ts";
+} from "../features/diagnostics/compatibility-report.ts";
 import type { CompatibilityEvent } from "../infra/codex/protocol/compatibility.ts";
 import { loadStatePath } from "../lib/config.ts";
 import { prepareDirectory, writeFileAtomic } from "../lib/fs.boundary.ts";

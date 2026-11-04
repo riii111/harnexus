@@ -11,6 +11,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Result } from "better-result";
 
+import { createCodexLink } from "../features/link/codex-link.ts";
+import { createDelegationWatch } from "../features/link/delegations.ts";
 import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import {
   type ClaudeSessionSettings,
@@ -20,8 +22,6 @@ import { fakeClaude } from "../infra/claude/testing/fake-claude.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import { createMemoryCronRecord } from "../infra/codex/testing/cron-record.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
-import { createCodexLink } from "../link/codex-link.ts";
-import { createDelegationWatch } from "../link/delegations.ts";
 import { connectClaudeThreads } from "./bridge-wiring.ts";
 
 let dir: string;

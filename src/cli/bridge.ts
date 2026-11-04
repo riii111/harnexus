@@ -2,8 +2,9 @@ import { constants } from "node:os";
 import { dirname, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 
-import { readBridgeIdentity } from "../diagnostics/bridge-identity.ts";
-import { REPO } from "../diagnostics/repo.ts";
+import { readBridgeIdentity } from "../features/diagnostics/bridge-identity.ts";
+import { REPO } from "../features/diagnostics/repo.ts";
+import { codexHome } from "../features/task/request.ts";
 import { createCloudCheckouts } from "../infra/claude/cloud-checkouts.ts";
 import { cloudCli, sweepCloudLogs } from "../infra/claude/cloud.ts";
 import {
@@ -50,7 +51,6 @@ import {
   readCommandOutput,
 } from "../lib/process.boundary.ts";
 import { serveLinesWhenFree } from "../lib/socket.boundary.ts";
-import { codexHome } from "../task/request.ts";
 import { createBridgeLogger } from "./bridge-logging.ts";
 import { connectClaudeThreads } from "./bridge-wiring.ts";
 import { reportCompatibilityFailure } from "./compatibility.boundary.ts";

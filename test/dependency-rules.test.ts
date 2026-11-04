@@ -20,19 +20,19 @@ describe("checkDependencies", () => {
   test("reports value, type-only, dynamic, import-type and re-export references breaking the area rules", async () => {
     const references = await collectReferences(
       await writeProject({
-        "infra/codex/c.ts": `import { a } from "../../conversation/a.ts";
+        "infra/codex/c.ts": `import { a } from "../../features/conversation/a.ts";
 export const c = a;`,
-        "lib/r.ts": `import type { P } from "../conversation/p.view.ts";
+        "lib/r.ts": `import type { P } from "../features/conversation/p.view.ts";
 export type R = P;`,
         "infra/claude/s.ts": `export * from "../codex/c.ts";`,
-        "conversation/p.view.ts": `export type P = 1;
-export const load = () => import("../infra/thread-store.ts");`,
-        "conversation/a.ts": `export const a = 1;
-export type M = typeof import("../cli/bridge.ts");`,
+        "features/conversation/p.view.ts": `export type P = 1;
+export const load = () => import("../../infra/thread-store.ts");`,
+        "features/conversation/a.ts": `export const a = 1;
+export type M = typeof import("../../cli/bridge.ts");`,
         "infra/thread-store.ts": "export const s = 1;",
-        "task/t.ts": `import { a } from "../conversation/a.ts";
+        "features/task/t.ts": `import { a } from "../conversation/a.ts";
 export const t = a;`,
-        "diagnostics/d.ts": `import { a } from "../conversation/a.ts";
+        "features/diagnostics/d.ts": `import { a } from "../conversation/a.ts";
 export const d = a;`,
         "cli/bridge.ts": "export const m = 1;",
       }),
@@ -41,36 +41,64 @@ export const d = a;`,
     const problems = checkDependencies(references, []);
 
     expect(problems).toEqual([
-      "conversation/a.ts -> cli/bridge.ts: conversation/ may not reference cli/",
-      "conversation/p.view.ts -> infra/thread-store.ts: a view may reference only views, infra/codex/protocol/ and lib/",
-      "diagnostics/d.ts -> conversation/a.ts: diagnostics/ may not reference conversation/",
+      "features/conversation/a.ts -> cli/bridge.ts: features/conversation/ may not reference cli/",
+      "features/conversation/p.view.ts -> infra/thread-store.ts: a view may reference only views, infra/codex/protocol/ and lib/",
+      "features/diagnostics/d.ts -> features/conversation/a.ts: features/diagnostics/ may not reference features/conversation/",
+      "features/task/t.ts -> features/conversation/a.ts: features/task/ may not reference features/conversation/",
       "infra/claude/s.ts -> infra/codex/c.ts: infra/claude/ may not reference infra/codex/",
-      "infra/codex/c.ts -> conversation/a.ts: infra/ may not reference conversation/",
-      "lib/r.ts -> conversation/p.view.ts: lib/ may not reference conversation/",
-      "task/t.ts -> conversation/a.ts: task/ may not reference conversation/",
+      "infra/codex/c.ts -> features/conversation/a.ts: infra/ may not reference features/conversation/",
+      "lib/r.ts -> features/conversation/p.view.ts: lib/ may not reference features/conversation/",
     ]);
   });
 
-  test("reports conversation code outside claude/ referencing conversation/claude/", async () => {
+  test("allows composition and the declared dependencies between features", async () => {
     const references = await collectReferences(
       await writeProject({
-        "conversation/controller.ts": `import { r } from "./claude/r.ts";
+        "cli/main.ts": `import { c } from "../features/conversation/c.ts";
+import { t } from "../features/task/t.ts";
+import { i } from "../infra/i.ts";
+import { l } from "../lib/l.ts";
+export const main = [c, t, i, l];`,
+        "features/conversation/c.ts": `import { link } from "../link/l.ts";
+export const c = link;`,
+        "features/task/t.ts": `import { link } from "../link/l.ts";
+import { p } from "../prwatch/p.ts";
+export const t = [link, p];`,
+        "features/link/l.ts": `import { i } from "../../infra/i.ts";
+import { l } from "../../lib/l.ts";
+export const link = [i, l];`,
+        "features/prwatch/p.ts": "export const p = 1;",
+        "infra/i.ts": `import { l } from "../lib/l.ts";
+export const i = l;`,
+        "lib/l.ts": "export const l = 1;",
+      }),
+    );
+
+    const problems = checkDependencies(references, []);
+
+    expect(problems).toEqual([]);
+  });
+
+  test("reports conversation code outside claude/ referencing features/conversation/claude/", async () => {
+    const references = await collectReferences(
+      await writeProject({
+        "features/conversation/controller.ts": `import { r } from "./claude/r.ts";
 export const c = r;`,
-        "conversation/claude/r.ts": "export const r = 1;",
+        "features/conversation/claude/r.ts": "export const r = 1;",
       }),
     );
 
     const problems = checkDependencies(references, []);
 
     expect(problems).toEqual([
-      "conversation/controller.ts -> conversation/claude/r.ts: conversation/ outside claude/ may not reference conversation/claude/",
+      "features/conversation/controller.ts -> features/conversation/claude/r.ts: features/conversation/ outside claude/ may not reference features/conversation/claude/",
     ]);
   });
 
   test("reports an I/O boundary used from a view", async () => {
     const references = await collectReferences(
       await writeProject({
-        "conversation/p.view.ts": `import { f } from "../lib/fs.boundary.ts";
+        "features/conversation/p.view.ts": `import { f } from "../../lib/fs.boundary.ts";
 export const p = f;`,
         "lib/fs.boundary.ts": "export const f = 1;",
       }),
@@ -79,29 +107,29 @@ export const p = f;`,
     const problems = checkDependencies(references, []);
 
     expect(problems).toEqual([
-      "conversation/p.view.ts -> lib/fs.boundary.ts: a view may not reference an I/O boundary",
+      "features/conversation/p.view.ts -> lib/fs.boundary.ts: a view may not reference an I/O boundary",
     ]);
   });
 
   test("reports a view referencing a file other than views, the App protocol and pure lib helpers", async () => {
     const references = await collectReferences(
       await writeProject({
-        "conversation/turn/t.view.ts": `import { h } from "../history/h.view.ts";
-import { j } from "../../lib/json.boundary.ts";
-import { m } from "../../infra/codex/protocol/m.ts";
+        "features/conversation/turn/t.view.ts": `import { h } from "../history/h.view.ts";
+import { j } from "../../../lib/json.boundary.ts";
+import { m } from "../../../infra/codex/protocol/m.ts";
 import { c } from "./controller.ts";
 export const t = [h, j, m, c];`,
-        "conversation/history/h.view.ts": "export const h = 1;",
+        "features/conversation/history/h.view.ts": "export const h = 1;",
         "lib/json.boundary.ts": "export const j = 1;",
         "infra/codex/protocol/m.ts": "export const m = 1;",
-        "conversation/turn/controller.ts": "export const c = 1;",
+        "features/conversation/turn/controller.ts": "export const c = 1;",
       }),
     );
 
     const problems = checkDependencies(references, []);
 
     expect(problems).toEqual([
-      "conversation/turn/t.view.ts -> conversation/turn/controller.ts: a view may reference only views, infra/codex/protocol/ and lib/",
+      "features/conversation/turn/t.view.ts -> features/conversation/turn/controller.ts: a view may reference only views, infra/codex/protocol/ and lib/",
     ]);
   });
 
@@ -109,12 +137,12 @@ export const t = [h, j, m, c];`,
     {
       name: "a testing helper",
       files: {
-        "conversation/a.ts": `import { t } from "../infra/codex/testing/t.ts";
+        "features/conversation/a.ts": `import { t } from "../../infra/codex/testing/t.ts";
 export const a = t;`,
         "infra/codex/testing/t.ts": "export const t = 1;",
       },
       expected: [
-        "conversation/a.ts -> infra/codex/testing/t.ts: source code may not reference tests or testing helpers",
+        "features/conversation/a.ts -> infra/codex/testing/t.ts: source code may not reference tests or testing helpers",
       ],
     },
     {
@@ -140,18 +168,20 @@ export const r = x;`,
     {
       name: "an import of a missing file",
       files: {
-        "conversation/a.ts": `import "./missing.ts";`,
+        "features/conversation/a.ts": `import "./missing.ts";`,
       },
-      expected: ['conversation/a.ts -> "./missing.ts": cannot be resolved'],
+      expected: [
+        'features/conversation/a.ts -> "./missing.ts": cannot be resolved',
+      ],
     },
     {
       name: "a require call",
       files: {
-        "lib/r.ts": `export const m = require("../conversation/m.ts");`,
-        "conversation/m.ts": "export const m = 1;",
+        "lib/r.ts": `export const m = require("../features/conversation/m.ts");`,
+        "features/conversation/m.ts": "export const m = 1;",
       },
       expected: [
-        'lib/r.ts -> "require("../conversation/m.ts")": cannot be resolved',
+        'lib/r.ts -> "require("../features/conversation/m.ts")": cannot be resolved',
       ],
     },
   ])("reports $name as unresolvable", async ({ files, expected }) => {
@@ -166,6 +196,9 @@ export const r = x;`,
     { name: "a file directly under src", path: "helpers.ts" },
     { name: "a TSX file directly under src", path: "helpers.tsx" },
     { name: "a file in an unknown folder", path: "helpers/h.ts" },
+    { name: "a file directly under features", path: "features/helpers.ts" },
+    { name: "a file in an unknown feature", path: "features/helpers/h.ts" },
+    { name: "a feature outside features", path: "conversation/a.ts" },
   ])("reports $name as outside the areas", async ({ path }) => {
     const references = await collectReferences(
       await writeProject({ [path]: "export const h = 1;" }),
@@ -179,17 +212,17 @@ export const r = x;`,
   test.each([
     {
       name: "the listed reference",
-      target: "conversation/models.ts",
+      target: "features/conversation/models.ts",
       exception: EXCEPTION,
       expected: [],
     },
     {
       name: "a reference to a file other than the listed target",
-      target: "conversation/route.ts",
+      target: "features/conversation/route.ts",
       exception: EXCEPTION,
       expected: [
-        "link/codex-link.ts -> conversation/route.ts: link/ may not reference conversation/",
-        "exception link/codex-link.ts -> conversation/models.ts is no longer needed",
+        "features/link/codex-link.ts -> features/conversation/route.ts: features/link/ may not reference features/conversation/",
+        "exception features/link/codex-link.ts -> features/conversation/models.ts is no longer needed",
       ],
     },
     {
@@ -197,7 +230,7 @@ export const r = x;`,
       target: "lib/object.ts",
       exception: { ...EXCEPTION, to: "lib/object.ts" },
       expected: [
-        "exception link/codex-link.ts -> lib/object.ts is no longer needed",
+        "exception features/link/codex-link.ts -> lib/object.ts is no longer needed",
       ],
     },
   ])(
@@ -205,7 +238,7 @@ export const r = x;`,
     async ({ target, exception, expected }) => {
       const references = await collectReferences(
         await writeProject({
-          "link/codex-link.ts": `import { m } from "${relative("link", target)}";
+          "features/link/codex-link.ts": `import { m } from "${relative("features/link", target)}";
 export const l = m;`,
           [target]: "export const m = 1;",
         }),
@@ -220,11 +253,11 @@ export const l = m;`,
 
 type Area =
   | "cli"
-  | "conversation"
-  | "diagnostics"
-  | "link"
-  | "prwatch"
-  | "task"
+  | "features/conversation"
+  | "features/diagnostics"
+  | "features/link"
+  | "features/prwatch"
+  | "features/task"
   | "infra"
   | "lib";
 
@@ -236,21 +269,32 @@ const EXCEPTIONS: readonly Exception[] = [];
 const ALLOWED: Record<Area, readonly Area[]> = {
   cli: [
     "cli",
-    "conversation",
-    "diagnostics",
-    "link",
-    "prwatch",
-    "task",
+    "features/conversation",
+    "features/diagnostics",
+    "features/link",
+    "features/prwatch",
+    "features/task",
     "infra",
     "lib",
   ],
-  conversation: ["conversation", "link", "infra", "lib"],
-  diagnostics: ["diagnostics", "infra", "lib"],
-  link: ["link", "infra", "lib"],
+  "features/conversation": [
+    "features/conversation",
+    "features/link",
+    "infra",
+    "lib",
+  ],
+  "features/diagnostics": ["features/diagnostics", "infra", "lib"],
+  "features/link": ["features/link", "infra", "lib"],
   // The PR watch stands apart from the conversation and is told how to reach workers, so it may be moved out whole.
-  prwatch: ["prwatch", "infra", "lib"],
+  "features/prwatch": ["features/prwatch", "infra", "lib"],
   // harnexus-task drives the PR watch, the thread links and the Claude and Codex CLIs, but knows nothing of the bridge's conversations.
-  task: ["task", "link", "prwatch", "infra", "lib"],
+  "features/task": [
+    "features/task",
+    "features/link",
+    "features/prwatch",
+    "infra",
+    "lib",
+  ],
   infra: ["infra", "lib"],
   lib: ["lib"],
 };
@@ -320,19 +364,19 @@ const brokenRule = (from: string, to: string) => {
   }
 
   if (
-    fromArea === "prwatch" &&
+    fromArea === "features/prwatch" &&
     toArea === "infra" &&
     !to.startsWith("infra/github/")
   )
-    return "prwatch/ may reach only infra/github/";
+    return "features/prwatch/ may reach only infra/github/";
   if (from.startsWith("infra/claude/") && to.startsWith("infra/codex/"))
     return "infra/claude/ may not reference infra/codex/";
   if (
-    from.startsWith("conversation/") &&
-    !from.startsWith("conversation/claude/") &&
-    to.startsWith("conversation/claude/")
+    from.startsWith("features/conversation/") &&
+    !from.startsWith("features/conversation/claude/") &&
+    to.startsWith("features/conversation/claude/")
   )
-    return "conversation/ outside claude/ may not reference conversation/claude/";
+    return "features/conversation/ outside claude/ may not reference features/conversation/claude/";
   return undefined;
 };
 
@@ -342,10 +386,10 @@ const isViewTarget = (path: string) =>
   path.startsWith("lib/");
 
 const areaOf = (path: string) => {
-  const [first, ...rest] = path.split("/");
-  return first !== undefined && rest.length > 0 && AREAS.has(first)
-    ? (first as Area)
-    : undefined;
+  const parts = path.split("/");
+  const depth = parts[0] === "features" ? 2 : 1;
+  const area = parts.slice(0, depth).join("/");
+  return parts.length > depth && AREAS.has(area) ? (area as Area) : undefined;
 };
 
 const isTestCode = (path: string) =>
@@ -462,8 +506,8 @@ const missingProject = (root: string): Reference => ({
 });
 
 const EXCEPTION: Exception = {
-  from: "link/codex-link.ts",
-  to: "conversation/models.ts",
+  from: "features/link/codex-link.ts",
+  to: "features/conversation/models.ts",
   reason: "fixture",
   until: "RA-02",
 };

@@ -8,7 +8,7 @@ describe("bridge startup imports", () => {
     const modules = [
       "cli/bridge-wiring.ts",
       "infra/claude/session.ts",
-      "link/codex-link.ts",
+      "features/link/codex-link.ts",
     ].map((path) => join(SRC, path));
     const script = `
       for (const path of ${JSON.stringify(modules)}) await import(path);

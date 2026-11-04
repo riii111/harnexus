@@ -1,0 +1,162 @@
+import { resolve } from "node:path";
+
+import { Result, TaggedError } from "better-result";
+
+import { isClaudeModel } from "../../infra/claude/models.ts";
+import { isObject } from "../../lib/object.ts";
+
+export type Thread = { model: string; cwd: string };
+
+export type AppRequest = {
+  id: string | number;
+  params: Record<string, unknown>;
+};
+
+export type Refusal = keyof typeof REFUSAL_MESSAGES;
+
+class ThreadRefused extends TaggedError("ThreadRefused")<{
+  refusal: Extract<
+    Refusal,
+    "codex_model" | "directory_change" | "directory_unknown"
+  >;
+  message: string;
+}> {}
+
+export type Mode = "plan" | "default";
+
+export const requestedModel = (params: Record<string, unknown>) => {
+  // The app spreads its last collaboration mode into requests while model carries the new choice (App 26.924), so model is read first.
+  if (typeof params.model === "string") return params.model;
+  const settings = collaborationMode(params)?.settings;
+  return isObject(settings) && typeof settings.model === "string"
+    ? settings.model
+    : undefined;
+};
+
+export const requestedEffort = (params: Record<string, unknown>) => {
+  // The spread mode may carry the effort of an earlier choice, so effort is read first, as the model is.
+  if (typeof params.effort === "string") return params.effort;
+  const settings = collaborationMode(params)?.settings;
+  return isObject(settings) && typeof settings.reasoning_effort === "string"
+    ? settings.reasoning_effort
+    : undefined;
+};
+
+export const checkThread = (
+  params: Record<string, unknown>,
+  known: Thread | undefined,
+  fallbackCwd: string | undefined,
+): Result<Thread, ThreadRefused> => {
+  const model = requestedModel(params) ?? known?.model;
+  if (!isClaudeModel(model)) return refused("codex_model");
+  if (known !== undefined) {
+    // A thread may move to another Claude model, but Claude keeps running where the thread started, so a new directory is refused.
+    return typeof params.cwd === "string" &&
+      !isSameDirectory(params.cwd, known.cwd)
+      ? refused("directory_change")
+      : Result.ok({ model, cwd: known.cwd });
+  }
+
+  const cwd = typeof params.cwd === "string" ? params.cwd : fallbackCwd;
+  return cwd === undefined
+    ? refused("directory_unknown")
+    : Result.ok({ model, cwd });
+};
+
+const refused = (refusal: ThreadRefused["refusal"]) =>
+  Result.err(
+    new ThreadRefused({ refusal, message: REFUSAL_MESSAGES[refusal] }),
+  );
+
+export const pinDirectory = (
+  params: Record<string, unknown>,
+  thread: Thread,
+): Record<string, unknown> =>
+  // The app reopens a thread in the first folder of its project, which can differ from where Claude runs (App 26.1013), so a reopen keeps Claude's directory instead of refusing the thread.
+  typeof params.cwd === "string" && !isSameDirectory(params.cwd, thread.cwd)
+    ? { ...params, cwd: thread.cwd }
+    : params;
+
+export const savedThreadChange = (
+  requested: Thread,
+  saved: Thread,
+): Refusal | null =>
+  // A turn checked before another turn saved the thread would otherwise run in the directory that turn saved; a different model is a model change, which the turn applies itself.
+  isSameDirectory(requested.cwd, saved.cwd) ? null : "directory_change";
+
+export const refusalMessage = (refusal: Refusal) => REFUSAL_MESSAGES[refusal];
+
+export const requestedMode = (
+  params: Record<string, unknown>,
+): Mode | undefined => {
+  const mode = collaborationMode(params)?.mode;
+  if (typeof mode !== "string") return undefined;
+  return mode === "plan" ? "plan" : "default";
+};
+
+const isSameDirectory = (a: string, b: string) =>
+  // Spelling differences such as a trailing slash do not change the directory; symlinks are not resolved, since that needs the file system.
+  resolve(a) === resolve(b);
+
+const collaborationMode = (params: Record<string, unknown>) =>
+  isObject(params.collaborationMode) ? params.collaborationMode : undefined;
+
+const REFUSAL_MESSAGES = {
+  missing_thread: "the request needs a threadId",
+  codex_model: "a Claude thread cannot switch to a Codex model",
+  directory_change:
+    "changing the working directory of a Claude thread is not supported",
+  directory_unknown: "the working directory of this thread is unknown",
+  unsupported_input:
+    "Claude threads accept text and images only; send audio and other attachments in a Codex thread",
+  image_not_local:
+    "Claude can read only images attached from this Mac; save the image as a file, then attach or paste it again",
+  image_unreadable:
+    "an attached image could not be read, possibly because it was moved or deleted; attach it again",
+  image_format:
+    "Claude reads PNG, JPEG, GIF and WebP images only; convert the image to one of these formats, then attach it again",
+  image_too_large:
+    "an attached image is too large for Claude and could not be reduced; crop it or attach a smaller image",
+  duplicate_message: "this message was already delivered to the Claude thread",
+  no_running_turn: "no running Claude turn matches the turn id",
+  steer_not_sent: "the Claude turn ended before the steer reached it",
+  nothing_to_compact: "there is no Claude conversation to compact yet",
+  compaction_not_steerable:
+    "a compaction takes no steers; send it as the next turn",
+  command_not_steerable:
+    "the bridge answers this turn itself and takes no steers; send it as the next turn",
+  approvals_not_steerable:
+    "this turn only shows Claude's requests for approval and takes no steers; send it as the next turn",
+  too_many_steers:
+    "this Claude turn takes no more steers; send it as the next turn",
+  bridge_closing: "the bridge is shutting down",
+  thread_not_saved: "the Claude thread could not be saved",
+  message_not_saved:
+    "the message id could not be saved, so the message was not run to avoid running it twice",
+  thread_busy: "the Claude thread cannot start a turn",
+  outcome_unknown:
+    "the previous Claude turn on this thread stopped before its outcome was known; check what that turn did, such as changed files or messages to other threads, then send a message yourself to continue",
+  unsupported_request: "this request is not supported on a Claude thread yet",
+  cloud_images:
+    "a Cloud thread sends text only; describe the image or attach it in the Cloud session on claude.ai",
+  cloud_not_sent:
+    "the message did not reach the Cloud session; check the session on claude.ai, then send it again",
+  cloud_send_unknown:
+    "the message may or may not have reached the Cloud session; check the session on claude.ai before sending it again",
+  cloud_unsupported:
+    "a Cloud thread shows a conversation that runs on claude.ai, so it cannot be rewound, compacted or opened as a side chat here",
+  model_mismatch:
+    "this thread's first turn asked for another model or effort than the thread that created it expected, or did not say which, so it was not run",
+  side_chat_unreadable:
+    "where the main conversation stands could not be read, so the side chat was not opened; open it again",
+  side_chat_main_unread:
+    "the main conversation could not be read when this side chat opened, so it stays on the main thread's agent; open a new side chat to ask the other one",
+  side_chat_model_fixed:
+    "this side chat already sent a message on another model; open a new side chat to ask that one",
+  side_chat_not_briefed:
+    "the Claude conversation could not be handed to Codex, so the message was not sent; send it again",
+  side_chat_stopped:
+    "Harnexus could not confirm that this side chat received the Claude conversation, so it takes no more messages; open a new side chat",
+  codex_incompatible:
+    "Claude is disabled because the Codex response format is incompatible with harnexus; run bun run doctor, update harnexus, then restart the app",
+} as const;

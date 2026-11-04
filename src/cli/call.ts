@@ -1,8 +1,8 @@
+import type { CallOutcome } from "../features/link/call-gateway.ts";
 import { loadCallerSocketPath } from "../lib/config.ts";
 import { parseJson } from "../lib/json.boundary.ts";
 import { isObject } from "../lib/object.ts";
 import { requestLine } from "../lib/socket.boundary.ts";
-import type { CallOutcome } from "../link/call-gateway.ts";
 
 const EXIT = {
   done: 0,

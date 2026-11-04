@@ -3,19 +3,19 @@ import { type InferErr, Result } from "better-result";
 import {
   type CloudLogEvent,
   serializeCloudEvent,
-} from "../conversation/claude/cloud/runtime.ts";
+} from "../features/conversation/claude/cloud/runtime.ts";
 import {
   type ClaudeLogEvent,
   isClaudeTurnEvent,
   serializeClaudeTurnEvent,
-} from "../conversation/claude/runtime.ts";
+} from "../features/conversation/claude/runtime.ts";
 import {
   isRouteEvent,
   type RouteEvent,
   serializeRouteEvent,
-} from "../conversation/route.ts";
-import { serializeTurnEvent } from "../conversation/turn/controller.ts";
-import type { BridgeIdentity } from "../diagnostics/bridge-identity.ts";
+} from "../features/conversation/route.ts";
+import { serializeTurnEvent } from "../features/conversation/turn/controller.ts";
+import type { BridgeIdentity } from "../features/diagnostics/bridge-identity.ts";
 import type {
   loadClaudeModels,
   loadEffortSettings,

@@ -1,1 +1,1 @@
-import "../diagnostics/doctor.ts";
+import "../features/diagnostics/doctor.ts";

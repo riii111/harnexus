@@ -1,28 +1,34 @@
 import { Result } from "better-result";
 
-import { openCloudChild } from "../conversation/claude/cloud/child-chats.ts";
-import { createCloudReviews } from "../conversation/claude/cloud/review-chats.ts";
+import { openCloudChild } from "../features/conversation/claude/cloud/child-chats.ts";
+import { createCloudReviews } from "../features/conversation/claude/cloud/review-chats.ts";
 import {
   type CloudLogEvent,
   createCloudRuntime,
-} from "../conversation/claude/cloud/runtime.ts";
+} from "../features/conversation/claude/cloud/runtime.ts";
 import {
   type ClaudeLogEvent,
   createClaudeRuntime,
-} from "../conversation/claude/runtime.ts";
+} from "../features/conversation/claude/runtime.ts";
 import {
   buildHistory,
   replayHistory,
-} from "../conversation/history/history.view.ts";
-import { createHistoryRequests } from "../conversation/history/request.ts";
-import { createRevertRequests } from "../conversation/history/revert-request.ts";
-import { createRouter, type RouteEvent } from "../conversation/route.ts";
-import { createSideChats } from "../conversation/side-chat/side-chat.ts";
-import { createSubagentRequests } from "../conversation/subagents/requests.ts";
-import { createSubagentRestore } from "../conversation/subagents/restore.ts";
-import { createSubagents } from "../conversation/subagents/subagents.ts";
-import { createThreadValues } from "../conversation/thread-values.ts";
-import { createTurnController } from "../conversation/turn/controller.ts";
+} from "../features/conversation/history/history.view.ts";
+import { createHistoryRequests } from "../features/conversation/history/request.ts";
+import { createRevertRequests } from "../features/conversation/history/revert-request.ts";
+import {
+  createRouter,
+  type RouteEvent,
+} from "../features/conversation/route.ts";
+import { createSideChats } from "../features/conversation/side-chat/side-chat.ts";
+import { createSubagentRequests } from "../features/conversation/subagents/requests.ts";
+import { createSubagentRestore } from "../features/conversation/subagents/restore.ts";
+import { createSubagents } from "../features/conversation/subagents/subagents.ts";
+import { createThreadValues } from "../features/conversation/thread-values.ts";
+import { createTurnController } from "../features/conversation/turn/controller.ts";
+import { createCallGateway } from "../features/link/call-gateway.ts";
+import { createCodexLink } from "../features/link/codex-link.ts";
+import { createDelegationWatch } from "../features/link/delegations.ts";
 import type { CloudCheckouts } from "../infra/claude/cloud-checkouts.ts";
 import { startCloudSession } from "../infra/claude/cloud-new.boundary.ts";
 import {
@@ -38,9 +44,6 @@ import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import { createThreadRequests } from "../infra/codex/thread-requests.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
 import { resizeImage } from "../lib/image.boundary.ts";
-import { createCallGateway } from "../link/call-gateway.ts";
-import { createCodexLink } from "../link/codex-link.ts";
-import { createDelegationWatch } from "../link/delegations.ts";
 
 type Runtime = Parameters<typeof createClaudeRuntime>[0];
 

@@ -1,5 +1,5 @@
-import { runTask, TASK_DEPS } from "../task/cli.ts";
-import { reportCrash } from "../task/crash.boundary.ts";
+import { runTask, TASK_DEPS } from "../features/task/cli.ts";
+import { reportCrash } from "../features/task/crash.boundary.ts";
 
 const run = await reportCrash(() =>
   runTask(process.argv.slice(2), { ...TASK_DEPS, env: process.env }),
