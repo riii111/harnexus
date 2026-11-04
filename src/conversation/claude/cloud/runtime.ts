@@ -683,6 +683,9 @@ export const createCloudRuntime = <Tag extends string>(
             continue;
           }
 
+          // A turn that fails on a halt says so itself, so the idle copies do not tell the chat again.
+          if (stoppedBy(copied.error) !== null)
+            linkNoticed.set(threadId, "halted");
           turn.fail({
             _tag: "CloudCopyFailed",
             message: `${COPY_FAILED}: ${copied.error.message}`,
@@ -942,6 +945,10 @@ export const createCloudRuntime = <Tag extends string>(
       );
     }
 
+    // Any copy that reads ends a failing spell, whether a turn or an idle copy made it, so a later one is told of afresh.
+    failingSince.delete(threadId);
+    if (linkNoticed.get(threadId) === "copy_failing")
+      linkNoticed.delete(threadId);
     const all = mainRecords(read.value);
     log({
       event: "claude_cloud",
@@ -1060,8 +1067,12 @@ export const createCloudRuntime = <Tag extends string>(
     threadId: string,
   ): Promise<"working" | "idle" | "skipped"> => {
     const { busy, halted } = stateOf(threadId);
-    // A halted thread is never copied again, so it waits like an idle one rather than waking the copies every POLL_MS.
-    if (halted) return "idle";
+    // A halted thread is never copied again, so it waits like an idle one rather than waking the copies every POLL_MS; its notice is tried again until the chat takes it.
+    if (halted) {
+      noticeLink(threadId, "halted", HALTED_NOTICE);
+      return "idle";
+    }
+
     if (busy) return "skipped";
     const cloud = threads.cloudOf(threadId);
     if (cloud === null) return "skipped";
@@ -1086,10 +1097,6 @@ export const createCloudRuntime = <Tag extends string>(
 
       return starting && !stateOf(threadId).halted ? "working" : "idle";
     }
-
-    failingSince.delete(threadId);
-    if (linkNoticed.get(threadId) === "copy_failing")
-      linkNoticed.delete(threadId);
 
     // A turn that ran while this copy was made saved a newer one, which this copy may be older than.
     if (stateOf(threadId).busy || threads.sessionIdOf(threadId) !== reading) {

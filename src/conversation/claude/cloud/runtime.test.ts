@@ -1912,6 +1912,63 @@ describe("createCloudRuntime idle copies", () => {
     ]);
   });
 
+  test("tells the chat that copies stopped on a later copy when the chat could not take the turn at first", async () => {
+    const env = linked({ copies: [[prompt("p1", "first")]], shown: null });
+    env.copyStop = "ran_model";
+    let accepts = false;
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return accepts;
+    });
+
+    await env.tick();
+    accepts = true;
+    await env.tick();
+    const turn = env.turn("", { startedBy: "claude" });
+    await env.runtime.run(turn.running);
+    await env.tick();
+
+    expect(env.ownStarts).toEqual(["thread-1", "thread-1"]);
+    expect(turn.texts()).toEqual([
+      expect.stringContaining("stopped copying this Cloud session"),
+    ]);
+  });
+
+  test("tells the chat of failing copies again after a turn sent from the app copied the session", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "first"), endReply("a1", "one")],
+        [
+          prompt("p1", "first"),
+          endReply("a1", "one"),
+          prompt("p2", "again"),
+          endReply("a2", "two"),
+        ],
+      ],
+      shown: "a1",
+    });
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+    const failFor = async (ms: number) => {
+      env.copyFailure = "network down";
+      await env.tick();
+      env.clock += ms;
+      await env.tick();
+      await env.runtime.run(env.turn("", { startedBy: "claude" }).running);
+    };
+
+    await failFor(10 * 60_000);
+    env.copyFailure = null;
+    const turn = env.turn("again");
+    await env.runtime.run(turn.running);
+    await failFor(10 * 60_000);
+
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(env.ownStarts).toEqual(["thread-1", "thread-1"]);
+  });
+
   test("tells the chat of failing copies again after they recovered and failed once more", async () => {
     const env = linked({
       copies: [[prompt("p1", "first"), endReply("a1", "one")]],
