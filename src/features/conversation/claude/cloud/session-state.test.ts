@@ -11,8 +11,8 @@ import {
   toolUse,
 } from "../../testing/session-record.ts";
 import {
-  answersAskWith,
   type CloudSessionState,
+  sentMatcherOf,
   sessionStateOf,
 } from "./session-state.ts";
 
@@ -146,7 +146,7 @@ describe("sessionStateOf", () => {
   });
 });
 
-describe("answersAskWith", () => {
+describe("sentMatcherOf", () => {
   const records = [
     prompt("p1", "fix it"),
     ask("a1", "q1"),
@@ -174,17 +174,15 @@ describe("answersAskWith", () => {
     const answered = [ask("a1", "q1"), toolResult("r1", "q1", result)];
 
     expect(
-      answersAskWith(answered, recordAt(answered, 1), "the second option"),
+      sentMatcherOf(answered)(recordAt(answered, 1), "the second option"),
     ).toBe(true);
   });
 
   test("leaves another tool's result that holds the same text", () => {
-    expect(
-      answersAskWith(records, recordAt(records, 3), "the second option"),
-    ).toBe(false);
-    expect(
-      answersAskWith(records, recordAt(records, 4), "the second option"),
-    ).toBe(true);
+    const sentAs = sentMatcherOf(records);
+
+    expect(sentAs(recordAt(records, 3), "the second option")).toBe(false);
+    expect(sentAs(recordAt(records, 4), "the second option")).toBe(true);
   });
 
   test.each([
@@ -194,12 +192,40 @@ describe("answersAskWith", () => {
   ])(
     "leaves an answer that differs from the sent text, such as $name",
     ({ sent }) => {
-      expect(answersAskWith(records, recordAt(records, 4), sent)).toBe(false);
-      expect(
-        answersAskWith(records, recordAt(records, 4), "the second option"),
-      ).toBe(true);
+      const sentAs = sentMatcherOf(records);
+
+      expect(sentAs(recordAt(records, 4), sent)).toBe(false);
+      expect(sentAs(recordAt(records, 4), "the second option")).toBe(true);
     },
   );
+
+  test("takes a prompt with the sent text whole, ignoring surrounding space", () => {
+    const sentAs = sentMatcherOf(records);
+
+    expect(sentAs(recordAt(records, 0), " fix it\n")).toBe(true);
+    expect(sentAs(recordAt(records, 0), "fix")).toBe(false);
+  });
+
+  test("collects the asked questions once however many results it checks", () => {
+    const reads = { names: 0 };
+    const crowded = [
+      prompt("p1", "fix it"),
+      reply("a0", "m-a0", countedAsk("q1", reads), "tool_use"),
+      ...Array.from({ length: 1000 }, (_, index) => [
+        bash(`a${index}`, `t${index}`),
+        toolResult(`r${index}`, `t${index}`, "ok"),
+      ]).flat(),
+      toolResult("answer", "q1", '="the second option".'),
+    ];
+    const sentAs = sentMatcherOf(crowded);
+
+    const matched = crowded
+      .filter((record) => sentAs(record, "the second option"))
+      .map((record) => record.uuid);
+
+    expect(matched).toEqual(["answer"]);
+    expect(reads.names).toBe(1);
+  });
 });
 
 const SEND_LATER = "mcp__claude-code-remote__send_later";
@@ -228,6 +254,18 @@ const ask = (uuid: string, id: string) =>
     toolUse(id, "AskUserQuestion", QUESTION_INPUT),
     "tool_use",
   );
+
+// A question whose tool name counts its reads, which a scan of the records for questions makes once.
+const countedAsk = (id: string, reads: { names: number }) => {
+  const block = { type: "tool_use", id, input: QUESTION_INPUT };
+  return Object.defineProperty(block, "name", {
+    enumerable: true,
+    get: () => {
+      reads.names += 1;
+      return "AskUserQuestion";
+    },
+  });
+};
 
 const interruption = (uuid: string) =>
   prompt(uuid, "[Request interrupted by user]");
