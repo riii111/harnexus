@@ -100,7 +100,7 @@ export const pageTimeline = (
 // The cursors the app pages back from the newest turn and item with.
 export const resumeCursors = (history: readonly HistoryTurn[]) => {
   const newestTurn = history.at(-1);
-  const newestItem = history.flatMap((entry) => entry.items).at(-1);
+  const newestItem = newestNonEmptyTurn(history)?.items.at(-1);
   return {
     turnsBackwardsCursor:
       newestTurn === undefined ? null : `${AT}${newestTurn.turn.id}`,
@@ -122,6 +122,15 @@ export const viewTurn = (entry: HistoryTurn, view: TurnsView): Turn => {
         itemsView: "full",
       };
   }
+};
+
+const newestNonEmptyTurn = (history: readonly HistoryTurn[]) => {
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const entry = history[index];
+    if (entry !== undefined && entry.items.length > 0) return entry;
+  }
+
+  return undefined;
 };
 
 const timeline = (history: readonly HistoryTurn[]): TimelineEntry[] => {

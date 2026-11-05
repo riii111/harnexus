@@ -177,11 +177,33 @@ describe("resumeCursors", () => {
       itemsBackwardsCursor: null,
     });
   });
+
+  test("takes the items cursor from the last turn that has items when empty turns follow it", () => {
+    const history = threeTurns();
+    const [, , last] = history;
+    const emptyTurn = (id: string) => ({
+      turn: { ...last!.turn, id },
+      items: [],
+    });
+    const withEmptyTurns = [...history, emptyTurn(T4), emptyTurn(T5)];
+
+    const cursors = resumeCursors(withEmptyTurns);
+
+    expect(cursors.turnsBackwardsCursor).toBe(`at:${T5}`);
+    expect(cursors.itemsBackwardsCursor).toBe(
+      `at:${last?.items.at(-1)?.item.id}`,
+    );
+    expect(resumeCursors(history).itemsBackwardsCursor).toBe(
+      cursors.itemsBackwardsCursor,
+    );
+  });
 });
 
 const T1 = "harnexus-history-u1";
 const T2 = "harnexus-history-u2";
 const T3 = "harnexus-history-u3";
+const T4 = "harnexus-history-u4";
+const T5 = "harnexus-history-u5";
 
 const threeTurns = () =>
   buildHistory(
