@@ -6,14 +6,7 @@ import {
   spyOn,
   test,
 } from "bun:test";
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  readdir,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,10 +18,8 @@ import { createCloudReviews } from "./review-chats.ts";
 const roots: string[] = [];
 afterEach(async () => {
   setSystemTime();
-  for (const root of roots.splice(0)) {
-    await chmod(join(root, "reviews"), 0o700).catch(() => {});
+  for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
-  }
 });
 
 const review = (key: string) => ({
@@ -415,24 +406,21 @@ describe("createCloudReviews", () => {
 
   test.each(DELIVERIES)(
     "does not send a review again after a restart when its final save failed after sending it to $name",
-    async ({ held, answers, earlier }) => {
-      const first = await setup([...answers], {
-        during: async (tool) => {
-          if (tool === held) await chmod(join(first.root, "reviews"), 0o500);
-        },
-      });
+    async ({ answers, earlier }) => {
+      const first = await setup([...answers]);
       if (earlier)
         await first.reviews.openReview(
           "parent",
           "/work/harnexus",
           review("t0"),
         );
+      const saveFinal = failingFinalSave();
       const delivery = await first.reviews.openReview(
         "parent",
         "/work/harnexus",
         review("t1"),
       );
-      await chmod(first.folder, 0o700);
+      saveFinal.mockRestore();
       const restarted = await setup([{ outcome: "done" }], {
         root: first.root,
       });
@@ -548,6 +536,33 @@ describe("createCloudReviews", () => {
       calls: 2,
     },
     {
+      name: "that is an object no version wrote",
+      file: () => ({ unexpected: true }),
+      outcome: "unreadable",
+      calls: 0,
+    },
+    {
+      name: "whose sent mark is not true although it was shown",
+      file: (key: string) => ({
+        ...review(key),
+        sent: "true",
+        threadId: "c",
+        shownAt: "2026-11-03T00:00:00.000Z",
+      }),
+      outcome: "unreadable",
+      calls: 0,
+    },
+    {
+      name: "that was shown without a sent mark",
+      file: (key: string) => ({
+        ...review(key),
+        threadId: "c",
+        shownAt: "2026-11-03T00:00:00.000Z",
+      }),
+      outcome: "unreadable",
+      calls: 0,
+    },
+    {
       name: "that cannot be parsed",
       file: () => "{ not json",
       outcome: "unreadable",
@@ -568,6 +583,7 @@ describe("createCloudReviews", () => {
         calls: made,
       } = await setup([projects, { outcome: "done", threadId: "review-chat" }]);
       await seed(folder, "t1.json", file("t1"));
+      const before = await readdir(folder);
 
       const opened = await reviews.openReview(
         "parent",
@@ -577,6 +593,8 @@ describe("createCloudReviews", () => {
 
       expect(opened).toBe(outcome);
       expect(made).toHaveLength(calls);
+      if (outcome === "unreadable")
+        expect(await readdir(folder)).toEqual(before);
     },
   );
 
@@ -701,5 +719,22 @@ const seed = async (folder: string, name: string, value: unknown) => {
   await writeFile(
     join(folder, name),
     typeof value === "string" ? value : JSON.stringify(value),
+  );
+};
+
+// Fails the save that marks a review sent, as a disk error after the send would, and lets every other save through.
+const failingFinalSave = () => {
+  const save = files.writeFileAtomic;
+  return spyOn(files, "writeFileAtomic").mockImplementation(
+    async (path, content) =>
+      content.includes('"sent":true')
+        ? Result.err(
+            new files.FileWriteFailed({
+              path,
+              cause: null,
+              message: "cannot write",
+            }),
+          )
+        : save(path, content),
   );
 };

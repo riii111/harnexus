@@ -70,6 +70,9 @@ export const createCloudReviews = (
       if (kept.kind === "unreadable") return "unreadable";
       // A review already sent, such as one a restarted bridge reads again, is not sent twice.
       if (kept.kind === "object" && kept.value.sent === true) return "done";
+      // A file that no earlier version wrote, or that contradicts a review not yet sent, may stand over a sent review, so it holds the review.
+      if (kept.kind === "object" && !isUnsentReviewFile(kept.value, review.key))
+        return "unreadable";
       const claimed = await claim(reservation);
       // A reservation stands over a review either being sent by another bridge or sent with a result not recorded, which this cannot tell apart.
       if (claimed === "taken") return await heldOutcome(path);
@@ -350,6 +353,18 @@ const reviewIn = (
     answer: kept.answer,
   };
 };
+
+const isUnsentReviewFile = (kept: Record<string, unknown>, key: string) =>
+  kept.key === key &&
+  typeof kept.reviewer === "string" &&
+  typeof kept.answer === "string" &&
+  [kept.verdict, kept.taskId, kept.head].every(
+    (value) =>
+      value === undefined || value === null || typeof value === "string",
+  ) &&
+  !("sent" in kept) &&
+  !("threadId" in kept) &&
+  !("shownAt" in kept);
 
 const outcomeOf = (answer: { outcome?: unknown }) =>
   typeof answer.outcome === "string" ? answer.outcome : "unknown";
