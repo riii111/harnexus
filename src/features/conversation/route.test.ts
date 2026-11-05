@@ -721,24 +721,31 @@ describe("threads with a Claude model", () => {
     expect(parse(await response).result.model).toBe(CLAUDE);
   });
 
-  test("forks a Claude thread asked into another directory where its source runs", () => {
-    const { router, calls, events } = setup(["th-claude"]);
+  // The app reopens a thread in the first folder of the project it is assigned to, as observed with App 26.1013.
+  test.each([
+    { name: "a fork", method: "thread/fork" },
+    { name: "a resume", method: "thread/resume" },
+  ])(
+    "keeps $name of a Claude thread asked into another directory in the directory the thread runs in",
+    ({ method }) => {
+      const { router, calls, events } = setup(["th-claude"]);
 
-    const forwarded = router.fromApp(
-      encode({
-        id: 9,
-        method: "thread/fork",
-        params: { threadId: "th-claude", cwd: "/elsewhere" },
-      }),
-    );
+      const forwarded = router.fromApp(
+        encode({
+          id: 9,
+          method,
+          params: { threadId: "th-claude", cwd: "/elsewhere" },
+        }),
+      );
 
-    expect(parse(forwarded).params).toEqual({
-      threadId: "th-claude",
-      cwd: "/fixture/work",
-    });
-    expect(calls).toEqual([]);
-    expect(events).toEqual([]);
-  });
+      expect(parse(forwarded).params).toEqual({
+        threadId: "th-claude",
+        cwd: "/fixture/work",
+      });
+      expect(calls).toEqual([]);
+      expect(events).toEqual([]);
+    },
+  );
 
   test.each([{ field: "lastTurnId" }, { field: "beforeTurnId" }])(
     "refuses a fork of a Claude thread from an earlier turn named by $field",
@@ -797,26 +804,6 @@ describe("threads with a Claude model", () => {
     expect(router.fromApp(line)).toBe(line);
     expect(await router.fromServer(response)).toBe(response);
     expect(calls).toEqual([]);
-  });
-
-  // The app reopens a thread in the first folder of the project it is assigned to, as observed with App 26.1013.
-  test("resumes a Claude thread asked into another directory where it started", () => {
-    const { router, calls, events } = setup(["th-claude"]);
-
-    const forwarded = router.fromApp(
-      encode({
-        id: 4,
-        method: "thread/resume",
-        params: { threadId: "th-claude", cwd: "/elsewhere" },
-      }),
-    );
-
-    expect(parse(forwarded).params).toEqual({
-      threadId: "th-claude",
-      cwd: "/fixture/work",
-    });
-    expect(calls).toEqual([]);
-    expect(events).toEqual([]);
   });
 
   test("moves a resumed Claude thread to the Claude model it names and hides it from the server", async () => {

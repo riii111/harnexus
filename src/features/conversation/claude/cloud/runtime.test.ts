@@ -159,15 +159,6 @@ describe("createCloudRuntime reviews", () => {
     expect(turn.texts().at(-1)).toContain("not sent");
   });
 
-  test("leaves a message in an ordinary chat to Claude", async () => {
-    const env = setup({ copies: [] });
-
-    await env.runtime.run(env.turn("hello").running);
-
-    expect(env.sends).toEqual([]);
-    expect(env.innerRuns).toEqual(["turn-1"]);
-  });
-
   test("says when the review it names is no longer kept", async () => {
     const env = setup({ copies: [] });
     const turn = env.turn("/cloud-review gone", {

@@ -34,12 +34,10 @@ const comment = (fields: Partial<PrComment>): PrComment => ({
   ...fields,
 });
 
-const verdictOf = (fields: Partial<PrComment>) => {
-  const [verdict] = classify([comment(fields)], "owner", RULES, BOTS);
-  return verdict !== undefined && "ignored" in verdict
-    ? verdict.ignored
-    : "notified";
-};
+const verdictsOf = (fields: Partial<PrComment>) =>
+  classify([comment(fields)], "owner", RULES, BOTS).map((verdict) =>
+    "finding" in verdict ? "notified" : verdict.ignored,
+  );
 
 describe("classify", () => {
   test.each([
@@ -141,7 +139,7 @@ describe("classify", () => {
     fields: Partial<PrComment>;
     expected: string;
   }[])("decides $name as $expected", ({ fields, expected }) => {
-    expect(verdictOf(fields)).toBe(expected);
+    expect(verdictsOf(fields)).toEqual([expected]);
   });
 
   test("labels CodeRabbit findings by severity and people by name", () => {
