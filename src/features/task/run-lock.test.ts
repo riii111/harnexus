@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,6 +19,12 @@ const lockIn = async () => {
 
 const DEAD_PID = 2 ** 22 + 999;
 
+const exists = (path: string) =>
+  access(path).then(
+    () => true,
+    () => false,
+  );
+
 describe("acquire", () => {
   test("refuses a second run while a live run holds the lock, and takes it once released", async () => {
     const lock = await lockIn();
@@ -29,6 +35,7 @@ describe("acquire", () => {
     const third = await acquire(lock, "review");
 
     expect(second.isErr() && second.error.message).toContain("another review");
+    expect(second.isErr() && second.error.message).not.toContain("remove");
     expect(third.isOk()).toBe(true);
   });
 
@@ -39,6 +46,57 @@ describe("acquire", () => {
     const taken = await acquire(lock, "review");
 
     expect(taken.isOk()).toBe(true);
+    expect(await exists(`${lock}.reap`)).toBe(false);
+  });
+
+  test("leaves a dead taker's guard and the lock for the owner to clear, and names both", async () => {
+    const lock = await lockIn();
+    const guard = `${lock}.reap`;
+    await writeFile(lock, JSON.stringify({ pid: DEAD_PID, token: "dead" }));
+    await writeFile(guard, JSON.stringify({ pid: DEAD_PID + 1 }));
+
+    const refused = await acquire(lock, "review");
+
+    expect(refused.isErr() && refused.error.message).toContain(guard);
+    expect(
+      refused.isErr() && refused.error.message.replaceAll(guard, ""),
+    ).toContain(lock);
+    expect(await exists(lock)).toBe(true);
+    expect(await exists(guard)).toBe(true);
+  });
+
+  test("lets no run hold the lock while a dead taker's guard remains", async () => {
+    const lock = await lockIn();
+    await writeFile(lock, JSON.stringify({ pid: DEAD_PID, token: "dead" }));
+    await writeFile(`${lock}.reap`, JSON.stringify({ pid: DEAD_PID + 1 }));
+
+    const together = await Promise.all([
+      acquire(lock, "review"),
+      acquire(lock, "review"),
+    ]);
+    const later = await acquire(lock, "review");
+
+    expect([...together, later].map((run) => run.isOk())).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    expect(JSON.parse(await readFile(lock, "utf8")).token).toBe("dead");
+  });
+
+  test("keeps a live taker's guard and does not take the lock", async () => {
+    const lock = await lockIn();
+    const guard = `${lock}.reap`;
+    await writeFile(lock, JSON.stringify({ pid: DEAD_PID, token: "dead" }));
+    await writeFile(guard, JSON.stringify({ pid: process.pid }));
+
+    const refused = await acquire(lock, "review");
+
+    expect(refused.isErr() && refused.error.message).toContain(
+      "is taking over",
+    );
+    expect(await exists(guard)).toBe(true);
+    expect(await exists(lock)).toBe(true);
   });
 });
 

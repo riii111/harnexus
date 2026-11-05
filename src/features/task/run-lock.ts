@@ -33,6 +33,12 @@ const heldBy = async (path: string) => {
 const dead = (holder: Fields | null) =>
   typeof holder?.pid === "number" && !processAlive(holder.pid);
 
+const abandonedGuard = (lock: string, guard: string) =>
+  fail(
+    `a run that was taking over this session died before it finished, and left ${lock} and ${guard}. ` +
+      `Once every review and question process for this session has stopped, remove ${guard}, then run again`,
+  );
+
 // Takes the lock over from a dead holder.
 const reap = (lock: string, observed: string) =>
   Result.gen(async function* () {
@@ -42,15 +48,17 @@ const reap = (lock: string, observed: string) =>
       io(writeFileExclusive(guard, JSON.stringify({ pid: process.pid }))),
     );
     if (!made) {
-      // A reaper that died leaves its guard behind; that alone is cleared.
-      if (dead(await heldBy(guard))) yield* Result.await(io(removeFile(guard)));
+      // Only the run that made a guard removes it: a second run deleting a dead guard could delete one made since, and two runs would then hold the lock.
+      if (dead(await heldBy(guard))) return abandonedGuard(lock, guard);
       return Result.ok(false);
     }
 
     const now = await heldBy(lock);
     const same = now !== null && now.token === observed && dead(now);
-    if (same) yield* Result.await(io(removeFile(lock)));
-    yield* Result.await(io(removeFile(guard)));
+    const removed = same ? await io(removeFile(lock)) : Result.ok();
+    const released = await io(removeFile(guard));
+    if (removed.isErr()) return removed;
+    if (released.isErr()) return released;
     return Result.ok(same);
   });
 
