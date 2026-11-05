@@ -449,8 +449,8 @@ export const createClaudeRuntime = ({
     const stopped = slots.slotOf(threadId);
     if (
       stopped?.session.isClosed() &&
-      stopped.unclaimed === "turn" &&
-      stopped.reader?.queued().some(saidSomething) === true
+      stopped.inbox.state === "awaiting-app-turn" &&
+      stopped.inbox.reader.queued().some(saidSomething)
     ) {
       const inbox = claimReader(stopped);
       try {
@@ -615,9 +615,9 @@ export const createClaudeRuntime = ({
     const threadId = turn.threadId;
     await waitForPendingInterrupt(threadId);
     const slot = slots.slotOf(threadId);
-    const inbox = slot?.unclaimed === "own" ? slot.reader : null;
+    const waiting = slot?.inbox;
     // A turn the app started ahead of this one took Claude's waiting messages, so this one has nothing to show.
-    if (slot === undefined || inbox == null) {
+    if (slot === undefined || waiting?.state !== "awaiting-claude-turn") {
       turn.finish(
         turn.state().interrupting
           ? { status: "interrupted" }
@@ -627,7 +627,8 @@ export const createClaudeRuntime = ({
       return;
     }
 
-    slot.unclaimed = null;
+    const inbox = waiting.reader;
+    slot.inbox = { state: "claimed", reader: inbox };
     claude.own = true;
     claude.slot = slot;
     turn.useLink(slot.link);
@@ -821,9 +822,9 @@ export const createClaudeRuntime = ({
     slot: SessionSlot,
     next: StreamedNext,
   ): Inbox<StreamedNext> | null => {
-    if (slot.reader !== null) {
-      slot.reader.push(next);
-      return slot.reader;
+    if (slot.inbox.state !== "empty") {
+      slot.inbox.reader.push(next);
+      return slot.inbox.reader;
     }
 
     if (slots.slotOf(threadId) !== slot) return null;
@@ -847,8 +848,10 @@ export const createClaudeRuntime = ({
     if (own) log({ event: "claude_turn", step: "own_turn" });
     const inbox = createInbox<StreamedNext>();
     inbox.push(next);
-    slot.reader = inbox;
-    slot.unclaimed = own ? "own" : "turn";
+    slot.inbox = {
+      state: own ? "awaiting-claude-turn" : "awaiting-app-turn",
+      reader: inbox,
+    };
     return inbox;
   };
 
@@ -908,9 +911,12 @@ export const createClaudeRuntime = ({
 
   const claimReader = (slot: SessionSlot) => {
     const inbox = createInbox<StreamedNext>();
-    for (const next of slot.reader?.drain() ?? []) inbox.push(next);
-    slot.reader = inbox;
-    slot.unclaimed = null;
+    const previous = slot.inbox;
+    if (previous.state !== "empty") {
+      for (const next of previous.reader.drain()) inbox.push(next);
+    }
+
+    slot.inbox = { state: "claimed", reader: inbox };
     return inbox;
   };
 
@@ -919,8 +925,8 @@ export const createClaudeRuntime = ({
     slot: SessionSlot,
     inbox: Inbox<StreamedNext>,
   ) => {
-    if (slot.reader !== inbox) return;
-    slot.reader = null;
+    if (slot.inbox.state !== "claimed" || slot.inbox.reader !== inbox) return;
+    slot.inbox = { state: "empty" };
     for (const next of inbox.drain()) route(threadId, slot, next);
   };
 
@@ -930,13 +936,20 @@ export const createClaudeRuntime = ({
     slots.scheduleIdleClose(threadId);
     approvals.showTurn(threadId);
     const slot = slots.slotOf(threadId);
-    if (slot?.reader == null || slot.unclaimed === null) return;
-    const left = slot.reader.drain();
-    const waitedFor = slot.unclaimed;
-    slot.reader = null;
-    slot.unclaimed = null;
+    const waiting = slot?.inbox;
+    if (
+      slot === undefined ||
+      waiting === undefined ||
+      waiting.state === "empty" ||
+      waiting.state === "claimed"
+    ) {
+      return;
+    }
+
+    const left = waiting.reader.drain();
+    slot.inbox = { state: "empty" };
     // A turn of Claude's own that could not run was shown as failed, so what it held is not shown again.
-    if (waitedFor === "own") {
+    if (waiting.state === "awaiting-claude-turn") {
       slot.discarding = !left.some(
         (next) =>
           next.done !== true &&
@@ -1224,8 +1237,7 @@ export const createClaudeRuntime = ({
       pendingInterrupt: null,
       link,
       attachedSkills: new Map(),
-      reader: null,
-      unclaimed: null,
+      inbox: { state: "empty" },
       discarding: false,
       backgroundTasks: 0,
     };
