@@ -51,6 +51,11 @@ HARNEXUS_PERMISSION_MODE=default bun run open-app
 Launch options are saved for future app launches.
 Running `bun run open-app` again without an option clears that option.
 
+## In-app browser
+
+A Claude chat can open a page in the app's in-app browser, read it, and click or type in it, so Claude can check a page it built. Each action follows your approval mode.
+To use a tab you already have open, @-mention it in your message. Claude asks you to type `Allow` for that tab; the permission lasts for that turn only. The site approvals the app shows still apply.
+
 ## Claude Cloud sessions
 
 To follow a [Claude Code cloud session](https://code.claude.com/docs/en/claude-code-on-the-web), start a new Claude chat and send its session ID or URL:
