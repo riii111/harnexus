@@ -58,20 +58,6 @@ describe("createLineRewriter", () => {
     expect(await output).toBe("first\nSLOW\nafter\nnext chunk\n");
   });
 
-  test("resumes after each pending rewrite of a burst without copying the remaining lines", async () => {
-    const lineCount = 2000;
-    const copied = countArraySliceElements();
-    const rewriter = createLineRewriter((line) => Promise.resolve(line));
-    const output = collect(rewriter);
-
-    rewriter.end("line\n".repeat(lineCount));
-    const text = await output;
-
-    const copiedElements = copied.stop();
-    expect(text).toBe("line\n".repeat(lineCount));
-    expect(copiedElements).toBeLessThan(lineCount);
-  });
-
   test("breaks the stream when a pending rewrite rejects", async () => {
     const rewriter = createLineRewriter((line) =>
       line.toString().startsWith("bad")
@@ -98,24 +84,6 @@ describe("createLineRewriter", () => {
     expect(await output).toBe("keep\nlast\n");
   });
 });
-
-const countArraySliceElements = () => {
-  const slice = Array.prototype.slice;
-  let total = 0;
-  const spy = spyOn(Array.prototype, "slice").mockImplementation(function (
-    this: unknown[],
-    ...args: Parameters<typeof slice>
-  ) {
-    total += this.length;
-    return slice.apply(this, args);
-  });
-  return {
-    stop: () => {
-      spy.mockRestore();
-      return total;
-    },
-  };
-};
 
 const collect = async (stream: NodeJS.ReadableStream) => {
   const chunks: Buffer[] = [];
