@@ -49,6 +49,52 @@ describe("attachServerRequests", () => {
     expect(result.isOk() && result.value).toEqual({ late: true });
   });
 
+  test("counts the time limit again from the user's answer, so a call right after it is not cut short", async () => {
+    const server = fakeServer();
+    const requests = attachServerRequests(server);
+    void collect(requests.serverOutput);
+
+    const answer = requests.request(
+      "call",
+      {},
+      { timeoutMs: 80, threadId: "th-1" },
+    );
+    server.output.write(
+      '{"id":5,"method":"mcpServer/elicitation/request","params":{"threadId":"th-1"}}\n',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    server.output.write(
+      '{"method":"serverRequest/resolved","params":{"threadId":"th-1","requestId":5}}\n',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    server.output.write('{"id":"harnexus-1","result":{"ok":true}}\n');
+    server.output.end();
+
+    const result = await answer;
+    expect(result.isOk() && result.value).toEqual({ ok: true });
+  });
+
+  test("times out when the call itself outlasts its limit after the user's answer", async () => {
+    const server = fakeServer();
+    const requests = attachServerRequests(server);
+    void collect(requests.serverOutput);
+
+    const answer = requests.request(
+      "call",
+      {},
+      { timeoutMs: 40, threadId: "th-1" },
+    );
+    server.output.write(
+      '{"id":5,"method":"mcpServer/elicitation/request","params":{"threadId":"th-1"}}\n',
+    );
+    server.output.write(
+      '{"method":"serverRequest/resolved","params":{"threadId":"th-1","requestId":5}}\n',
+    );
+
+    const result = await answer;
+    expect(result.isErr() && result.error._tag).toBe("ServerRequestUnanswered");
+  });
+
   test.each([
     { name: "for another thread", asked: "th-2", resolved: false },
     { name: "already answered", asked: "th-1", resolved: true },

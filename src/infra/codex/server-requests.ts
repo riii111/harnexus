@@ -51,6 +51,8 @@ export const attachServerRequests = ({
 
   // The questions the app has open for each thread, which the server announces when it asks and when the answer arrives.
   const asking = new Map<string, Set<string>>();
+  // Called when a thread's last question is answered, so each call waiting on that thread counts its limit from then.
+  const rearmers = new Map<string, { threadId: string; rearm: () => void }>();
 
   const trackQuestions = (line: Buffer) => {
     if (!line.includes(ELICITATION_BYTES) && !line.includes(RESOLVED_BYTES)) {
@@ -67,7 +69,11 @@ export const attachServerRequests = ({
     } else if (method === RESOLVED) {
       for (const [thread, open] of asking) {
         open.delete(String(params.requestId));
-        if (open.size === 0) asking.delete(thread);
+        if (open.size > 0) continue;
+        asking.delete(thread);
+        for (const waiting of rearmers.values()) {
+          if (waiting.threadId === thread) waiting.rearm();
+        }
       }
     }
   };
@@ -113,21 +119,26 @@ export const attachServerRequests = ({
     const id = `${ID_PREFIX}${sequence}`;
     if (closed) return Promise.resolve(Result.err(notSent(method)));
     return new Promise((resolve) => {
-      let timer = setTimeout(expire, timeoutMs);
-      function expire() {
-        // The user's time to answer is no part of the call's own, so the limit starts again once the question is answered.
-        if (threadId !== undefined && asking.has(threadId)) {
-          timer = setTimeout(expire, timeoutMs);
-          return;
-        }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const rearm = () => {
+        clearTimeout(timer);
+        timer = setTimeout(expire, timeoutMs);
+      };
 
-        settle({ kind: "timeout" });
+      function expire() {
+        // The user's time to answer is no part of the call's own, so while a question is open the limit stays unspent and starts again from the answer.
+        if (threadId === undefined || !asking.has(threadId)) {
+          settle({ kind: "timeout" });
+        }
       }
 
+      rearm();
+      if (threadId !== undefined) rearmers.set(id, { threadId, rearm });
       const abort = () => settle({ kind: "aborted" });
       signal?.addEventListener("abort", abort, { once: true });
       const settle = (answer: Answer) => {
         clearTimeout(timer);
+        rearmers.delete(id);
         signal?.removeEventListener("abort", abort);
         pending.delete(id);
         resolve(toResult(method, answer, timeoutMs));
