@@ -35,6 +35,7 @@ describe("acquire", () => {
     const third = await acquire(lock, "review");
 
     expect(second.isErr() && second.error.message).toContain("another review");
+    expect(second.isErr() && second.error.message).not.toContain("remove");
     expect(third.isOk()).toBe(true);
   });
 
@@ -56,8 +57,10 @@ describe("acquire", () => {
 
     const refused = await acquire(lock, "review");
 
-    expect(refused.isErr() && refused.error.message).toContain(lock);
     expect(refused.isErr() && refused.error.message).toContain(guard);
+    expect(
+      refused.isErr() && refused.error.message.replaceAll(guard, ""),
+    ).toContain(lock);
     expect(await exists(lock)).toBe(true);
     expect(await exists(guard)).toBe(true);
   });
@@ -94,15 +97,6 @@ describe("acquire", () => {
     );
     expect(await exists(guard)).toBe(true);
     expect(await exists(lock)).toBe(true);
-  });
-
-  test("does not ask to remove anything while a live run holds the lock", async () => {
-    const lock = await lockIn();
-    (await acquire(lock, "review")).unwrap();
-
-    const refused = await acquire(lock, "review");
-
-    expect(refused.isErr() && refused.error.message).not.toContain("remove");
   });
 });
 
