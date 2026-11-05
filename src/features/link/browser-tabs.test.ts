@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { runInNewContext } from "node:vm";
 
 import { Result } from "better-result";
 
@@ -262,6 +263,70 @@ describe("createBrowserTabs operating", () => {
   });
 });
 
+describe("createBrowserTabs scripts run by the browser server", () => {
+  test("click presses the element whose number and text match the page as the app shows it", async () => {
+    const { browser, calls } = connect({ tabId: "4" });
+    browser.beginTurn({ turnId: "turn-1" });
+    await use(browser, "browser_open_tab", { url: PAGE });
+    await use(browser, "browser_click", { element: 6, label: "Run check" });
+    const tab = fakeTab({ id: "4" });
+
+    await runScript(codes(calls())[1], tab);
+
+    expect(tab.actions).toEqual(["state", "click 6", "state"]);
+  });
+
+  test("type enters the text in the element whose number and text match", async () => {
+    const { browser, calls } = connect({ tabId: "4" });
+    browser.beginTurn({ turnId: "turn-1" });
+    await use(browser, "browser_open_tab", { url: PAGE });
+    await use(browser, "browser_type", {
+      element: 5,
+      label: "Test value",
+      text: "hello",
+    });
+    const tab = fakeTab({ id: "4" });
+
+    await runScript(codes(calls())[1], tab);
+
+    expect(tab.actions).toEqual(["state", 'type 5 "hello"', "state"]);
+  });
+
+  test.each([
+    {
+      name: "the element now carries other text",
+      state: AX_STATE.replace("Run check", "Reset"),
+      id: "4",
+    },
+    {
+      name: "the element number is gone from the page",
+      state: AX_STATE.replace("\t6 button Run check", ""),
+      id: "4",
+    },
+    { name: "the bound tab is another tab", state: AX_STATE, id: "9" },
+  ])("click acts on nothing when $name", async ({ state, id }) => {
+    const { browser, calls } = connect({ tabId: "4" });
+    browser.beginTurn({ turnId: "turn-1" });
+    await use(browser, "browser_open_tab", { url: PAGE });
+    await use(browser, "browser_click", { element: 6, label: "Run check" });
+    const tab = fakeTab({ id, state });
+
+    await expect(runScript(codes(calls())[1], tab)).rejects.toThrow();
+    expect(tab.actions).not.toContain("click 6");
+  });
+
+  test("open writes the marker with the new tab's id after the page state", async () => {
+    const { browser, calls } = connect();
+    browser.beginTurn({ turnId: "turn-1" });
+    await use(browser, "browser_open_tab", { url: PAGE });
+    const tab = fakeTab({ id: "12" });
+
+    await runScript(codes(calls())[0], tab);
+
+    expect(tab.written).toEqual(["harnexus-tab:12"]);
+  });
+});
+
 describe("createBrowserTabs ending a turn", () => {
   test.each([
     { name: "finished", end: "Stop" as const },
@@ -450,6 +515,46 @@ const gated = () => {
 };
 
 const PAGE = "http://127.0.0.1:54392/claude";
+
+// The page text as the app's browser returned it for the fixture page, with the element numbers it gives.
+const AX_STATE = [
+  "0 AXWebArea Harnexus browser check, URL: 127.0.0.1:54392/claude",
+  "\t1 heading Browser check, Value: 1",
+  "\t3 container",
+  "\t\t5 text field (settable) Test value",
+  "\t6 button Run check",
+].join("\n");
+
+const fakeTab = ({ id, state = AX_STATE }: { id: string; state?: string }) => {
+  const actions: string[] = [];
+  const written: string[] = [];
+  const tab = {
+    id,
+    getAXState: async () => {
+      actions.push("state");
+      return state;
+    },
+    click: async (element: number) => {
+      actions.push(`click ${element}`);
+    },
+    typeText: async (element: number, text: string) => {
+      actions.push(`type ${element} ${JSON.stringify(text)}`);
+    },
+  };
+  return { ...tab, actions, written };
+};
+
+const runScript = (
+  code: string | undefined,
+  tab: ReturnType<typeof fakeTab>,
+) => {
+  const cua = { getTab: async () => tab, createBrowserTab: async () => tab };
+  const nodeRepl = { write: (text: string) => tab.written.push(text) };
+  return runInNewContext(`(async () => {${code}})()`, {
+    cua,
+    nodeRepl,
+  }) as Promise<void>;
+};
 
 const REGISTERED = {
   name: "cua_repl",
