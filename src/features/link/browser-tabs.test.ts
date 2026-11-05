@@ -552,6 +552,34 @@ describe("createBrowserTabs scripts run by the browser server", () => {
   });
 });
 
+describe("createBrowserTabs waiting for the user", () => {
+  test("sends browser calls without a time limit, since the app may ask the user about the site meanwhile", async () => {
+    const { browser, options } = connect();
+    begin(browser, "turn-1");
+
+    await use(browser, "browser_open_tab", { url: PAGE });
+
+    expect(options()).toEqual([
+      { timeoutMs: null, signal: expect.any(AbortSignal) },
+    ]);
+  });
+
+  test("ends the wait without sending the call again when the turn is stopped", async () => {
+    const { browser, calls } = connect({ holdUntilAbort: true });
+    begin(browser, "turn-1");
+    const opening = use(browser, "browser_open_tab", { url: PAGE });
+    await settle();
+
+    browser.endTurn("Interrupt");
+    const opened = await opening;
+    await settle();
+
+    expect(opened.isError).toBe(true);
+    expect(browser.hasUnsettledWrite()).toBe(true);
+    expect(calls().map((call) => call.tool)).toEqual(["js", "turn_ended"]);
+  });
+});
+
 describe("createBrowserTabs ending a turn", () => {
   test.each([
     { name: "finished", end: "Stop" as const },
@@ -651,6 +679,7 @@ const connect = ({
   marker = true,
   servers = [REGISTERED],
   hold = null,
+  holdUntilAbort = false,
 }: {
   session?: string | null;
   tabId?: string;
@@ -658,11 +687,13 @@ const connect = ({
   marker?: boolean;
   servers?: object[];
   hold?: Promise<void> | null;
+  holdUntilAbort?: boolean;
 } = {}) => {
   let lostNext = false;
   const recorded: Call[] = [];
   const listed: unknown[] = [];
-  const request: ServerRequest = async (method, params) => {
+  const sentOptions: object[] = [];
+  const request: ServerRequest = async (method, params, options) => {
     if (method === "thread/read") {
       return Result.ok({
         thread: session === null ? {} : { sessionId: session },
@@ -677,6 +708,14 @@ const connect = ({
     const call = params as Call;
     recorded.push(call);
     if (call.tool === "turn_ended") return Result.ok({ content: [] });
+    sentOptions.push(options);
+    if (holdUntilAbort) {
+      await new Promise((resolve) =>
+        options.signal?.addEventListener("abort", resolve),
+      );
+      return Result.err(unanswered());
+    }
+
     if (hold !== null) await hold;
     if (lostNext) {
       lostNext = false;
@@ -700,6 +739,7 @@ const connect = ({
     browser,
     calls: () => recorded,
     listings: () => listed,
+    options: () => sentOptions,
     lose: () => {
       lostNext = true;
     },

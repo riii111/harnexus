@@ -25,6 +25,54 @@ describe("attachServerRequests", () => {
     );
   });
 
+  test("waits without a time limit until the answer arrives", async () => {
+    const server = fakeServer();
+    const requests = attachServerRequests(server);
+    void collect(requests.serverOutput);
+
+    const answer = requests.request("call", {}, { timeoutMs: null });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    server.output.write('{"id":"harnexus-1","result":{"late":true}}\n');
+    server.output.end();
+
+    const result = await answer;
+    expect(result.isOk() && result.value).toEqual({ late: true });
+  });
+
+  test("reports an unanswered request when its wait is stopped and keeps the late answer from the app", async () => {
+    const server = fakeServer();
+    const requests = attachServerRequests(server);
+    const appOutput = collect(requests.serverOutput);
+    const stop = new AbortController();
+
+    const answer = requests.request(
+      "call",
+      {},
+      { timeoutMs: null, signal: stop.signal },
+    );
+    stop.abort();
+    server.output.write('{"id":"harnexus-1","result":{}}\n');
+    server.output.end();
+
+    const result = await answer;
+    expect(result.isErr() && result.error._tag).toBe("ServerRequestUnanswered");
+    expect(await appOutput).toBe("");
+  });
+
+  test("does not send a request whose wait was already stopped", async () => {
+    const server = fakeServer();
+    const requests = attachServerRequests(server);
+
+    const answer = await requests.request(
+      "call",
+      {},
+      { timeoutMs: null, signal: AbortSignal.abort() },
+    );
+
+    expect(answer.isErr() && answer.error._tag).toBe("ServerRequestNotSent");
+    expect(server.sent()).toEqual([]);
+  });
+
   test("passes the app a response to an id this bridge never issued", async () => {
     const server = fakeServer();
     const requests = attachServerRequests(server);

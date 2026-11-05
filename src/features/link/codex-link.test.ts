@@ -1277,7 +1277,7 @@ type CallParams = {
 type RecordedRequest = {
   method: string;
   params: CallParams;
-  timeoutMs: number;
+  timeoutMs: number | null;
 };
 
 const CALLER = "thread-caller";

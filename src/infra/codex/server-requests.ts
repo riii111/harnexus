@@ -31,7 +31,8 @@ export type ServerRequestError =
 export type ServerRequest = (
   method: string,
   params: unknown,
-  options: { timeoutMs: number },
+  // A null timeout waits for the answer however long it takes, until the signal aborts, which leaves the request unanswered.
+  options: { timeoutMs: number | null; signal?: AbortSignal },
 ) => Promise<Result<unknown, ServerRequestError>>;
 
 // The bridge's own requests to the server, sent between the app's lines.
@@ -78,19 +79,30 @@ export const attachServerRequests = ({
   // A response can only arrive before the server output ends, so everything still waiting then is unanswered.
   filtered.once("finish", closeAll);
 
-  const request: ServerRequest = (method, params, { timeoutMs }) => {
+  const request: ServerRequest = (method, params, { timeoutMs, signal }) => {
     sequence += 1;
     const id = `${ID_PREFIX}${sequence}`;
     if (closed) return Promise.resolve(Result.err(notSent(method)));
     return new Promise((resolve) => {
-      const timer = setTimeout(() => settle({ kind: "timeout" }), timeoutMs);
+      const timer =
+        timeoutMs === null
+          ? null
+          : setTimeout(() => settle({ kind: "timeout" }), timeoutMs);
+      const abort = () => settle({ kind: "aborted" });
+      signal?.addEventListener("abort", abort, { once: true });
       const settle = (answer: Answer) => {
-        clearTimeout(timer);
+        if (timer !== null) clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
         pending.delete(id);
         resolve(toResult(method, answer, timeoutMs));
       };
 
       pending.set(id, settle);
+      if (signal?.aborted === true) {
+        settle({ kind: "notSent" });
+        return;
+      }
+
       const sent = injector.inject(
         `${JSON.stringify({ id, method, params })}\n`,
       );
@@ -108,7 +120,7 @@ export const attachServerRequests = ({
 const toResult = (
   method: string,
   answer: Answer,
-  timeoutMs: number,
+  timeoutMs: number | null,
 ): Result<unknown, ServerRequestError> => {
   switch (answer.kind) {
     case "result":
@@ -132,6 +144,13 @@ const toResult = (
         new ServerRequestUnanswered({
           method,
           message: `the server did not answer ${method} within ${timeoutMs}ms`,
+        }),
+      );
+    case "aborted":
+      return Result.err(
+        new ServerRequestUnanswered({
+          method,
+          message: `the wait for ${method} was stopped before it was answered`,
         }),
       );
     case "closed":
@@ -168,6 +187,7 @@ type Answer =
   | { kind: "rejected"; error: { code?: unknown; message?: unknown } | null }
   | { kind: "notSent" }
   | { kind: "timeout" }
+  | { kind: "aborted" }
   | { kind: "closed" };
 
 const ID_PREFIX = "harnexus-";

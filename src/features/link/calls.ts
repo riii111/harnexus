@@ -21,6 +21,8 @@ export const READ_TOOLS = [
 type CallTarget = {
   server: string;
   meta: () => Promise<Result<Record<string, unknown>, MetaUnavailable>>;
+  // Set when the call may wait for the user, such as a site permission the app asks about; it then has no time limit and ends only when this signal aborts.
+  userWait?: () => AbortSignal;
 };
 
 export const createAppToolCalls = ({
@@ -60,7 +62,9 @@ export const createAppToolCalls = ({
         arguments: args,
         ...(Object.keys(meta.value).length > 0 && { _meta: meta.value }),
       },
-      { timeoutMs },
+      target.userWait === undefined
+        ? { timeoutMs }
+        : { timeoutMs: null, signal: target.userWait() },
     );
     return answered.andThen(readToolResult);
   };
