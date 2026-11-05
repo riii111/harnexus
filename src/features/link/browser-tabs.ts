@@ -131,7 +131,6 @@ export const createBrowserTabs = ({
     request,
     target: {
       server: SERVER,
-      userWait: () => (turn ?? NO_WAIT).ended.signal,
       meta: async () => {
         const running = turn;
         if (running === null) return notRunning();
@@ -140,7 +139,9 @@ export const createBrowserTabs = ({
         const meta = await metaOf(running.turnId);
         if (turn !== running) return notRunning();
         running.used = meta.isOk() || running.used;
-        return meta;
+        return meta.isErr()
+          ? meta
+          : Result.ok({ meta: meta.value, signal: running.ended.signal });
       },
     },
     unknownAdvice:
@@ -465,7 +466,6 @@ const APP_PLUGIN = "unified-computer-use@openai-bundled";
 const REQUIRED_TOOLS = ["js", "turn_ended"];
 const TAB_MARKER = "harnexus-tab:";
 const TAB_ID = /^[\w.:-]{1,200}$/;
-const NO_WAIT = { ended: { signal: AbortSignal.abort() } };
 const NO_TURN = "The browser can be used only while a turn is running.";
 const TAB_NUMBER = z.number().int().positive().optional();
 const ELEMENT = z.number().int().nonnegative();

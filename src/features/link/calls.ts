@@ -20,16 +20,23 @@ export const READ_TOOLS = [
 // What a server tool call needs besides its arguments: the server and the request meta that names the turn it acts for.
 type CallTarget = {
   server: string;
-  meta: () => Promise<Result<Record<string, unknown>, MetaUnavailable>>;
-  // Set when the call may wait for the user, such as a site permission the app asks about; it then has no time limit and ends only when this signal aborts.
-  userWait?: () => AbortSignal;
+  // The signal belongs to the same turn as the meta, and ends the wait for the call when that turn stops.
+  meta: () => Promise<
+    Result<
+      { meta: Record<string, unknown>; signal?: AbortSignal },
+      MetaUnavailable
+    >
+  >;
 };
 
 export const createAppToolCalls = ({
   callerThreadId,
   store,
   request,
-  target = { server: CODEX_APP_SERVER, meta: async () => Result.ok({}) },
+  target = {
+    server: CODEX_APP_SERVER,
+    meta: async () => Result.ok({ meta: {} }),
+  },
   unknownAdvice = "Stop sending or creating threads and ask the user to check the app.",
 }: {
   callerThreadId: string;
@@ -60,11 +67,15 @@ export const createAppToolCalls = ({
         server: target.server,
         tool: name,
         arguments: args,
-        ...(Object.keys(meta.value).length > 0 && { _meta: meta.value }),
+        ...(Object.keys(meta.value.meta).length > 0 && {
+          _meta: meta.value.meta,
+        }),
       },
-      target.userWait === undefined
-        ? { timeoutMs }
-        : { timeoutMs: null, signal: target.userWait() },
+      {
+        timeoutMs,
+        threadId: callerThreadId,
+        ...(meta.value.signal !== undefined && { signal: meta.value.signal }),
+      },
     );
     return answered.andThen(readToolResult);
   };

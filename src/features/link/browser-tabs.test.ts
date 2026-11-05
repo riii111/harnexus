@@ -553,15 +553,34 @@ describe("createBrowserTabs scripts run by the browser server", () => {
 });
 
 describe("createBrowserTabs waiting for the user", () => {
-  test("sends browser calls without a time limit, since the app may ask the user about the site meanwhile", async () => {
+  test("sends browser calls with the thread and the turn's stop signal, so the time limit can wait for the user", async () => {
     const { browser, options } = connect();
     begin(browser, "turn-1");
 
     await use(browser, "browser_open_tab", { url: PAGE });
 
     expect(options()).toEqual([
-      { timeoutMs: null, signal: expect.any(AbortSignal) },
+      {
+        timeoutMs: 120_000,
+        threadId: "thread-1",
+        signal: expect.any(AbortSignal),
+      },
     ]);
+  });
+
+  test("sends nothing for a turn that stopped while its call was being prepared, even if the next turn has begun", async () => {
+    let swap = () => {};
+    const { browser, calls } = connect({ onSessionRead: () => swap() });
+    begin(browser, "old");
+    swap = () => {
+      browser.endTurn("Interrupt");
+      begin(browser, "new");
+    };
+
+    const opened = await use(browser, "browser_open_tab", { url: PAGE });
+
+    expect(opened.isError).toBe(true);
+    expect(calls()).toEqual([]);
   });
 
   test("ends the wait without sending the call again when the turn is stopped", async () => {
@@ -680,6 +699,7 @@ const connect = ({
   servers = [REGISTERED],
   hold = null,
   holdUntilAbort = false,
+  onSessionRead = () => {},
 }: {
   session?: string | null;
   tabId?: string;
@@ -688,6 +708,7 @@ const connect = ({
   servers?: object[];
   hold?: Promise<void> | null;
   holdUntilAbort?: boolean;
+  onSessionRead?: () => void;
 } = {}) => {
   let lostNext = false;
   const recorded: Call[] = [];
@@ -695,6 +716,7 @@ const connect = ({
   const sentOptions: object[] = [];
   const request: ServerRequest = async (method, params, options) => {
     if (method === "thread/read") {
+      onSessionRead();
       return Result.ok({
         thread: session === null ? {} : { sessionId: session },
       });

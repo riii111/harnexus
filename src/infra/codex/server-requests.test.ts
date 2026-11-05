@@ -25,19 +25,60 @@ describe("attachServerRequests", () => {
     );
   });
 
-  test("waits without a time limit until the answer arrives", async () => {
+  test("keeps its time limit standing still while the app asks the user a question for the thread", async () => {
     const server = fakeServer();
     const requests = attachServerRequests(server);
     void collect(requests.serverOutput);
 
-    const answer = requests.request("call", {}, { timeoutMs: null });
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    const answer = requests.request(
+      "call",
+      {},
+      { timeoutMs: 30, threadId: "th-1" },
+    );
+    server.output.write(
+      '{"id":5,"method":"mcpServer/elicitation/request","params":{"threadId":"th-1","turnId":null}}\n',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    server.output.write(
+      '{"method":"serverRequest/resolved","params":{"threadId":"th-1","requestId":5}}\n',
+    );
     server.output.write('{"id":"harnexus-1","result":{"late":true}}\n');
     server.output.end();
 
     const result = await answer;
     expect(result.isOk() && result.value).toEqual({ late: true });
   });
+
+  test.each([
+    { name: "for another thread", asked: "th-2", resolved: false },
+    { name: "already answered", asked: "th-1", resolved: true },
+  ])(
+    "times out as usual when the question was $name",
+    async ({ asked, resolved }) => {
+      const server = fakeServer();
+      const requests = attachServerRequests(server);
+      void collect(requests.serverOutput);
+
+      const answer = requests.request(
+        "call",
+        {},
+        { timeoutMs: 30, threadId: "th-1" },
+      );
+      server.output.write(
+        `{"id":5,"method":"mcpServer/elicitation/request","params":{"threadId":"${asked}","turnId":null}}\n`,
+      );
+      if (resolved) {
+        server.output.write(
+          '{"method":"serverRequest/resolved","params":{"threadId":"th-1","requestId":5}}\n',
+        );
+      }
+
+      const result = await answer;
+      expect(result.isErr() && result.error._tag).toBe(
+        "ServerRequestUnanswered",
+      );
+    },
+  );
 
   test("reports an unanswered request when its wait is stopped and keeps the late answer from the app", async () => {
     const server = fakeServer();
@@ -48,7 +89,7 @@ describe("attachServerRequests", () => {
     const answer = requests.request(
       "call",
       {},
-      { timeoutMs: null, signal: stop.signal },
+      { timeoutMs: 5_000, signal: stop.signal },
     );
     stop.abort();
     server.output.write('{"id":"harnexus-1","result":{}}\n');
@@ -66,7 +107,7 @@ describe("attachServerRequests", () => {
     const answer = await requests.request(
       "call",
       {},
-      { timeoutMs: null, signal: AbortSignal.abort() },
+      { timeoutMs: 5_000, signal: AbortSignal.abort() },
     );
 
     expect(answer.isErr() && answer.error._tag).toBe("ServerRequestNotSent");
