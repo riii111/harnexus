@@ -63,7 +63,7 @@ export type ThreadEnd = "archived" | "deleted";
 
 export type TurnLink = Pick<
   ReturnType<typeof createCodexLink>,
-  "hasUnsettledWrite" | "stopWrites"
+  "hasUnsettledWrite" | "stopWrites" | "finishTurn"
 >;
 
 // items are what the app shows as the user's message; text and images are what the agent is sent.

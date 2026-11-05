@@ -570,7 +570,7 @@ export const createTurnController = <Tag extends string>({
         );
         release(active);
         const link = active.link;
-        link?.stopWrites();
+        link?.finishTurn();
         if (active.outcomeUnknown) {
           if (link !== null) runtime.dropSession(threadId, link);
           return Result.err(

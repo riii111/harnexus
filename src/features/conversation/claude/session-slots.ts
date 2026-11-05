@@ -15,6 +15,7 @@ export type CodexLink = Pick<
   | "allowedTools"
   | "hasUnsettledWrite"
   | "stopWrites"
+  | "finishTurn"
   | "acceptWrites"
 >;
 

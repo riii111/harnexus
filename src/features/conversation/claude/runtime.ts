@@ -547,7 +547,7 @@ export const createClaudeRuntime = ({
       return;
     }
 
-    slot.value.link.acceptWrites();
+    slot.value.link.acceptWrites({ turnId: turn.turnId });
     // A new session has lost the skills an earlier one held, so they are attached again.
     const attached = slot.value.attachedSkills;
     const fresh = skills.skills.filter(
@@ -632,7 +632,7 @@ export const createClaudeRuntime = ({
     claude.own = true;
     claude.slot = slot;
     turn.useLink(slot.link);
-    slot.link.acceptWrites();
+    slot.link.acceptWrites({ turnId: turn.turnId });
     approvals.showTurn(threadId);
     if (turn.state().interrupting) interrupt(turn, false);
     try {
