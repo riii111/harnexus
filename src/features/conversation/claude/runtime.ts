@@ -16,11 +16,13 @@ import type { TokenUsageBreakdown } from "../../../infra/codex/protocol/messages
 import type { ServerRequest } from "../../../infra/codex/server-requests.ts";
 import type { ThreadRecord } from "../../../infra/thread-store.ts";
 import { ABORTED, waitForAbort } from "../../../lib/wait-for-abort.ts";
+import type { BrowserTurn } from "../../link/browser-tabs.ts";
 import type { Subagents } from "../subagents/subagents.ts";
 import { type Refusal, refusalMessage } from "../thread-request.ts";
 import type { ThreadValues } from "../thread-values.ts";
 import type { TurnEvent } from "../turn/controller.ts";
 import { RECOVERY_CONTEXT } from "../turn/recovery.view.ts";
+import { tabConsentPrompt } from "../turn/tab-consent.view.ts";
 import { breakdown } from "../turn/token-usage.view.ts";
 import type {
   ErrorTag,
@@ -36,6 +38,7 @@ import {
   type TurnOutcome,
 } from "../turn/turn.view.ts";
 import { createApprovals } from "./approvals.ts";
+import { candidatesBlock } from "./browser-tabs.view.ts";
 import { createForkPoints } from "./fork-points.ts";
 import { readImages } from "./image-attachments.ts";
 import { createInbox, type Inbox } from "./inbox.ts";
@@ -547,7 +550,7 @@ export const createClaudeRuntime = ({
       return;
     }
 
-    slot.value.link.acceptWrites({ turnId: turn.turnId });
+    slot.value.link.acceptWrites(browserTurn(turn));
     // A new session has lost the skills an earlier one held, so they are attached again.
     const attached = slot.value.attachedSkills;
     const fresh = skills.skills.filter(
@@ -572,6 +575,28 @@ export const createClaudeRuntime = ({
     }
   };
 
+  const browserTurn = (turn: Turn): BrowserTurn => {
+    let asked = 0;
+    return {
+      turnId: turn.turnId,
+      candidates: turn.input.tabCandidates,
+      confirm: async (tab, signal) => {
+        const prompt = tabConsentPrompt(
+          {
+            threadId: turn.threadId,
+            turnId: turn.turnId,
+            // The question belongs to no item of the turn, so each one carries an id of its own.
+            itemId: `${turn.turnId}-tab-consent-${++asked}`,
+          },
+          tab,
+        );
+        return prompt.allowed(
+          await turn.ask(prompt.method, prompt.params, signal),
+        );
+      },
+    };
+  };
+
   const sendPrompt = (
     turn: Turn,
     claude: ClaudeTurn,
@@ -586,6 +611,9 @@ export const createClaudeRuntime = ({
       attachments: [
         ...(turn.recovering ? [RECOVERY_CONTEXT] : []),
         ...(reference === null ? [] : [reference]),
+        ...(turn.input.tabCandidates.length === 0
+          ? []
+          : [candidatesBlock(turn.input.tabCandidates)]),
         ...fresh.map(({ block }) => block),
       ],
     });
@@ -632,7 +660,7 @@ export const createClaudeRuntime = ({
     claude.own = true;
     claude.slot = slot;
     turn.useLink(slot.link);
-    slot.link.acceptWrites({ turnId: turn.turnId });
+    slot.link.acceptWrites(browserTurn(turn));
     approvals.showTurn(threadId);
     if (turn.state().interrupting) interrupt(turn, false);
     try {

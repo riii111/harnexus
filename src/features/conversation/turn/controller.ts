@@ -5,6 +5,10 @@ import { matchError, Result, TaggedError } from "better-result";
 import type { ImageSource } from "../../../infra/claude/images.ts";
 import { createAppRequests } from "../../../infra/codex/app-requests.ts";
 import type { UserInput } from "../../../infra/codex/protocol/messages.ts";
+import {
+  parseTabMention,
+  type TabMention,
+} from "../../../infra/codex/protocol/tab-mention.ts";
 import { isManualTurnTrigger } from "../../../infra/codex/protocol/turn-trigger.ts";
 import type { ServerRequest } from "../../../infra/codex/server-requests.ts";
 import type { ThreadRecord, ThreadStore } from "../../../infra/thread-store.ts";
@@ -179,7 +183,7 @@ export const createTurnController = <Tag extends string>({
     }
 
     const delegated = delegatedMessage(params);
-    const input = messageInput(params.input, delegated);
+    const input = messageInput(params.input, delegated, true);
     if (typeof input === "string") {
       return refuse(id, input);
     }
@@ -266,6 +270,7 @@ export const createTurnController = <Tag extends string>({
       toolOutput: null,
       text: runtime.compactPrompt,
       images: [],
+      tabCandidates: [],
       permissionMode: threads.modeOf(threadId) ?? "default",
       effort: threads.pickedEffortOf(threadId),
       startedBy: "app" as const,
@@ -284,6 +289,7 @@ export const createTurnController = <Tag extends string>({
       toolOutput: null,
       text: "",
       images: [],
+      tabCandidates: [],
       permissionMode: threads.modeOf(threadId) ?? "default",
       effort: threads.pickedEffortOf(threadId),
       startedBy: "claude",
@@ -426,7 +432,7 @@ export const createTurnController = <Tag extends string>({
       return;
     }
 
-    const input = messageInput(params.input, null);
+    const input = messageInput(params.input, null, false);
     if (typeof input === "string") {
       refuse(id, input);
       return;
@@ -1035,15 +1041,18 @@ const clientMessageId = (params: Record<string, unknown>) =>
 const messageInput = (
   value: unknown,
   delegated: { text: string; toolOutput: ToolOutput } | null,
+  takesTabLinks: boolean,
 ): MessageInput | Refusal => {
   const items = Array.isArray(value) ? value : [];
   if (items.length === 0 && delegated === null) return "unsupported_input";
   const texts = delegated === null ? [] : [delegated.text];
   const images: ImageSource[] = [];
+  const tabCandidates: TabMention[] = [];
   for (const item of items) {
     if (!isObject(item)) return "unsupported_input";
     if (item.type === "text" && typeof item.text === "string") {
       texts.push(item.text);
+      if (takesTabLinks) addTabCandidates(tabCandidates, item.text);
     } else if (item.type === "localImage" && typeof item.path === "string") {
       images.push({ path: item.path });
     } else if (item.type === "image") {
@@ -1063,7 +1072,25 @@ const messageInput = (
     toolOutput: delegated?.toolOutput ?? null,
     text: texts.join("\n"),
     images,
+    tabCandidates,
   };
 };
+
+// A tab link the user's own message carries is only a candidate: the app writes a mention as plain text, so a link the user pasted looks the same and the tab is used only once the user allows it.
+const addTabCandidates = (found: TabMention[], text: string) => {
+  for (const [, link] of text.matchAll(TAB_LINK)) {
+    const tab = parseTabMention(link);
+    if (
+      tab !== null &&
+      found.length < MAX_TAB_CANDIDATES &&
+      !found.some((known) => known.link === tab.link)
+    ) {
+      found.push(tab);
+    }
+  }
+};
+
+const TAB_LINK = /\]\((plugin:\/\/browser@openai-bundled\?[^)\s]+)\)/g;
+const MAX_TAB_CANDIDATES = 8;
 
 const INVALID_REQUEST = -32600;

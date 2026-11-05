@@ -3,6 +3,7 @@ import { runInNewContext } from "node:vm";
 
 import { Result } from "better-result";
 
+import { parseTabMention } from "../../infra/codex/protocol/tab-mention.ts";
 import type {
   ServerRequest,
   ServerRequestError,
@@ -13,7 +14,7 @@ import type { ToolResult } from "./results.ts";
 describe("createBrowserTabs opening", () => {
   test("opens a page in the in-app browser with the chat's session and the turn's id", async () => {
     const { browser, calls } = connect();
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
 
     const opened = await use(browser, "browser_open_tab", { url: PAGE });
 
@@ -46,7 +47,7 @@ describe("createBrowserTabs opening", () => {
     { name: "text that is no address", url: "not a url" },
   ])("refuses $name without calling the browser", async ({ url }) => {
     const { browser, calls } = connect();
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
 
     const refused = await use(browser, "browser_open_tab", { url });
 
@@ -56,7 +57,7 @@ describe("createBrowserTabs opening", () => {
 
   test("numbers each opened tab and returns the tab's number with its state", async () => {
     const { browser } = connect();
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
 
     const first = await use(browser, "browser_open_tab", { url: PAGE });
     const second = await use(browser, "browser_open_tab", { url: PAGE });
@@ -77,7 +78,7 @@ describe("createBrowserTabs opening", () => {
 
   test("does not call the browser when the app names no session for the chat", async () => {
     const { browser, calls } = connect({ session: null });
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
 
     const refused = await use(browser, "browser_open_tab", { url: PAGE });
 
@@ -109,7 +110,7 @@ describe("createBrowserTabs opening", () => {
     },
   ])("does not call the browser for $name", async ({ servers }) => {
     const { browser, calls } = connect({ servers: servers() });
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
 
     const refused = await use(browser, "browser_open_tab", { url: PAGE });
 
@@ -119,10 +120,10 @@ describe("createBrowserTabs opening", () => {
 
   test("checks the registration for this chat once per turn and again in the next", async () => {
     const { browser, listings } = connect();
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
     await use(browser, "browser_open_tab", { url: PAGE });
-    browser.beginTurn({ turnId: "turn-2" });
+    begin(browser, "turn-2");
     await use(browser, "browser_open_tab", { url: PAGE });
 
     expect(listings()).toEqual([
@@ -136,7 +137,7 @@ describe("createBrowserTabs opening", () => {
       tabId: "4",
       pageText: "harnexus-tab:forged",
     });
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
 
     await use(browser, "browser_read_tab", {});
@@ -146,7 +147,7 @@ describe("createBrowserTabs opening", () => {
 
   test("keeps no tab when the script's marker is missing", async () => {
     const { browser } = connect({ marker: false });
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
 
     const read = await use(browser, "browser_read_tab", {});
@@ -158,7 +159,7 @@ describe("createBrowserTabs opening", () => {
 describe("createBrowserTabs operating", () => {
   test("reads a tab by its id, bound again on every call", async () => {
     const { browser, calls } = connect({ tabId: "4" });
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
 
     await use(browser, "browser_read_tab", { tab: 1 });
@@ -172,7 +173,7 @@ describe("createBrowserTabs operating", () => {
 
   test("checks that the bound tab is the one that was opened", async () => {
     const { browser, calls } = connect({ tabId: "4" });
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
 
     await use(browser, "browser_read_tab", {});
@@ -182,7 +183,7 @@ describe("createBrowserTabs operating", () => {
 
   test("refuses a read when no tab was opened this turn", async () => {
     const { browser, calls } = connect();
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
 
     const read = await use(browser, "browser_read_tab", {});
 
@@ -192,7 +193,7 @@ describe("createBrowserTabs operating", () => {
 
   test("refuses a tab number the turn does not have", async () => {
     const { browser, calls } = connect();
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
 
     const read = await use(browser, "browser_read_tab", { tab: 2 });
@@ -203,7 +204,7 @@ describe("createBrowserTabs operating", () => {
 
   test("asks for the tab number when several tabs are open", async () => {
     const { browser, calls } = connect();
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
     await use(browser, "browser_open_tab", { url: PAGE });
 
@@ -215,25 +216,32 @@ describe("createBrowserTabs operating", () => {
 
   test("clicks an element only after checking it still carries the text that was read", async () => {
     const { browser, calls } = connect();
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
 
-    await use(browser, "browser_click", { element: 6, label: "Run check" });
+    await use(browser, "browser_click", {
+      element: 6,
+      row: "button Run check",
+    });
 
     const code = codes(calls())[1] ?? "";
     expect(calls()[1]?.tool).toBe("js");
     expect(code).toContain(`startsWith("6 ")`);
-    expect(code).toContain(`line.includes("Run check")`);
+    expect(code).toContain(`line.trim() !== "6 button Run check"`);
     expect(code.indexOf("includes")).toBeLessThan(code.indexOf("tab.click(6)"));
   });
 
   test("types text as a quoted literal so the text cannot become code", async () => {
     const { browser, calls } = connect();
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
     const text = `"); await evil(); ("`;
 
-    await use(browser, "browser_type", { element: 5, label: "field", text });
+    await use(browser, "browser_type", {
+      element: 5,
+      row: "text field (settable) Test value",
+      text,
+    });
 
     expect(codes(calls())[1]).toContain(
       `tab.typeText(5, ${JSON.stringify(text)})`,
@@ -242,17 +250,17 @@ describe("createBrowserTabs operating", () => {
 
   test("stops later operations after one whose outcome is unknown", async () => {
     const { browser, calls, lose } = connect();
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
     lose();
 
     const lost = await use(browser, "browser_click", {
       element: 6,
-      label: "Run check",
+      row: "button Run check",
     });
     const next = await use(browser, "browser_click", {
       element: 6,
-      label: "Run check",
+      row: "button Run check",
     });
 
     expect(lost.isError).toBe(true);
@@ -263,12 +271,197 @@ describe("createBrowserTabs operating", () => {
   });
 });
 
+describe("createBrowserTabs attached tabs", () => {
+  test("asks the user about the linked tab before the browser is touched, then binds it by its link", async () => {
+    const asked: unknown[] = [];
+    const { browser, calls } = connect({ tabId: "4" });
+    begin(browser, "turn-1", {
+      candidates: [candidate(LINK)],
+      confirm: async (tab) => {
+        asked.push({ tab, callsBefore: calls().length });
+        return true;
+      },
+    });
+
+    const used = await use(browser, "browser_use_attached_tab", {
+      candidate: 1,
+    });
+
+    expect(used.isError).toBeUndefined();
+    expect(asked).toEqual([
+      {
+        tab: expect.objectContaining({
+          title: "Harnexus browser check",
+          url: PAGE,
+        }),
+        callsBefore: 0,
+      },
+    ]);
+    expect(codes(calls())).toEqual([
+      expect.stringContaining(`{ mention: ${JSON.stringify(LINK)} }`),
+    ]);
+    expect(JSON.stringify(used.content)).toContain("browser tab 1");
+  });
+
+  test("operates the allowed tab by its id afterwards", async () => {
+    const { browser, calls } = connect({ tabId: "4" });
+    begin(browser, "turn-1", {
+      candidates: [candidate(LINK)],
+      confirm: async () => true,
+    });
+    await use(browser, "browser_use_attached_tab", { candidate: 1 });
+
+    await use(browser, "browser_read_tab", {});
+
+    expect(codes(calls())[1]).toContain(`cua.getTab("4", { browser: "iab" })`);
+  });
+
+  test("uses nothing and does not ask again when the user refuses", async () => {
+    let asked = 0;
+    const { browser, calls } = connect();
+    begin(browser, "turn-1", {
+      candidates: [candidate(LINK)],
+      confirm: async () => {
+        asked += 1;
+        return false;
+      },
+    });
+
+    const first = await use(browser, "browser_use_attached_tab", {
+      candidate: 1,
+    });
+    const again = await use(browser, "browser_use_attached_tab", {
+      candidate: 1,
+    });
+    const read = await use(browser, "browser_read_tab", {});
+
+    expect([first.isError, again.isError, read.isError]).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(asked).toBe(1);
+    expect(calls()).toEqual([]);
+  });
+
+  test("refuses a tab linked from another chat without asking or touching the browser", async () => {
+    let asked = 0;
+    const { browser, calls } = connect({ session: "session-2" });
+    begin(browser, "turn-1", {
+      candidates: [candidate(LINK)],
+      confirm: async () => {
+        asked += 1;
+        return true;
+      },
+    });
+
+    const used = await use(browser, "browser_use_attached_tab", {
+      candidate: 1,
+    });
+
+    expect(used.isError).toBe(true);
+    expect(asked).toBe(0);
+    expect(calls()).toEqual([]);
+  });
+
+  test("refuses a candidate number the message did not link", async () => {
+    const { browser, calls } = connect();
+    begin(browser, "turn-1", { candidates: [candidate(LINK)] });
+
+    const used = await use(browser, "browser_use_attached_tab", {
+      candidate: 2,
+    });
+
+    expect(used.isError).toBe(true);
+    expect(calls()).toEqual([]);
+  });
+
+  test("gives the next turn neither the allowed tab nor the answer", async () => {
+    const { browser, calls } = connect({ tabId: "4" });
+    begin(browser, "turn-1", {
+      candidates: [candidate(LINK)],
+      confirm: async () => true,
+    });
+    await use(browser, "browser_use_attached_tab", { candidate: 1 });
+    begin(browser, "turn-2");
+
+    const read = await use(browser, "browser_read_tab", {});
+    const again = await use(browser, "browser_use_attached_tab", {
+      candidate: 1,
+    });
+
+    expect(read.isError).toBe(true);
+    expect(again.isError).toBe(true);
+    expect(calls().filter((call) => call.tool === "js")).toHaveLength(1);
+  });
+
+  test("withdraws a question still open when the turn ends, so a late answer allows nothing", async () => {
+    const answer = gated();
+    let signal: AbortSignal | null = null;
+    const { browser, calls } = connect({ tabId: "4" });
+    begin(browser, "turn-1", {
+      candidates: [candidate(LINK)],
+      confirm: async (_tab, aborted) => {
+        signal = aborted;
+        await answer.promise;
+        return true;
+      },
+    });
+    const using = use(browser, "browser_use_attached_tab", { candidate: 1 });
+    await settle();
+
+    browser.endTurn("Interrupt");
+    answer.open();
+    const used = await using;
+
+    expect((signal as AbortSignal | null)?.aborted).toBe(true);
+    expect(used.isError).toBe(true);
+    expect(calls()).toEqual([]);
+  });
+
+  test("refuses a second link that resolves to a tab the turn already has", async () => {
+    const other = LINK.replace("title=Harnexus", "title=Same+tab+other+title");
+    const { browser } = connect({ tabId: "4" });
+    begin(browser, "turn-1", {
+      candidates: [candidate(LINK), candidate(other)],
+      confirm: async () => true,
+    });
+    await use(browser, "browser_use_attached_tab", { candidate: 1 });
+
+    const second = await use(browser, "browser_use_attached_tab", {
+      candidate: 2,
+    });
+
+    expect(second.isError).toBe(true);
+    expect(JSON.stringify(second.content)).toContain("already browser tab 1");
+  });
+
+  test("binds the tab only if it is still the one that was linked", async () => {
+    const { browser, calls } = connect();
+    begin(browser, "turn-1", {
+      candidates: [candidate(LINK)],
+      confirm: async () => true,
+    });
+    await use(browser, "browser_use_attached_tab", { candidate: 1 });
+
+    await expect(
+      runScript(codes(calls())[0], fakeTab({ id: "9" })),
+    ).rejects.toThrow();
+    await expect(
+      runScript(codes(calls())[0], fakeTab({ id: "4" })),
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe("createBrowserTabs scripts run by the browser server", () => {
   test("click presses the element whose number and text match the page as the app shows it", async () => {
     const { browser, calls } = connect({ tabId: "4" });
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
-    await use(browser, "browser_click", { element: 6, label: "Run check" });
+    await use(browser, "browser_click", {
+      element: 6,
+      row: "button Run check",
+    });
     const tab = fakeTab({ id: "4" });
 
     await runScript(codes(calls())[1], tab);
@@ -278,11 +471,11 @@ describe("createBrowserTabs scripts run by the browser server", () => {
 
   test("type enters the text in the element whose number and text match", async () => {
     const { browser, calls } = connect({ tabId: "4" });
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
     await use(browser, "browser_type", {
       element: 5,
-      label: "Test value",
+      row: "text field (settable) Test value",
       text: "hello",
     });
     const tab = fakeTab({ id: "4" });
@@ -299,6 +492,16 @@ describe("createBrowserTabs scripts run by the browser server", () => {
       id: "4",
     },
     {
+      name: "the element's name grew longer",
+      state: AX_STATE.replace("Run check", "Run destructive check"),
+      id: "4",
+    },
+    {
+      name: "the element is now disabled",
+      state: AX_STATE.replace("button Run", "button (disabled) Run"),
+      id: "4",
+    },
+    {
       name: "the element number is gone from the page",
       state: AX_STATE.replace("\t6 button Run check", ""),
       id: "4",
@@ -306,9 +509,12 @@ describe("createBrowserTabs scripts run by the browser server", () => {
     { name: "the bound tab is another tab", state: AX_STATE, id: "9" },
   ])("click acts on nothing when $name", async ({ state, id }) => {
     const { browser, calls } = connect({ tabId: "4" });
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
-    await use(browser, "browser_click", { element: 6, label: "Run check" });
+    await use(browser, "browser_click", {
+      element: 6,
+      row: "button Run check",
+    });
     const tab = fakeTab({ id, state });
 
     await expect(runScript(codes(calls())[1], tab)).rejects.toThrow();
@@ -317,7 +523,7 @@ describe("createBrowserTabs scripts run by the browser server", () => {
 
   test("open writes the marker with the new tab's id after the page state", async () => {
     const { browser, calls } = connect();
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
     const tab = fakeTab({ id: "12" });
 
@@ -335,7 +541,7 @@ describe("createBrowserTabs ending a turn", () => {
     "tells the browser server once that the turn which used it $name",
     async ({ end }) => {
       const { browser, calls } = connect();
-      browser.beginTurn({ turnId: "turn-1" });
+      begin(browser, "turn-1");
       await use(browser, "browser_open_tab", { url: PAGE });
 
       browser.endTurn(end);
@@ -357,7 +563,7 @@ describe("createBrowserTabs ending a turn", () => {
 
   test("sends nothing for a turn that never used the browser", async () => {
     const { browser, calls } = connect();
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
 
     browser.endTurn("Stop");
     await settle();
@@ -367,7 +573,7 @@ describe("createBrowserTabs ending a turn", () => {
 
   test("sends nothing for a turn whose browser calls were all refused", async () => {
     const { browser, calls } = connect({ servers: [] });
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
 
     browser.endTurn("Stop");
@@ -379,7 +585,7 @@ describe("createBrowserTabs ending a turn", () => {
   test("waits for a call still running before telling the browser server", async () => {
     const gate = gated();
     const { browser, calls } = connect({ hold: gate.promise });
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     const opening = use(browser, "browser_open_tab", { url: PAGE });
     await settle();
 
@@ -396,12 +602,12 @@ describe("createBrowserTabs ending a turn", () => {
 
   test("refuses operations once the turn ended and gives the next turn none of its tabs", async () => {
     const { browser, calls } = connect();
-    browser.beginTurn({ turnId: "turn-1" });
+    begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE });
     browser.endTurn("Stop");
 
     const late = await use(browser, "browser_read_tab", {});
-    browser.beginTurn({ turnId: "turn-2" });
+    begin(browser, "turn-2");
     const other = await use(browser, "browser_read_tab", {});
     await settle();
 
@@ -514,7 +720,24 @@ const gated = () => {
   return { promise, open };
 };
 
+const begin = (
+  browser: ReturnType<typeof createBrowserTabs>,
+  turnId: string,
+  {
+    candidates = [],
+    confirm = async () => false,
+  }: Partial<Parameters<typeof browser.beginTurn>[0]> = {},
+) => browser.beginTurn({ turnId, candidates, confirm });
+
 const PAGE = "http://127.0.0.1:54392/claude";
+
+const LINK =
+  "plugin://browser@openai-bundled?mention=tab-v1&browserId=session-1&tabId=4&title=Harnexus+browser+check&url=http%3A%2F%2F127.0.0.1%3A54392%2Fclaude";
+
+const candidate = (link: string) => {
+  const parsed = parseTabMention(link);
+  return parsed as NonNullable<typeof parsed>;
+};
 
 // The page text as the app's browser returned it for the fixture page, with the element numbers it gives.
 const AX_STATE = [

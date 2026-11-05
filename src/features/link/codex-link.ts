@@ -4,7 +4,11 @@ import { z } from "zod";
 import type { CronRecord } from "../../infra/codex/automations.boundary.ts";
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
 import { createAutomationTool } from "./automation.ts";
-import { type BrowserTurn, createBrowserTabs } from "./browser-tabs.ts";
+import {
+  BROWSER_ALLOWED_TOOLS,
+  type BrowserTurn,
+  createBrowserTabs,
+} from "./browser-tabs.ts";
 import {
   createAppToolCalls,
   type LinkStore,
@@ -125,7 +129,7 @@ export const createCodexLink = ({
     call,
     createChecked: created.createChecked,
     // Reads change nothing and reach only what the app lets this thread read, so they run without asking; creating and sending stay under the user's Claude permission rules.
-    allowedTools: [...READ_TOOLS, "browser_read_tab"].map(
+    allowedTools: [...READ_TOOLS, ...BROWSER_ALLOWED_TOOLS].map(
       (name) => `mcp__${CODEX_LINK_SERVER}__${name}`,
     ),
     hasUnsettledWrite: () =>

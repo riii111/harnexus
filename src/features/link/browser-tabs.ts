@@ -1,6 +1,7 @@
 import { Result } from "better-result";
 import { z } from "zod";
 
+import type { TabMention } from "../../infra/codex/protocol/tab-mention.ts";
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
 import { isObject } from "../../lib/object.ts";
 import {
@@ -11,11 +12,24 @@ import {
 } from "./calls.ts";
 import { defineTool, failure, type ToolResult } from "./results.ts";
 
-export type BrowserTurn = { turnId: string };
+export type BrowserTurn = {
+  turnId: string;
+  // The tabs the user's message linked; none is used before the user allows it.
+  candidates: readonly TabMention[];
+  confirm: (
+    tab: Pick<TabMention, "title" | "url">,
+    signal: AbortSignal,
+  ) => Promise<boolean>;
+};
 
 type ActiveTurn = {
   turnId: string;
   tabs: string[];
+  candidates: readonly TabMention[];
+  confirm: BrowserTurn["confirm"];
+  // Each candidate is asked about once, so a refusal or a repeated call never asks the user again.
+  decisions: Map<number, Promise<boolean>>;
+  ended: AbortController;
   // Set once a call is about to reach the browser server, so only a turn that used it is reported as ended.
   used: boolean;
   registered: boolean;
@@ -161,6 +175,14 @@ export const createBrowserTabs = ({
       : execute(running, mode, script(tabId.value));
   };
 
+  const consent = (running: ActiveTurn, number: number, tab: TabMention) => {
+    const decided = running.decisions.get(number);
+    if (decided !== undefined) return decided;
+    const asked = running.confirm(tab, running.ended.signal);
+    running.decisions.set(number, asked);
+    return asked;
+  };
+
   const tools = [
     defineTool(
       "browser_open_tab",
@@ -188,8 +210,54 @@ export const createBrowserTabs = ({
       },
     ),
     defineTool(
+      "browser_use_attached_tab",
+      "Use an in-app browser tab the user's message linked, by its candidate number from <browser_tab_candidates>. The user is asked to allow it first; if they refuse, do not retry. The tab is then numbered after the tabs this turn already has, and its state is returned.",
+      { candidate: z.number().int().positive() },
+      async (args) => {
+        const running = turn;
+        if (running === null) return failure(NO_TURN);
+        const tab = running.candidates[args.candidate - 1];
+        if (tab === undefined) {
+          return failure(
+            `There is no candidate ${args.candidate}; the message linked ${running.candidates.length}.`,
+          );
+        }
+
+        const session = await sessionOf();
+        if (session === null || tab.browserId !== session) {
+          return failure(
+            "That tab belongs to another chat, so it was not used.",
+          );
+        }
+
+        if (!(await consent(running, args.candidate, tab))) {
+          return failure(
+            "The user did not allow this tab, so it was not used.",
+          );
+        }
+
+        const resolved = await execute(running, "read", {
+          label: "browser_use_attached_tab",
+          title: "Opening the attached browser tab",
+          code: attachedScript(tab),
+        });
+        const marked = takeMarker(resolved);
+        if (resolved.isError === true || marked.id === null)
+          return marked.result;
+        const known = running.tabs.indexOf(marked.id);
+        if (known >= 0) {
+          return failure(
+            `That tab is already browser tab ${known + 1} of this turn.`,
+          );
+        }
+
+        running.tabs.push(marked.id);
+        return withNumber(marked.result, running.tabs.length);
+      },
+    ),
+    defineTool(
       "browser_read_tab",
-      "Read the current state of a tab opened with browser_open_tab: its elements with their numbers, for browser_click and browser_type.",
+      "Read the current state of a browser tab of this turn: its elements with their numbers, for browser_click and browser_type.",
       { tab: TAB_NUMBER },
       (args) =>
         operate("read", args.tab, (tabId) => ({
@@ -201,25 +269,25 @@ export const createBrowserTabs = ({
     ),
     defineTool(
       "browser_click",
-      "Click an element of a tab opened with browser_open_tab, by its number and text from the latest browser_read_tab, then return the tab's new state. It clicks only if the element still carries that text, so read the tab again after the page changes.",
-      { tab: TAB_NUMBER, element: ELEMENT, label: ELEMENT_LABEL },
+      "Click an element of a browser tab by its number and its whole line from the latest browser_read_tab, then return the tab's new state. It clicks only if that line is unchanged, so read the tab again after the page changes.",
+      { tab: TAB_NUMBER, element: ELEMENT, row: ELEMENT_ROW },
       (args) =>
         operate("write", args.tab, (tabId) => ({
           label: "browser_click",
           title: "Clicking in the browser tab",
           code: tabScript(
             tabId,
-            `${elementGuard(args.element, args.label)}\n  await tab.click(${args.element});\n  await tab.getAXState();`,
+            `${elementGuard(args.element, args.row)}\n  await tab.click(${args.element});\n  await tab.getAXState();`,
           ),
         })),
     ),
     defineTool(
       "browser_type",
-      "Type text into an element of a tab opened with browser_open_tab, by its number and text from the latest browser_read_tab, then return the tab's new state. It types only if the element still carries that text.",
+      "Type text into an element of a browser tab by its number and its whole line from the latest browser_read_tab, then return the tab's new state. It types only if that line is unchanged.",
       {
         tab: TAB_NUMBER,
         element: ELEMENT,
-        label: ELEMENT_LABEL,
+        row: ELEMENT_ROW,
         text: z.string(),
       },
       (args) =>
@@ -228,7 +296,7 @@ export const createBrowserTabs = ({
           title: "Typing in the browser tab",
           code: tabScript(
             tabId,
-            `${elementGuard(args.element, args.label)}\n  await tab.typeText(${args.element}, ${JSON.stringify(args.text)});\n  await tab.getAXState();`,
+            `${elementGuard(args.element, args.row)}\n  await tab.typeText(${args.element}, ${JSON.stringify(args.text)});\n  await tab.getAXState();`,
           ),
         })),
     ),
@@ -262,6 +330,8 @@ export const createBrowserTabs = ({
     // The turn loses the browser at once, and the browser server hears of the end once, after the calls still running have settled, so none of its tabs carries into the next turn.
     const ending = turn;
     turn = null;
+    // A question still open when the turn ends is withdrawn, so no later answer can allow anything.
+    ending?.ended.abort();
     calls.stopWrites();
     if (ending === null || !ending.used) return;
     void settled().then(() => sendTurnEnded(ending.turnId, end));
@@ -269,10 +339,19 @@ export const createBrowserTabs = ({
 
   return {
     tools,
-    beginTurn: ({ turnId }: BrowserTurn) => {
+    beginTurn: ({ turnId, candidates, confirm }: BrowserTurn) => {
       endTurn("Stop");
       calls.acceptWrites();
-      turn = { turnId, tabs: [], used: false, registered: false };
+      turn = {
+        turnId,
+        tabs: [],
+        candidates,
+        confirm,
+        decisions: new Map(),
+        ended: new AbortController(),
+        used: false,
+        registered: false,
+      };
     },
     endTurn,
     hasUnsettledWrite: calls.hasUnsettledWrite,
@@ -319,14 +398,25 @@ const tabScript = (tabId: string, action: string) => {
   ].join("\n");
 };
 
-const elementGuard = (element: number, label: string) => {
-  // Element numbers come from an earlier read and shift with the page, so the action runs only if the element still carries the text the model read.
-  const prefix = JSON.stringify(`${element} `);
-  const text = JSON.stringify(label);
+const elementGuard = (element: number, row: string) => {
+  // Element numbers come from an earlier read and shift with the page, so the action runs only if the element's whole line is still what the model read.
+  const whole = JSON.stringify(`${element} ${row.trim()}`);
   return [
     "const state = await tab.getAXState({ disableDiffing: true, emit: false });",
-    `  const line = state.split("\\n").find((entry) => entry.trimStart().startsWith(${prefix}));`,
-    `  if (line === undefined || !line.includes(${text})) throw new Error("Element ${element} is no longer the one that was read; read the tab again.");`,
+    `  const line = state.split("\\n").find((entry) => entry.trim().startsWith(${JSON.stringify(`${element} `)}));`,
+    `  if (line === undefined || line.trim() !== ${whole}) throw new Error("Element ${element} is no longer the one that was read; read the tab again.");`,
+  ].join("\n");
+};
+
+const attachedScript = (tab: TabMention) => {
+  // The app's binding checks the tab's title and address against the link; the id is checked here too, so a tab that changed since the user attached it is an error.
+  const id = JSON.stringify(tab.tabId);
+  return [
+    "{",
+    `  const tab = await cua.getTab({ mention: ${JSON.stringify(tab.link)} }, { browser: "iab" });`,
+    `  if (String(tab.id) !== ${id} && String(tab.providerTabId) !== ${id}) throw new Error("The tab is no longer the one that was attached.");`,
+    `  nodeRepl.write(${JSON.stringify(TAB_MARKER)} + tab.id);`,
+    "}",
   ].join("\n");
 };
 
@@ -365,6 +455,11 @@ const withNumber = (result: ToolResult, number: number): ToolResult => ({
 });
 
 const SERVER = "cua_repl";
+// Reading a tab the turn already holds needs no question, and the attached-tab tool asks the user itself, so Claude's own permission prompt, which its auto mode could answer, stands in for neither.
+export const BROWSER_ALLOWED_TOOLS = [
+  "browser_read_tab",
+  "browser_use_attached_tab",
+];
 const APP_PLUGIN = "unified-computer-use@openai-bundled";
 const REQUIRED_TOOLS = ["js", "turn_ended"];
 const TAB_MARKER = "harnexus-tab:";
@@ -372,9 +467,9 @@ const TAB_ID = /^[\w.:-]{1,200}$/;
 const NO_TURN = "The browser can be used only while a turn is running.";
 const TAB_NUMBER = z.number().int().positive().optional();
 const ELEMENT = z.number().int().nonnegative();
-const ELEMENT_LABEL = z
+const ELEMENT_ROW = z
   .string()
   .min(1)
   .describe(
-    "The element's text exactly as the latest browser_read_tab shows it, so the action goes only to that element",
+    "Everything after the element number on its line in the latest browser_read_tab, such as 'button Run check'",
   );

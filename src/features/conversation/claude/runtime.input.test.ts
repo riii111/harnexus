@@ -10,8 +10,10 @@ import { Result } from "better-result";
 
 import { fakeClaude } from "../../../infra/claude/testing/fake-claude.ts";
 import { pngBytes } from "../../../infra/claude/testing/image-files.ts";
+import type { ServerRequest } from "../../../infra/codex/server-requests.ts";
 import {
   answer,
+  appRequest,
   completedItems,
   completedTurnStatuses,
   completeTurn,
@@ -519,6 +521,161 @@ describe("skill links in Claude input", () => {
   });
 });
 
+describe("browser tabs linked in Claude input", () => {
+  test("lists the linked tab for Claude without using it while the turn shows the message as sent", async () => {
+    const input = [
+      {
+        type: "text",
+        text: `see [Browser check](${TAB_LINK}) now`,
+        text_elements: [],
+      },
+    ];
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, toolCalls } = await harness([claude]);
+
+    turns.startTurn(withInput(turnStart(10, ""), input), undefined);
+    await until(() => claude.started());
+    const [prompt] = await readPrompts(claude, 1);
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(JSON.stringify(prompt?.message.content)).toContain(
+      "<browser_tab_candidates>",
+    );
+    expect(JSON.stringify(prompt?.message.content)).toContain(
+      "Harnexus browser check",
+    );
+    expect(
+      completedItems(sent).filter((item) => item.type === "userMessage"),
+    ).toMatchObject([{ content: input }]);
+    expect(browserCalls(toolCalls)).toEqual([]);
+  });
+
+  test.each([
+    {
+      name: "a link whose encoding was changed",
+      text: `[x](${TAB_LINK.replace("tabId=4", "tabId=%34")})`,
+    },
+    { name: "a link outside a markdown link", text: `see ${TAB_LINK}` },
+    {
+      name: "a link to another plugin",
+      text: `[x](plugin://tool@market?mention=tab-v1)`,
+    },
+  ])("lists no tab for $name", async ({ text }) => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude]);
+
+    turns.startTurn(turnStart(10, text), undefined);
+    await until(() => claude.started());
+
+    expect(JSON.stringify(await firstPrompt(claude.prompt()))).not.toContain(
+      "browser_tab_candidates",
+    );
+  });
+
+  test("lists no tab for a link a message from another thread carries", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude]);
+
+    turns.startTurn(
+      withInput(
+        {
+          ...turnStart(10, ""),
+          params: {
+            ...turnStart(10, "").params,
+            input: [],
+            toolOutput: {
+              name: "send_message_to_thread",
+              namespace: "codex_app",
+              output: `<codex_delegation>\n  <source_thread_id>th-codex</source_thread_id>\n  <input>[x](${TAB_LINK})</input>\n</codex_delegation>`,
+            },
+          },
+        },
+        [],
+      ),
+      undefined,
+    );
+    await until(() => claude.started());
+
+    expect(JSON.stringify(await firstPrompt(claude.prompt()))).not.toContain(
+      "browser_tab_candidates",
+    );
+  });
+
+  test.each([
+    { name: "typed Allow", reply: "Allow", used: true },
+    { name: "typed allow in lower case", reply: " allow ", used: true },
+    { name: "any other answer", reply: "yes please", used: false },
+    { name: "a refusal", reply: "Deny", used: false },
+  ])(
+    "asks the user once and uses the tab only after $name",
+    async ({ reply, used }) => {
+      const claude = fakeClaude(SUBSCRIPTION);
+      const { turns, sent, settings, toolCalls } = await harness([claude], {
+        linkRequest: browserServer,
+      });
+      turns.startTurn(
+        withInput(turnStart(10, ""), [
+          { type: "text", text: `[x](${TAB_LINK})`, text_elements: [] },
+        ]),
+        undefined,
+      );
+      await until(() => claude.started());
+      const tool = settings[0]?.toolServers?.codex_link?.find(
+        (entry) => entry.name === "browser_use_attached_tab",
+      );
+
+      const using = tool?.handler({ candidate: 1 }, undefined);
+      const request = await appRequest(sent);
+      const before = browserCalls(toolCalls).length;
+      turns.answerRequest({
+        id: request.id,
+        result: { answers: { browser_tab_consent: { answers: [reply] } } },
+      });
+      const result = await using;
+
+      expect(request).toMatchObject({
+        method: "item/tool/requestUserInput",
+        params: {
+          turnId: "turn-1",
+          questions: [{ isOther: true, options: null }],
+        },
+      });
+      expect(JSON.stringify(request.params.questions)).toContain(
+        "http://127.0.0.1:54392/claude",
+      );
+      expect(before).toBe(0);
+      expect(result?.isError === true).toBe(!used);
+      expect(browserCalls(toolCalls).length > 0).toBe(used);
+    },
+  );
+
+  test("refuses the tab and ends the question when the turn is stopped before the answer", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings, toolCalls } = await harness([claude], {
+      linkRequest: browserServer,
+    });
+    turns.startTurn(
+      withInput(turnStart(10, ""), [
+        { type: "text", text: `[x](${TAB_LINK})`, text_elements: [] },
+      ]),
+      undefined,
+    );
+    await until(() => claude.started());
+    const tool = settings[0]?.toolServers?.codex_link?.find(
+      (entry) => entry.name === "browser_use_attached_tab",
+    );
+    const using = tool?.handler({ candidate: 1 }, undefined);
+    await appRequest(sent);
+
+    turns.interruptTurn(interrupt(20, "turn-1"));
+    const result = await using;
+
+    expect(result?.isError).toBe(true);
+    expect(browserCalls(toolCalls)).toEqual([]);
+  });
+});
+
 describe("images in Claude input", () => {
   test("sends an attached image ahead of the typed text while the turn shows the input as the app sent it", async () => {
     const bytes = pngBytes(40, 30);
@@ -835,6 +992,38 @@ const writeImage = async (name: string, bytes: Uint8Array) => {
   await writeFile(path, bytes);
   return path;
 };
+
+const browserCalls = (calls: unknown[]) =>
+  calls.filter((call) => (call as { server?: string }).server === "cua_repl");
+
+const browserServer: ServerRequest = async (method) => {
+  if (method === "thread/read") {
+    return Result.ok({ thread: { sessionId: "session-1" } });
+  }
+
+  if (method === "mcpServerStatus/list") {
+    return Result.ok({
+      data: [
+        {
+          name: "cua_repl",
+          pluginId: "unified-computer-use@openai-bundled",
+          runtimeStatus: "connected",
+          tools: { js: {}, turn_ended: {} },
+        },
+      ],
+    });
+  }
+
+  return Result.ok({
+    content: [
+      { type: "text", text: "page" },
+      { type: "text", text: "harnexus-tab:4" },
+    ],
+  });
+};
+
+const TAB_LINK =
+  "plugin://browser@openai-bundled?mention=tab-v1&browserId=session-1&tabId=4&title=Harnexus+browser+check&url=http%3A%2F%2F127.0.0.1%3A54392%2Fclaude";
 
 const withInput = <T extends { params: Record<string, unknown> }>(
   request: T,
