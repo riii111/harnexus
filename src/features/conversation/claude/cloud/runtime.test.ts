@@ -85,6 +85,35 @@ describe("createCloudRuntime reviews", () => {
   });
 
   test.each([
+    { name: "not kept", outcome: "not_kept", tries: 2 },
+    { name: "reserved", outcome: "reserved", tries: 1 },
+    { name: "unreadable", outcome: "unreadable", tries: 1 },
+  ])(
+    "hands a review the chat answered $name to the chat again only when it was certainly not sent",
+    async ({ outcome, tries }) => {
+      const env = linked({
+        copies: [
+          [
+            prompt("p1", "review"),
+            reply("a1", "m1", toolUse("t1", "Bash", {}), "tool_use"),
+            toolResult("u1", "t1", output),
+            endReply("a2", "reviewed"),
+          ],
+        ],
+        shown: null,
+      });
+      env.reviewOutcomes.push(outcome);
+
+      await env.runtime.run(env.turn("review").running);
+      await settle();
+      await env.tick();
+      await settle();
+
+      expect(env.reviews).toHaveLength(tries);
+    },
+  );
+
+  test.each([
     {
       name: "the first message of the chat it opened",
       delegatedBy: "create_thread" as const,
@@ -2114,6 +2143,7 @@ const setup = ({
     ownStarts,
     copyCalls: 0,
     childOutcomes: [] as string[],
+    reviewOutcomes: [] as string[],
     reviews: [] as { parent: string; key: string }[],
     reviewKept: new Map<string, CloudReview>(),
     reviewChats: new Map<
@@ -2307,7 +2337,7 @@ const setup = ({
     openReview: async (parent, review) => {
       env.reviews.push({ parent, key: review.key });
       env.reviewKept.set(review.key, review);
-      return "done";
+      return env.reviewOutcomes.shift() ?? "done";
     },
     reviewOf: async (key) => env.reviewKept.get(key) ?? null,
     reviewChatOf: async (threadId) => env.reviewChats.get(threadId) ?? null,

@@ -10,7 +10,9 @@ import {
   prepareDirectory,
   readTextFileIfExists,
   realPathOrSelf,
+  removeFile,
   writeFileAtomic,
+  writeFileExclusive,
 } from "../../../../lib/fs.boundary.ts";
 import { parseJson } from "../../../../lib/json.boundary.ts";
 import { isObject } from "../../../../lib/object.ts";
@@ -29,11 +31,19 @@ export const createCloudReviews = (
   const chatsPath = join(dir, "chats.json");
   const queue = createSerialQueue();
 
-  const readJson = async (path: string) => {
+  const readObject = async (path: string): Promise<ReadObject> => {
     const text = await readTextFileIfExists(path);
-    if (text.isErr() || text.value === null) return null;
+    if (text.isErr()) return UNREADABLE;
+    if (text.value === null) return MISSING;
     const parsed = parseJson(text.value);
-    return parsed.isOk() && isObject(parsed.value) ? parsed.value : null;
+    return parsed.isOk() && isObject(parsed.value)
+      ? { kind: "object", value: parsed.value }
+      : UNREADABLE;
+  };
+
+  const readJson = async (path: string) => {
+    const read = await readObject(path);
+    return read.kind === "object" ? read.value : null;
   };
 
   const write = async (path: string, value: object) => {
@@ -42,24 +52,8 @@ export const createCloudReviews = (
     return (await writeFileAtomic(path, JSON.stringify(value))).isOk();
   };
 
-  const reviewOf = async (key: string): Promise<CloudReview | null> => {
-    const kept = await readJson(join(dir, `${key}.json`));
-    if (
-      kept === null ||
-      typeof kept.reviewer !== "string" ||
-      typeof kept.answer !== "string"
-    )
-      return null;
-    const text = (value: unknown) => (typeof value === "string" ? value : null);
-    return {
-      key,
-      reviewer: kept.reviewer,
-      verdict: text(kept.verdict),
-      taskId: text(kept.taskId),
-      head: text(kept.head),
-      answer: kept.answer,
-    };
-  };
+  const reviewOf = async (key: string): Promise<CloudReview | null> =>
+    reviewIn(key, await readJson(join(dir, `${key}.json`)));
 
   // Sends the review to its reviewer's chat, which is opened in the parent chat's project the first time; reviews go out one at a time, so the chats file is never written twice at once.
   const openReview = (
@@ -70,9 +64,24 @@ export const createCloudReviews = (
   ) =>
     queue.run("reviews", async () => {
       const path = join(dir, `${review.key}.json`);
+      const reservation = join(dir, `${review.key}${RESERVED}`);
+      const kept = await readObject(path);
+      // A file that cannot be read may say the review was sent, so it is not taken for a missing one.
+      if (kept.kind === "unreadable") return "unreadable";
       // A review already sent, such as one a restarted bridge reads again, is not sent twice.
-      if ((await readJson(path))?.sent === true) return "done";
-      if (!(await write(path, review))) return "not_kept";
+      if (kept.kind === "object" && kept.value.sent === true) return "done";
+      // A file that no earlier version wrote, or that contradicts a review not yet sent, may stand over a sent review, so it holds the review.
+      if (kept.kind === "object" && !isUnsentReviewFile(kept.value, review.key))
+        return "unreadable";
+      const claimed = await claim(reservation);
+      // A reservation stands over a review either being sent by another bridge or sent with a result not recorded, which this cannot tell apart.
+      if (claimed === "taken") return await heldOutcome(path);
+      if (claimed === "failed") return "not_kept";
+      if (!(await write(path, review))) {
+        await removeFile(reservation);
+        return "not_kept";
+      }
+
       const sent = await deliver(
         parentThreadId,
         parentFolder,
@@ -80,15 +89,35 @@ export const createCloudReviews = (
         workerSession,
       );
       // A send whose outcome is unknown may have shown the review, so it is kept as shown rather than sent again.
-      if (sent.outcome === "done" || sent.outcome === "unknown")
+      if (sent.outcome === "done" || sent.outcome === "unknown") {
         await write(path, {
           ...review,
           sent: true,
           threadId: sent.threadId,
           shownAt: new Date().toISOString(),
         });
+      } else if (NEVER_SENT.has(sent.outcome)) {
+        await removeFile(reservation);
+      }
+
       return sent.outcome;
     });
+
+  // Takes the review's reservation, which a bridge sharing the folder cannot take while it stands; only a reservation made here is ever removed.
+  const claim = async (reservation: string) => {
+    if ((await prepareDirectory(dir)).isErr()) return "failed";
+    const made = await writeFileExclusive(
+      reservation,
+      JSON.stringify({ reservedAt: new Date().toISOString() }),
+    );
+    if (made.isOk()) return made.value ? "claimed" : "taken";
+    // The reservation is visible but its folder entry may be lost in a crash, so it cannot allow a send; it was made here, so it is dropped.
+    if (made.error._tag === "FileSyncFailed") await removeFile(reservation);
+    return "failed";
+  };
+
+  const heldOutcome = async (path: string) =>
+    (await readJson(path))?.sent === true ? "done" : "reserved";
 
   const deliver = async (
     parentThreadId: string,
@@ -187,7 +216,7 @@ export const createCloudReviews = (
         continue;
       }
 
-      const review = await reviewOf(name.slice(0, -".json".length));
+      const review = reviewIn(name.slice(0, -".json".length), kept);
       if (review !== null)
         shown.push({ at, asked: false, records: reviewRecords(review, at) });
     }
@@ -228,6 +257,12 @@ const chatIn = (
 };
 
 const ASKED = "asked-";
+
+// Made beside a review's file before it is sent, so of the bridges sharing the folder only one sends the review; it is not a .json file, so it is never read as a conversation record.
+const RESERVED = ".reserved";
+
+// The outcomes that leave a review certainly unsent, so its reservation is given up and a later try may take it.
+const NEVER_SENT = new Set(["not_sent", "blocked", "no_project"]);
 
 // A message sent from a reviewer's chat and the note that answered it, in the shape Claude's own records take.
 const askedRecords = (name: string, text: string, at: string) =>
@@ -288,6 +323,48 @@ const reviewRecords = (review: CloudReview, at: string) =>
       timestamp: at,
     },
   ] as unknown as SessionMessage[];
+
+type ReadObject =
+  | { kind: "missing" }
+  | { kind: "unreadable" }
+  | { kind: "object"; value: Record<string, unknown> };
+
+const MISSING: ReadObject = { kind: "missing" };
+const UNREADABLE: ReadObject = { kind: "unreadable" };
+
+// A review as its file keeps it, or null when the file names no reviewer and answer.
+const reviewIn = (
+  key: string,
+  kept: Record<string, unknown> | null,
+): CloudReview | null => {
+  if (
+    kept === null ||
+    typeof kept.reviewer !== "string" ||
+    typeof kept.answer !== "string"
+  )
+    return null;
+  const text = (value: unknown) => (typeof value === "string" ? value : null);
+  return {
+    key,
+    reviewer: kept.reviewer,
+    verdict: text(kept.verdict),
+    taskId: text(kept.taskId),
+    head: text(kept.head),
+    answer: kept.answer,
+  };
+};
+
+const isUnsentReviewFile = (kept: Record<string, unknown>, key: string) =>
+  kept.key === key &&
+  typeof kept.reviewer === "string" &&
+  typeof kept.answer === "string" &&
+  [kept.verdict, kept.taskId, kept.head].every(
+    (value) =>
+      value === undefined || value === null || typeof value === "string",
+  ) &&
+  !("sent" in kept) &&
+  !("threadId" in kept) &&
+  !("shownAt" in kept);
 
 const outcomeOf = (answer: { outcome?: unknown }) =>
   typeof answer.outcome === "string" ? answer.outcome : "unknown";
