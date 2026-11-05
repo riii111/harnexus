@@ -6,6 +6,7 @@ import { Result } from "better-result";
 
 import { startClaudeSession } from "../../../infra/claude/session.ts";
 import { fakeClaude } from "../../../infra/claude/testing/fake-claude.ts";
+import type { ThreadRecord } from "../../../infra/thread-store.ts";
 import { createEmptyFile, writeFileAtomic } from "../../../lib/fs.boundary.ts";
 import {
   ALLOWED_TOOLS,
@@ -39,6 +40,11 @@ import {
   until,
   useTempDir,
 } from "../testing/harness.ts";
+import {
+  type Rendered,
+  renderTurnStarted,
+  type TurnOutcome,
+} from "../turn/turn.view.ts";
 import {
   ALLOWED,
   type FakeClaude,
@@ -1250,6 +1256,38 @@ describe("turns Claude starts between app turns", () => {
     expect(claude.closes()).toBe(0);
   });
 
+  test("leaves what an app turn took from Claude to that turn when Claude's own turn runs after it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, runtime, store } = await harness([claude], {
+      ownTurnsShown: false,
+    });
+    await completeTurn(turns, sent, claude, 10);
+    const prompts = claude.prompt()?.[Symbol.asyncIterator]();
+    await prompts?.next();
+    const record = store.get(THREAD);
+    if (record === undefined) return expect.unreachable("thread not saved");
+    runtime.listen(() => true);
+    claude.emit(sdk(INIT));
+    claude.emit(sdk(answer("msg-2", "the agent finished")));
+    claude.emit(sdk(ownResult()));
+    await settle();
+
+    turns.startTurn(turnStart(11, "next"), undefined);
+    const next = await prompts?.next();
+    const own = runClaudeStartedTurn(runtime, record);
+    await own.finished;
+    claude.emit(sdk(answer("msg-3", "hi")));
+    claude.emit(sdk(success([next?.value?.uuid])));
+    await until(() => completedTurnStatuses(sent).length === 2);
+
+    expect(own.outcomes).toEqual([{ status: "completed" }]);
+    expect(own.shown).toEqual([]);
+    expect(completedTurns(sent)[1]).toMatchObject({
+      id: "turn-2",
+      items: [{ text: "hi" }],
+    });
+  });
+
   test("leaves a background task's report alone until Claude starts a turn for it", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent } = await harness([claude]);
@@ -1591,4 +1629,46 @@ const answerAndComplete = async (
   await until(() => claude.drained());
   claude.emit(sdk(success()));
   await until(() => completedTurnStatuses(sent).length === completed);
+};
+
+// Runs a turn as the controller would for one Claude started, so a test chooses when it reaches the runtime.
+const runClaudeStartedTurn = (runtime: Runtime, record: ThreadRecord) => {
+  const outcomes: TurnOutcome[] = [];
+  const shown: Rendered[] = [];
+  let state = renderTurnStarted({
+    threadId: THREAD,
+    turnId: "turn-own",
+    cwd: dir,
+    now: 0,
+  }).state;
+  const finished = runtime.run({
+    threadId: THREAD,
+    turnId: "turn-own",
+    record,
+    model: MODEL,
+    input: {
+      items: [],
+      toolOutput: null,
+      text: "",
+      images: [],
+      permissionMode: "default",
+      effort: null,
+      startedBy: "claude",
+    },
+    compaction: false,
+    startedAtMs: 0,
+    state: () => state,
+    apply: (rendered) => {
+      state = rendered.state;
+      shown.push(rendered);
+    },
+    finish: (outcome) => outcomes.push(outcome),
+    fail: (error) =>
+      outcomes.push({ status: "failed", message: error.message }),
+    markOutcomeUnknown: () => {},
+    isOpen: () => true,
+    useLink: () => {},
+    ask: async () => ({}),
+  });
+  return { finished, outcomes, shown };
 };
