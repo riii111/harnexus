@@ -91,8 +91,7 @@ const fakeSlot = (name: string, closes: string[]) =>
     pendingInterrupt: null,
     link: { stopWrites: () => {} },
     attachedSkills: new Map(),
-    reader: null,
-    unclaimed: null,
+    inbox: { state: "empty" },
     discarding: false,
     backgroundTasks: 0,
   }) as unknown as SessionSlot;

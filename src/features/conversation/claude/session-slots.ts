@@ -23,6 +23,13 @@ export type StreamedMessage =
 
 export type StreamedNext = IteratorResult<StreamedMessage, void>;
 
+// What holds Claude's messages for the session: nothing, a turn the app starts, a turn Claude starts, or the turn that took them.
+type SlotInbox =
+  | { state: "empty" }
+  | { state: "awaiting-app-turn"; reader: Inbox<StreamedNext> }
+  | { state: "awaiting-claude-turn"; reader: Inbox<StreamedNext> }
+  | { state: "claimed"; reader: Inbox<StreamedNext> };
+
 // A session is not reused until its interrupt reports whether a send is still queued, which can arrive after the interrupted turn has ended.
 export type SessionSlot = {
   session: ClaudeSession;
@@ -30,8 +37,7 @@ export type SessionSlot = {
   pendingInterrupt: Promise<void> | null;
   link: CodexLink;
   attachedSkills: Map<string, string>;
-  reader: Inbox<StreamedNext> | null;
-  unclaimed: "own" | "turn" | null;
+  inbox: SlotInbox;
   discarding: boolean;
   backgroundTasks: number;
 };
