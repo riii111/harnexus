@@ -19,7 +19,7 @@ export const createLineRewriter = (
 
       const bytes = Buffer.concat([...carry, incoming.subarray(0, end)]);
       carry = end < incoming.length ? [incoming.subarray(end)] : [];
-      const pending = pushLines(splitLines(bytes), rewrite, (kept) =>
+      const pending = pushLines(splitLines(bytes), 0, rewrite, (kept) =>
         this.push(kept),
       );
       // A line whose rewrite is still pending holds back every later line, so the output keeps the input's order.
@@ -40,17 +40,18 @@ export const createLineRewriter = (
 
 const pushLines = (
   lines: Buffer[],
+  from: number,
   rewrite: (line: Buffer) => Rewritten | Promise<Rewritten>,
   push: (kept: Buffer) => void,
 ): Promise<void> | null => {
   const kept: Buffer[] = [];
-  for (const [index, line] of lines.entries()) {
-    const rewritten = rewrite(line);
+  for (let index = from; index < lines.length; index += 1) {
+    const rewritten = rewrite(lines[index] as Buffer);
     if (rewritten instanceof Promise) {
       if (kept.length > 0) push(Buffer.concat(kept));
       return rewritten.then(async (resolved) => {
         if (resolved !== null) push(resolved);
-        await pushLines(lines.slice(index + 1), rewrite, push);
+        await pushLines(lines, index + 1, rewrite, push);
       });
     }
 

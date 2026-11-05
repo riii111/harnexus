@@ -58,6 +58,21 @@ describe("createLineRewriter", () => {
     expect(await output).toBe("first\nSLOW\nafter\nnext chunk\n");
   });
 
+  test("breaks the stream when a pending rewrite rejects", async () => {
+    const rewriter = createLineRewriter((line) =>
+      line.toString().startsWith("bad")
+        ? Promise.reject(new Error("rewrite failed"))
+        : line,
+    );
+    const output = collect(rewriter);
+
+    rewriter.write("first\nbad\nafter\n");
+
+    expect(await output.catch((error: Error) => error.message)).toBe(
+      "rewrite failed",
+    );
+  });
+
   test("drops a line whose pending rewrite settles with nothing", async () => {
     const rewriter = createLineRewriter((line) =>
       line.toString().startsWith("drop") ? Promise.resolve(null) : line,
