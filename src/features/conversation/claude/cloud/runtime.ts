@@ -1516,7 +1516,12 @@ const cloudChatName = (
 const NAME_LENGTH = 60;
 const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-const UNSENT_OUTCOMES = new Set(["not_sent", "no_project", "no_parent"]);
+const UNSENT_OUTCOMES = new Set([
+  "not_sent",
+  "no_project",
+  "no_parent",
+  "not_kept",
+]);
 
 // Stops waiting for a message whose send failed.
 const forget = (follow: Follow, text: string) => {

@@ -1,15 +1,34 @@
-import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import {
+  afterEach,
+  describe,
+  expect,
+  setSystemTime,
+  spyOn,
+  test,
+} from "bun:test";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { Result } from "better-result";
+
+import * as files from "../../../../lib/fs.boundary.ts";
 import { createCloudReviews } from "./review-chats.ts";
 
 const roots: string[] = [];
 afterEach(async () => {
   setSystemTime();
-  for (const root of roots.splice(0))
+  for (const root of roots.splice(0)) {
+    await chmod(join(root, "reviews"), 0o700).catch(() => {});
     await rm(root, { recursive: true, force: true });
+  }
 });
 
 const review = (key: string) => ({
@@ -21,18 +40,38 @@ const review = (key: string) => ({
   answer: "判定: LGTM",
 });
 
-// The app's answers to the calls the bridge makes for the parent chat, in order.
-const setup = async (answers: Record<string, unknown>[]) => {
-  const root = await mkdtemp(join(tmpdir(), "harnexus-reviews-"));
-  roots.push(root);
+// The app's answers to the calls the bridge makes for the parent chat, in order; a bridge started with the root of another shares its reviews folder.
+const setup = async (
+  answers: Record<string, unknown>[],
+  options: { root?: string; during?: (tool: string) => Promise<void> } = {},
+) => {
+  const root =
+    options.root ?? (await mkdtemp(join(tmpdir(), "harnexus-reviews-")));
+  if (options.root === undefined) roots.push(root);
   const calls: { tool: string; arguments: Record<string, unknown> }[] = [];
   const reviews = createCloudReviews(join(root, "reviews"), async (line) => {
     const call = JSON.parse(line);
     calls.push({ tool: call.tool, arguments: call.arguments });
+    await options.during?.(call.tool);
     return JSON.stringify(answers.shift() ?? { outcome: "unknown" });
   });
-  return { reviews, calls, root };
+  return { reviews, calls, root, folder: join(root, "reviews") };
 };
+
+const deferred = () => {
+  let resolve = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+};
+
+const sentCount = (
+  calls: { arguments: Record<string, unknown> }[],
+  key: string,
+) =>
+  calls.filter((call) => call.arguments.prompt === `/cloud-review ${key}`)
+    .length;
 
 const projects = {
   outcome: "done",
@@ -47,6 +86,26 @@ const projects = {
     ],
   },
 };
+
+// Where a review goes: a chat of the reviewer's that exists, or one the first review opens.
+const DELIVERIES = [
+  {
+    name: "an existing chat",
+    held: "send_message_to_thread",
+    answers: [
+      projects,
+      { outcome: "done", threadId: "review-chat" },
+      { outcome: "done" },
+    ],
+    earlier: true,
+  },
+  {
+    name: "a new chat",
+    held: "create_thread",
+    answers: [projects, { outcome: "done", threadId: "review-chat" }],
+    earlier: false,
+  },
+];
 
 describe("createCloudReviews", () => {
   test("opens a chat for a reviewer's first review, then sends its later reviews there", async () => {
@@ -315,9 +374,332 @@ describe("createCloudReviews", () => {
     });
   });
 
+  test.each(DELIVERIES)(
+    "sends a review once when a second bridge reads it while the first is sending it to $name",
+    async ({ held, answers, earlier }) => {
+      const sending = deferred();
+      const entered = deferred();
+      const first = await setup([...answers], {
+        during: async (tool) => {
+          if (tool !== held) return;
+          entered.resolve();
+          await sending.promise;
+        },
+      });
+      if (earlier)
+        await first.reviews.openReview(
+          "parent",
+          "/work/harnexus",
+          review("t0"),
+        );
+      const second = await setup([{ outcome: "done" }], { root: first.root });
+
+      const delivery = first.reviews.openReview(
+        "parent",
+        "/work/harnexus",
+        review("t1"),
+      );
+      await entered.promise;
+      const raced = await second.reviews.openReview(
+        "parent",
+        "/work/harnexus",
+        review("t1"),
+      );
+      sending.resolve();
+
+      expect([await delivery, raced]).toEqual(["done", "reserved"]);
+      expect(second.calls).toEqual([]);
+      expect(sentCount(first.calls, "t1")).toBe(1);
+    },
+  );
+
+  test.each(DELIVERIES)(
+    "does not send a review again after a restart when its final save failed after sending it to $name",
+    async ({ held, answers, earlier }) => {
+      const first = await setup([...answers], {
+        during: async (tool) => {
+          if (tool === held) await chmod(join(first.root, "reviews"), 0o500);
+        },
+      });
+      if (earlier)
+        await first.reviews.openReview(
+          "parent",
+          "/work/harnexus",
+          review("t0"),
+        );
+      const delivery = await first.reviews.openReview(
+        "parent",
+        "/work/harnexus",
+        review("t1"),
+      );
+      await chmod(first.folder, 0o700);
+      const restarted = await setup([{ outcome: "done" }], {
+        root: first.root,
+      });
+
+      const again = await restarted.reviews.openReview(
+        "parent",
+        "/work/harnexus",
+        review("t1"),
+      );
+
+      expect([delivery, again]).toEqual(["done", "reserved"]);
+      expect(restarted.calls).toEqual([]);
+      expect(await restarted.reviews.reviewOf("t1")).toEqual(review("t1"));
+    },
+  );
+
+  test.each([
+    {
+      name: "refused before it was sent",
+      chat: false,
+      answers: [projects, { outcome: "not_sent" }],
+      first: "not_sent",
+      second: "done",
+      calls: 2,
+    },
+    {
+      name: "found no project",
+      chat: false,
+      answers: [{ outcome: "done", result: { content: [] } }],
+      first: "no_project",
+      second: "done",
+      calls: 2,
+    },
+    {
+      name: "was blocked by an earlier send of unknown result",
+      chat: true,
+      answers: [
+        {
+          outcome: "tool_error",
+          result: {
+            content: [
+              {
+                type: "text",
+                text: "An earlier create_thread call has an unknown outcome and is never repeated automatically.",
+              },
+            ],
+            isError: true,
+          },
+        },
+      ],
+      first: "blocked",
+      second: "done",
+      calls: 1,
+    },
+    {
+      name: "made a chat whose first turn was refused",
+      chat: false,
+      answers: [
+        projects,
+        { outcome: "model_mismatch", threadId: "review-chat" },
+      ],
+      first: "model_mismatch",
+      second: "reserved",
+      calls: 0,
+    },
+  ])(
+    "after a restart, tries a review whose delivery $name again only when it was certainly not sent",
+    async ({ chat, answers, first, second, calls }) => {
+      const earlier = await setup([...answers]);
+      if (chat)
+        await seed(earlier.folder, "chats.json", {
+          "0199-reviewer": { threadId: "review-chat", session: null },
+        });
+      const initial = await earlier.reviews.openReview(
+        "parent",
+        "/work/harnexus",
+        review("t1"),
+      );
+      const restarted = await setup(
+        [projects, { outcome: "done", threadId: "review-chat" }],
+        {
+          root: earlier.root,
+        },
+      );
+
+      const again = await restarted.reviews.openReview(
+        "parent",
+        "/work/harnexus",
+        review("t1"),
+      );
+
+      expect([initial, again]).toEqual([first, second]);
+      expect(restarted.calls).toHaveLength(calls);
+    },
+  );
+
+  test.each([
+    {
+      name: "that was sent before reservations were kept",
+      file: (key: string) => ({
+        ...review(key),
+        sent: true,
+        threadId: "c",
+        shownAt: "2026-11-03T00:00:00.000Z",
+      }),
+      outcome: "done",
+      calls: 0,
+    },
+    {
+      name: "that was not sent before reservations were kept",
+      file: (key: string) => review(key),
+      outcome: "done",
+      calls: 2,
+    },
+    {
+      name: "that cannot be parsed",
+      file: () => "{ not json",
+      outcome: "unreadable",
+      calls: 0,
+    },
+    {
+      name: "that is not an object",
+      file: () => [1],
+      outcome: "unreadable",
+      calls: 0,
+    },
+  ])(
+    "reads a review file $name as its sent state tells",
+    async ({ file, outcome, calls }) => {
+      const {
+        reviews,
+        folder,
+        calls: made,
+      } = await setup([projects, { outcome: "done", threadId: "review-chat" }]);
+      await seed(folder, "t1.json", file("t1"));
+
+      const opened = await reviews.openReview(
+        "parent",
+        "/work/harnexus",
+        review("t1"),
+      );
+
+      expect(opened).toBe(outcome);
+      expect(made).toHaveLength(calls);
+    },
+  );
+
+  test("does not send a review whose file cannot be read", async () => {
+    const { reviews, folder, calls } = await setup([]);
+    await mkdir(join(folder, "t1.json"), { recursive: true });
+
+    const opened = await reviews.openReview(
+      "parent",
+      "/work/harnexus",
+      review("t1"),
+    );
+
+    expect([opened, calls]).toEqual(["unreadable", []]);
+  });
+
+  test("keeps a reservation it did not make when a review is read again", async () => {
+    const { reviews, folder, calls } = await setup([]);
+    await seed(folder, "t1.reserved", {
+      reservedAt: "2026-11-03T00:00:00.000Z",
+    });
+
+    const opened = await reviews.openReview(
+      "parent",
+      "/work/harnexus",
+      review("t1"),
+    );
+
+    expect([opened, calls, await readdir(folder)]).toEqual([
+      "reserved",
+      [],
+      ["t1.reserved"],
+    ]);
+  });
+
+  test("does not send a review whose reservation cannot be kept on disk, and takes it back to try again", async () => {
+    const { reviews, folder, calls } = await setup([
+      projects,
+      { outcome: "done", threadId: "review-chat" },
+    ]);
+    const exclusive = spyOn(files, "writeFileExclusive").mockImplementationOnce(
+      async (path) => {
+        await writeFile(path, "{}");
+        return Result.err(
+          new files.FileSyncFailed({
+            path,
+            cause: null,
+            message: "cannot sync",
+          }),
+        );
+      },
+    );
+
+    const first = await reviews.openReview(
+      "parent",
+      "/work/harnexus",
+      review("t1"),
+    );
+    const filesAfter = await readdir(folder);
+    const second = await reviews.openReview(
+      "parent",
+      "/work/harnexus",
+      review("t1"),
+    );
+    exclusive.mockRestore();
+
+    expect([first, filesAfter, second, sentCount(calls, "t1")]).toEqual([
+      "not_kept",
+      [],
+      "done",
+      1,
+    ]);
+  });
+
+  test("takes back the reservation of a review it could not save, to try again", async () => {
+    const { reviews, folder, calls } = await setup([
+      projects,
+      { outcome: "done", threadId: "review-chat" },
+    ]);
+    const atomic = spyOn(files, "writeFileAtomic").mockImplementationOnce(
+      async (path) =>
+        Result.err(
+          new files.FileWriteFailed({
+            path,
+            cause: null,
+            message: "cannot write",
+          }),
+        ),
+    );
+
+    const first = await reviews.openReview(
+      "parent",
+      "/work/harnexus",
+      review("t1"),
+    );
+    const filesAfter = await readdir(folder);
+    const callsAfter = calls.length;
+    const second = await reviews.openReview(
+      "parent",
+      "/work/harnexus",
+      review("t1"),
+    );
+    atomic.mockRestore();
+
+    expect([first, filesAfter, callsAfter, second]).toEqual([
+      "not_kept",
+      [],
+      0,
+      "done",
+    ]);
+  });
+
   test("names no review it never kept", async () => {
     const { reviews } = await setup([]);
 
     expect(await reviews.reviewOf("t9")).toBeNull();
   });
 });
+
+const seed = async (folder: string, name: string, value: unknown) => {
+  await mkdir(folder, { recursive: true });
+  await writeFile(
+    join(folder, name),
+    typeof value === "string" ? value : JSON.stringify(value),
+  );
+};
