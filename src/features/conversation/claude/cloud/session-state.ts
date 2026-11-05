@@ -4,6 +4,7 @@ import { isObject } from "../../../../lib/object.ts";
 import { endsTurn, turnOpeningTextOf } from "../../history/history.view.ts";
 import { INTERRUPTED } from "../../history/message.view.ts";
 import { waitingIn } from "./children.ts";
+import { contentOf, textsOf } from "./records.ts";
 
 // What a Cloud session is doing, as far as its copied records tell.
 export type CloudSessionState =
@@ -75,23 +76,14 @@ export const handsBack = (state: CloudSessionState) =>
   state.kind === "interrupted" ||
   state.kind === "errored";
 
-// Whether a record answers a question or plan the session asked with this text, as a message sent while it waits for the answer may arrive.
-export const answersAskWith = (
-  records: readonly SessionMessage[],
-  message: SessionMessage,
-  text: string,
-) => {
-  if (message.type !== "user") return false;
-  const asks = askIdsIn(records);
-  // Claude Code writes answers as "question"="answer" pairs ending in a comma or period, so the text counts only whole and in the answer's place, never as a question or part of a longer answer.
-  const wanted = `="${text.trim()}"`;
-  return contentOf(message).some(
-    (block) =>
-      block.type === "tool_result" &&
-      typeof block.tool_use_id === "string" &&
-      asks.has(block.tool_use_id) &&
-      textsOf(block.content).some((answer) => holdsAnswer(answer, wanted)),
-  );
+// Matches records of one copy against a message sent from the app: a prompt with its text, or the answer it gave a question or plan the session was waiting on.
+export const sentMatcherOf = (records: readonly SessionMessage[]) => {
+  // The questions and plans are collected from this copy once, and only when a tool result asks for them.
+  let asks: ReadonlySet<string> | null = null;
+  const askIds = () => (asks ??= askIdsIn(records));
+  return (message: SessionMessage, text: string) =>
+    turnOpeningTextOf(message)?.trim() === text.trim() ||
+    answersAsk(message, text, askIds);
 };
 
 // A record that ends Claude's turn with something to read; a copy may mark the thinking that opens the reply as the end too, before the reply's text arrives.
@@ -133,6 +125,23 @@ const pendingAsk = (
   return found === undefined
     ? null
     : { kind: "awaiting_input", toolUseId: found[0], ...found[1] };
+};
+
+const answersAsk = (
+  message: SessionMessage,
+  text: string,
+  askIds: () => ReadonlySet<string>,
+) => {
+  if (message.type !== "user") return false;
+  // Claude Code writes answers as "question"="answer" pairs ending in a comma or period, so the text counts only whole and in the answer's place, never as a question or part of a longer answer.
+  const wanted = `="${text.trim()}"`;
+  return contentOf(message).some(
+    (block) =>
+      block.type === "tool_result" &&
+      typeof block.tool_use_id === "string" &&
+      askIds().has(block.tool_use_id) &&
+      textsOf(block.content).some((answer) => holdsAnswer(answer, wanted)),
+  );
 };
 
 const holdsAnswer = (result: string, wanted: string) => {
@@ -177,21 +186,6 @@ const isInterruption = (message: SessionMessage) =>
   textsOf(isObject(message.message) ? message.message.content : null).some(
     (text) => INTERRUPTED.test(text),
   );
-
-const contentOf = (record: SessionMessage): Record<string, unknown>[] => {
-  const message = isObject(record) ? record.message : null;
-  const content = isObject(message) ? message.content : null;
-  return Array.isArray(content) ? content.filter(isObject) : [];
-};
-
-const textsOf = (content: unknown) =>
-  typeof content === "string"
-    ? [content]
-    : Array.isArray(content)
-      ? content.flatMap((item) =>
-          isObject(item) && typeof item.text === "string" ? [item.text] : [],
-        )
-      : [];
 
 const ASK_USER_QUESTION = "AskUserQuestion";
 const EXIT_PLAN_MODE = "ExitPlanMode";

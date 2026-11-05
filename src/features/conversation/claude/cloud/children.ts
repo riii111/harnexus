@@ -3,6 +3,7 @@ import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { parseJson } from "../../../../lib/json.boundary.ts";
 import { isObject } from "../../../../lib/object.ts";
 import { endsTurn } from "../../history/history.view.ts";
+import { contentOf, textsOf } from "./records.ts";
 
 export type CloudChild = { sessionId: string; title: string | null };
 
@@ -46,21 +47,6 @@ export const childSessionsIn = (
 
   return [...children.values()];
 };
-
-const contentOf = (record: SessionMessage): Record<string, unknown>[] => {
-  const message = isObject(record) ? record.message : null;
-  const content = isObject(message) ? message.content : null;
-  return Array.isArray(content) ? content.filter(isObject) : [];
-};
-
-const textsOf = (content: unknown) =>
-  typeof content === "string"
-    ? [content]
-    : Array.isArray(content)
-      ? content.flatMap((item) =>
-          isObject(item) && typeof item.text === "string" ? [item.text] : [],
-        )
-      : [];
 
 const createdIn = (content: unknown): CloudChild | null => {
   for (const text of textsOf(content)) {

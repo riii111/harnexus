@@ -4,6 +4,7 @@ import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import { parseJson } from "../../../../lib/json.boundary.ts";
 import { isObject } from "../../../../lib/object.ts";
+import { contentOf, textsOf } from "./records.ts";
 
 // A review harnexus-task review finished in a Cloud session, as its output names it.
 export type CloudReview = {
@@ -36,21 +37,6 @@ export const reviewsIn = (
 
   return [...reviews.values()];
 };
-
-const contentOf = (record: SessionMessage): Record<string, unknown>[] => {
-  const message = isObject(record) ? record.message : null;
-  const content = isObject(message) ? message.content : null;
-  return Array.isArray(content) ? content.filter(isObject) : [];
-};
-
-const textsOf = (content: unknown) =>
-  typeof content === "string"
-    ? [content]
-    : Array.isArray(content)
-      ? content.flatMap((item) =>
-          isObject(item) && typeof item.text === "string" ? [item.text] : [],
-        )
-      : [];
 
 // The output is harnexus-task's JSON, alone or with other lines around it, and with line numbers when a file was read.
 const reviewOf = (text: string): CloudReview | null => {

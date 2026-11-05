@@ -26,10 +26,10 @@ import { createTurnRecords } from "../turn-records.ts";
 import { type CloudChild, childSessionsIn } from "./children.ts";
 import { type CloudReview, reviewsIn } from "./reviews.ts";
 import {
-  answersAskWith,
   type CloudSessionState,
   handsBack,
   runningToolOf,
+  sentMatcherOf,
   sessionStateOf,
   stateKeyOf,
 } from "./session-state.ts";
@@ -756,6 +756,7 @@ export const createCloudRuntime = <Tag extends string>(
   // The records of a copy past what the turn showed, and whether its reply ended.
   const advance = (follow: Follow, all: readonly SessionMessage[]) => {
     const state = sessionStateOf(all);
+    const sentAs = sentMatcherOf(all);
     const from = indexAfter(all, follow.after);
     const shown: SessionMessage[] = [];
     if (follow.record === null) {
@@ -763,7 +764,7 @@ export const createCloudRuntime = <Tag extends string>(
       let found = -1;
       for (let index = all.length - 1; index >= from; index--) {
         const message = all[index];
-        if (message !== undefined && sentAs(all, message, first)) {
+        if (message !== undefined && sentAs(message, first)) {
           found = index;
           break;
         }
@@ -785,7 +786,7 @@ export const createCloudRuntime = <Tag extends string>(
       if (message === undefined) continue;
       const next = follow.texts[follow.matched];
       // A prompt this turn sent is shown by the app already, so only replies and prompts typed elsewhere are rendered.
-      if (next !== undefined && sentAs(all, message, next)) {
+      if (next !== undefined && sentAs(message, next)) {
         follow.matched += 1;
         lastPrompt = index;
       } else {
@@ -1524,15 +1525,6 @@ const forget = (follow: Follow, text: string) => {
   const at = follow.texts.lastIndexOf(text);
   if (at >= follow.matched) follow.texts.splice(at, 1);
 };
-
-// A record holding a message sent from the app: a prompt with its text, or the answer it gave a question the session was waiting on.
-const sentAs = (
-  all: readonly SessionMessage[],
-  message: SessionMessage,
-  text: string,
-) =>
-  turnOpeningTextOf(message)?.trim() === text.trim() ||
-  answersAskWith(all, message, text);
 
 const keyOf = (message: SessionMessage | undefined) => message?.uuid ?? null;
 
