@@ -230,7 +230,10 @@ export const createBrowserTabs = ({
           );
         }
 
-        if (!(await consent(running, args.candidate, tab))) {
+        const allowed = await consent(running, args.candidate, tab);
+        // The turn may have ended or moved on while the user was asked, and an answer allows the tab for its own turn only.
+        if (turn !== running) return failure(NO_TURN);
+        if (!allowed) {
           return failure(
             "The user did not allow this tab, so it was not used.",
           );
@@ -408,17 +411,14 @@ const elementGuard = (element: number, row: string) => {
   ].join("\n");
 };
 
-const attachedScript = (tab: TabMention) => {
-  // The app's binding checks the tab's title and address against the link; the id is checked here too, so a tab that changed since the user attached it is an error.
-  const id = JSON.stringify(tab.tabId);
-  return [
+const attachedScript = (tab: TabMention) =>
+  // The app's own binding checks the tab's id, title and address against the link, so a tab that changed since the user attached it is an error.
+  [
     "{",
     `  const tab = await cua.getTab({ mention: ${JSON.stringify(tab.link)} }, { browser: "iab" });`,
-    `  if (String(tab.id) !== ${id} && String(tab.providerTabId) !== ${id}) throw new Error("The tab is no longer the one that was attached.");`,
     `  nodeRepl.write(${JSON.stringify(TAB_MARKER)} + tab.id);`,
     "}",
   ].join("\n");
-};
 
 const openableUrl = (value: string) => {
   if (!URL.canParse(value)) return null;

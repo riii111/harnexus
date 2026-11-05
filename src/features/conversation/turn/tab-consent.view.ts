@@ -25,12 +25,16 @@ export const tabConsentPrompt = (target: UserInputTarget, tab: ConsentTab) => ({
       options: null,
     },
   ]),
-  allowed: (answer: unknown) =>
-    answerValuesOf(answer, QUESTION).some(
-      (value) =>
-        typeof value === "string" &&
-        value.trim().toLowerCase() === APPROVE.toLowerCase(),
-    ),
+  // Only one answer that is the approving word counts, so a missing, extra or free-text answer never allows the tab.
+  allowed: (answer: unknown) => {
+    const values = answerValuesOf(answer, QUESTION);
+    const [only] = values;
+    return (
+      values.length === 1 &&
+      typeof only === "string" &&
+      only.trim().toLowerCase() === APPROVE.toLowerCase()
+    );
+  },
 });
 
 const QUESTION = "browser_tab_consent";

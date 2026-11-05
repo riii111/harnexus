@@ -436,20 +436,39 @@ describe("createBrowserTabs attached tabs", () => {
     expect(JSON.stringify(second.content)).toContain("already browser tab 1");
   });
 
-  test("binds the tab only if it is still the one that was linked", async () => {
+  test("does not send the old turn's link under a new turn when the turn changes while the user is asked", async () => {
+    const answer = gated();
+    const { browser, calls } = connect({ tabId: "4" });
+    begin(browser, "turn-1", {
+      candidates: [candidate(LINK)],
+      confirm: async () => {
+        await answer.promise;
+        return true;
+      },
+    });
+    const using = use(browser, "browser_use_attached_tab", { candidate: 1 });
+    await settle();
+
+    begin(browser, "turn-2");
+    answer.open();
+    const used = await using;
+
+    expect(used.isError).toBe(true);
+    expect(calls()).toEqual([]);
+  });
+
+  test("binds the tab by its link and reports the id the browser gave it", async () => {
     const { browser, calls } = connect();
     begin(browser, "turn-1", {
       candidates: [candidate(LINK)],
       confirm: async () => true,
     });
     await use(browser, "browser_use_attached_tab", { candidate: 1 });
+    const tab = fakeTab({ id: "tab-77" });
 
-    await expect(
-      runScript(codes(calls())[0], fakeTab({ id: "9" })),
-    ).rejects.toThrow();
-    await expect(
-      runScript(codes(calls())[0], fakeTab({ id: "4" })),
-    ).resolves.toBeUndefined();
+    await runScript(codes(calls())[0], tab);
+
+    expect(tab.written).toEqual(["harnexus-tab:tab-77"]);
   });
 });
 

@@ -606,6 +606,8 @@ describe("browser tabs linked in Claude input", () => {
     { name: "typed Allow", reply: "Allow", used: true },
     { name: "typed allow in lower case", reply: " allow ", used: true },
     { name: "any other answer", reply: "yes please", used: false },
+    { name: "no answer", reply: null, used: false },
+    { name: "several answers", reply: ["Deny", "Allow"], used: false },
     { name: "a refusal", reply: "Deny", used: false },
   ])(
     "asks the user once and uses the tab only after $name",
@@ -630,7 +632,13 @@ describe("browser tabs linked in Claude input", () => {
       const before = browserCalls(toolCalls).length;
       turns.answerRequest({
         id: request.id,
-        result: { answers: { browser_tab_consent: { answers: [reply] } } },
+        result: {
+          answers: {
+            browser_tab_consent: {
+              answers: reply === null ? [] : [reply].flat(),
+            },
+          },
+        },
       });
       const result = await using;
 
