@@ -35,12 +35,14 @@ beforeAll(async () => {
     `#!/usr/bin/perl\nuse JSON::PP;\nuse Encode qw(decode_utf8);\nopen my $out, ">", "$ENV{FAKE_NOTIFICATION_REPORT}.tmp" or exit 1;\nprint $out encode_json([map { decode_utf8($_) } @ARGV]);\nclose $out;\nrename "$ENV{FAKE_NOTIFICATION_REPORT}.tmp", $ENV{FAKE_NOTIFICATION_REPORT} or exit 1;\nexit 1 if ($ENV{FAKE_NOTIFICATION_MODE} // "") eq "fail";\nif (($ENV{FAKE_NOTIFICATION_MODE} // "") eq "delay") { sleep 2; open my $done, ">", "$ENV{FAKE_NOTIFICATION_REPORT}.done"; close $done; }\n`,
   );
   await chmod(notifier, 0o755);
+  const launchctl = join(dir, "launchctl");
+  await writeFile(launchctl, FAKE_LAUNCHCTL);
+  await chmod(launchctl, 0o755);
   await writeFile(
     LAUNCHER,
-    (await Bun.file(SOURCE_LAUNCHER).text()).replaceAll(
-      "/usr/bin/osascript",
-      notifier,
-    ),
+    (await Bun.file(SOURCE_LAUNCHER).text())
+      .replaceAll("/usr/bin/osascript", notifier)
+      .replaceAll("/bin/launchctl", launchctl),
   );
   await chmod(LAUNCHER, 0o755);
   await symlink(join(import.meta.dir, "..", "src"), join(dir, "src"));
@@ -88,6 +90,82 @@ describe("delegation to the standard Codex", () => {
     },
     TIMEOUT,
   );
+});
+
+describe("sandbox helper without the App environment", () => {
+  test(
+    "delegates sandbox to the Codex registered with launchd keeping args and exit code",
+    async () => {
+      const { env, reportPath } = setup({
+        HARNEXUS_CODEX_PATH: undefined,
+        FAKE_LAUNCHCTL_VALUE: fakeCodex,
+        FAKE_CODEX_EXIT: "3",
+      });
+      const args = ["--flag", "sandbox", "macos", "--", "node", "a b"];
+
+      const result = await finish(launch(args, env, { stdin: "in\n" }));
+      const report = await readReport(reportPath);
+
+      expect(result).toMatchObject({ stdout: "in\n", exitCode: 3 });
+      expect(report.argv).toEqual(args);
+      expect(report.env).toEqual({ ...env, HARNEXUS_LAUNCHER_ACTIVE: "1" });
+    },
+    TIMEOUT,
+  );
+
+  test.each<{ name: string; args: string[] }>([
+    { name: "app-server", args: ["app-server"] },
+    { name: "an ordinary command", args: ["exec"] },
+  ])(
+    "refuses $name when HARNEXUS_CODEX_PATH is unset even if launchd has it",
+    async ({ args }) => {
+      const { env } = setup({
+        HARNEXUS_CODEX_PATH: undefined,
+        FAKE_LAUNCHCTL_VALUE: fakeCodex,
+      });
+
+      await expectRefused(args, env, "HARNEXUS_CODEX_PATH is not set");
+    },
+  );
+
+  test.each([
+    { name: "empty", value: () => "", expected: "is not set" },
+    {
+      name: "relative",
+      value: () => "codex.js",
+      expected: "must be an absolute path",
+    },
+    {
+      name: "not an existing file",
+      value: () => join(dir, "none"),
+      expected: "is not an executable file",
+    },
+    {
+      name: "the launcher itself",
+      value: () => LAUNCHER,
+      expected: "points to the launcher itself",
+    },
+  ])(
+    "refuses sandbox when the launchd value is $name",
+    async ({ value, expected }) => {
+      const { env } = setup({
+        HARNEXUS_CODEX_PATH: undefined,
+        FAKE_LAUNCHCTL_VALUE: value(),
+      });
+
+      await expectRefused(["sandbox"], env, expected);
+    },
+  );
+
+  test("stops sandbox when the launcher is already marked active", async () => {
+    const { env } = setup({
+      HARNEXUS_CODEX_PATH: undefined,
+      FAKE_LAUNCHCTL_VALUE: fakeCodex,
+      HARNEXUS_LAUNCHER_ACTIVE: "1",
+    });
+
+    await expectRefused(["sandbox"], env, "recursive launch detected");
+  });
 });
 
 describe("startup fallback", () => {
@@ -876,4 +954,9 @@ const LINGERING_CODEX = `#!/bin/sh
 trap '' TERM
 exec >&-
 exec sleep 30
+`;
+
+const FAKE_LAUNCHCTL = `#!/bin/sh
+[ "$1" = getenv ] && [ "$2" = HARNEXUS_CODEX_PATH ] || exit 2
+printf '%s\\n' "$FAKE_LAUNCHCTL_VALUE"
 `;

@@ -27,7 +27,7 @@ if (length($ENV{HARNEXUS_LAUNCHER_ACTIVE} // "")) {
 }
 
 my $self = abs_path($0) // fail("cannot resolve the launcher path");
-my $codex = require_executable("HARNEXUS_CODEX_PATH");
+my $codex = codex_path();
 if ((abs_path($codex) // "") eq $self) {
   fail("HARNEXUS_CODEX_PATH points to the launcher itself");
 }
@@ -143,9 +143,28 @@ sub option_value {
   return undef;
 }
 
+# The App's browser helper starts `codex sandbox` without the App's environment; only that call may recover the path from the login session's launchd registration, and the App's own app-server still fails when it is unset.
+sub codex_path {
+  return require_executable("HARNEXUS_CODEX_PATH") if length($ENV{HARNEXUS_CODEX_PATH} // "") || !runs_sandbox(@ARGV);
+  return require_executable("HARNEXUS_CODEX_PATH", registered_codex_path());
+}
+
+sub runs_sandbox {
+  my $at = first_positional(0, @_);
+  return defined $at && $_[$at] eq "sandbox";
+}
+
+sub registered_codex_path {
+  open(my $launchctl, "-|", "/bin/launchctl", "getenv", "HARNEXUS_CODEX_PATH") or return "";
+  my $path = <$launchctl> // "";
+  close $launchctl;
+  $path =~ s/\n\z//;
+  return $path;
+}
+
 sub require_executable {
-  my ($name) = @_;
-  my $path = $ENV{$name} // "";
+  my ($name, $path) = @_;
+  $path //= $ENV{$name} // "";
   fail("$name is not set") if $path eq "";
   fail("$name must be an absolute path") if $path !~ m{^/};
   fail("$name is not an executable file") unless -f $path && -x _;
