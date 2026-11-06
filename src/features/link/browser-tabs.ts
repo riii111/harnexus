@@ -188,7 +188,7 @@ export const createBrowserTabs = ({
   const tools = [
     defineTool(
       "browser_open_tab",
-      "Open a web page in the Codex in-app browser. The new tab is numbered after the tabs this turn already opened, and its state is returned; the browser can only operate tabs opened this way during the turn. Only http and https pages open. The tab closes when the turn ends; set keepOpen only when the work must continue in a later turn, and never open the page again if keeping it fails.",
+      "Open a web page in the Codex in-app browser. The new tab is numbered after the tabs this turn already opened, and its state is returned; the browser can only operate tabs opened this way during the turn. Only http and https pages open. The tab closes when the turn ends; set keepOpen only when the work must continue in a later turn, and if keeping it cannot be confirmed the tab is still open and numbered, so never open the page again.",
       { url: z.string().min(1), keepOpen: z.boolean().optional() },
       async (args) => {
         const url = openableUrl(args.url);
@@ -213,8 +213,11 @@ export const createBrowserTabs = ({
     ),
     defineTool(
       "browser_use_attached_tab",
-      "Use an in-app browser tab the user's message linked, by its candidate number from <browser_tab_candidates>. The user is asked to allow it first; if they refuse, do not retry. The tab is then numbered after the tabs this turn already has, and its state is returned.",
-      { candidate: z.number().int().positive() },
+      "Use an in-app browser tab the user's message linked, by its candidate number from <browser_tab_candidates>. The user is asked to allow it first; if they refuse, do not retry. The tab is then numbered after the tabs this turn already has, and its state is returned. Set keepOpen only when the work must continue in a later turn; if keeping it cannot be confirmed the tab is still open, so do not use the link again.",
+      {
+        candidate: z.number().int().positive(),
+        keepOpen: z.boolean().optional(),
+      },
       async (args) => {
         const running = turn;
         if (running === null) return failure(NO_TURN);
@@ -241,11 +244,15 @@ export const createBrowserTabs = ({
           );
         }
 
-        const resolved = await execute(running, "read", {
-          label: "browser_use_attached_tab",
-          title: "Opening the attached browser tab",
-          code: attachedScript(tab),
-        });
+        const resolved = await execute(
+          running,
+          args.keepOpen === true ? "write" : "read",
+          {
+            label: "browser_use_attached_tab",
+            title: "Opening the attached browser tab",
+            code: attachedScript(tab, args.keepOpen === true),
+          },
+        );
         const marked = takeMarker(resolved);
         if (resolved.isError === true || marked.id === null)
           return marked.result;
@@ -417,21 +424,29 @@ const openScript = (url: string, keepOpen: boolean) =>
   [
     "{",
     `  const tab = await cua.createBrowserTab("iab", ${JSON.stringify(url)}, { visible: true });`,
-    ...(keepOpen
-      ? [
-          '  if (typeof tab.markHandoff !== "function") throw new Error("This tab cannot be kept open for a later turn.");',
-          "  await tab.markHandoff();",
-        ]
-      : []),
+    ...keepScript(keepOpen),
     `  nodeRepl.write(${JSON.stringify(TAB_MARKER)} + tab.id);`,
     "}",
   ].join("\n");
 
-const attachedScript = (tab: TabMention) =>
+// The tab is already open when keeping it fails, so the failure is reported in a fixed sentence and the tab stays numbered, and nothing opens it again.
+const keepScript = (keepOpen: boolean) =>
+  keepOpen
+    ? [
+        "  try {",
+        "    await tab.markHandoff();",
+        "  } catch {",
+        `    nodeRepl.write(${JSON.stringify(KEEP_UNCONFIRMED)});`,
+        "  }",
+      ]
+    : [];
+
+const attachedScript = (tab: TabMention, keepOpen: boolean) =>
   // The app's own binding checks the tab's id, title and address against the link, so a tab that changed since the user attached it is an error.
   [
     "{",
     `  const tab = await cua.getTab({ mention: ${JSON.stringify(tab.link)} }, { browser: "iab" });`,
+    ...keepScript(keepOpen),
     `  nodeRepl.write(${JSON.stringify(TAB_MARKER)} + tab.id);`,
     "}",
   ].join("\n");
@@ -479,6 +494,8 @@ export const BROWSER_ALLOWED_TOOLS = [
 const APP_PLUGIN = "unified-computer-use@openai-bundled";
 const REQUIRED_TOOLS = ["js", "turn_ended"];
 const TAB_MARKER = "harnexus-tab:";
+const KEEP_UNCONFIRMED =
+  "Keeping this tab open for a later turn could not be confirmed. The tab is open and numbered; do not open it again.";
 const TAB_ID = /^[\w.:-]{1,200}$/;
 const NO_TURN = "The browser can be used only while a turn is running.";
 const TAB_NUMBER = z.number().int().positive().optional();

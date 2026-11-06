@@ -562,14 +562,97 @@ describe("createBrowserTabs scripts run by the browser server", () => {
     },
   );
 
-  test("opens no tab as numbered when keeping it open fails", async () => {
+  test.each([
+    { name: "without the keep call", keep: undefined },
+    { name: "when the keep call throws", keep: "throws" },
+  ])(
+    "keeps the opened tab numbered and says keeping is unconfirmed $name",
+    async ({ keep }) => {
+      const { browser, calls } = connect();
+      begin(browser, "turn-1");
+      await use(browser, "browser_open_tab", { url: PAGE, keepOpen: true });
+      const tab = {
+        ...fakeTab({ id: "12" }),
+        markHandoff:
+          keep === "throws"
+            ? () => Promise.reject(new Error("host detail"))
+            : undefined,
+      };
+
+      await runScript(codes(calls())[0], tab);
+
+      expect(tab.written).toEqual([
+        expect.stringContaining("could not be confirmed"),
+        "harnexus-tab:12",
+      ]);
+      expect(JSON.stringify(tab.written)).not.toContain("host detail");
+    },
+  );
+
+  test.each([
+    { name: "kept for a later turn", keepOpen: true, mode: "marks" },
+    { name: "left temporary", keepOpen: false, mode: "none" },
+  ])(
+    "marks an allowed attached tab only when it is $name",
+    async ({ keepOpen, mode }) => {
+      const { browser, calls } = connect();
+      begin(browser, "turn-1", {
+        candidates: [candidate(LINK)],
+        confirm: async () => true,
+      });
+      await use(browser, "browser_use_attached_tab", {
+        candidate: 1,
+        keepOpen,
+      });
+      const tab = fakeTab({ id: "4" });
+
+      await runScript(codes(calls())[0], tab);
+
+      expect(tab.marks).toEqual(mode === "marks" ? ["handoff"] : []);
+    },
+  );
+
+  test("marks nothing and sends nothing when the user refuses the attached tab", async () => {
     const { browser, calls } = connect();
+    begin(browser, "turn-1", { candidates: [candidate(LINK)] });
+
+    const used = await use(browser, "browser_use_attached_tab", {
+      candidate: 1,
+      keepOpen: true,
+    });
+
+    expect(used.isError).toBe(true);
+    expect(calls()).toEqual([]);
+  });
+
+  test("sends a keeping attach as a write, which a stopped turn never sends", async () => {
+    const { browser, calls } = connect();
+    begin(browser, "turn-1", {
+      candidates: [candidate(LINK)],
+      confirm: async () => {
+        browser.endTurn("Interrupt");
+        return true;
+      },
+    });
+
+    const used = await use(browser, "browser_use_attached_tab", {
+      candidate: 1,
+      keepOpen: true,
+    });
+
+    expect(used.isError).toBe(true);
+    expect(calls()).toEqual([]);
+  });
+
+  test("leaves the next turn with no tab to operate even after a tab was kept open", async () => {
+    const { browser } = connect();
     begin(browser, "turn-1");
     await use(browser, "browser_open_tab", { url: PAGE, keepOpen: true });
-    const tab = { ...fakeTab({ id: "12" }), markHandoff: undefined };
+    begin(browser, "turn-2");
 
-    await expect(runScript(codes(calls())[0], tab)).rejects.toThrow();
-    expect(tab.written).toEqual([]);
+    const read = await use(browser, "browser_read_tab", {});
+
+    expect(read.isError).toBe(true);
   });
 
   test("open writes the marker with the new tab's id after the page state", async () => {
