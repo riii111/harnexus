@@ -101,12 +101,20 @@ const connectAdapter = async (mode: "observe" | "write") => {
       checkouts: createCloudCheckouts(join(dir, "checkouts"), {}),
     },
     external: {
-      adapter,
+      adapter: {
+        settings: adapter,
+        spawn: (handlers) =>
+          startLineProcess(adapter.command, adapter.args, handlers),
+      },
       bridgeId: "bridge-1",
-      spawn: (handlers) =>
-        startLineProcess(adapter.command, adapter.args, handlers),
-      state: EMPTY_EXTERNAL_STATE,
-      save: async () => true,
+      store: {
+        initial: EMPTY_EXTERNAL_STATE,
+        read: async () => EMPTY_EXTERNAL_STATE,
+        update: async (change) => ({
+          state: EMPTY_EXTERNAL_STATE,
+          result: change(EMPTY_EXTERNAL_STATE).result,
+        }),
+      },
     },
     send: () => {},
     log: () => {},

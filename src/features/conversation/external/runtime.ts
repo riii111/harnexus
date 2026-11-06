@@ -28,10 +28,25 @@ export const createExternalRuntime = <Tag extends string>(
       return;
     }
 
+    // A stop while the chat's route is looked up, which may wait for the adapter, is kept, so the turn is sent nowhere afterwards.
+    let stoppedEarly = false;
+    const waiting = {
+      turnId: turn.turnId,
+      stop: () => {
+        stoppedEarly = true;
+      },
+    };
+    live.set(turn.threadId, waiting);
     const route = await conversations.route(
       turn.threadId,
       firstTurnOf(turn.input),
     );
+    if (live.get(turn.threadId) === waiting) live.delete(turn.threadId);
+    if (stoppedEarly || turn.state().interrupting) {
+      turn.finish({ status: "interrupted" }, null);
+      return;
+    }
+
     if (route.kind === "normal") {
       await inner.run(turn as RunningTurn<Tag>);
       return;

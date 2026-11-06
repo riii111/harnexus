@@ -6,9 +6,13 @@ import { z } from "zod";
 import {
   prepareDirectory,
   readTextFileIfExists,
+  removeFile,
   writeFileAtomic,
+  writeFileExclusive,
 } from "../lib/fs.boundary.ts";
 import { parseJson } from "../lib/json.boundary.ts";
+import { isObject } from "../lib/object.ts";
+import { processAlive } from "../lib/run.boundary.ts";
 
 // A chat that shows an adapter's conversation, as the adapter declared it or as its first turn confirmed it.
 export type ConversationBinding = {
@@ -90,6 +94,80 @@ export const readExternalConversations = async (
         }),
       );
 };
+
+class ExternalConversationsLocked extends TaggedError(
+  "ExternalConversationsLocked",
+)<{ path: string; message: string }> {}
+
+// Changes the file as it stands now, under a lock every bridge sharing it takes, so no bridge's change is written over by another's older copy; answers the state the file then holds.
+export const updateExternalConversations = async <T>(
+  path: string,
+  change: (state: ExternalConversationState) => {
+    // Null leaves the file as it is.
+    state: ExternalConversationState | null;
+    result: T;
+  },
+  { waitMs = LOCK_WAIT_MS, staleMs = LOCK_STALE_MS } = {},
+) => {
+  const lock = `${path}.lock`;
+  const made = await prepareDirectory(dirname(path));
+  if (made.isErr()) return Result.err(made.error);
+  const held = await takeLock(lock, waitMs, staleMs);
+  if (held.isErr()) return Result.err(held.error);
+  const read = await readExternalConversations(path);
+  const changed = read.map(change);
+  const written =
+    changed.isOk() && changed.value.state !== null
+      ? await writeExternalConversations(path, changed.value.state)
+      : Result.ok();
+  await removeFile(lock);
+  if (changed.isErr()) return Result.err(changed.error);
+  if (written.isErr()) return Result.err(written.error);
+  return Result.ok({
+    state: changed.value.state ?? read.unwrapOr(EMPTY_EXTERNAL_STATE),
+    result: changed.value.result,
+  });
+};
+
+// A lock left by a bridge that died, or held far longer than any change takes, is taken over.
+const takeLock = async (lock: string, waitMs: number, staleMs: number) => {
+  const until = Date.now() + waitMs;
+  for (;;) {
+    const made = await writeFileExclusive(
+      lock,
+      JSON.stringify({ pid: process.pid, at: Date.now() }),
+    );
+    if (made.isErr()) return Result.err(made.error);
+    if (made.value) return Result.ok();
+    const seen = (await readTextFileIfExists(lock)).unwrapOr(null) ?? "";
+    const holder = parseJson(seen).unwrapOr(null);
+    const stale =
+      !isObject(holder) ||
+      typeof holder.pid !== "number" ||
+      typeof holder.at !== "number" ||
+      !processAlive(holder.pid) ||
+      Date.now() - holder.at > staleMs;
+    // Removed only while it is still the lock read, so a lock another bridge took over meanwhile stays.
+    if (stale) {
+      const again = (await readTextFileIfExists(lock)).unwrapOr(null) ?? "";
+      if (again === seen) await removeFile(lock);
+      continue;
+    }
+
+    if (Date.now() >= until)
+      return Result.err(
+        new ExternalConversationsLocked({
+          path: lock,
+          message: `${lock} is held by another bridge`,
+        }),
+      );
+    await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
+  }
+};
+
+const LOCK_WAIT_MS = 5_000;
+const LOCK_STALE_MS = 30_000;
+const LOCK_RETRY_MS = 20;
 
 export const writeExternalConversations = async (
   path: string,

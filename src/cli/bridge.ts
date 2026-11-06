@@ -39,7 +39,7 @@ import {
 } from "../infra/codex/transport/relay.ts";
 import {
   readExternalConversations,
-  writeExternalConversations,
+  updateExternalConversations,
 } from "../infra/external-conversations.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import {
@@ -197,10 +197,9 @@ async function withClaude(relay: {
     dirname(statePath.value),
     EXTERNAL_CONVERSATIONS_FILE,
   );
-  // Read before any turn is taken, so a chat bound to a conversation is never run as Claude while the file is read; an unreadable file is left as it is.
-  const externalState =
-    adapter === null ? null : await readExternalConversations(externalPath);
-  if (externalState?.isErr() === true)
+  // Read whether or not an adapter is registered, so a chat bound before is never run as Claude after its adapter is removed; an unreadable file is left as it is.
+  const externalState = await readExternalConversations(externalPath);
+  if (externalState.isErr())
     logger.log({ event: "external_state_unavailable" });
 
   const permissionMode = loadPermissionMode(process.env);
@@ -271,18 +270,27 @@ async function withClaude(relay: {
     claudeModels: catalog.models,
     codexHome: loadCodexHome(process.env),
     cloudSkills: settings.isOk() ? settings.value.cloudSkills : [],
-    ...(adapter !== null && {
-      external: {
-        adapter,
-        // Names this bridge to its adapter, so an adapter's answer is never taken for another bridge's.
-        bridgeId: randomUUID(),
-        spawn: (handlers) =>
-          startLineProcess(adapter.command, adapter.args, handlers),
-        state: externalState?.isOk() === true ? externalState.value : null,
-        save: async (state) =>
-          (await writeExternalConversations(externalPath, state)).isOk(),
+    external: {
+      adapter:
+        adapter === null
+          ? null
+          : {
+              settings: adapter,
+              spawn: (handlers) =>
+                startLineProcess(adapter.command, adapter.args, handlers),
+            },
+      // Names this bridge to its adapter, so an adapter's answer is never taken for another bridge's.
+      bridgeId: randomUUID(),
+      store: {
+        initial: externalState.unwrapOr(null),
+        read: async () =>
+          (await readExternalConversations(externalPath)).unwrapOr(null),
+        update: async (change) =>
+          (await updateExternalConversations(externalPath, change)).unwrapOr(
+            null,
+          ),
       },
-    }),
+    },
     cronRecord: openCronRecord(cronRecordPath(statePath.value)),
     // Copies of Cloud sessions are written beside the thread state, apart from any project the user works in.
     cloud: {

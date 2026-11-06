@@ -104,20 +104,30 @@ export type GatewayCall = {
   arguments: Record<string, unknown>;
 };
 
+// The state file shared by bridges, kept in memory; null stands for one that cannot be read.
+export type SharedFile = { state: ExternalConversationState | null };
+
+export const sharedFile = (
+  state: ExternalConversationState | null = { bindings: [], intents: [] },
+): SharedFile => ({ state });
+
 // A bridge's conversations with a fake adapter, a fake call gateway and a saved state kept in memory.
 export const externalEnv = ({
   mode = "write",
   bridgeId = "bridge-1",
   adapterId = "taskctl",
   state = { bindings: [], intents: [] } as ExternalConversationState | null,
+  file = sharedFile(state),
   callers = ["parent-1"],
   owners = {} as Record<string, string>,
   conversationsHeld = [] as string[],
 }: {
-  mode?: "observe" | "write";
+  // None for a bridge with no adapter registered.
+  mode?: "observe" | "write" | "none";
   bridgeId?: string;
   adapterId?: string;
   state?: ExternalConversationState | null;
+  file?: SharedFile;
   callers?: string[];
   owners?: Record<string, string>;
   conversationsHeld?: string[];
@@ -129,7 +139,8 @@ export const externalEnv = ({
   const sends: { sessionId: string; text: string }[] = [];
   const logs: ExternalLogEvent[] = [];
   const ownStarts: string[] = [];
-  let ids = 0;
+  // Bridges sharing a file each count from where their bridge id puts them, so their intents never share an id.
+  let ids = bridgeId === "bridge-b" ? 1_000 : 0;
   const env = {
     adapter,
     timers,
@@ -153,17 +164,32 @@ export const externalEnv = ({
       return true;
     },
     lastSaved: (): ExternalConversationState | undefined => saved.at(-1),
+    file,
+    // Runs before each change of the file, so a test can hold one.
+    duringUpdate: async () => {},
   };
+  const copy = (state: ExternalConversationState) => ({
+    bindings: [...state.bindings],
+    intents: [...state.intents],
+  });
   const conversations = createExternalConversations({
-    adapterId,
-    mode,
+    adapter:
+      mode === "none" ? null : { id: adapterId, mode, spawn: adapter.spawn },
     bridgeId,
-    spawn: adapter.spawn,
-    state,
-    save: async (next) => {
-      if (env.saveFails) return false;
-      saved.push({ bindings: [...next.bindings], intents: [...next.intents] });
-      return true;
+    store: {
+      initial: file.state === null ? null : copy(file.state),
+      read: async () => (file.state === null ? null : copy(file.state)),
+      update: async (change) => {
+        await env.duringUpdate();
+        if (file.state === null || env.saveFails) return null;
+        const changed = change(copy(file.state));
+        if (changed.state !== null) {
+          file.state = copy(changed.state);
+          saved.push(copy(changed.state));
+        }
+
+        return { state: copy(file.state), result: changed.result };
+      },
     },
     call: async (line) => {
       const call = JSON.parse(line) as GatewayCall;

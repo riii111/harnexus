@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import {
   readExternalConversations,
+  updateExternalConversations,
   writeExternalConversations,
 } from "./external-conversations.ts";
 
@@ -54,5 +55,59 @@ describe("readExternalConversations", () => {
     const read = await readExternalConversations(path);
 
     expect(read.isErr()).toBe(true);
+  });
+});
+
+describe("updateExternalConversations", () => {
+  test("applies changes made at once to the file as each finds it, so none is lost", async () => {
+    const path = join(dir, "external-conversations.json");
+    const add = (threadId: string) =>
+      updateExternalConversations(path, (state) => ({
+        state: {
+          ...state,
+          bindings: [
+            ...state.bindings,
+            { adapterId: "taskctl", conversationId: threadId, threadId },
+          ],
+        },
+        result: null,
+      }));
+
+    await Promise.all([add("t1"), add("t2"), add("t3")]);
+
+    const kept = (await readExternalConversations(path)).unwrap();
+    expect(kept.bindings.map((binding) => binding.threadId).sort()).toEqual([
+      "t1",
+      "t2",
+      "t3",
+    ]);
+  });
+
+  test("takes over a lock left by a process that is gone", async () => {
+    const path = join(dir, "external-conversations.json");
+    await writeFile(
+      `${path}.lock`,
+      JSON.stringify({ pid: 2 ** 22 + 7, at: 0 }),
+    );
+
+    const updated = await updateExternalConversations(path, (state) => ({
+      state,
+      result: "changed",
+    }));
+
+    expect(updated.unwrap().result).toBe("changed");
+  });
+
+  test("leaves a file it cannot read as it is", async () => {
+    const path = join(dir, "external-conversations.json");
+    await writeFile(path, "{");
+
+    const updated = await updateExternalConversations(path, () => ({
+      state: { bindings: [], intents: [] },
+      result: null,
+    }));
+
+    expect(updated.isErr()).toBe(true);
+    expect(await readFile(path, "utf8")).toBe("{");
   });
 });

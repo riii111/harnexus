@@ -13,6 +13,7 @@ import {
 import {
   createExternalConversations,
   type ExternalLogEvent,
+  type ExternalStateStore,
   type SpawnAdapter,
 } from "../features/conversation/external/conversations.ts";
 import { externalHistoryRecords } from "../features/conversation/external/history.ts";
@@ -49,7 +50,6 @@ import {
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import { createThreadRequests } from "../infra/codex/thread-requests.ts";
-import type { ExternalConversationState } from "../infra/external-conversations.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
 import type { AdapterSettings } from "../lib/connection-settings.boundary.ts";
 import { resizeImage } from "../lib/image.boundary.ts";
@@ -100,13 +100,11 @@ export const connectClaudeThreads = ({
   };
   // Skills the user set to mean /cloud when picked in an empty chat.
   cloudSkills?: readonly string[];
-  // The outside conversation adapter the user registered, started once the threads are connected.
+  // The chats bound to outside conversations and the adapter the user registered, if any, started once the threads are connected.
   external?: {
-    adapter: AdapterSettings;
+    adapter: { settings: AdapterSettings; spawn: SpawnAdapter } | null;
     bridgeId: string;
-    spawn: SpawnAdapter;
-    state: ExternalConversationState | null;
-    save: (state: ExternalConversationState) => Promise<boolean>;
+    store: ExternalStateStore;
   };
   send: (message: object) => void;
   log: (
@@ -195,7 +193,7 @@ export const connectClaudeThreads = ({
     }),
   });
   // An adapter that writes to chats replaces the old review writer, which is then never started, so no chat is written by both.
-  const writes = external?.adapter.mode === "write";
+  const writes = external?.adapter?.settings.mode === "write";
   const reviews =
     cloud === undefined || writes
       ? undefined
@@ -204,12 +202,16 @@ export const connectClaudeThreads = ({
     external === undefined
       ? null
       : createExternalConversations({
-          adapterId: external.adapter.id,
-          mode: external.adapter.mode,
+          adapter:
+            external.adapter === null
+              ? null
+              : {
+                  id: external.adapter.settings.id,
+                  mode: external.adapter.settings.mode,
+                  spawn: external.adapter.spawn,
+                },
           bridgeId: external.bridgeId,
-          spawn: external.spawn,
-          state: external.state,
-          save: external.save,
+          store: external.store,
           call: callGateway.handle,
           isCaller: threads.isSavedClaudeThread,
           holdsConversation: (threadId) =>

@@ -11,6 +11,7 @@ import {
   intent,
   records,
   settle,
+  sharedFile,
 } from "./testing/fake-adapter.ts";
 
 const INTENT_1 = "00000000-0000-4000-8000-000000000001";
@@ -771,6 +772,7 @@ describe("createExternalConversations bindings", () => {
       env.adapter
         .latest()
         .responses()
+        .sort((x, y) => Number(x.id) - Number(y.id))
         .map(({ outcome, reason }) => ({ outcome, reason })),
     ).toEqual([
       { outcome: "done", reason: undefined },
@@ -879,6 +881,154 @@ describe("createExternalConversations with two bridges", () => {
       event: "external_adapter",
       step: "answer_lost",
     });
+  });
+});
+
+describe("createExternalConversations kept from running bound chats as Claude", () => {
+  test.each([
+    { name: "no adapter is registered", mode: "none" as const },
+    { name: "the adapter only observes", mode: "observe" as const },
+  ])("stops a message in a bound chat when $name", async ({ mode }) => {
+    const env = externalEnv({
+      mode,
+      state: { bindings: [binding("c1", "chat-1")], intents: [] },
+    });
+    const runs: string[] = [];
+    const runtime = createExternalRuntime(
+      innerRuntime(runs),
+      env.conversations,
+    );
+    env.conversations.start();
+    const turn = fakeTurn("turn-1", { text: "hello" });
+
+    await runtime.run(turn.running);
+
+    expect(turn.failure?._tag).toBe("ExternalConversationStopped");
+    expect(runs).toEqual([]);
+  });
+
+  test("stops a message in a chat that may be bound while the state file cannot be read, and runs one holding Claude's conversation", async () => {
+    const env = externalEnv({ state: null, conversationsHeld: ["chat-2"] });
+    const runs: string[] = [];
+    const runtime = createExternalRuntime(
+      innerRuntime(runs),
+      env.conversations,
+    );
+    env.conversations.start();
+    env.adapter.latest().say(hello());
+    await settle();
+    const maybeBound = fakeTurn("turn-1", { text: "hello" });
+    const claudes = fakeTurn("turn-2", { threadId: "chat-2", text: "hello" });
+
+    await runtime.run(maybeBound.running);
+    await runtime.run(claudes.running);
+
+    expect(maybeBound.failure?.message).toContain(
+      "external-conversations.json",
+    );
+    expect(runs).toEqual(["turn-2"]);
+  });
+
+  test("finishes a turn stopped while it waits for the adapter's declaration, and sends it nowhere", async () => {
+    const env = externalEnv();
+    const runs: string[] = [];
+    const runtime = createExternalRuntime(
+      innerRuntime(runs),
+      env.conversations,
+    );
+    env.conversations.start();
+    const turn = fakeTurn("turn-1", { threadId: "chat-old", text: "hi" });
+
+    const ran = runtime.run(turn.running);
+    await settle();
+    runtime.interrupt(turn.running, false);
+    env.adapter
+      .latest()
+      .say(hello([{ conversationId: "legacy", threadId: "chat-old" }]));
+    await ran;
+
+    expect(turn.outcome).toEqual({ status: "interrupted" });
+    expect(env.adapter.latest().events("turn")).toEqual([]);
+    expect(runs).toEqual([]);
+  });
+
+  test("leaves the adapter started after one that exited while its declaration was saved to greet on its own", async () => {
+    const env = externalEnv({ owners: { s1: "parent-1" } });
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    env.env.duringUpdate = () => held;
+    env.conversations.start();
+    env.adapter
+      .latest()
+      .say(hello([{ conversationId: "c1", threadId: "chat-1" }]));
+    env.adapter.latest().exit();
+    env.timers.runAll();
+    env.env.duringUpdate = async () => {};
+
+    release();
+    await settle();
+    env.adapter.latest().say({
+      type: "request",
+      id: 1,
+      op: "cloud_send",
+      sessionId: "s1",
+      text: "hi",
+    });
+    await settle();
+
+    expect(env.adapter.processes).toHaveLength(2);
+    expect(env.adapter.latest().sent.map((line) => line.type)).toEqual([
+      "hello",
+      "response",
+    ]);
+    expect(env.adapter.latest().responses()[0]).toMatchObject({
+      outcome: "not_sent",
+      reason: "not_ready",
+    });
+    expect(env.sends).toEqual([]);
+  });
+});
+
+describe("createExternalConversations with bridges sharing one state file", () => {
+  test("keeps each bridge's intents, and refuses a create of a conversation another bridge is creating", async () => {
+    const file = sharedFile();
+    const a = externalEnv({ bridgeId: "bridge-a", file });
+    const b = externalEnv({ bridgeId: "bridge-b", file });
+    a.env.answer = async () => ({ outcome: "unknown" });
+    b.env.answer = async () => ({ outcome: "unknown" });
+    a.conversations.start();
+    b.conversations.start();
+    a.adapter.latest().say(hello());
+    b.adapter.latest().say(hello());
+    await settle();
+    const create = (env: typeof a, id: number, conversationId: string) =>
+      env.adapter.latest().say({
+        type: "request",
+        id,
+        op: "create_conversation",
+        conversationId,
+        callerThreadId: "parent-1",
+        arguments: { model: "claude-sonnet-5-5" },
+      });
+
+    create(a, 1, "c1");
+    await until(() => a.adapter.latest().responses().length === 1);
+    create(b, 1, "c2");
+    await until(() => b.adapter.latest().responses().length === 1);
+    create(b, 2, "c1");
+    await until(() => b.adapter.latest().responses().length === 2);
+
+    expect(file.state?.intents.map((kept) => kept.conversationId)).toEqual([
+      "c1",
+      "c2",
+    ]);
+    expect(b.adapter.latest().responses()[1]).toMatchObject({
+      outcome: "unknown",
+      reason: "pending_create",
+    });
+    expect([a.calls.length, b.calls.length]).toEqual([1, 1]);
   });
 });
 

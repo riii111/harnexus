@@ -95,12 +95,9 @@ export type ExternalConversations = ReturnType<
 
 // Starts the adapter the user registered and keeps one connection to it: what it is told of Cloud sessions and chats, and what it asks this bridge to do.
 export const createExternalConversations = ({
-  adapterId,
-  mode,
+  adapter,
   bridgeId,
-  spawn,
-  state,
-  save,
+  store,
   call,
   isCaller,
   holdsConversation,
@@ -114,13 +111,14 @@ export const createExternalConversations = ({
   historyMs = HISTORY_MS,
   postMs = POST_MS,
 }: {
-  adapterId: string;
-  mode: "observe" | "write";
+  // Null when no adapter is registered; the chats bound before are still kept from running as Claude.
+  adapter: {
+    id: string;
+    mode: "observe" | "write";
+    spawn: SpawnAdapter;
+  } | null;
   bridgeId: string;
-  spawn: SpawnAdapter;
-  // Null when the file could not be read, so nothing is written over it and no first turn is taken for an intent.
-  state: ExternalConversationState | null;
-  save: (state: ExternalConversationState) => Promise<boolean>;
+  store: ExternalStateStore;
   // The bridge's own call gateway, answering version 1 lines.
   call: (line: string) => Promise<string>;
   isCaller: (threadId: string) => boolean;
@@ -142,16 +140,14 @@ export const createExternalConversations = ({
   historyMs?: number;
   postMs?: number;
 }) => {
-  const writes = createSerialQueue();
-  // Binds and creates are checked and saved one at a time, so none is answered before the change it relies on is saved.
+  const adapterId = adapter?.id ?? null;
+  const mode = adapter?.mode ?? null;
+  const writes = mode === "write";
+  // This bridge's changes go one at a time; the store's lock keeps them apart from other bridges'.
   const changes = createSerialQueue();
-  const bindings = new Map<string, ConversationBinding>(
-    (state?.bindings ?? []).map((binding) => [binding.threadId, binding]),
-  );
-  const intents = new Map<string, CreateIntent>(
-    (state?.intents ?? []).map((intent) => [intent.intentId, intent]),
-  );
-  const writable = state !== null;
+  // The bindings and intents as the file last read held them, or null when it could not be read.
+  let view: Draft | null =
+    store.initial === null ? null : draftOf(store.initial);
   // Threads whose declared binding contradicts another, whose turns are stopped until a later declaration settles them.
   const conflicts = new Set<string>();
   // The creates waiting for their chat's first turn, by intent.
@@ -192,19 +188,32 @@ export const createExternalConversations = ({
 
   const nextId = (prefix: string) => `${prefix}-${bridgeId}-${++sequence}`;
 
-  const persist = () =>
-    writes.run("state", async () => {
-      if (!writable) return false;
-      const saved = await save({
-        bindings: [...bindings.values()],
-        intents: [...intents.values()],
+  const refresh = async () => {
+    const read = await store.read();
+    view = read === null ? null : draftOf(read);
+    return view;
+  };
+
+  // Applies an edit to the file as it stands now; null when the file could not be read or written, which leaves it as it was.
+  const change = <T>(edit: (draft: Draft) => T) =>
+    changes.run("state", async () => {
+      const updated = await store.update((state) => {
+        const draft = draftOf(state);
+        const result = edit(draft);
+        return { state: draft.changed ? stateOf(draft) : null, result };
       });
-      if (!saved) log({ event: "external_adapter", step: "state_unwritable" });
-      return saved;
+      if (updated === null) {
+        log({ event: "external_adapter", step: "state_unwritable" });
+        await refresh();
+        return null;
+      }
+
+      view = draftOf(updated.state);
+      return { result: updated.result };
     });
 
-  const threadOfConversation = (conversationId: string) => {
-    for (const binding of bindings.values()) {
+  const threadOf = (draft: Draft | null, conversationId: string) => {
+    for (const binding of draft?.bindings.values() ?? []) {
       if (
         binding.adapterId === adapterId &&
         binding.conversationId === conversationId
@@ -215,35 +224,39 @@ export const createExternalConversations = ({
     return undefined;
   };
 
-  const intentOfConversation = (conversationId: string) =>
-    [...intents.values()].find(
+  const intentOf = (draft: Draft | null, conversationId: string) =>
+    [...(draft?.intents.values() ?? [])].find(
       (intent) =>
         intent.adapterId === adapterId &&
         intent.conversationId === conversationId,
     );
 
-  const dropIntents = (conversationId: string) => {
-    for (const [intentId, intent] of intents) {
+  const dropIntents = (draft: Draft, conversationId: string) => {
+    for (const [intentId, intent] of draft.intents) {
       if (
         intent.adapterId === adapterId &&
         intent.conversationId === conversationId
-      )
-        intents.delete(intentId);
+      ) {
+        draft.intents.delete(intentId);
+        draft.changed = true;
+      }
     }
   };
 
   const ownBindings = () =>
-    [...bindings.values()].filter((binding) => binding.adapterId === adapterId);
+    [...(view?.bindings.values() ?? [])].filter(
+      (binding) => binding.adapterId === adapterId,
+    );
 
   // A process that neither answers nor exits is not waited for longer than its handshake.
   const untilFirstConnection = () =>
-    connected || mode !== "write"
+    connected || !writes
       ? Promise.resolve()
       : Promise.race([firstConnection, delay(schedule, handshakeMs)]);
 
   const connect = () => {
-    if (closed || refused) return;
-    const opened = spawn({
+    if (closed || refused || adapter === null) return;
+    const opened = adapter.spawn({
       onLine: (line) => {
         if (current === opened) receive(opened, line);
       },
@@ -343,7 +356,7 @@ export const createExternalConversations = ({
         return;
       }
 
-      void greet(message.bindings);
+      void greet(process, message.bindings);
       return;
     }
 
@@ -408,8 +421,13 @@ export const createExternalConversations = ({
     }
   };
 
-  const greet = async (declared: readonly DeclaredBinding[]) => {
-    if (mode === "write") await adopt(declared);
+  const greet = async (
+    process: LineProcess,
+    declared: readonly DeclaredBinding[],
+  ) => {
+    if (writes) await adopt(declared);
+    // A process that exited while its declaration was saved leaves the connection to the one started after it, which greets on its own.
+    if (current !== process) return;
     cancelTimer?.();
     cancelTimer = null;
     connected = true;
@@ -419,19 +437,17 @@ export const createExternalConversations = ({
     sendLine({
       type: "ready",
       bridgeId,
-      bindings:
-        mode === "write"
-          ? ownBindings().map(({ conversationId, threadId }) => ({
-              conversationId,
-              threadId,
-            }))
-          : [],
-      pending:
-        mode === "write"
-          ? [...intents.values()]
-              .filter((intent) => intent.adapterId === adapterId)
-              .map((intent) => intent.conversationId)
-          : [],
+      bindings: writes
+        ? ownBindings().map(({ conversationId, threadId }) => ({
+            conversationId,
+            threadId,
+          }))
+        : [],
+      pending: writes
+        ? [...(view?.intents.values() ?? [])]
+            .filter((intent) => intent.adapterId === adapterId)
+            .map((intent) => intent.conversationId)
+        : [],
       conflicts: [...conflicts],
     });
     markReady();
@@ -448,7 +464,6 @@ export const createExternalConversations = ({
 
   // Takes the bindings the adapter declared from its own record; a binding only this bridge knows, such as one a first turn confirmed while the adapter was away, is kept and told to it.
   const adopt = async (declared: readonly DeclaredBinding[]) => {
-    conflicts.clear();
     const threadCount = new Map<string, number>();
     const conversationCount = new Map<string, number>();
     for (const { threadId, conversationId } of declared) {
@@ -459,38 +474,39 @@ export const createExternalConversations = ({
       );
     }
 
-    let changed = false;
-    for (const { threadId, conversationId } of declared) {
-      const kept = bindings.get(threadId);
-      const other = threadOfConversation(conversationId);
-      if (
-        (threadCount.get(threadId) ?? 0) > 1 ||
-        (conversationCount.get(conversationId) ?? 0) > 1 ||
-        (kept !== undefined &&
-          (kept.adapterId !== adapterId ||
-            kept.conversationId !== conversationId)) ||
-        (other !== undefined && other !== threadId) ||
-        (kept === undefined && holdsConversation(threadId))
-      ) {
-        conflicts.add(threadId);
-        if (other !== undefined && other !== threadId) conflicts.add(other);
-        continue;
+    const adopted = await change((draft) => {
+      const found = new Set<string>();
+      for (const { threadId, conversationId } of declared) {
+        const kept = draft.bindings.get(threadId);
+        const other = threadOf(draft, conversationId);
+        if (
+          (threadCount.get(threadId) ?? 0) > 1 ||
+          (conversationCount.get(conversationId) ?? 0) > 1 ||
+          (kept !== undefined &&
+            (kept.adapterId !== adapterId ||
+              kept.conversationId !== conversationId)) ||
+          (other !== undefined && other !== threadId) ||
+          (kept === undefined && holdsConversation(threadId))
+        ) {
+          found.add(threadId);
+          if (other !== undefined && other !== threadId) found.add(other);
+          continue;
+        }
+
+        if (kept === undefined && adapterId !== null) {
+          draft.bindings.set(threadId, { adapterId, conversationId, threadId });
+          draft.changed = true;
+        }
+
+        dropIntents(draft, conversationId);
       }
 
-      if (kept === undefined) {
-        bindings.set(threadId, { adapterId, conversationId, threadId });
-        changed = true;
-      }
-
-      if (intentOfConversation(conversationId) !== undefined) {
-        dropIntents(conversationId);
-        changed = true;
-      }
-    }
-
+      return found;
+    });
+    conflicts.clear();
+    for (const threadId of adopted?.result ?? []) conflicts.add(threadId);
     if (conflicts.size > 0)
       log({ event: "external_adapter", step: "binding_conflict" });
-    if (changed) await persist();
   };
 
   const answerRequest = async (request: AdapterRequest): Promise<Answer> => {
@@ -554,49 +570,50 @@ export const createExternalConversations = ({
     AdapterRequest,
     { op: "create_conversation" }
   >): Promise<Answer> => {
-    const registered = await changes.run("bindings", () =>
-      register(conversationId, callerThreadId, args),
-    );
+    const registered = await register(conversationId, callerThreadId, args);
     return "outcome" in registered ? registered : askToCreate(registered, args);
   };
 
-  // Saves the intent of a create, or answers why none is made.
+  // Saves the intent of a create, or answers why none is made; checked against the file as it stands, so two bridges never both create one conversation.
   const register = async (
     conversationId: string,
     callerThreadId: string,
     args: Record<string, unknown>,
   ): Promise<Answer | CreateIntent> => {
-    const existing = threadOfConversation(conversationId);
-    if (existing !== undefined)
-      return { outcome: "done", threadId: existing, existing: true };
-    if (!writable) return { outcome: "not_sent", reason: "state_unavailable" };
-    // A create whose outcome is not known stays registered, so it is never asked of the app again.
-    if (intentOfConversation(conversationId) !== undefined)
-      return {
-        outcome: "unknown",
-        reason: "pending_create",
-        message:
-          "an earlier create of this conversation has not been settled, so another is not sent",
-      };
     if (!isCaller(callerThreadId))
       return { outcome: "rejected", reason: "unknown_caller" };
     // Only a Claude chat's first turn reaches the bridge, so a chat on another model would run its prompt as a turn.
     if (!isClaudeModel(args.model))
       return { outcome: "invalid", reason: "not_claude_model" };
-    const intent: CreateIntent = {
+    const fresh: CreateIntent = {
       intentId: newId(),
-      adapterId,
+      adapterId: adapterId ?? "",
       conversationId,
       callerThreadId,
       createdAt: new Date(now()).toISOString(),
     };
-    intents.set(intent.intentId, intent);
-    if (!(await persist())) {
-      intents.delete(intent.intentId);
-      return { outcome: "not_sent", reason: "state_unavailable" };
-    }
-
-    return intent;
+    const registered = await change((draft): Answer | CreateIntent => {
+      const existing = threadOf(draft, conversationId);
+      if (existing !== undefined)
+        return { outcome: "done", threadId: existing, existing: true };
+      // A create whose outcome is not known stays registered, so it is never asked of the app again.
+      if (intentOf(draft, conversationId) !== undefined)
+        return {
+          outcome: "unknown",
+          reason: "pending_create",
+          message:
+            "an earlier create of this conversation has not been settled, so another is not sent",
+        };
+      draft.intents.set(fresh.intentId, fresh);
+      draft.changed = true;
+      return fresh;
+    });
+    return (
+      registered?.result ?? {
+        outcome: "not_sent",
+        reason: "state_unavailable",
+      }
+    );
   };
 
   const askToCreate = async (
@@ -616,21 +633,26 @@ export const createExternalConversations = ({
     const outcome = outcomeOf(answered.outcome);
     const named =
       typeof answered.threadId === "string" ? answered.threadId : null;
-    const bound = firstTurn.threadId ?? threadOfConversation(conversationId);
+    const bound = firstTurn.threadId ?? threadOf(view, conversationId);
     if (bound !== undefined) return { outcome: "done", threadId: bound };
-    if (named !== null && intents.has(intent.intentId)) {
-      // The app made the chat but its first turn was refused or not seen, so it is bound by the answer.
-      const confirmed = await confirm(intent, named);
-      if (confirmed) return { outcome: "done", threadId: named };
-    }
+    // The app made the chat but its first turn was refused or not seen, so it is bound by the answer.
+    if (named !== null && (await confirm(intent, named)) === "bound")
+      return { outcome: "done", threadId: named };
 
     if (
       outcome === "not_sent" ||
       outcome === "rejected" ||
       outcome === "invalid"
     ) {
-      intents.delete(intent.intentId);
-      await persist();
+      const dropped = await change((draft) => {
+        // A first turn that bound the chat meanwhile shows it was made after all.
+        const shown = threadOf(draft, conversationId);
+        if (shown === undefined && draft.intents.delete(intent.intentId))
+          draft.changed = true;
+        return shown;
+      });
+      if (dropped?.result !== undefined)
+        return { outcome: "done", threadId: dropped.result };
       return {
         outcome,
         ...(typeof answered.message === "string" && {
@@ -647,71 +669,67 @@ export const createExternalConversations = ({
     };
   };
 
-  // Binds the chat a create made; answers false when the conversation already shows in another chat.
+  // Binds the chat a create made; refused when the conversation already shows in another chat, or failed when the file could not be changed.
   const confirm = async (intent: CreateIntent, threadId: string) => {
-    const other = threadOfConversation(intent.conversationId);
-    if (other !== undefined && other !== threadId) return false;
-    const kept = bindings.get(threadId);
-    if (kept !== undefined && kept.conversationId !== intent.conversationId)
-      return false;
-    bindings.set(threadId, {
-      adapterId,
-      conversationId: intent.conversationId,
-      threadId,
+    const confirmed = await change((draft) => {
+      const other = threadOf(draft, intent.conversationId);
+      if (other !== undefined) return other === threadId;
+      const kept = draft.bindings.get(threadId);
+      if (kept !== undefined) return false;
+      draft.bindings.set(threadId, {
+        adapterId: intent.adapterId,
+        conversationId: intent.conversationId,
+        threadId,
+      });
+      draft.changed = true;
+      dropIntents(draft, intent.conversationId);
+      return true;
     });
-    dropIntents(intent.conversationId);
+    if (confirmed === null) return "failed";
+    if (!confirmed.result) return "refused";
     created.get(intent.intentId)?.(threadId);
-    // The binding holds in memory even when it cannot be saved; the adapter is told it, so its record rebuilds the copy.
-    await persist();
     sendLine({
       type: "event",
       event: "conversation_bound",
       conversationId: intent.conversationId,
       threadId,
     });
-    return true;
+    return "bound";
   };
 
-  const bindConversation = (conversationId: string, threadId: string) =>
-    changes.run("bindings", () => bindNow(conversationId, threadId));
-
-  const bindNow = async (
+  const bindConversation = async (
     conversationId: string,
     threadId: string,
   ): Promise<Answer> => {
-    const kept = bindings.get(threadId);
-    if (kept !== undefined)
-      return kept.adapterId === adapterId &&
-        kept.conversationId === conversationId
-        ? { outcome: "done", threadId }
-        : { outcome: "rejected", reason: "binding_conflict" };
-    const other = threadOfConversation(conversationId);
-    if (other !== undefined)
-      return { outcome: "rejected", reason: "binding_conflict" };
-    if (!writable) return { outcome: "not_sent", reason: "state_unavailable" };
     if (!isCaller(threadId))
       return { outcome: "rejected", reason: "unknown_caller" };
     if (holdsConversation(threadId))
       return { outcome: "rejected", reason: "has_conversation" };
-    const binding = { adapterId, conversationId, threadId };
-    const dropped = [...intents.values()];
-    bindings.set(threadId, binding);
-    dropIntents(conversationId);
-    if (!(await persist())) {
-      bindings.delete(threadId);
-      for (const intent of dropped) intents.set(intent.intentId, intent);
+    const bound = await change((draft): Answer => {
+      const kept = draft.bindings.get(threadId);
+      if (kept !== undefined)
+        return kept.adapterId === adapterId &&
+          kept.conversationId === conversationId
+          ? { outcome: "done", threadId }
+          : { outcome: "rejected", reason: "binding_conflict" };
+      if (threadOf(draft, conversationId) !== undefined || adapterId === null)
+        return { outcome: "rejected", reason: "binding_conflict" };
+      draft.bindings.set(threadId, { adapterId, conversationId, threadId });
+      draft.changed = true;
+      dropIntents(draft, conversationId);
+      return { outcome: "done", threadId };
+    });
+    if (bound === null)
       return { outcome: "not_sent", reason: "state_unavailable" };
-    }
-
-    conflicts.delete(threadId);
-    return { outcome: "done", threadId };
+    if (bound.result.outcome === "done") conflicts.delete(threadId);
+    return bound.result;
   };
 
   const post = async (
     conversationId: string,
     text: string,
   ): Promise<Answer> => {
-    const threadId = threadOfConversation(conversationId);
+    const threadId = threadOf(view, conversationId);
     if (threadId === undefined)
       return { outcome: "rejected", reason: "unbound" };
     if (conflicts.has(threadId))
@@ -815,34 +833,47 @@ export const createExternalConversations = ({
     },
 
     isBound: (threadId: string) =>
-      mode === "write" && (bindings.has(threadId) || conflicts.has(threadId)),
+      view?.bindings.has(threadId) === true || conflicts.has(threadId),
 
+    // Whether a turn goes to Claude, to the adapter, or nowhere; a chat holding Claude's own conversation is never bound, and any other is checked against the file as it stands.
     route: async (
       threadId: string,
       firstTurn: { text: string; source: string | null } | null,
     ): Promise<ConversationRoute> => {
-      if (mode !== "write") return NORMAL;
+      if (holdsConversation(threadId)) return NORMAL;
       await untilFirstConnection();
+      const known = await refresh();
+      if (known === null) return { kind: "stopped", message: STATE_UNREADABLE };
       if (conflicts.has(threadId))
         return { kind: "stopped", message: CONFLICT };
-      const binding = bindings.get(threadId);
+      const binding = known.bindings.get(threadId);
       if (binding !== undefined)
-        return binding.adapterId === adapterId
+        return writes && binding.adapterId === adapterId
           ? {
               kind: "bound",
               conversationId: binding.conversationId,
               opened: false,
             }
-          : { kind: "stopped", message: OTHER_ADAPTER };
+          : { kind: "stopped", message: NO_ADAPTER };
       const intentId =
         firstTurn === null ? null : intentOfFirstTurn(firstTurn.text);
       if (intentId === null) return NORMAL;
-      const intent = intents.get(intentId);
+      const intent = known.intents.get(intentId);
       if (intent === undefined || intent.callerThreadId !== firstTurn?.source)
         return { kind: "stopped", message: UNKNOWN_FIRST_TURN };
-      return (await confirm(intent, threadId))
-        ? { kind: "bound", conversationId: intent.conversationId, opened: true }
-        : { kind: "stopped", message: CONFLICT };
+      if (!writes || intent.adapterId !== adapterId)
+        return { kind: "stopped", message: NO_ADAPTER };
+      const confirmed = await confirm(intent, threadId);
+      if (confirmed === "bound")
+        return {
+          kind: "bound",
+          conversationId: intent.conversationId,
+          opened: true,
+        };
+      return {
+        kind: "stopped",
+        message: confirmed === "refused" ? CONFLICT : STATE_UNREADABLE,
+      };
     },
 
     // Hands a turn of a bound chat to the adapter; false when no adapter is connected, so the turn is stopped.
@@ -880,7 +911,7 @@ export const createExternalConversations = ({
 
     // The bound chat's conversation as the adapter keeps it, or null when it cannot be asked.
     history: async (threadId: string) => {
-      const binding = bindings.get(threadId);
+      const binding = view?.bindings.get(threadId);
       if (binding === undefined || !connected) return null;
       const id = nextId("history");
       const answered = new Promise<HistoryEntry[] | null>((resolve) => {
@@ -913,6 +944,38 @@ export const createExternalConversations = ({
     },
   };
 };
+
+// Where the bindings are kept, shared by every bridge with the same state folder.
+export type ExternalStateStore = {
+  // As read when the bridge started, or null when it could not be read.
+  initial: ExternalConversationState | null;
+  read: () => Promise<ExternalConversationState | null>;
+  update: <T>(
+    change: (state: ExternalConversationState) => {
+      state: ExternalConversationState | null;
+      result: T;
+    },
+  ) => Promise<{ state: ExternalConversationState; result: T } | null>;
+};
+
+type Draft = {
+  bindings: Map<string, ConversationBinding>;
+  intents: Map<string, CreateIntent>;
+  changed: boolean;
+};
+
+const draftOf = (state: ExternalConversationState): Draft => ({
+  bindings: new Map(
+    state.bindings.map((binding) => [binding.threadId, binding]),
+  ),
+  intents: new Map(state.intents.map((intent) => [intent.intentId, intent])),
+  changed: false,
+});
+
+const stateOf = (draft: Draft): ExternalConversationState => ({
+  bindings: [...draft.bindings.values()],
+  intents: [...draft.intents.values()],
+});
 
 export const serializeExternalEvent = (entry: ExternalLogEvent) =>
   entry.step === "request"
@@ -954,8 +1017,11 @@ const NORMAL: ConversationRoute = { kind: "normal" };
 const CONFLICT =
   "This chat's link to its outside conversation contradicts another, so nothing here is sent until the adapter declares it again.";
 
-const OTHER_ADAPTER =
-  "This chat shows an outside conversation of an adapter that is not registered now, so nothing here is sent.";
+const NO_ADAPTER =
+  "This chat shows an outside conversation whose adapter is not registered to answer it now, so nothing here is sent.";
+
+const STATE_UNREADABLE =
+  "This chat may show an outside conversation, but the bridge could not read or save external-conversations.json beside its threads.json, so nothing here is sent. Fix or remove that file and restart the app.";
 
 const UNKNOWN_FIRST_TURN =
   "This chat was opened for an outside conversation this bridge has no record of, so it was not run.";
