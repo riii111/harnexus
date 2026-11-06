@@ -280,6 +280,7 @@ export const harness = async (
               allowedTools: ALLOWED_TOOLS,
               hasUnsettledWrite: unsettledWrite,
               stopWrites: () => gates.push("stop"),
+              finishTurn: () => gates.push("stop"),
               acceptWrites: () => gates.push("accept"),
             }
           : createCodexLink({

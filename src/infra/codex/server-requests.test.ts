@@ -25,6 +25,141 @@ describe("attachServerRequests", () => {
     );
   });
 
+  test("keeps its time limit standing still while the app asks the user a question for the thread", async () => {
+    const server = fakeServer();
+    const requests = attachServerRequests(server);
+    void collect(requests.serverOutput);
+
+    const answer = requests.request(
+      "call",
+      {},
+      { timeoutMs: 30, threadId: "th-1" },
+    );
+    server.output.write(
+      '{"id":5,"method":"mcpServer/elicitation/request","params":{"threadId":"th-1","turnId":null}}\n',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    server.output.write(
+      '{"method":"serverRequest/resolved","params":{"threadId":"th-1","requestId":5}}\n',
+    );
+    server.output.write('{"id":"harnexus-1","result":{"late":true}}\n');
+    server.output.end();
+
+    const result = await answer;
+    expect(result.isOk() && result.value).toEqual({ late: true });
+  });
+
+  test("counts the time limit again from the user's answer, so a call right after it is not cut short", async () => {
+    const server = fakeServer();
+    const requests = attachServerRequests(server);
+    void collect(requests.serverOutput);
+
+    const answer = requests.request(
+      "call",
+      {},
+      { timeoutMs: 80, threadId: "th-1" },
+    );
+    server.output.write(
+      '{"id":5,"method":"mcpServer/elicitation/request","params":{"threadId":"th-1"}}\n',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    server.output.write(
+      '{"method":"serverRequest/resolved","params":{"threadId":"th-1","requestId":5}}\n',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    server.output.write('{"id":"harnexus-1","result":{"ok":true}}\n');
+    server.output.end();
+
+    const result = await answer;
+    expect(result.isOk() && result.value).toEqual({ ok: true });
+  });
+
+  test("times out when the call itself outlasts its limit after the user's answer", async () => {
+    const server = fakeServer();
+    const requests = attachServerRequests(server);
+    void collect(requests.serverOutput);
+
+    const answer = requests.request(
+      "call",
+      {},
+      { timeoutMs: 40, threadId: "th-1" },
+    );
+    server.output.write(
+      '{"id":5,"method":"mcpServer/elicitation/request","params":{"threadId":"th-1"}}\n',
+    );
+    server.output.write(
+      '{"method":"serverRequest/resolved","params":{"threadId":"th-1","requestId":5}}\n',
+    );
+
+    const result = await answer;
+    expect(result.isErr() && result.error._tag).toBe("ServerRequestUnanswered");
+  });
+
+  test.each([
+    { name: "for another thread", asked: "th-2", resolved: false },
+    { name: "already answered", asked: "th-1", resolved: true },
+  ])(
+    "times out as usual when the question was $name",
+    async ({ asked, resolved }) => {
+      const server = fakeServer();
+      const requests = attachServerRequests(server);
+      void collect(requests.serverOutput);
+
+      const answer = requests.request(
+        "call",
+        {},
+        { timeoutMs: 30, threadId: "th-1" },
+      );
+      server.output.write(
+        `{"id":5,"method":"mcpServer/elicitation/request","params":{"threadId":"${asked}","turnId":null}}\n`,
+      );
+      if (resolved) {
+        server.output.write(
+          '{"method":"serverRequest/resolved","params":{"threadId":"th-1","requestId":5}}\n',
+        );
+      }
+
+      const result = await answer;
+      expect(result.isErr() && result.error._tag).toBe(
+        "ServerRequestUnanswered",
+      );
+    },
+  );
+
+  test("reports an unanswered request when its wait is stopped and keeps the late answer from the app", async () => {
+    const server = fakeServer();
+    const requests = attachServerRequests(server);
+    const appOutput = collect(requests.serverOutput);
+    const stop = new AbortController();
+
+    const answer = requests.request(
+      "call",
+      {},
+      { timeoutMs: 5_000, signal: stop.signal },
+    );
+    stop.abort();
+    server.output.write('{"id":"harnexus-1","result":{}}\n');
+    server.output.end();
+
+    const result = await answer;
+    expect(result.isErr() && result.error._tag).toBe("ServerRequestUnanswered");
+    expect(await appOutput).toBe("");
+  });
+
+  test("does not send a request whose wait was already stopped", async () => {
+    const server = fakeServer();
+    const requests = attachServerRequests(server);
+
+    const answer = await requests.request(
+      "call",
+      {},
+      { timeoutMs: 5_000, signal: AbortSignal.abort() },
+    );
+
+    expect(answer.isErr() && answer.error._tag).toBe("ServerRequestNotSent");
+    expect(server.sent()).toEqual([]);
+  });
+
   test("passes the app a response to an id this bridge never issued", async () => {
     const server = fakeServer();
     const requests = attachServerRequests(server);

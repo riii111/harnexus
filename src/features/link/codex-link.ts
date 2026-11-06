@@ -5,6 +5,11 @@ import type { CronRecord } from "../../infra/codex/automations.boundary.ts";
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
 import { createAutomationTool } from "./automation.ts";
 import {
+  BROWSER_ALLOWED_TOOLS,
+  type BrowserTurn,
+  createBrowserTabs,
+} from "./browser-tabs.ts";
+import {
   createAppToolCalls,
   type LinkStore,
   MAX_WAIT_MS,
@@ -44,7 +49,9 @@ export const createCodexLink = ({
     ...waits,
   });
 
+  const browser = createBrowserTabs({ callerThreadId, store, request });
   const tools = [
+    ...browser.tools,
     defineTool(
       "list_projects",
       "List the projects in the Codex app, to choose where create_thread starts a worker or reviewer.",
@@ -122,11 +129,23 @@ export const createCodexLink = ({
     call,
     createChecked: created.createChecked,
     // Reads change nothing and reach only what the app lets this thread read, so they run without asking; creating and sending stay under the user's Claude permission rules.
-    allowedTools: READ_TOOLS.map(
+    allowedTools: [...READ_TOOLS, ...BROWSER_ALLOWED_TOOLS].map(
       (name) => `mcp__${CODEX_LINK_SERVER}__${name}`,
     ),
-    hasUnsettledWrite: calls.hasUnsettledWrite,
-    stopWrites: calls.stopWrites,
-    acceptWrites: calls.acceptWrites,
+    hasUnsettledWrite: () =>
+      calls.hasUnsettledWrite() || browser.hasUnsettledWrite(),
+    stopWrites: () => {
+      calls.stopWrites();
+      browser.endTurn("Interrupt");
+    },
+    finishTurn: () => {
+      calls.stopWrites();
+      browser.endTurn("Stop");
+    },
+    // The turn that accepts writes again is also the only one that may use the browser.
+    acceptWrites: (turn?: BrowserTurn) => {
+      calls.acceptWrites();
+      if (turn !== undefined) browser.beginTurn(turn);
+    },
   };
 };

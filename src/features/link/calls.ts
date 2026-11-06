@@ -9,12 +9,6 @@ export type LinkStore = {
   get: (threadId: string) => object | undefined;
 };
 
-type AppTool =
-  | (typeof READ_TOOLS)[number]
-  | "create_thread"
-  | "send_message_to_thread"
-  | "automation_update";
-
 export type AppToolCalls = ReturnType<typeof createAppToolCalls>;
 
 export const READ_TOOLS = [
@@ -23,14 +17,33 @@ export const READ_TOOLS = [
   "wait_threads",
 ] as const;
 
+// What a server tool call needs besides its arguments: the server and the request meta that names the turn it acts for.
+type CallTarget = {
+  server: string;
+  // The signal belongs to the same turn as the meta, and ends the wait for the call when that turn stops.
+  meta: () => Promise<
+    Result<
+      { meta: Record<string, unknown>; signal?: AbortSignal },
+      MetaUnavailable
+    >
+  >;
+};
+
 export const createAppToolCalls = ({
   callerThreadId,
   store,
   request,
+  target = {
+    server: CODEX_APP_SERVER,
+    meta: async () => Result.ok({ meta: {} }),
+  },
+  unknownAdvice = "Stop sending or creating threads and ask the user to check the app.",
 }: {
   callerThreadId: string;
   store: LinkStore;
   request: ServerRequest;
+  target?: CallTarget;
+  unknownAdvice?: string;
 }) => {
   const writes = createSerialQueue();
   let unknownWrite: string | null = null;
@@ -41,25 +54,34 @@ export const createAppToolCalls = ({
   let stopped = false;
 
   const callApp = async (
-    name: AppTool,
+    name: string,
     args: Record<string, unknown>,
     timeoutMs = CALL_TIMEOUT_MS,
-  ) =>
-    (
-      await request(
-        "mcpServer/tool/call",
-        {
-          threadId: callerThreadId,
-          server: CODEX_APP_SERVER,
-          tool: name,
-          arguments: args,
-        },
-        { timeoutMs },
-      )
-    ).andThen(readToolResult);
+  ) => {
+    const meta = await target.meta();
+    if (meta.isErr()) return Result.err(meta.error);
+    const answered = await request(
+      "mcpServer/tool/call",
+      {
+        threadId: callerThreadId,
+        server: target.server,
+        tool: name,
+        arguments: args,
+        ...(Object.keys(meta.value.meta).length > 0 && {
+          _meta: meta.value.meta,
+        }),
+      },
+      {
+        timeoutMs,
+        threadId: callerThreadId,
+        ...(meta.value.signal !== undefined && { signal: meta.value.signal }),
+      },
+    );
+    return answered.andThen(readToolResult);
+  };
 
   const read = async (
-    name: AppTool,
+    name: string,
     args: Record<string, unknown>,
     targets: readonly string[],
     timeoutMs?: number,
@@ -71,14 +93,17 @@ export const createAppToolCalls = ({
   };
 
   const write = (
-    name: AppTool,
+    name: string,
     args: Record<string, unknown>,
     targets: readonly string[],
     {
       queuedIn = currentGeneration(),
       onSuccess = async (result) => result,
       beforeSend = () => null,
+      label = name,
     }: {
+      // Names the call to the user when it is refused or its outcome is unknown, where the tool's own name would not say what was asked.
+      label?: string;
       queuedIn?: number | null;
       onSuccess?: (result: ToolResult) => Promise<ToolResult>;
       beforeSend?: () => string | null | Promise<string | null>;
@@ -88,12 +113,12 @@ export const createAppToolCalls = ({
     writes.run(CODEX_APP_SERVER, async () => {
       if (unknownWrite !== null) {
         return failure(
-          `An earlier ${unknownWrite} call has an unknown outcome and is never repeated automatically. Stop sending or creating threads and ask the user to check the app.`,
+          `An earlier ${unknownWrite} call has an unknown outcome and is never repeated automatically. ${unknownAdvice}`,
         );
       }
 
       // A write queued behind another is dropped once its turn is stopped, since nobody is left to act on its result.
-      if (queuedIn !== generation) return notSentAfterStop(name);
+      if (queuedIn !== generation) return notSentAfterStop(label);
       const refusal = refuseTargets(targets, { allowSelf: false });
       if (refusal !== null) return failure(refusal);
       const unsendable = await beforeSend();
@@ -102,14 +127,17 @@ export const createAppToolCalls = ({
       try {
         const called = await callApp(name, args, WRITE_TIMEOUT_MS);
         if (called.isErr()) {
-          if (called.error._tag === "ServerRequestNotSent") {
+          if (
+            called.error._tag === "ServerRequestNotSent" ||
+            called.error._tag === "MetaUnavailable"
+          ) {
             return failure(called.error.message);
           }
 
           // A malformed answer is still an answer to a call that ran, so like a lost one it leaves the outcome unknown.
-          unknownWrite = name;
+          unknownWrite = label;
           return failure(
-            `${called.error.message}. The ${name} call may or may not have taken effect and will not be repeated; ask the user to check the app.`,
+            `${called.error.message}. The ${label} call may or may not have taken effect and will not be repeated; ask the user to check the app.`,
           );
         }
 
@@ -144,7 +172,7 @@ export const createAppToolCalls = ({
     currentGeneration,
     wasStopped: (queuedIn: number | null) => queuedIn !== generation,
     hasUnknownWrite: () => unknownWrite !== null,
-    markUnknownWrite: (name: AppTool) => {
+    markUnknownWrite: (name: string) => {
       unknownWrite = name;
     },
     hasUnsettledWrite: () =>
@@ -160,8 +188,13 @@ export const createAppToolCalls = ({
   };
 };
 
-export const notSentAfterStop = (name: AppTool) =>
+export const notSentAfterStop = (name: string) =>
   failure(`The turn was stopped before ${name} was sent, so it was not sent.`);
+
+// The request meta could not be built, so the call was never sent.
+export class MetaUnavailable extends TaggedError("MetaUnavailable")<{
+  message: string;
+}> {}
 
 class AppToolAnswerMalformed extends TaggedError("AppToolAnswerMalformed")<{
   message: string;
@@ -169,7 +202,7 @@ class AppToolAnswerMalformed extends TaggedError("AppToolAnswerMalformed")<{
 
 type ContentItem = ToolResult["content"][number];
 
-const readToolResult = (answer: unknown) => {
+export const readToolResult = (answer: unknown) => {
   if (!isObject(answer) || !Array.isArray(answer.content)) {
     return Result.err(
       new AppToolAnswerMalformed({

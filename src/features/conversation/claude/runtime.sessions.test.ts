@@ -1651,6 +1651,7 @@ const runClaudeStartedTurn = (runtime: Runtime, record: ThreadRecord) => {
       toolOutput: null,
       text: "",
       images: [],
+      tabCandidates: [],
       permissionMode: "default",
       effort: null,
       startedBy: "claude",

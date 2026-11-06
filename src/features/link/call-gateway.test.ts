@@ -554,7 +554,11 @@ const setup = ({
   armedMs?: number;
 } = {}) => {
   const watch = createDelegationWatch({ armedMs });
-  const requests: { method: string; params: unknown; timeoutMs: number }[] = [];
+  const requests: {
+    method: string;
+    params: unknown;
+    timeoutMs: number | null;
+  }[] = [];
   const linkCalls: { tool: string; args: unknown }[] = [];
   const opened: string[] = [];
   const request = (async (method, params, { timeoutMs }) => {

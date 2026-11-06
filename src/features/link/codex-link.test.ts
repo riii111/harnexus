@@ -21,6 +21,8 @@ describe("createCodexLink tools", () => {
       "mcp__codex_link__list_projects",
       "mcp__codex_link__read_thread",
       "mcp__codex_link__wait_threads",
+      "mcp__codex_link__browser_read_tab",
+      "mcp__codex_link__browser_use_attached_tab",
     ]);
   });
 
@@ -1275,7 +1277,7 @@ type CallParams = {
 type RecordedRequest = {
   method: string;
   params: CallParams;
-  timeoutMs: number;
+  timeoutMs: number | null;
 };
 
 const CALLER = "thread-caller";

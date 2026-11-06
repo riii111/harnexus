@@ -2449,6 +2449,7 @@ const fakeTurn = (
           },
     text: delegated ?? typed,
     images: images as TurnInput["images"],
+    tabCandidates: [],
     permissionMode: "default",
     effort: null,
     startedBy,

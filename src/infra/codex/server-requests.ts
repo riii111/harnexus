@@ -3,6 +3,7 @@ import type { Readable, Writable } from "node:stream";
 import { Result, TaggedError } from "better-result";
 
 import { parseJson } from "../../lib/json.boundary.ts";
+import { isObject } from "../../lib/object.ts";
 import { createLineInjector } from "./transport/inject.ts";
 import { createLineRewriter } from "./transport/line-rewriter.ts";
 
@@ -31,7 +32,8 @@ export type ServerRequestError =
 export type ServerRequest = (
   method: string,
   params: unknown,
-  options: { timeoutMs: number },
+  // The signal ends the wait early, which leaves the request unanswered; with a thread id the time limit stands still while the app asks the user something for that thread.
+  options: { timeoutMs: number; signal?: AbortSignal; threadId?: string },
 ) => Promise<Result<unknown, ServerRequestError>>;
 
 // The bridge's own requests to the server, sent between the app's lines.
@@ -47,7 +49,37 @@ export const attachServerRequests = ({
   let sequence = 0;
   let closed = false;
 
+  // The questions the app has open for each thread, which the server announces when it asks and when the answer arrives.
+  const asking = new Map<string, Set<string>>();
+  // Called when a thread's last question is answered, so each call waiting on that thread counts its limit from then.
+  const rearmers = new Map<string, { threadId: string; rearm: () => void }>();
+
+  const trackQuestions = (line: Buffer) => {
+    if (!line.includes(ELICITATION_BYTES) && !line.includes(RESOLVED_BYTES)) {
+      return;
+    }
+
+    const parsed = parseJson(line.toString());
+    if (parsed.isErr() || !isObject(parsed.value)) return;
+    const { method, id, params } = parsed.value;
+    if (!isObject(params)) return;
+    if (method === ELICITATION && typeof params.threadId === "string") {
+      const open = asking.get(params.threadId) ?? new Set<string>();
+      asking.set(params.threadId, open.add(String(id)));
+    } else if (method === RESOLVED) {
+      for (const [thread, open] of asking) {
+        open.delete(String(params.requestId));
+        if (open.size > 0) continue;
+        asking.delete(thread);
+        for (const waiting of rearmers.values()) {
+          if (waiting.threadId === thread) waiting.rearm();
+        }
+      }
+    }
+  };
+
   const dropOwnResponse = (line: Buffer) => {
+    trackQuestions(line);
     // The bridge's ids take their own prefix so they never collide with the app's.
     if (sequence === 0 || !line.includes(ID_PREFIX_BYTES)) return line;
     const parsed = parseJson(line.toString());
@@ -78,19 +110,46 @@ export const attachServerRequests = ({
   // A response can only arrive before the server output ends, so everything still waiting then is unanswered.
   filtered.once("finish", closeAll);
 
-  const request: ServerRequest = (method, params, { timeoutMs }) => {
+  const request: ServerRequest = (
+    method,
+    params,
+    { timeoutMs, signal, threadId },
+  ) => {
     sequence += 1;
     const id = `${ID_PREFIX}${sequence}`;
     if (closed) return Promise.resolve(Result.err(notSent(method)));
     return new Promise((resolve) => {
-      const timer = setTimeout(() => settle({ kind: "timeout" }), timeoutMs);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const rearm = () => {
+        clearTimeout(timer);
+        timer = setTimeout(expire, timeoutMs);
+      };
+
+      function expire() {
+        // The user's time to answer is no part of the call's own, so while a question is open the limit stays unspent and starts again from the answer.
+        if (threadId === undefined || !asking.has(threadId)) {
+          settle({ kind: "timeout" });
+        }
+      }
+
+      rearm();
+      if (threadId !== undefined) rearmers.set(id, { threadId, rearm });
+      const abort = () => settle({ kind: "aborted" });
+      signal?.addEventListener("abort", abort, { once: true });
       const settle = (answer: Answer) => {
         clearTimeout(timer);
+        rearmers.delete(id);
+        signal?.removeEventListener("abort", abort);
         pending.delete(id);
         resolve(toResult(method, answer, timeoutMs));
       };
 
       pending.set(id, settle);
+      if (signal?.aborted === true) {
+        settle({ kind: "stopped" });
+        return;
+      }
+
       const sent = injector.inject(
         `${JSON.stringify({ id, method, params })}\n`,
       );
@@ -134,6 +193,20 @@ const toResult = (
           message: `the server did not answer ${method} within ${timeoutMs}ms`,
         }),
       );
+    case "stopped":
+      return Result.err(
+        new ServerRequestNotSent({
+          method,
+          message: `the turn was stopped before ${method} was sent, so it was not sent`,
+        }),
+      );
+    case "aborted":
+      return Result.err(
+        new ServerRequestUnanswered({
+          method,
+          message: `the wait for ${method} was stopped before it was answered`,
+        }),
+      );
     case "closed":
       return Result.err(
         new ServerRequestUnanswered({
@@ -168,7 +241,13 @@ type Answer =
   | { kind: "rejected"; error: { code?: unknown; message?: unknown } | null }
   | { kind: "notSent" }
   | { kind: "timeout" }
+  | { kind: "aborted" }
+  | { kind: "stopped" }
   | { kind: "closed" };
 
 const ID_PREFIX = "harnexus-";
+const ELICITATION = "mcpServer/elicitation/request";
+const RESOLVED = "serverRequest/resolved";
+const ELICITATION_BYTES = Buffer.from(ELICITATION);
+const RESOLVED_BYTES = Buffer.from(RESOLVED);
 const ID_PREFIX_BYTES = Buffer.from(`"${ID_PREFIX}`);

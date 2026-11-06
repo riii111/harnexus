@@ -3,6 +3,7 @@ import type { InferErr } from "better-result";
 
 import type { ImageSource } from "../../../infra/claude/images.ts";
 import type { UserInput } from "../../../infra/codex/protocol/messages.ts";
+import type { TabMention } from "../../../infra/codex/protocol/tab-mention.ts";
 import type { ThreadRecord } from "../../../infra/thread-store.ts";
 import type { createCodexLink } from "../../link/codex-link.ts";
 import type { delegatedMessage } from "../../link/delegations.ts";
@@ -63,7 +64,7 @@ export type ThreadEnd = "archived" | "deleted";
 
 export type TurnLink = Pick<
   ReturnType<typeof createCodexLink>,
-  "hasUnsettledWrite" | "stopWrites"
+  "hasUnsettledWrite" | "stopWrites" | "finishTurn"
 >;
 
 // items are what the app shows as the user's message; text and images are what the agent is sent.
@@ -72,6 +73,8 @@ export type MessageInput = {
   toolOutput: ToolOutput | null;
   text: string;
   images: ImageSource[];
+  // The in-app browser tabs the user's message linked, which Claude may use only after the user allows each one.
+  tabCandidates: TabMention[];
 };
 
 export type ToolOutput = NonNullable<
