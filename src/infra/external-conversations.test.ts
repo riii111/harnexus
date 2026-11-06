@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   readExternalConversations,
   updateExternalConversations,
-  writeExternalConversations,
 } from "./external-conversations.ts";
 
 let dir: string;
@@ -32,82 +32,123 @@ const STATE = {
   ],
 };
 
+const bind = (folder: string, threadId: string) =>
+  updateExternalConversations(folder, (state) => ({
+    state: {
+      ...state,
+      bindings: [
+        ...state.bindings,
+        { adapterId: "taskctl", conversationId: threadId, threadId },
+      ],
+    },
+    result: threadId,
+  }));
+
 describe("readExternalConversations", () => {
-  test("reads a missing file as holding nothing", async () => {
-    const read = await readExternalConversations(join(dir, "none.json"));
+  test("reads a missing folder as holding nothing", async () => {
+    const read = await readExternalConversations(join(dir, "none"));
 
-    expect(read.unwrap()).toEqual({ bindings: [], intents: [] });
+    expect(read.unwrap()).toEqual({
+      revision: 0,
+      state: { bindings: [], intents: [] },
+    });
   });
 
-  test("reads back what was written, in a folder made for it", async () => {
-    const path = join(dir, "state", "external-conversations.json");
+  test("refuses a latest revision of another version rather than taking it for none", async () => {
+    const folder = join(dir, "external-conversations");
+    await mkdir(folder);
+    await writeFile(
+      join(folder, "000000000001.json"),
+      JSON.stringify({ version: 2, ...STATE }),
+    );
 
-    await writeExternalConversations(path, STATE);
-
-    expect((await readExternalConversations(path)).unwrap()).toEqual(STATE);
-    expect(JSON.parse(await readFile(path, "utf8")).version).toBe(1);
-  });
-
-  test("refuses a file of another version rather than taking it for none", async () => {
-    const path = join(dir, "external-conversations.json");
-    await writeFile(path, JSON.stringify({ version: 2, ...STATE }));
-
-    const read = await readExternalConversations(path);
+    const read = await readExternalConversations(folder);
 
     expect(read.isErr()).toBe(true);
   });
 });
 
 describe("updateExternalConversations", () => {
-  test("applies changes made at once to the file as each finds it, so none is lost", async () => {
-    const path = join(dir, "external-conversations.json");
-    const add = (threadId: string) =>
-      updateExternalConversations(path, (state) => ({
-        state: {
-          ...state,
-          bindings: [
-            ...state.bindings,
-            { adapterId: "taskctl", conversationId: threadId, threadId },
-          ],
-        },
-        result: null,
-      }));
+  test("reads back what was changed, in a folder made for it", async () => {
+    const folder = join(dir, "state", "external-conversations");
 
-    await Promise.all([add("t1"), add("t2"), add("t3")]);
-
-    const kept = (await readExternalConversations(path)).unwrap();
-    expect(kept.bindings.map((binding) => binding.threadId).sort()).toEqual([
-      "t1",
-      "t2",
-      "t3",
-    ]);
-  });
-
-  test("takes over a lock left by a process that is gone", async () => {
-    const path = join(dir, "external-conversations.json");
-    await writeFile(
-      `${path}.lock`,
-      JSON.stringify({ pid: 2 ** 22 + 7, at: 0 }),
-    );
-
-    const updated = await updateExternalConversations(path, (state) => ({
-      state,
-      result: "changed",
-    }));
-
-    expect(updated.unwrap().result).toBe("changed");
-  });
-
-  test("leaves a file it cannot read as it is", async () => {
-    const path = join(dir, "external-conversations.json");
-    await writeFile(path, "{");
-
-    const updated = await updateExternalConversations(path, () => ({
-      state: { bindings: [], intents: [] },
+    await updateExternalConversations(folder, () => ({
+      state: STATE,
       result: null,
     }));
 
+    expect((await readExternalConversations(folder)).unwrap()).toEqual({
+      revision: 1,
+      state: STATE,
+    });
+  });
+
+  test("makes each of changes made at once on the revision before it, so none is lost", async () => {
+    const folder = join(dir, "external-conversations");
+
+    await Promise.all([
+      bind(folder, "t1"),
+      bind(folder, "t2"),
+      bind(folder, "t3"),
+    ]);
+
+    const kept = (await readExternalConversations(folder)).unwrap();
+    expect(
+      kept.state.bindings.map((binding) => binding.threadId).sort(),
+    ).toEqual(["t1", "t2", "t3"]);
+    expect(kept.revision).toBe(3);
+  });
+
+  test("makes a change worked out on an older revision again on the newer one instead of writing over it", async () => {
+    const folder = join(dir, "external-conversations");
+    await bind(folder, "t1");
+    const seen: number[] = [];
+
+    const late = await updateExternalConversations(folder, (state) => {
+      seen.push(state.bindings.length);
+      // Another bridge makes the next revision while this change is worked out.
+      if (seen.length === 1)
+        writeFileSync(
+          join(folder, "000000000002.json"),
+          JSON.stringify({
+            version: 1,
+            bindings: [...state.bindings, ...STATE.bindings],
+            intents: [],
+          }),
+        );
+      return {
+        state: { ...state, intents: [...STATE.intents] },
+        result: null,
+      };
+    });
+
+    const kept = (await readExternalConversations(folder)).unwrap();
+    expect(late.isOk()).toBe(true);
+    expect(seen).toEqual([1, 2]);
+    expect(kept).toMatchObject({ revision: 3 });
+    expect(kept.state.bindings).toHaveLength(2);
+    expect(kept.state.intents).toHaveLength(1);
+  });
+
+  test("keeps only the latest revisions", async () => {
+    const folder = join(dir, "external-conversations");
+    for (const threadId of Array.from({ length: 12 }, (_, at) => `t${at}`))
+      await bind(folder, threadId);
+
+    const names = await readdir(folder);
+
+    expect(names.sort()[0]).toBe("000000000005.json");
+    expect(names).toHaveLength(8);
+  });
+
+  test("leaves a revision it cannot read as it is", async () => {
+    const folder = join(dir, "external-conversations");
+    await mkdir(folder);
+    await writeFile(join(folder, "000000000001.json"), "{");
+
+    const updated = await bind(folder, "t1");
+
     expect(updated.isErr()).toBe(true);
-    expect(await readFile(path, "utf8")).toBe("{");
+    expect(await readdir(folder)).toEqual(["000000000001.json"]);
   });
 });

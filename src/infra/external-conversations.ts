@@ -1,18 +1,16 @@
-import { dirname } from "node:path";
+import { join } from "node:path";
 
 import { Result, TaggedError } from "better-result";
 import { z } from "zod";
 
 import {
+  listDirectoryIfExists,
   prepareDirectory,
   readTextFileIfExists,
   removeFile,
-  writeFileAtomic,
   writeFileExclusive,
 } from "../lib/fs.boundary.ts";
 import { parseJson } from "../lib/json.boundary.ts";
-import { isObject } from "../lib/object.ts";
-import { processAlive } from "../lib/run.boundary.ts";
 
 // A chat that shows an adapter's conversation, as the adapter declared it or as its first turn confirmed it.
 export type ConversationBinding = {
@@ -37,6 +35,10 @@ export type ExternalConversationState = {
 
 class ExternalConversationsUnreadable extends TaggedError(
   "ExternalConversationsUnreadable",
+)<{ path: string; message: string }> {}
+
+class ExternalConversationsContended extends TaggedError(
+  "ExternalConversationsContended",
 )<{ path: string; message: string }> {}
 
 const FILE_VERSION = 1;
@@ -66,117 +68,121 @@ export const EMPTY_EXTERNAL_STATE: ExternalConversationState = {
   intents: [],
 };
 
-// A missing file holds nothing; a file that cannot be read is an error, so its intents are never taken for none.
+// The state is a folder of numbered revisions, each external-conversations.json as it stood after one change; a change is made by creating the next number, which only one bridge can do, so a bridge working from an older revision never writes over a newer one.
+const REVISION = /^(\d{12})\.json$/;
+
+const revisionName = (revision: number) =>
+  `${String(revision).padStart(12, "0")}.json`;
+
+// A missing folder holds nothing; a latest revision that cannot be read is an error, so its intents are never taken for none.
 export const readExternalConversations = async (
-  path: string,
+  dir: string,
 ): Promise<
-  Result<ExternalConversationState, ExternalConversationsUnreadable>
+  Result<
+    { revision: number; state: ExternalConversationState },
+    ExternalConversationsUnreadable
+  >
 > => {
-  const read = await readTextFileIfExists(path);
-  if (read.isErr())
-    return Result.err(
-      new ExternalConversationsUnreadable({
-        path,
-        message: read.error.message,
-      }),
-    );
-  if (read.value === null) return Result.ok(EMPTY_EXTERNAL_STATE);
-  const parsed = STATE.safeParse(parseJson(read.value).unwrapOr(undefined));
-  return parsed.success
-    ? Result.ok({
-        bindings: parsed.data.bindings,
-        intents: parsed.data.intents,
-      })
-    : Result.err(
+  for (let tries = 0; tries < READ_TRIES; tries++) {
+    const names = await listDirectoryIfExists(dir);
+    if (names.isErr())
+      return Result.err(
         new ExternalConversationsUnreadable({
-          path,
-          message: `${path} is not a version ${FILE_VERSION} file of chat bindings`,
+          path: dir,
+          message: names.error.message,
         }),
       );
+    const latest = Math.max(
+      0,
+      ...(names.value ?? []).flatMap((name) => {
+        const matched = REVISION.exec(name)?.[1];
+        return matched === undefined ? [] : [Number(matched)];
+      }),
+    );
+    if (latest === 0)
+      return Result.ok({ revision: 0, state: EMPTY_EXTERNAL_STATE });
+    const path = join(dir, revisionName(latest));
+    const read = await readTextFileIfExists(path);
+    if (read.isErr())
+      return Result.err(
+        new ExternalConversationsUnreadable({
+          path,
+          message: read.error.message,
+        }),
+      );
+    // Pruned after the folder was listed, so a newer revision stands; it is listed again.
+    if (read.value === null) continue;
+    const parsed = STATE.safeParse(parseJson(read.value).unwrapOr(undefined));
+    return parsed.success
+      ? Result.ok({
+          revision: latest,
+          state: {
+            bindings: parsed.data.bindings,
+            intents: parsed.data.intents,
+          },
+        })
+      : Result.err(
+          new ExternalConversationsUnreadable({
+            path,
+            message: `${path} is not a version ${FILE_VERSION} file of chat bindings`,
+          }),
+        );
+  }
+
+  return Result.err(
+    new ExternalConversationsUnreadable({
+      path: dir,
+      message: `${dir} kept changing while it was read`,
+    }),
+  );
 };
 
-class ExternalConversationsLocked extends TaggedError(
-  "ExternalConversationsLocked",
-)<{ path: string; message: string }> {}
-
-// Changes the file as it stands now, under a lock every bridge sharing it takes, so no bridge's change is written over by another's older copy; answers the state the file then holds.
+// Changes the state as it stands now; when another bridge made a revision first, the change is made again on that one.
 export const updateExternalConversations = async <T>(
-  path: string,
+  dir: string,
   change: (state: ExternalConversationState) => {
-    // Null leaves the file as it is.
+    // Null leaves the state as it is.
     state: ExternalConversationState | null;
     result: T;
   },
-  { waitMs = LOCK_WAIT_MS, staleMs = LOCK_STALE_MS } = {},
 ) => {
-  const lock = `${path}.lock`;
-  const made = await prepareDirectory(dirname(path));
+  const made = await prepareDirectory(dir);
   if (made.isErr()) return Result.err(made.error);
-  const held = await takeLock(lock, waitMs, staleMs);
-  if (held.isErr()) return Result.err(held.error);
-  const read = await readExternalConversations(path);
-  const changed = read.map(change);
-  const written =
-    changed.isOk() && changed.value.state !== null
-      ? await writeExternalConversations(path, changed.value.state)
-      : Result.ok();
-  await removeFile(lock);
-  if (changed.isErr()) return Result.err(changed.error);
-  if (written.isErr()) return Result.err(written.error);
-  return Result.ok({
-    state: changed.value.state ?? read.unwrapOr(EMPTY_EXTERNAL_STATE),
-    result: changed.value.result,
-  });
+  for (let tries = 0; tries < UPDATE_TRIES; tries++) {
+    const read = await readExternalConversations(dir);
+    if (read.isErr()) return Result.err(read.error);
+    const changed = change(read.value.state);
+    if (changed.state === null)
+      return Result.ok({ state: read.value.state, result: changed.result });
+    const next = read.value.revision + 1;
+    const created = await writeFileExclusive(
+      join(dir, revisionName(next)),
+      JSON.stringify({ version: FILE_VERSION, ...changed.state }),
+    );
+    if (created.isErr()) return Result.err(created.error);
+    if (!created.value) continue;
+    await prune(dir, next);
+    return Result.ok({ state: changed.state, result: changed.result });
+  }
+
+  return Result.err(
+    new ExternalConversationsContended({
+      path: dir,
+      message: `${dir} was changed by other bridges on every try`,
+    }),
+  );
 };
 
-// A lock left by a bridge that died, or held far longer than any change takes, is taken over.
-const takeLock = async (lock: string, waitMs: number, staleMs: number) => {
-  const until = Date.now() + waitMs;
-  for (;;) {
-    const made = await writeFileExclusive(
-      lock,
-      JSON.stringify({ pid: process.pid, at: Date.now() }),
-    );
-    if (made.isErr()) return Result.err(made.error);
-    if (made.value) return Result.ok();
-    const seen = (await readTextFileIfExists(lock)).unwrapOr(null) ?? "";
-    const holder = parseJson(seen).unwrapOr(null);
-    const stale =
-      !isObject(holder) ||
-      typeof holder.pid !== "number" ||
-      typeof holder.at !== "number" ||
-      !processAlive(holder.pid) ||
-      Date.now() - holder.at > staleMs;
-    // Removed only while it is still the lock read, so a lock another bridge took over meanwhile stays.
-    if (stale) {
-      const again = (await readTextFileIfExists(lock)).unwrapOr(null) ?? "";
-      if (again === seen) await removeFile(lock);
-      continue;
-    }
-
-    if (Date.now() >= until)
-      return Result.err(
-        new ExternalConversationsLocked({
-          path: lock,
-          message: `${lock} is held by another bridge`,
-        }),
-      );
-    await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
+// Older revisions are only read by a bridge that listed the folder before the newest was made, which then lists it again.
+const prune = async (dir: string, latest: number) => {
+  for (let revision = latest - KEPT_REVISIONS; revision > 0; revision--) {
+    const removed = await removeFile(join(dir, revisionName(revision)));
+    if (removed.isErr()) return;
+    if (revision <= latest - KEPT_REVISIONS - PRUNE_BATCH) return;
   }
 };
 
-const LOCK_WAIT_MS = 5_000;
-const LOCK_STALE_MS = 30_000;
-const LOCK_RETRY_MS = 20;
-
-export const writeExternalConversations = async (
-  path: string,
-  state: ExternalConversationState,
-) => {
-  const made = await prepareDirectory(dirname(path));
-  if (made.isErr()) return made;
-  return writeFileAtomic(
-    path,
-    JSON.stringify({ version: FILE_VERSION, ...state }),
-  );
-};
+const READ_TRIES = 5;
+const UPDATE_TRIES = 20;
+const KEPT_REVISIONS = 8;
+const PRUNE_BATCH = 8;

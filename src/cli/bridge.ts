@@ -71,7 +71,7 @@ import {
 const CLOUD_COPY_FOLDER = "cloud-copies";
 const CLOUD_REVIEW_FOLDER = "cloud-reviews";
 
-const EXTERNAL_CONVERSATIONS_FILE = "external-conversations.json";
+const EXTERNAL_CONVERSATIONS_FOLDER = "external-conversations";
 
 const CLOUD_CHECKOUT_FOLDER = "checkouts";
 
@@ -195,7 +195,7 @@ async function withClaude(relay: {
     : null;
   const externalPath = join(
     dirname(statePath.value),
-    EXTERNAL_CONVERSATIONS_FILE,
+    EXTERNAL_CONVERSATIONS_FOLDER,
   );
   // Read whether or not an adapter is registered, so a chat bound before is never run as Claude after its adapter is removed; an unreadable file is left as it is.
   const externalState = await readExternalConversations(externalPath);
@@ -282,9 +282,11 @@ async function withClaude(relay: {
       // Names this bridge to its adapter, so an adapter's answer is never taken for another bridge's.
       bridgeId: randomUUID(),
       store: {
-        initial: externalState.unwrapOr(null),
-        read: async () =>
-          (await readExternalConversations(externalPath)).unwrapOr(null),
+        initial: externalState.isOk() ? externalState.value.state : null,
+        read: async () => {
+          const read = await readExternalConversations(externalPath);
+          return read.isOk() ? read.value.state : null;
+        },
         update: async (change) =>
           (await updateExternalConversations(externalPath, change)).unwrapOr(
             null,

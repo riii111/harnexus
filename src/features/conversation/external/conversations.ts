@@ -504,7 +504,12 @@ export const createExternalConversations = ({
       return found;
     });
     conflicts.clear();
-    for (const threadId of adopted?.result ?? []) conflicts.add(threadId);
+    // A declaration that could not be saved still says those chats show conversations, so they are stopped rather than taken for chats of Claude's.
+    const stopped =
+      adopted === null
+        ? declared.map((binding) => binding.threadId)
+        : adopted.result;
+    for (const threadId of stopped) conflicts.add(threadId);
     if (conflicts.size > 0)
       log({ event: "external_adapter", step: "binding_conflict" });
   };
@@ -912,7 +917,15 @@ export const createExternalConversations = ({
     // The bound chat's conversation as the adapter keeps it, or null when it cannot be asked.
     history: async (threadId: string) => {
       const binding = view?.bindings.get(threadId);
-      if (binding === undefined || !connected) return null;
+      // Only the adapter the chat was bound for is asked, so another adapter's conversation of the same id is never shown.
+      if (
+        binding === undefined ||
+        !connected ||
+        !writes ||
+        binding.adapterId !== adapterId ||
+        conflicts.has(threadId)
+      )
+        return null;
       const id = nextId("history");
       const answered = new Promise<HistoryEntry[] | null>((resolve) => {
         asks.set(id, resolve);
@@ -1021,7 +1034,7 @@ const NO_ADAPTER =
   "This chat shows an outside conversation whose adapter is not registered to answer it now, so nothing here is sent.";
 
 const STATE_UNREADABLE =
-  "This chat may show an outside conversation, but the bridge could not read or save external-conversations.json beside its threads.json, so nothing here is sent. Fix or remove that file and restart the app.";
+  "This chat may show an outside conversation, but the bridge could not read or save the external-conversations folder beside its threads.json, so nothing here is sent. Fix or remove its latest file and restart the app.";
 
 const UNKNOWN_FIRST_TURN =
   "This chat was opened for an outside conversation this bridge has no record of, so it was not run.";

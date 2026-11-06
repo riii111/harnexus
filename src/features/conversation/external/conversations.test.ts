@@ -991,6 +991,46 @@ describe("createExternalConversations kept from running bound chats as Claude", 
   });
 });
 
+describe("createExternalConversations when its state cannot be saved or names another adapter", () => {
+  test("stops a declared chat whose binding could not be saved", async () => {
+    const env = externalEnv();
+    const runs: string[] = [];
+    const runtime = createExternalRuntime(
+      innerRuntime(runs),
+      env.conversations,
+    );
+    env.env.saveFails = true;
+    env.conversations.start();
+    env.adapter
+      .latest()
+      .say(hello([{ conversationId: "c1", threadId: "chat-1" }]));
+    await settle();
+    const turn = fakeTurn("turn-1", { text: "hello" });
+
+    await runtime.run(turn.running);
+
+    expect(turn.failure?._tag).toBe("ExternalConversationStopped");
+    expect(runs).toEqual([]);
+  });
+
+  test("never asks an adapter for the history of a chat bound for another", async () => {
+    const env = externalEnv({
+      adapterId: "other",
+      state: { bindings: [binding("c1", "chat-1")], intents: [] },
+    });
+    env.conversations.start();
+    env.adapter.latest().say({ ...hello(), adapterId: "other" });
+    await settle();
+
+    const read = await env.conversations.history("chat-1");
+
+    expect(read).toBeNull();
+    expect(
+      env.adapter.latest().sent.filter((line) => line.op === "history"),
+    ).toEqual([]);
+  });
+});
+
 describe("createExternalConversations with bridges sharing one state file", () => {
   test("keeps each bridge's intents, and refuses a create of a conversation another bridge is creating", async () => {
     const file = sharedFile();
