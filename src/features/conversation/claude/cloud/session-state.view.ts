@@ -54,3 +54,6 @@ export const HALTED_NOTICE =
 
 export const NOT_STARTED_NOTICE =
   "The Cloud session has shown nothing yet, so harnexus cannot tell whether it started. Check it on claude.ai; anything it does later appears here when it is copied.";
+
+export const RESUMES_LATER_NOTICE =
+  "The Cloud session ended this turn and will go on by itself, such as when work it left running ends or a message it scheduled or subscribed to arrives. What it does next appears here.";

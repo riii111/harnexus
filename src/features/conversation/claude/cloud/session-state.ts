@@ -29,9 +29,9 @@ export type CloudSessionState =
 //                        ├─ ends its turn ───────────> *replied ─────────────────────────┤
 //                        ├─ stopped on claude.ai ────> *interrupted ─────────────────────┤
 //                        ├─ API error ───────────────> *errored ─────────────────────────┤
-//                        └─ ends with work scheduled ─> resumes_later ───────────────────┘
+//                        └─ ends with work scheduled ─> *resumes_later ──────────────────┘
 //
-//   * hands the next move back to the user, so a chat following the session ends its turn there.
+//   * ends the chat's turn there, as claude.ai shows the turn over; a session that resumes by itself is shown in a turn of its own.
 export const sessionStateOf = (
   records: readonly SessionMessage[],
 ): CloudSessionState => {
@@ -69,9 +69,10 @@ export const runningToolOf = (records: readonly SessionMessage[]) => {
   return typeof call?.name === "string" ? call.name : null;
 };
 
-// Whether the session has handed the next move to the user, so a chat following it stops waiting.
+// Whether the session ended its turn, so a chat following it stops waiting, even when the session will go on by itself later.
 export const handsBack = (state: CloudSessionState) =>
   state.kind === "replied" ||
+  state.kind === "resumes_later" ||
   state.kind === "awaiting_input" ||
   state.kind === "interrupted" ||
   state.kind === "errored";
