@@ -44,9 +44,9 @@ import {
 
 const CLOUD_ID = "session_01NfjPqrX1AK5RmKyV182VYD";
 
-// How the app links a picked skill in the message it sends.
-const CLOUD_SKILL_LINK =
-  "[$cloud-session](/home/me/.agents/skills/cloud-session/SKILL.md)";
+// The skill the user set to mean /cloud, linked the way the app links a picked skill in the message it sends.
+const CLOUD_SKILL = "start-in-cloud";
+const CLOUD_SKILL_LINK = `[$${CLOUD_SKILL}](/home/me/.agents/skills/${CLOUD_SKILL}/SKILL.md)`;
 
 type CloudEvent = Parameters<typeof serializeCloudEvent>[0];
 
@@ -436,7 +436,7 @@ describe("createCloudRuntime /cloud", () => {
     expect(env.innerRuns).toEqual([]);
   });
 
-  test("starts a Cloud session for a request sent with the cloud-session skill in an empty chat, without the skill's link and without Claude", async () => {
+  test("starts a Cloud session for a request sent with the set /cloud skill in an empty chat, without the skill's link and without Claude", async () => {
     const env = setup({ copies: [[]] });
     const turn = env.turn(
       `${CLOUD_SKILL_LINK} README の誤字を直して\nPR は作らない`,
@@ -459,7 +459,7 @@ describe("createCloudRuntime /cloud", () => {
     { name: "id", argument: CLOUD_ID },
     { name: "URL", argument: `https://claude.ai/code/${CLOUD_ID}` },
   ])(
-    "links an empty chat to the session whose $name is sent with the cloud-session skill",
+    "links an empty chat to the session whose $name is sent with the set /cloud skill",
     async ({ argument }) => {
       const env = setup({
         copies: [[prompt("p1", "hello"), endReply("r1", "hi")]],
@@ -475,7 +475,19 @@ describe("createCloudRuntime /cloud", () => {
     },
   );
 
-  test("refuses the cloud-session skill sent alone in an empty chat as it refuses /cloud alone", async () => {
+  test("passes a skill on to Claude when no skill is set as /cloud, as by default", async () => {
+    const env = setup({ copies: [], cloudSkills: [] });
+
+    await env.runtime.run(
+      env.turn(`${CLOUD_SKILL_LINK} README の誤字を直して`).running,
+    );
+
+    expect(env.started).toEqual([]);
+    expect(env.links).toEqual([]);
+    expect(env.innerRuns).toEqual(["turn-1"]);
+  });
+
+  test("refuses the set /cloud skill sent alone in an empty chat as it refuses /cloud alone", async () => {
     const env = setup({ copies: [] });
     const turn = env.turn(`${CLOUD_SKILL_LINK}\n`);
 
@@ -488,7 +500,7 @@ describe("createCloudRuntime /cloud", () => {
 
   test.each([
     {
-      name: "the cloud-session skill in a chat that holds a conversation",
+      name: "the set /cloud skill in a chat that holds a conversation",
       text: `${CLOUD_SKILL_LINK} README の誤字を直して`,
       held: true,
     },
@@ -2101,10 +2113,12 @@ const setup = ({
   copies,
   waitLimitMs,
   link,
+  cloudSkills = [CLOUD_SKILL],
 }: {
   copies: SessionMessage[][];
   waitLimitMs?: number;
   link?: CloudLink;
+  cloudSkills?: readonly string[];
 }) => {
   const sessionIds = new Map<string, string | null>();
   const clouds = new Map<string, CloudLink>();
@@ -2367,6 +2381,7 @@ const setup = ({
         if (at !== -1) ticks.splice(at, 1);
       };
     },
+    cloudSkills,
     ...(waitLimitMs === undefined ? {} : { waitLimitMs }),
   };
   env.runtime = createCloudRuntime(fakeInner(innerRuns), deps);

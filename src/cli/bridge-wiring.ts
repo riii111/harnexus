@@ -63,6 +63,7 @@ export const connectClaudeThreads = ({
   cronRecord,
   permissionMode = "auto",
   cloud,
+  cloudSkills = [],
   send,
   log,
 }: {
@@ -87,6 +88,8 @@ export const connectClaudeThreads = ({
     // Where the reviews a Cloud session read are kept for their chats.
     reviewDir: string;
   };
+  // Skills the user set to mean /cloud when picked in an empty chat.
+  cloudSkills?: readonly string[];
   send: (message: object) => void;
   log: (event: ClaudeLogEvent | RouteEvent | CloudLogEvent) => void;
 }) => {
@@ -183,6 +186,7 @@ export const connectClaudeThreads = ({
     send,
     log,
     renameThread,
+    cloudSkills,
     ...(reviews === undefined
       ? {}
       : {

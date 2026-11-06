@@ -32,6 +32,7 @@ import {
   type loadPermissionMode,
   loadStatePath,
 } from "../lib/config.ts";
+import type { loadConnectionSettings } from "../lib/connection-settings.boundary.ts";
 import { openLogSink } from "../lib/fs.boundary.ts";
 import { createLogger } from "../lib/logger.ts";
 import type { Signal } from "../lib/process.boundary.ts";
@@ -54,6 +55,7 @@ type LogEvent =
   | { event: "effort_settings_unavailable"; reason: EffortSettingsFailure }
   | { event: "claude_models_unavailable"; reason: ModelsFailure }
   | { event: "claude_models_loaded"; count: number }
+  | { event: "connection_settings_unavailable"; reason: SettingsFailure }
   | { event: "bridge_signaled"; signal: Signal }
   | { event: "call_socket_listening" }
   | { event: "call_socket_unavailable"; reason: CallSocketFailure }
@@ -81,6 +83,10 @@ type ClaudeUnavailable =
 
 type EffortSettingsFailure = InferErr<
   Awaited<ReturnType<typeof loadEffortSettings>>
+>["_tag"];
+
+type SettingsFailure = InferErr<
+  Awaited<ReturnType<typeof loadConnectionSettings>>
 >["_tag"];
 
 type ModelsFailure = InferErr<
@@ -161,6 +167,7 @@ const serializeLogEvent = (entry: LogEvent) => {
     case "claude_unavailable":
     case "effort_settings_unavailable":
     case "claude_models_unavailable":
+    case "connection_settings_unavailable":
     case "call_socket_unavailable":
       return { event: entry.event, reason: entry.reason };
     case "claude_models_loaded":

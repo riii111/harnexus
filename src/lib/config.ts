@@ -164,6 +164,17 @@ export const loadCallerSocketPath = (
 const defaultCallSocketPath = (statePath: string) =>
   join(dirname(statePath), "call.sock");
 
+// Where the Codex App keeps its automations and worktrees; a relative CODEX_HOME is ignored, so the working directory never picks it.
+export const loadCodexHome = (
+  env: Record<string, string | undefined>,
+  home: () => string = homedir,
+) => {
+  const value = env.CODEX_HOME;
+  return value !== undefined && isAbsolute(value)
+    ? value
+    : join(home(), ".codex");
+};
+
 const DEFAULT_SHUTDOWN_GRACE_MS = 5000;
 
 const DEFAULT_STATE_PATH = ".local/state/harnexus/threads.json";

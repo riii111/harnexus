@@ -21,10 +21,27 @@ export const defineTool: typeof tool = (
   ...(extras?.annotations !== undefined && { annotations: extras.annotations }),
 });
 
-export const failure = (text: string): ToolResult => ({
-  content: [{ type: "text", text }],
-  isError: true,
-});
+// What a failed call tells a caller of the call socket, which reads it instead of the text written for Claude.
+export type FailureKind = "not_sent" | "rejected" | "unknown" | "invalid";
+
+// Kept beside the result rather than in it, so what Claude reads does not change.
+const failureKinds = new WeakMap<object, FailureKind>();
+
+export const failure = (
+  text: string,
+  kind: FailureKind = "rejected",
+): ToolResult => {
+  const result: ToolResult = {
+    content: [{ type: "text", text }],
+    isError: true,
+  };
+  failureKinds.set(result, kind);
+  return result;
+};
+
+// A failure the app itself answered carries no kind, and is a refusal of a call that reached it.
+export const failureKindOf = (result: object): FailureKind =>
+  failureKinds.get(result) ?? "rejected";
 
 export const withNote = (result: ToolResult, note: string): ToolResult => ({
   ...result,
