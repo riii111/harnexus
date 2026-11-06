@@ -29,9 +29,9 @@ export type CloudSessionState =
 //                        ├─ ends its turn ───────────> *replied ─────────────────────────┤
 //                        ├─ stopped on claude.ai ────> *interrupted ─────────────────────┤
 //                        ├─ API error ───────────────> *errored ─────────────────────────┤
-//                        └─ ends with work scheduled ─> resumes_later ───────────────────┘
+//                        └─ ends with work scheduled ─> *resumes_later ──────────────────┘
 //
-//   * hands the next move back to the user, so a chat following the session ends its turn there.
+//   * ends the chat's turn there, as claude.ai shows the turn over; a session that resumes by itself is shown in a turn of its own.
 export const sessionStateOf = (
   records: readonly SessionMessage[],
 ): CloudSessionState => {
@@ -69,9 +69,24 @@ export const runningToolOf = (records: readonly SessionMessage[]) => {
   return typeof call?.name === "string" ? call.name : null;
 };
 
-// Whether the session has handed the next move to the user, so a chat following it stops waiting.
+// The tool call the session's last record made and is still waiting on, with when it was made; a call with no result for long may wait for the user to allow it on claude.ai, which the copied records never show.
+export const waitingCallOf = (records: readonly SessionMessage[]) => {
+  const last = records.at(-1);
+  if (last === undefined || last.type !== "assistant") return null;
+  const call = contentOf(last).find((block) => block.type === "tool_use");
+  const stamp = (last as { timestamp?: unknown }).timestamp;
+  const at = typeof stamp === "string" ? Date.parse(stamp) : Number.NaN;
+  return typeof call?.id === "string" &&
+    typeof call.name === "string" &&
+    !Number.isNaN(at)
+    ? { id: call.id, name: call.name, at }
+    : null;
+};
+
+// Whether the session ended its turn, so a chat following it stops waiting, even when the session will go on by itself later.
 export const handsBack = (state: CloudSessionState) =>
   state.kind === "replied" ||
+  state.kind === "resumes_later" ||
   state.kind === "awaiting_input" ||
   state.kind === "interrupted" ||
   state.kind === "errored";

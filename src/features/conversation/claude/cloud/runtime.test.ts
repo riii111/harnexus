@@ -1550,7 +1550,7 @@ describe("createCloudRuntime idle copies", () => {
     expect(env.copyCalls).toBe(1);
   });
 
-  test("keeps Claude's own turn running while the session waits for a message it scheduled, until it comes", async () => {
+  test("ends Claude's own turn when the session waits for a message it scheduled, saying it goes on by itself, then shows what it does once the message comes", async () => {
     const SEND_LATER = "mcp__claude-code-remote__send_later";
     const waiting = [
       prompt("p1", "first"),
@@ -1566,10 +1566,7 @@ describe("createCloudRuntime idle copies", () => {
       endReply("a3", "will check later"),
     ];
     const env = linked({
-      // Waiting for what it scheduled is no reason to stop following it, however long it takes.
-      waitLimitMs: 0,
       copies: [
-        waiting,
         waiting,
         waiting,
         [
@@ -1580,16 +1577,98 @@ describe("createCloudRuntime idle copies", () => {
       ],
       shown: "a1",
     });
-    env.runtime.listen(() => true);
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+    const ownTurn = async () => {
+      await env.tick();
+      const turn = env.turn("", { startedBy: "claude" });
+      await env.runtime.run(turn.running);
+      return turn;
+    };
 
+    const scheduled = await ownTurn();
     await env.tick();
-    const turn = env.turn("", { startedBy: "claude" });
+    const waitedWhileScheduled = env.planned.at(-1);
+    const resumed = await ownTurn();
+
+    expect(scheduled.texts()).toEqual([
+      "will check later",
+      expect.stringContaining("will go on by itself"),
+    ]);
+    expect(scheduled.outcome).toEqual({ status: "completed" });
+    expect(env.ownStarts).toEqual(["thread-1", "thread-1"]);
+    expect(resumed.userTexts()).toEqual(["check CI"]);
+    expect(resumed.texts()).toEqual(["CI passed"]);
+    expect(env.cloudOf("thread-1")?.shown).toBe("a5");
+    expect(waitedWhileScheduled).toBe(30_000);
+  });
+
+  test("says once that a tool call with no result for a minute may wait for permission on claude.ai, then follows its result", async () => {
+    const calling = [
+      prompt("p1", "add the repo"),
+      reply(
+        "a1",
+        "m1",
+        toolUse("t1", "mcp__claude-code-remote__add_repo", {}),
+        "tool_use",
+        new Date(0).toISOString(),
+      ),
+    ];
+    const env = linked({
+      copies: [
+        calling,
+        calling,
+        calling,
+        [...calling, toolResult("r1", "t1", "added"), endReply("a2", "done")],
+      ],
+      shown: null,
+    });
+    env.clock = 60_000;
+    const turn = env.turn("add the repo");
+
     await env.runtime.run(turn.running);
 
-    expect(turn.texts()).toEqual(["will check later", "CI passed"]);
-    expect(turn.userTexts()).toEqual(["check CI"]);
+    expect(turn.texts()).toEqual([
+      expect.stringContaining(
+        "`mcp__claude-code-remote__add_repo` has shown no result for a while",
+      ),
+      "done",
+    ]);
     expect(turn.outcome).toEqual({ status: "completed" });
-    expect(env.cloudOf("thread-1")?.shown).toBe("a5");
+  });
+
+  test("ends a turn sent from the app when the session left work to go on with by itself", async () => {
+    const env = linked({
+      copies: [
+        [
+          prompt("p1", "review it"),
+          reply(
+            "a1",
+            "m1",
+            toolUse("t1", "Bash", { run_in_background: true }),
+            "tool_use",
+          ),
+          toolResult(
+            "r1",
+            "t1",
+            "Command running in background with ID: b42t71ybw. Output is being written to: /tmp/b42t71ybw.output.",
+          ),
+          endReply("a2", "Asked Codex."),
+        ],
+      ],
+      shown: null,
+    });
+    const turn = env.turn("review it");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(turn.texts()).toEqual([
+      "Asked Codex.",
+      expect.stringContaining("will go on by itself"),
+    ]);
   });
 
   test("follows a session linked while it is in its turn with a turn of Claude's own, and not again once the user stops it", async () => {
