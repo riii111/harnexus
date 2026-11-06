@@ -558,7 +558,11 @@ describe("createBrowserTabs scripts run by the browser server", () => {
       await runScript(codes(calls())[0], tab);
 
       expect(tab.marks).toEqual(marks);
-      expect(tab.written).toEqual(["harnexus-tab:12"]);
+      expect(tab.written).toEqual(
+        keepOpen
+          ? ["Marked to stay open for work in a later turn.", "harnexus-tab:12"]
+          : ["harnexus-tab:12"],
+      );
     },
   );
 

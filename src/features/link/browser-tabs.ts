@@ -435,6 +435,7 @@ const keepScript = (keepOpen: boolean) =>
     ? [
         "  try {",
         "    await tab.markHandoff();",
+        `    nodeRepl.write(${JSON.stringify(KEEP_MARKED)});`,
         "  } catch {",
         `    nodeRepl.write(${JSON.stringify(KEEP_UNCONFIRMED)});`,
         "  }",
@@ -494,6 +495,7 @@ export const BROWSER_ALLOWED_TOOLS = [
 const APP_PLUGIN = "unified-computer-use@openai-bundled";
 const REQUIRED_TOOLS = ["js", "turn_ended"];
 const TAB_MARKER = "harnexus-tab:";
+const KEEP_MARKED = "Marked to stay open for work in a later turn.";
 const KEEP_UNCONFIRMED =
   "Keeping this tab open for a later turn could not be confirmed. The tab is open and numbered; do not open it again.";
 const TAB_ID = /^[\w.:-]{1,200}$/;
