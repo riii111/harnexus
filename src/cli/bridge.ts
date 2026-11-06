@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { constants } from "node:os";
 import { dirname, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
@@ -36,6 +37,10 @@ import {
   type RelayObserver,
   relayStreams,
 } from "../infra/codex/transport/relay.ts";
+import {
+  readExternalConversations,
+  writeExternalConversations,
+} from "../infra/external-conversations.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import {
   loadCallSocketPath,
@@ -50,6 +55,7 @@ import {
   announceBridgeStatus,
   openServerPipes,
   readCommandOutput,
+  startLineProcess,
 } from "../lib/process.boundary.ts";
 import { serveLinesWhenFree } from "../lib/socket.boundary.ts";
 import { createBridgeLogger } from "./bridge-logging.ts";
@@ -64,6 +70,8 @@ import {
 
 const CLOUD_COPY_FOLDER = "cloud-copies";
 const CLOUD_REVIEW_FOLDER = "cloud-reviews";
+
+const EXTERNAL_CONVERSATIONS_FILE = "external-conversations.json";
 
 const CLOUD_CHECKOUT_FOLDER = "checkouts";
 
@@ -182,6 +190,19 @@ async function withClaude(relay: {
     return plain;
   }
 
+  const adapter = settings.isOk()
+    ? settings.value.externalConversationAdapter
+    : null;
+  const externalPath = join(
+    dirname(statePath.value),
+    EXTERNAL_CONVERSATIONS_FILE,
+  );
+  // Read before any turn is taken, so a chat bound to a conversation is never run as Claude while the file is read; an unreadable file is left as it is.
+  const externalState =
+    adapter === null ? null : await readExternalConversations(externalPath);
+  if (externalState?.isErr() === true)
+    logger.log({ event: "external_state_unavailable" });
+
   const permissionMode = loadPermissionMode(process.env);
   if (permissionMode.isErr()) {
     logger.log({
@@ -229,7 +250,7 @@ async function withClaude(relay: {
   // The bridge's own requests to the server are answered before the router reads the server output, so their responses never reach the app.
   const serverCalls = attachServerRequests(relay);
   let callSocketOpen = false;
-  const { router, closeAll, callGateway } = connectClaudeThreads({
+  const { router, closeAll, callGateway, reviewWriter } = connectClaudeThreads({
     store: store.value,
     permissionMode: permissionMode.value,
     request: serverCalls.request,
@@ -250,6 +271,18 @@ async function withClaude(relay: {
     claudeModels: catalog.models,
     codexHome: loadCodexHome(process.env),
     cloudSkills: settings.isOk() ? settings.value.cloudSkills : [],
+    ...(adapter !== null && {
+      external: {
+        adapter,
+        // Names this bridge to its adapter, so an adapter's answer is never taken for another bridge's.
+        bridgeId: randomUUID(),
+        spawn: (handlers) =>
+          startLineProcess(adapter.command, adapter.args, handlers),
+        state: externalState?.isOk() === true ? externalState.value : null,
+        save: async (state) =>
+          (await writeExternalConversations(externalPath, state)).isOk(),
+      },
+    }),
     cronRecord: openCronRecord(cronRecordPath(statePath.value)),
     // Copies of Cloud sessions are written beside the thread state, apart from any project the user works in.
     cloud: {
@@ -276,6 +309,7 @@ async function withClaude(relay: {
       }
     },
   });
+  logger.log({ event: "cloud_review_writer", writer: reviewWriter });
   // Not awaited: while another bridge holds the socket this one keeps waiting to take it over, and threads started before then go without CODEX_THREAD_ID.
   void openCallSocket(callGateway.handle).then((open) => {
     callSocketOpen = open;

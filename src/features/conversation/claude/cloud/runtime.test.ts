@@ -52,6 +52,74 @@ type CloudEvent = Parameters<typeof serializeCloudEvent>[0];
 
 type SendAnswer = Result<void, CloudSendRejected | CloudSendUnknown>;
 
+describe("createCloudRuntime observations", () => {
+  test("tells of the copy a chat was linked with as linked and of each later copy as continued, with where the app was shown", async () => {
+    const env = setup({
+      copies: [
+        [prompt("p1", "hello"), endReply("r1", "hi")],
+        [prompt("p1", "hello"), endReply("r1", "hi"), prompt("p2", "more")],
+      ],
+    });
+
+    env.runtime.listen(() => true);
+    await env.runtime.run(env.turn(`/cloud ${CLOUD_ID}`).running);
+    await env.tick();
+
+    expect(env.observed).toEqual([
+      {
+        sessionId: CLOUD_ID,
+        parentThreadId: "thread-1",
+        phase: "linked",
+        shownBefore: null,
+        records: ["p1", "r1"],
+      },
+      {
+        sessionId: CLOUD_ID,
+        parentThreadId: "thread-1",
+        phase: "continued",
+        shownBefore: "r1",
+        records: ["p1", "r1", "p2"],
+      },
+    ]);
+  });
+
+  test("without a review writer, only tells of a review the session read and sends it to no chat", async () => {
+    const output = JSON.stringify({
+      status: "completed",
+      reviewer: "0199-reviewer",
+      answer: "判定: LGTM",
+    });
+    const env = setup({
+      copies: [
+        [
+          prompt("p1", "review"),
+          reply("a1", "m1", toolUse("t1", "Bash", {}), "tool_use"),
+          toolResult("u1", "t1", output),
+          endReply("a2", "reviewed"),
+        ],
+      ],
+      link: { sessionId: CLOUD_ID, shown: null },
+      reviewWriter: false,
+    });
+
+    await env.runtime.run(env.turn("review").running);
+    await env.tick();
+
+    expect(env.reviews).toEqual([]);
+    expect(env.observed.at(-1)?.records).toContain("u1");
+  });
+
+  test("copies the chat of a session sent to for an outside conversation soon", async () => {
+    const env = linked({ copies: [], shown: null });
+
+    const sent = await env.runtime.sendToSession(CLOUD_ID, "ask", "/work/tree");
+
+    expect(sent.isOk()).toBe(true);
+    expect(env.sends).toEqual([{ cloud: CLOUD_ID, text: "ask" }]);
+    expect(env.planned.at(-1)).toBe(10_000);
+  });
+});
+
 describe("createCloudRuntime reviews", () => {
   const output = JSON.stringify({
     status: "completed",
@@ -2114,11 +2182,14 @@ const setup = ({
   waitLimitMs,
   link,
   cloudSkills = [CLOUD_SKILL],
+  reviewWriter = true,
 }: {
   copies: SessionMessage[][];
   waitLimitMs?: number;
   link?: CloudLink;
   cloudSkills?: readonly string[];
+  // False as for a bridge whose adapter writes to chats, which starts no review writer.
+  reviewWriter?: boolean;
 }) => {
   const sessionIds = new Map<string, string | null>();
   const clouds = new Map<string, CloudLink>();
@@ -2159,6 +2230,13 @@ const setup = ({
     childOutcomes: [] as string[],
     reviewOutcomes: [] as string[],
     reviews: [] as { parent: string; key: string }[],
+    observed: [] as {
+      sessionId: string;
+      parentThreadId: string;
+      phase: string;
+      shownBefore: string | null;
+      records: string[];
+    }[],
     reviewKept: new Map<string, CloudReview>(),
     reviewChats: new Map<
       string,
@@ -2252,7 +2330,9 @@ const setup = ({
         delegatedBy?: "create_thread" | "send_message_to_thread" | null;
       } = {},
     ) => fakeTurn(`turn-${++turns}`, typed, options),
-    runtime: undefined as unknown as TurnRuntime<string>,
+    runtime: undefined as unknown as ReturnType<
+      typeof createCloudRuntime<string>
+    >,
   };
   const deps: CloudDeps = {
     threads: {
@@ -2348,15 +2428,24 @@ const setup = ({
         ? Result.err({ _tag: "AppRequestFailed" })
         : Result.ok(null);
     },
-    openReview: async (parent, review) => {
-      env.reviews.push({ parent, key: review.key });
-      env.reviewKept.set(review.key, review);
-      return env.reviewOutcomes.shift() ?? "done";
-    },
-    reviewOf: async (key) => env.reviewKept.get(key) ?? null,
-    reviewChatOf: async (threadId) => env.reviewChats.get(threadId) ?? null,
-    noteReviewAsk: async (threadId, text) => {
-      env.reviewAsks.push({ threadId, text });
+    ...(reviewWriter && {
+      openReview: async (parent: string, review: CloudReview) => {
+        env.reviews.push({ parent, key: review.key });
+        env.reviewKept.set(review.key, review);
+        return env.reviewOutcomes.shift() ?? "done";
+      },
+      reviewOf: async (key: string) => env.reviewKept.get(key) ?? null,
+      reviewChatOf: async (threadId: string) =>
+        env.reviewChats.get(threadId) ?? null,
+      noteReviewAsk: async (threadId: string, text: string) => {
+        env.reviewAsks.push({ threadId, text });
+      },
+    }),
+    observe: ({ records, ...observation }) => {
+      env.observed.push({
+        ...observation,
+        records: records.map((record) => record.uuid),
+      });
     },
     openChild: async (parent, child) => {
       env.children.push({ parent, child });

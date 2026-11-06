@@ -27,7 +27,10 @@ describe("loadConnectionSettings", () => {
   test("sets no /cloud skill when the file is missing", async () => {
     const loaded = await loadConnectionSettings({ XDG_CONFIG_HOME: dir });
 
-    expect(loaded.unwrap()).toEqual({ cloudSkills: [] });
+    expect(loaded.unwrap()).toEqual({
+      cloudSkills: [],
+      externalConversationAdapter: null,
+    });
   });
 
   test("reads the skills set to mean /cloud", async () => {
@@ -35,7 +38,31 @@ describe("loadConnectionSettings", () => {
 
     const loaded = await loadConnectionSettings({ XDG_CONFIG_HOME: dir });
 
-    expect(loaded.unwrap()).toEqual({ cloudSkills: ["cloud-session"] });
+    expect(loaded.unwrap()).toEqual({
+      cloudSkills: ["cloud-session"],
+      externalConversationAdapter: null,
+    });
+  });
+
+  test("reads the outside conversation adapter the user registered", async () => {
+    await write(
+      JSON.stringify({
+        externalConversationAdapter: {
+          id: "taskctl",
+          command: "/opt/taskctl/bin/adapter",
+          mode: "observe",
+        },
+      }),
+    );
+
+    const loaded = await loadConnectionSettings({ XDG_CONFIG_HOME: dir });
+
+    expect(loaded.unwrap().externalConversationAdapter).toEqual({
+      id: "taskctl",
+      command: "/opt/taskctl/bin/adapter",
+      args: [],
+      mode: "observe",
+    });
   });
 
   test.each([
@@ -47,6 +74,14 @@ describe("loadConnectionSettings", () => {
     {
       name: "a list that is not a list",
       text: '{"cloudSkills":"cloud-session"}',
+    },
+    {
+      name: "an adapter named by a relative command",
+      text: '{"externalConversationAdapter":{"id":"a","command":"bin/a","mode":"write"}}',
+    },
+    {
+      name: "an adapter with an unknown mode",
+      text: '{"externalConversationAdapter":{"id":"a","command":"/bin/a","mode":"all"}}',
     },
   ])("refuses $name", async ({ text }) => {
     await write(text);

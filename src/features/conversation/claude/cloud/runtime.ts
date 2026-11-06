@@ -151,6 +151,19 @@ export type CloudDeps = {
   noteReviewAsk?: (threadId: string, text: string) => Promise<void>;
   // Skills the user set to mean /cloud when picked in a chat that holds nothing yet.
   cloudSkills?: readonly string[];
+  // Told of every copy of a linked session that reads, for an outside conversation adapter.
+  observe?: (observation: {
+    sessionId: string;
+    parentThreadId: string;
+    phase: "linked" | "continued";
+    shownBefore: string | null;
+    records: readonly SessionMessage[];
+  }) => void;
+  // Migration only: told the reviews kept unsent in memory whenever they change.
+  // TODO(S5): remove with the old Cloud review writer.
+  onLegacyUnsent?: (
+    entries: readonly { parentThreadId: string; review: CloudReview }[],
+  ) => void;
   // Starts a Cloud session from a request in a folder, as claude --cloud does.
   startCloud?: (
     request: string,
@@ -230,12 +243,20 @@ export const createCloudRuntime = <Tag extends string>(
     renameThread,
     startCloud,
     cloudSkills = [],
+    observe,
+    onLegacyUnsent,
     now = Date.now,
     sleep = defaultSleep,
     schedule = defaultSchedule,
     waitLimitMs = WAIT_LIMIT_MS,
   }: CloudDeps,
-): TurnRuntime<Tag | CloudFailureTag> => {
+): TurnRuntime<Tag | CloudFailureTag> & {
+  sendToSession: (
+    cloudSessionId: string,
+    text: string,
+    cwd: string,
+  ) => Promise<Result<void, CloudSendFailure>>;
+} => {
   type Turn = RunningTurn<Tag | CloudFailureTag>;
 
   const states = new Map<string, CloudThread>();
@@ -460,6 +481,13 @@ export const createCloudRuntime = <Tag extends string>(
     }
 
     log({ event: "claude_cloud", step: "linked" });
+    observe?.({
+      sessionId: cloudSessionId,
+      parentThreadId: threadId,
+      phase: "linked",
+      shownBefore: null,
+      records: copied.value.records,
+    });
     // Stopping while a session starts cannot undo it, so the chat still shows the session it started.
     reply(
       turn,
@@ -969,6 +997,16 @@ export const createCloudRuntime = <Tag extends string>(
     });
     noticeChildren(threadId, all);
     noticeReviews(threadId, all);
+    // A copy made while the chat is being linked is told of by the link itself.
+    const cloud = threads.cloudOf(threadId);
+    if (cloud?.sessionId === cloudSessionId)
+      observe?.({
+        sessionId: cloudSessionId,
+        parentThreadId: threadId,
+        phase: "continued",
+        shownBefore: cloud.shown,
+        records: all,
+      });
     return Result.ok({ copy: copied.value, records: all });
   };
 
@@ -992,6 +1030,14 @@ export const createCloudRuntime = <Tag extends string>(
           } else {
             unsentReviews.delete(review.key);
           }
+
+          // TODO(S5): remove with the old Cloud review writer.
+          onLegacyUnsent?.(
+            [...unsentReviews.values()].map((entry) => ({
+              parentThreadId: entry.threadId,
+              review: entry.review,
+            })),
+          );
 
           log({ event: "claude_cloud", step: "review", outcome });
         });
@@ -1254,7 +1300,20 @@ export const createCloudRuntime = <Tag extends string>(
     return null;
   };
 
+  // Sends for an outside conversation to a linked session, and copies its chat soon, so the answer comes as fast as one to a message typed there.
+  const sendToSession = async (
+    cloudSessionId: string,
+    text: string,
+    cwd: string,
+  ) => {
+    const sent = await sendToCloud(cloudSessionId, text, cwd);
+    const owner = threads.cloudOwner(cloudSessionId);
+    if (sent.isOk() && owner !== undefined) hurry(owner);
+    return sent;
+  };
+
   return {
+    sendToSession,
     compactPrompt: inner.compactPrompt,
     closeSession: (threadId) => inner.closeSession(threadId),
     pauseMessages: (threadId) => inner.pauseMessages(threadId),

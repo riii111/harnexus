@@ -12,15 +12,37 @@ class ConnectionSettingsInvalid extends TaggedError(
   "ConnectionSettingsInvalid",
 )<{ path: string; message: string }> {}
 
+// A process the user registered to show and answer outside conversations in chats; observe only reads Cloud sessions, write may also make and answer chats.
+export type AdapterSettings = {
+  id: string;
+  command: string;
+  args: readonly string[];
+  mode: "observe" | "write";
+};
+
 export type ConnectionSettings = {
   // Skills that mean /cloud when picked in a chat that holds nothing yet.
   cloudSkills: readonly string[];
+  // Never found by the bridge itself, so without this entry no process is started.
+  externalConversationAdapter: AdapterSettings | null;
 };
 
-const DEFAULT_SETTINGS: ConnectionSettings = { cloudSkills: [] };
+const DEFAULT_SETTINGS: ConnectionSettings = {
+  cloudSkills: [],
+  externalConversationAdapter: null,
+};
+
+const ADAPTER = z.strictObject({
+  id: z.string().regex(/^[A-Za-z0-9._-]{1,64}$/),
+  // Only an absolute path, so the program run never depends on the folder the bridge starts in.
+  command: z.string().refine(isAbsolute),
+  args: z.array(z.string()).default([]),
+  mode: z.enum(["observe", "write"]),
+});
 
 const SETTINGS = z.object({
   cloudSkills: z.array(z.string().regex(/^[A-Za-z0-9._:-]+$/)).default([]),
+  externalConversationAdapter: ADAPTER.nullable().default(null),
 });
 
 export const connectionSettingsPath = (
@@ -54,11 +76,14 @@ export const loadConnectionSettings = async (
 
   const parsed = SETTINGS.safeParse(parseJson(read.value).unwrapOr(undefined));
   return parsed.success
-    ? Result.ok({ cloudSkills: parsed.data.cloudSkills })
+    ? Result.ok({
+        cloudSkills: parsed.data.cloudSkills,
+        externalConversationAdapter: parsed.data.externalConversationAdapter,
+      })
     : Result.err(
         new ConnectionSettingsInvalid({
           path,
-          message: `${path} must be a JSON object whose cloudSkills is a list of skill names`,
+          message: `${path} must be a JSON object whose cloudSkills is a list of skill names and whose externalConversationAdapter, if set, names an id, an absolute command, its args and a mode of observe or write`,
         }),
       );
 };

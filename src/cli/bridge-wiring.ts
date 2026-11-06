@@ -11,6 +11,13 @@ import {
   createClaudeRuntime,
 } from "../features/conversation/claude/runtime.ts";
 import {
+  createExternalConversations,
+  type ExternalLogEvent,
+  type SpawnAdapter,
+} from "../features/conversation/external/conversations.ts";
+import { externalHistoryRecords } from "../features/conversation/external/history.ts";
+import { createExternalRuntime } from "../features/conversation/external/runtime.ts";
+import {
   buildHistory,
   replayHistory,
 } from "../features/conversation/history/history.view.ts";
@@ -42,7 +49,9 @@ import {
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import { createThreadRequests } from "../infra/codex/thread-requests.ts";
+import type { ExternalConversationState } from "../infra/external-conversations.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
+import type { AdapterSettings } from "../lib/connection-settings.boundary.ts";
 import { resizeImage } from "../lib/image.boundary.ts";
 
 type Runtime = Parameters<typeof createClaudeRuntime>[0];
@@ -64,6 +73,7 @@ export const connectClaudeThreads = ({
   permissionMode = "auto",
   cloud,
   cloudSkills = [],
+  external,
   send,
   log,
 }: {
@@ -90,8 +100,18 @@ export const connectClaudeThreads = ({
   };
   // Skills the user set to mean /cloud when picked in an empty chat.
   cloudSkills?: readonly string[];
+  // The outside conversation adapter the user registered, started once the threads are connected.
+  external?: {
+    adapter: AdapterSettings;
+    bridgeId: string;
+    spawn: SpawnAdapter;
+    state: ExternalConversationState | null;
+    save: (state: ExternalConversationState) => Promise<boolean>;
+  };
   send: (message: object) => void;
-  log: (event: ClaudeLogEvent | RouteEvent | CloudLogEvent) => void;
+  log: (
+    event: ClaudeLogEvent | RouteEvent | CloudLogEvent | ExternalLogEvent,
+  ) => void;
 }) => {
   // One store and one watch for created threads are shared, so a child is traced to its parent whichever part sees it first.
   const delegations = createDelegationWatch();
@@ -174,10 +194,50 @@ export const connectClaudeThreads = ({
         }),
     }),
   });
+  // An adapter that writes to chats replaces the old review writer, which is then never started, so no chat is written by both.
+  const writes = external?.adapter.mode === "write";
   const reviews =
-    cloud === undefined
+    cloud === undefined || writes
       ? undefined
       : createCloudReviews(cloud.reviewDir, (call) => callGateway.handle(call));
+  const conversations =
+    external === undefined
+      ? null
+      : createExternalConversations({
+          adapterId: external.adapter.id,
+          mode: external.adapter.mode,
+          bridgeId: external.bridgeId,
+          spawn: external.spawn,
+          state: external.state,
+          save: external.save,
+          call: callGateway.handle,
+          isCaller: threads.isSavedClaudeThread,
+          holdsConversation: (threadId) =>
+            threads.sessionIdOf(threadId) !== null ||
+            threads.cloudOf(threadId) !== null,
+          cloudOwner: (sessionId) => store.cloudOwner(sessionId),
+          sendToSession: async (
+            sessionId,
+            text,
+          ): Promise<{
+            outcome: "done" | "rejected" | "unknown";
+            message?: string;
+          }> => {
+            const owner = store.cloudOwner(sessionId);
+            const record = owner === undefined ? undefined : store.get(owner);
+            if (cloud === undefined || record === undefined)
+              return { outcome: "rejected", message: CLOUD_OFF };
+            const sent: Awaited<ReturnType<typeof runtime.sendToSession>> =
+              await runtime.sendToSession(sessionId, text, record.worktree);
+            if (sent.isOk()) return { outcome: "done" };
+            return {
+              outcome:
+                sent.error._tag === "CloudSendUnknown" ? "unknown" : "rejected",
+              message: sent.error.message,
+            };
+          },
+          log,
+        });
   const runtime = createCloudRuntime(claude, {
     threads,
     sendToCloud: (cloudSessionId, text, cwd) =>
@@ -201,6 +261,16 @@ export const connectClaudeThreads = ({
     log,
     renameThread,
     cloudSkills,
+    ...(conversations !== null && {
+      observe: conversations.observe,
+      onLegacyUnsent: (entries) =>
+        conversations.noteLegacyUnsent(
+          entries.map(({ parentThreadId, review }) => ({
+            parentThreadId,
+            review: { ...review },
+          })),
+        ),
+    }),
     ...(reviews === undefined
       ? {}
       : {
@@ -243,7 +313,7 @@ export const connectClaudeThreads = ({
   const turns = createTurnController({
     store,
     threads,
-    runtime,
+    runtime: createExternalRuntime(runtime, conversations),
     materializeThread: (threadId) => appThreads.inject(threadId, [THREAD_NOTE]),
     send,
     log,
@@ -256,7 +326,18 @@ export const connectClaudeThreads = ({
     send,
     log,
     subagentHistory: subagents.historyOf,
-    ...(reviews === undefined ? {} : { keptRecords: reviews.recordsOf }),
+    ...((reviews !== undefined || conversations !== null) && {
+      keptRecords: async (threadId: string) => {
+        if (conversations?.isBound(threadId) === true) {
+          const entries = await conversations.history(threadId);
+          return entries === null
+            ? null
+            : externalHistoryRecords(threadId, entries);
+        }
+
+        return reviews === undefined ? null : reviews.recordsOf(threadId);
+      },
+    }),
     subagents: {
       restore: subagentRestore.restore,
       agentRefOf: subagents.agentRefOf,
@@ -301,7 +382,15 @@ export const connectClaudeThreads = ({
     }),
     sideChats,
   });
-  return { router, closeAll: turns.closeAll, callGateway };
+  conversations?.start();
+  return {
+    router,
+    closeAll: turns.closeAll,
+    callGateway,
+    // Which writer shows the reviews Cloud sessions read, logged at start so a bridge with a writing adapter is seen to run no old writer.
+    reviewWriter:
+      reviews !== undefined ? "legacy" : writes ? "adapter" : "none",
+  } as const;
 };
 
 // The server writes a thread to disk only once it holds some history, and Claude turns never reach it, so without this item the app cannot reopen a Claude thread after a restart; the note carries no conversation text.
