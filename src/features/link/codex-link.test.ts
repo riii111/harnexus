@@ -12,6 +12,7 @@ import type { ServerRequest } from "../../infra/codex/server-requests.ts";
 import { createMemoryCronRecord } from "../../infra/codex/testing/cron-record.ts";
 import { createCodexLink } from "./codex-link.ts";
 import { createDelegationWatch } from "./delegations.ts";
+import { failureKindOf } from "./results.ts";
 
 describe("createCodexLink tools", () => {
   test("lets only the read tools run without asking", async () => {
@@ -928,6 +929,71 @@ describe("createCodexLink call", () => {
   });
 });
 
+describe("createCodexLink call failure kinds", () => {
+  test("names a write after the stop as not sent", async () => {
+    const { link, requests } = await connect();
+
+    link.stopWrites();
+    const result = await link.call("send_message_to_thread", SEND_ARGS);
+
+    expect(failureKindOf(result)).toBe("not_sent");
+    expect(requests).toEqual([]);
+  });
+
+  test("names a write whose answer was lost as unknown and the next write as not sent", async () => {
+    const { link, requests } = await connect({
+      answer: () => Result.err(unanswered()),
+    });
+
+    const lost = await link.call("send_message_to_thread", SEND_ARGS);
+    const next = await link.call("send_message_to_thread", SEND_ARGS);
+
+    expect(failureKindOf(lost)).toBe("unknown");
+    expect(failureKindOf(next)).toBe("not_sent");
+    expect(requests).toHaveLength(1);
+  });
+
+  test.each([
+    {
+      name: "a write the server never received as not sent",
+      answer: () => Result.err(notSent()),
+      kind: "not_sent",
+    },
+    {
+      // Writes after it are held back as after a lost answer, so the caller is told the same.
+      name: "a write the server refused as unknown",
+      answer: () => Result.err(rejected()),
+      kind: "unknown",
+    },
+    {
+      name: "a write the app answered as an error as rejected",
+      answer: () =>
+        Result.ok({ ...textAnswer("no such thread"), isError: true }),
+      kind: "rejected",
+    },
+  ])("names $name", async ({ answer, kind }) => {
+    const { link } = await connect({ answer });
+
+    const result = await link.call("send_message_to_thread", SEND_ARGS);
+
+    expect(failureKindOf(result)).toBe(kind);
+  });
+
+  test("names a message to the caller itself as rejected and bad arguments as invalid", async () => {
+    const { link, requests } = await connect();
+
+    const self = await link.call("send_message_to_thread", {
+      threadId: CALLER,
+      prompt: "hi",
+    });
+    const bad = await link.call("send_message_to_thread", { prompt: "" });
+
+    expect(failureKindOf(self)).toBe("rejected");
+    expect(failureKindOf(bad)).toBe("invalid");
+    expect(requests).toEqual([]);
+  });
+});
+
 describe("createCodexLink createChecked", () => {
   test.each([
     {
@@ -1281,6 +1347,10 @@ type RecordedRequest = {
 };
 
 const CALLER = "thread-caller";
+const SEND_ARGS = {
+  threadId: "019a0000-0000-7000-8000-000000000001",
+  prompt: "hi",
+};
 const DEFAULT_MODELS = {
   data: [
     { id: "gpt-other", model: "gpt-other", isDefault: false },

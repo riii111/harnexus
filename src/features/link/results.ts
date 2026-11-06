@@ -22,6 +22,7 @@ export const defineTool: typeof tool = (
 });
 
 // What a failed call tells a caller of the call socket, which reads it instead of the text written for Claude.
+// A failure the app itself answered carries no kind, and is a refusal of a call that reached it.
 export type FailureKind = "not_sent" | "rejected" | "unknown" | "invalid";
 
 // Kept beside the result rather than in it, so what Claude reads does not change.
@@ -39,7 +40,6 @@ export const failure = (
   return result;
 };
 
-// A failure the app itself answered carries no kind, and is a refusal of a call that reached it.
 export const failureKindOf = (result: object): FailureKind =>
   failureKinds.get(result) ?? "rejected";
 

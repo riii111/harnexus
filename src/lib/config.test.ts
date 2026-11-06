@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  loadCallerSocket,
   loadCallerSocketPath,
+  loadCodexHome,
   loadCallSocketPath,
   loadLogPath,
   loadPermissionMode,
@@ -190,5 +192,29 @@ describe("loadCallerSocketPath", () => {
     );
 
     expect(path.isErr() && path.error._tag).toBe("CallSocketPathNotAbsolute");
+  });
+});
+
+describe("loadCallerSocket", () => {
+  test("is null when the socket is off", () => {
+    expect(
+      loadCallerSocket({ HARNEXUS_CALL_SOCKET: "off" }).unwrap(),
+    ).toBeNull();
+  });
+
+  test("is the default socket beside the thread state otherwise", () => {
+    expect(loadCallerSocket({}, () => "/home/u").unwrap()).toBe(
+      "/home/u/.local/state/harnexus/call.sock",
+    );
+  });
+});
+
+describe("loadCodexHome", () => {
+  test.each([
+    { name: "an absolute CODEX_HOME", value: "/opt/codex", home: "/opt/codex" },
+    { name: "no CODEX_HOME", value: undefined, home: "/home/u/.codex" },
+    { name: "a relative CODEX_HOME", value: "codex", home: "/home/u/.codex" },
+  ])("is the given folder for $name", ({ value, home }) => {
+    expect(loadCodexHome({ CODEX_HOME: value }, () => "/home/u")).toBe(home);
   });
 });

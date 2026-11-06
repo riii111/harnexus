@@ -159,6 +159,13 @@ export const connectClaudeThreads = ({
     request,
     delegations,
     cloudOwner: (cloudSessionId) => store.cloudOwner(cloudSessionId),
+    ...(cloud !== undefined && {
+      startCloud: (prompt: string, cwd: string) =>
+        startCloudSession(cloud.cli.file, prompt, {
+          cwd,
+          env: cloud.cli.env,
+        }),
+    }),
   });
   const reviews =
     cloud === undefined

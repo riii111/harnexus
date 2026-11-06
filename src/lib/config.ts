@@ -161,6 +161,17 @@ export const loadCallerSocketPath = (
     return Result.ok(defaultCallSocketPath(state));
   });
 
+// Where a caller finds the bridge's call socket, or null when it is off, so a caller can say so instead of failing to connect.
+export const loadCallerSocket = (
+  env: Record<string, string | undefined>,
+  home: () => string = homedir,
+) =>
+  callSocketSetting(env).andThen((setting) =>
+    setting.kind === "off"
+      ? Result.ok<string | null>(null)
+      : loadCallerSocketPath(env, home),
+  );
+
 const defaultCallSocketPath = (statePath: string) =>
   join(dirname(statePath), "call.sock");
 

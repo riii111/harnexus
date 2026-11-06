@@ -70,6 +70,22 @@ Worker sessions it creates also open as chats in the same project.
 To start a new Cloud session instead, send `/cloud` followed by your request, or ask an agent in the app to do it in the Cloud. This needs `claude` signed in on this Mac. The session starts in Auto mode, so it and the workers it starts rarely stop for permission prompts.
 Updates may take a few minutes to appear when you are not sending messages.
 
+To let a skill act as `/cloud` when you pick it in an empty Claude chat, list it in `~/.config/harnexus/connection.json` and restart the app:
+
+```json
+{ "cloudSkills": ["my-cloud-skill"] }
+```
+
+To open Cloud chats from scripts or skills, install the `harnexus` command, which runs this checkout with the current Bun:
+
+```sh
+bun run install:cli            # ~/.local/bin/harnexus; use --prefix DIR for another folder
+harnexus cloud --link https://claude.ai/code/session_01AbC...
+harnexus cloud --prompt-file request.md
+```
+
+Run it from a chat in the app. It opens a new chat for the session, or answers with the chat already showing it; it never switches the chat it runs in.
+
 Cloud chats support text only. Rewind, compact, and side chats are unavailable.
 Stopping a turn in the app stops waiting for replies; to stop the Cloud session itself, use claude.ai.
 
