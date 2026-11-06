@@ -28,11 +28,11 @@ afterEach(async () => {
 });
 
 const STATE = {
-  bindings: [{ adapterId: "taskctl", conversationId: "c1", threadId: "t1" }],
+  bindings: [{ adapterId: "my-adapter", conversationId: "c1", threadId: "t1" }],
   intents: [
     {
       intentId: "i1",
-      adapterId: "taskctl",
+      adapterId: "my-adapter",
       conversationId: "c2",
       callerThreadId: "t0",
       createdAt: "2026-11-06T00:00:00.000Z",
@@ -46,7 +46,7 @@ const bind = (folder: string, threadId: string) =>
       ...state,
       bindings: [
         ...state.bindings,
-        { adapterId: "taskctl", conversationId: threadId, threadId },
+        { adapterId: "my-adapter", conversationId: threadId, threadId },
       ],
     },
     result: threadId,
@@ -155,7 +155,7 @@ describe("updateExternalConversations", () => {
               : JSON.stringify({
                   version: 1,
                   bindings: Array.from({ length: revision }, (_, at) => ({
-                    adapterId: "taskctl",
+                    adapterId: "my-adapter",
                     conversationId: `t${at}`,
                     threadId: `t${at}`,
                   })),

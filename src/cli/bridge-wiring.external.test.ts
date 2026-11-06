@@ -25,12 +25,9 @@ afterEach(async () => {
 });
 
 describe("connectClaudeThreads with an outside conversation adapter", () => {
-  test.each([
-    { mode: "write" as const, writer: "adapter" },
-    { mode: "observe" as const, writer: "legacy" },
-  ])(
-    "starts the registered $mode adapter as a process spoken to without the call socket, and keeps the old review writer only beside an observing one",
-    async ({ mode, writer }) => {
+  test.each([{ mode: "write" as const }, { mode: "observe" as const }])(
+    "starts the registered $mode adapter as a process spoken to without the call socket",
+    async ({ mode }) => {
       const { threads, received } = await connectAdapter(mode);
 
       await until(async () =>
@@ -38,7 +35,6 @@ describe("connectClaudeThreads with an outside conversation adapter", () => {
       );
       threads.closeAll();
 
-      expect(threads.reviewWriter).toBe(writer);
       expect(await received()).toEqual([
         expect.objectContaining({ type: "hello", bridgeId: "bridge-1", mode }),
         expect.objectContaining({ type: "ready", bridgeId: "bridge-1" }),
@@ -62,7 +58,7 @@ const say = (message) => process.stdout.write(JSON.stringify({ v: 1, ...message 
 createInterface({ input: process.stdin }).on("line", (line) => {
   appendFileSync(log, line + "\\n");
   const message = JSON.parse(line);
-  if (message.type === "hello") say({ type: "hello", adapterId: "taskctl", bindings: [] });
+  if (message.type === "hello") say({ type: "hello", adapterId: "my-adapter", bindings: [] });
   if (message.type === "ready")
     say({ type: "request", id: 1, op: "bind_conversation", conversationId: "c1", threadId: "chat-x" });
 });
@@ -76,7 +72,7 @@ const connectAdapter = async (mode: "observe" | "write") => {
   const store = (await openThreadStore(join(dir, "threads.json"))).unwrap();
   const catalog = createModelCatalog();
   const adapter = {
-    id: "taskctl",
+    id: "my-adapter",
     command: process.execPath,
     args: [script, log],
     mode,
@@ -97,7 +93,6 @@ const connectAdapter = async (mode: "observe" | "write") => {
     cloud: {
       cli: cloudCli({}),
       copyDir: join(dir, "cloud-copies"),
-      reviewDir: join(dir, "cloud-reviews"),
       checkouts: createCloudCheckouts(join(dir, "checkouts"), {}),
     },
     external: {

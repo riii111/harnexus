@@ -118,7 +118,7 @@ const cloud = async (args: readonly string[], deps: Deps) => {
       ...(text("thinking") !== undefined && { thinking: text("thinking") }),
     },
   });
-  // A chat opened is printed as harnexus-task cloud printed it, so its callers read the same fields.
+  // A chat opened is printed as its result alone, so a script reads threadId and cloudSessionId at the top level.
   if (answer.outcome === "done" && isObject(answer.result))
     return {
       code: EXIT.done,

@@ -68,7 +68,6 @@ type LogEvent =
   | CloudLogEvent
   | ExternalLogEvent
   | { event: "external_state_unavailable" }
-  | { event: "cloud_review_writer"; writer: "legacy" | "adapter" | "none" }
   | RouteEvent;
 
 type CallSocketFailure =
@@ -185,8 +184,6 @@ const serializeLogEvent = (entry: LogEvent) => {
       return serializeExternalEvent(entry);
     case "external_state_unavailable":
       return { event: entry.event };
-    case "cloud_review_writer":
-      return { event: entry.event, writer: entry.writer };
     case "claude_turn":
       return isClaudeTurnEvent(entry)
         ? serializeClaudeTurnEvent(entry)

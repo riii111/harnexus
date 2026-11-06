@@ -55,7 +55,7 @@ type Link = {
   ) => Promise<{ ran: T } | { refused: ToolAnswer }>;
 };
 
-// Serves the call socket's thread tools to harnexus-task, sending a Claude thread's calls through its codex_link.
+// Serves the call socket's thread tools to local programs, sending a Claude thread's calls through its codex_link.
 export const createCallGateway = ({
   isClaudeThread,
   openLink,
@@ -180,7 +180,7 @@ export const createCallGateway = ({
     return failedCall(answered.error);
   };
 
-  // Names the thread the call came from; harnexus-task sends only the worker's own thread.
+  // Names only the thread the call came from.
   const nameThread = async (
     threadId: string,
     args: Record<string, unknown>,

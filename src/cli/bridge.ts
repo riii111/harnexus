@@ -69,7 +69,6 @@ import {
 } from "./supervise.ts";
 
 const CLOUD_COPY_FOLDER = "cloud-copies";
-const CLOUD_REVIEW_FOLDER = "cloud-reviews";
 
 const EXTERNAL_CONVERSATIONS_FOLDER = "external-conversations";
 
@@ -249,7 +248,7 @@ async function withClaude(relay: {
   // The bridge's own requests to the server are answered before the router reads the server output, so their responses never reach the app.
   const serverCalls = attachServerRequests(relay);
   let callSocketOpen = false;
-  const { router, closeAll, callGateway, reviewWriter } = connectClaudeThreads({
+  const { router, closeAll, callGateway } = connectClaudeThreads({
     store: store.value,
     permissionMode: permissionMode.value,
     request: serverCalls.request,
@@ -298,7 +297,6 @@ async function withClaude(relay: {
     cloud: {
       cli: cloudCli(process.env),
       copyDir: join(dirname(statePath.value), CLOUD_COPY_FOLDER),
-      reviewDir: join(dirname(statePath.value), CLOUD_REVIEW_FOLDER),
       checkouts: createCloudCheckouts(
         join(
           dirname(statePath.value),
@@ -319,7 +317,6 @@ async function withClaude(relay: {
       }
     },
   });
-  logger.log({ event: "cloud_review_writer", writer: reviewWriter });
   // Not awaited: while another bridge holds the socket this one keeps waiting to take it over, and threads started before then go without CODEX_THREAD_ID.
   void openCallSocket(callGateway.handle).then((open) => {
     callSocketOpen = open;

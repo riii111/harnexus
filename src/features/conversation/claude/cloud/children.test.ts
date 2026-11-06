@@ -79,7 +79,7 @@ describe("waitingIn", () => {
       "a1",
       "m1",
       toolUse("t1", "Bash", {
-        command: "harnexus-task review --request req.json",
+        command: "bun run check-all",
         run_in_background: true,
       }),
       "tool_use",

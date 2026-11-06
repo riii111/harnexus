@@ -30,7 +30,7 @@ export const load = () => import("../../infra/thread-store.ts");`,
         "features/conversation/a.ts": `export const a = 1;
 export type M = typeof import("../../cli/bridge.ts");`,
         "infra/thread-store.ts": "export const s = 1;",
-        "features/task/t.ts": `import { a } from "../conversation/a.ts";
+        "features/link/t.ts": `import { a } from "../conversation/a.ts";
 export const t = a;`,
         "features/diagnostics/d.ts": `import { a } from "../conversation/a.ts";
 export const d = a;`,
@@ -44,7 +44,7 @@ export const d = a;`,
       "features/conversation/a.ts -> cli/bridge.ts: features/conversation/ may not reference cli/",
       "features/conversation/p.view.ts -> infra/thread-store.ts: a view may reference only views, infra/codex/protocol/ and lib/",
       "features/diagnostics/d.ts -> features/conversation/a.ts: features/diagnostics/ may not reference features/conversation/",
-      "features/task/t.ts -> features/conversation/a.ts: features/task/ may not reference features/conversation/",
+      "features/link/t.ts -> features/conversation/a.ts: features/link/ may not reference features/conversation/",
       "infra/claude/s.ts -> infra/codex/c.ts: infra/claude/ may not reference infra/codex/",
       "infra/codex/c.ts -> features/conversation/a.ts: infra/ may not reference features/conversation/",
       "lib/r.ts -> features/conversation/p.view.ts: lib/ may not reference features/conversation/",
@@ -55,19 +55,17 @@ export const d = a;`,
     const references = await collectReferences(
       await writeProject({
         "cli/main.ts": `import { c } from "../features/conversation/c.ts";
-import { t } from "../features/task/t.ts";
+import { d } from "../features/diagnostics/d.ts";
 import { i } from "../infra/i.ts";
 import { l } from "../lib/l.ts";
-export const main = [c, t, i, l];`,
+export const main = [c, d, i, l];`,
         "features/conversation/c.ts": `import { link } from "../link/l.ts";
 export const c = link;`,
-        "features/task/t.ts": `import { link } from "../link/l.ts";
-import { p } from "../prwatch/p.ts";
-export const t = [link, p];`,
+        "features/diagnostics/d.ts": `import { i } from "../../infra/i.ts";
+export const d = i;`,
         "features/link/l.ts": `import { i } from "../../infra/i.ts";
 import { l } from "../../lib/l.ts";
 export const link = [i, l];`,
-        "features/prwatch/p.ts": "export const p = 1;",
         "infra/i.ts": `import { l } from "../lib/l.ts";
 export const i = l;`,
         "lib/l.ts": "export const l = 1;",
@@ -256,8 +254,6 @@ type Area =
   | "features/conversation"
   | "features/diagnostics"
   | "features/link"
-  | "features/prwatch"
-  | "features/task"
   | "infra"
   | "lib";
 
@@ -272,8 +268,6 @@ const ALLOWED: Record<Area, readonly Area[]> = {
     "features/conversation",
     "features/diagnostics",
     "features/link",
-    "features/prwatch",
-    "features/task",
     "infra",
     "lib",
   ],
@@ -285,16 +279,6 @@ const ALLOWED: Record<Area, readonly Area[]> = {
   ],
   "features/diagnostics": ["features/diagnostics", "infra", "lib"],
   "features/link": ["features/link", "infra", "lib"],
-  // The PR watch stands apart from the conversation and is told how to reach workers, so it may be moved out whole.
-  "features/prwatch": ["features/prwatch", "infra", "lib"],
-  // harnexus-task drives the PR watch, the thread links and the Claude and Codex CLIs, but knows nothing of the bridge's conversations.
-  "features/task": [
-    "features/task",
-    "features/link",
-    "features/prwatch",
-    "infra",
-    "lib",
-  ],
   infra: ["infra", "lib"],
   lib: ["lib"],
 };
@@ -363,12 +347,6 @@ const brokenRule = (from: string, to: string) => {
       return "a view may reference only views, infra/codex/protocol/ and lib/";
   }
 
-  if (
-    fromArea === "features/prwatch" &&
-    toArea === "infra" &&
-    !to.startsWith("infra/github/")
-  )
-    return "features/prwatch/ may reach only infra/github/";
   if (from.startsWith("infra/claude/") && to.startsWith("infra/codex/"))
     return "infra/claude/ may not reference infra/codex/";
   if (

@@ -115,7 +115,7 @@ export const sharedFile = (
 export const externalEnv = ({
   mode = "write",
   bridgeId = "bridge-1",
-  adapterId = "taskctl",
+  adapterId = "my-adapter",
   state = { bindings: [], intents: [] } as ExternalConversationState | null,
   file = sharedFile(state),
   callers = ["parent-1"],
@@ -216,14 +216,18 @@ export const hello = (
   bindings: { conversationId: string; threadId: string }[] = [],
 ) => ({
   type: "hello",
-  adapterId: "taskctl",
+  adapterId: "my-adapter",
   bindings,
 });
 
 export const binding = (
   conversationId: string,
   threadId: string,
-): ConversationBinding => ({ adapterId: "taskctl", conversationId, threadId });
+): ConversationBinding => ({
+  adapterId: "my-adapter",
+  conversationId,
+  threadId,
+});
 
 export const intent = (
   intentId: string,
@@ -231,7 +235,7 @@ export const intent = (
   callerThreadId = "parent-1",
 ): CreateIntent => ({
   intentId,
-  adapterId: "taskctl",
+  adapterId: "my-adapter",
   conversationId,
   callerThreadId,
   createdAt: "2026-11-06T00:00:00.000Z",

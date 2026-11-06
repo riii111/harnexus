@@ -1,7 +1,6 @@
 import { Result } from "better-result";
 
 import { openCloudChild } from "../features/conversation/claude/cloud/child-chats.ts";
-import { createCloudReviews } from "../features/conversation/claude/cloud/review-chats.ts";
 import {
   type CloudLogEvent,
   createCloudRuntime,
@@ -95,8 +94,6 @@ export const connectClaudeThreads = ({
     cli: CloudCli;
     copyDir: string;
     checkouts: CloudCheckouts;
-    // Where the reviews a Cloud session read are kept for their chats.
-    reviewDir: string;
   };
   // Skills the user set to mean /cloud when picked in an empty chat.
   cloudSkills?: readonly string[];
@@ -192,12 +189,6 @@ export const connectClaudeThreads = ({
         }),
     }),
   });
-  // An adapter that writes to chats replaces the old review writer, which is then never started, so no chat is written by both.
-  const writes = external?.adapter?.settings.mode === "write";
-  const reviews =
-    cloud === undefined || writes
-      ? undefined
-      : createCloudReviews(cloud.reviewDir, (call) => callGateway.handle(call));
   const conversations =
     external === undefined
       ? null
@@ -263,34 +254,7 @@ export const connectClaudeThreads = ({
     log,
     renameThread,
     cloudSkills,
-    ...(conversations !== null && {
-      observe: conversations.observe,
-      onLegacyUnsent: (entries) =>
-        conversations.noteLegacyUnsent(
-          entries.map(({ parentThreadId, review }) => ({
-            parentThreadId,
-            review: { ...review },
-          })),
-        ),
-    }),
-    ...(reviews === undefined
-      ? {}
-      : {
-          openReview: (parentThreadId, review) => {
-            const parent = store.get(parentThreadId);
-            return parent === undefined
-              ? Promise.resolve("no_parent")
-              : reviews.openReview(
-                  parentThreadId,
-                  parent.worktree,
-                  review,
-                  parent.cloud?.sessionId ?? null,
-                );
-          },
-          reviewOf: reviews.reviewOf,
-          reviewChatOf: reviews.chatOf,
-          noteReviewAsk: reviews.noteAsk,
-        }),
+    ...(conversations !== null && { observe: conversations.observe }),
     ...(cloud === undefined
       ? {}
       : {
@@ -328,16 +292,13 @@ export const connectClaudeThreads = ({
     send,
     log,
     subagentHistory: subagents.historyOf,
-    ...((reviews !== undefined || conversations !== null) && {
+    ...(conversations !== null && {
       keptRecords: async (threadId: string) => {
-        if (conversations?.isBound(threadId) === true) {
-          const entries = await conversations.history(threadId);
-          return entries === null
-            ? null
-            : externalHistoryRecords(threadId, entries);
-        }
-
-        return reviews === undefined ? null : reviews.recordsOf(threadId);
+        if (!conversations.isBound(threadId)) return null;
+        const entries = await conversations.history(threadId);
+        return entries === null
+          ? null
+          : externalHistoryRecords(threadId, entries);
       },
     }),
     subagents: {
@@ -389,9 +350,6 @@ export const connectClaudeThreads = ({
     router,
     closeAll: turns.closeAll,
     callGateway,
-    // Which writer shows the reviews Cloud sessions read, logged at start so a bridge with a writing adapter is seen to run no old writer.
-    reviewWriter:
-      reviews !== undefined ? "legacy" : writes ? "adapter" : "none",
   } as const;
 };
 

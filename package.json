@@ -16,11 +16,7 @@
     "open-app": "bun --no-env-file --config=/dev/null src/cli/open-app.ts",
     "call": "bun --no-env-file --config=/dev/null src/cli/call.ts",
     "cloud": "bun --no-env-file --config=/dev/null src/cli/harnexus.ts cloud",
-    "install:cli": "bash scripts/install-cli.sh",
-    "task": "bun --no-env-file --config=/dev/null src/cli/task.ts",
-    "build:task": "bun --no-env-file --config=/dev/null src/cli/check-bun.ts && bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/cli/task.ts --outfile dist/harnexus-task",
-    "install:task:cloud": "bash scripts/install-cloud-task.sh",
-    "install:task": "bun run build:task && mkdir -p \"$HOME/.local/bin\" && install -m 0755 dist/harnexus-task \"$HOME/.local/bin/.harnexus-task.tmp\" && mv -f \"$HOME/.local/bin/.harnexus-task.tmp\" \"$HOME/.local/bin/harnexus-task\""
+    "install:cli": "bash scripts/install-cli.sh"
   },
   "devDependencies": {
     "@stylistic/eslint-plugin": "5.10.0",
