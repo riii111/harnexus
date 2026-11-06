@@ -212,7 +212,8 @@ describe("connectClaudeThreads", () => {
       await start();
       await until(() => sessions.has(WORKER_A));
       const started = sent.find((message) => message.method === "turn/started");
-      const turnId = (started?.params as { turn: { id: string } }).turn.id;
+      if (started === undefined) return expect.unreachable("no turn started");
+      const turnId = (started.params as { turn: { id: string } }).turn.id;
       await threads.router.fromApp(
         Buffer.from(
           `${JSON.stringify({ id: 99, method: "turn/interrupt", params: { threadId: WORKER_A, turnId } })}\n`,
