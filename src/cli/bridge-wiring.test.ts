@@ -206,6 +206,37 @@ describe("connectClaudeThreads", () => {
     }
   });
 
+  test("holds a Claude thread's socket writes once the app stops its turn", async () => {
+    const { threads, sessions, calls, sent, start } = await orchestration();
+    try {
+      await start();
+      await until(() => sessions.has(WORKER_A));
+      const started = sent.find((message) => message.method === "turn/started");
+      const turnId = (started?.params as { turn: { id: string } }).turn.id;
+      await threads.router.fromApp(
+        Buffer.from(
+          `${JSON.stringify({ id: 99, method: "turn/interrupt", params: { threadId: WORKER_A, turnId } })}\n`,
+        ),
+      );
+
+      const answer = JSON.parse(
+        await threads.callGateway.handle(
+          JSON.stringify({
+            version: 1,
+            threadId: WORKER_A,
+            tool: "send_message_to_thread",
+            arguments: { threadId: "child-1", prompt: "continue" },
+          }),
+        ),
+      );
+
+      expect(answer).toMatchObject({ version: 1, outcome: "not_sent" });
+      expect(calls).toEqual([]);
+    } finally {
+      threads.closeAll();
+    }
+  });
+
   test("starts a Claude thread's session with the thread it runs", async () => {
     const { started, settingsOf } = await workerA();
 
@@ -263,7 +294,8 @@ const orchestration = async () => {
   const calls: { tool: string; arguments: Record<string, unknown> }[] = [];
   let sequence = 0;
   let child = 0;
-  const threads = connect(store, [], {
+  const sent: Sent[] = [];
+  const threads = connect(store, sent, {
     listConversations: async () => Result.ok([]),
     startSession: async (settings) => {
       const claude = fakeClaude(SUBSCRIPTION);
@@ -314,6 +346,7 @@ const orchestration = async () => {
     store,
     sessions,
     calls,
+    sent,
     start: () =>
       threads.router.fromApp(
         Buffer.from(`${JSON.stringify(turnOf(++sequence, "coordinate"))}\n`),

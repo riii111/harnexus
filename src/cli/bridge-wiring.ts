@@ -95,6 +95,8 @@ export const connectClaudeThreads = ({
 }) => {
   // One store and one watch for created threads are shared, so a child is traced to its parent whichever part sees it first.
   const delegations = createDelegationWatch();
+  // The link of each thread's running session, so its socket calls share the stop, order and unknown-outcome state of the turn's own tool calls.
+  const sessionLinks = new Map<string, ReturnType<typeof createCodexLink>>();
   const openLink = (callerThreadId: string) =>
     createCodexLink({
       callerThreadId,
@@ -146,7 +148,11 @@ export const connectClaudeThreads = ({
     lastRecordOf,
     readHistory,
     renameThread,
-    openLink: (callerThreadId) => openLink(callerThreadId),
+    openLink: (callerThreadId) => {
+      const link = openLink(callerThreadId);
+      sessionLinks.set(callerThreadId, link);
+      return link;
+    },
     send,
     log,
     effortRule,
@@ -156,6 +162,7 @@ export const connectClaudeThreads = ({
   const callGateway = createCallGateway({
     isClaudeThread: threads.isSavedClaudeThread,
     openLink,
+    sessionLink: (threadId) => sessionLinks.get(threadId),
     request,
     delegations,
     cloudOwner: (cloudSessionId) => store.cloudOwner(cloudSessionId),

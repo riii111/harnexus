@@ -59,6 +59,7 @@ type Link = {
 export const createCallGateway = ({
   isClaudeThread,
   openLink,
+  sessionLink = () => undefined,
   request,
   delegations,
   cloudOwner = () => undefined,
@@ -69,6 +70,8 @@ export const createCallGateway = ({
   // The chat a Cloud session is linked to, however it was linked.
   cloudOwner?: (cloudSessionId: string) => string | undefined;
   openLink: (threadId: string) => Link;
+  // The link of the thread's running session, used before one of the gateway's own so a stop in the app also holds the socket's writes.
+  sessionLink?: (threadId: string) => Link | undefined;
   request: ServerRequest;
   delegations: Pick<DelegationWatch, "expect">;
   // Starts a Cloud session for cloud_open; without it cloud_open only opens chats for sessions already started.
@@ -81,6 +84,8 @@ export const createCallGateway = ({
   const links = new Map<string, Link>();
 
   const linkOf = (threadId: string) => {
+    const running = sessionLink(threadId);
+    if (running !== undefined) return running;
     const known = links.get(threadId);
     if (known !== undefined) return known;
     const opened = openLink(threadId);
