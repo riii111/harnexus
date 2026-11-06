@@ -69,6 +69,20 @@ export const runningToolOf = (records: readonly SessionMessage[]) => {
   return typeof call?.name === "string" ? call.name : null;
 };
 
+// The tool call the session's last record made and is still waiting on, with when it was made; a call with no result for long may wait for the user to allow it on claude.ai, which the copied records never show.
+export const waitingCallOf = (records: readonly SessionMessage[]) => {
+  const last = records.at(-1);
+  if (last === undefined || last.type !== "assistant") return null;
+  const call = contentOf(last).find((block) => block.type === "tool_use");
+  const stamp = (last as { timestamp?: unknown }).timestamp;
+  const at = typeof stamp === "string" ? Date.parse(stamp) : Number.NaN;
+  return typeof call?.id === "string" &&
+    typeof call.name === "string" &&
+    !Number.isNaN(at)
+    ? { id: call.id, name: call.name, at }
+    : null;
+};
+
 // Whether the session ended its turn, so a chat following it stops waiting, even when the session will go on by itself later.
 export const handsBack = (state: CloudSessionState) =>
   state.kind === "replied" ||

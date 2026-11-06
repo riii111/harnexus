@@ -9,6 +9,9 @@ export const askNotice = (
 export const unconfirmedNotice = (tool: string | null) =>
   `harnexus cannot tell what the Cloud session is doing: it has shown nothing new for a while${tool === null ? "" : `, last running \`${tool}\``}. Check it on claude.ai; anything it does later appears here when it is copied.`;
 
+export const callWaitingNotice = (tool: string) =>
+  `\`${tool}\` has shown no result for a while. If claude.ai asks to allow or deny it, answer there; harnexus cannot answer it from here.`;
+
 export const copyFailingNotice = (reason: string) =>
   `The Cloud session could not be copied for a while (${reason}), so this chat may be behind. harnexus keeps trying; check the session on claude.ai.`;
 

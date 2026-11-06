@@ -32,9 +32,11 @@ import {
   sentMatcherOf,
   sessionStateOf,
   stateKeyOf,
+  waitingCallOf,
 } from "./session-state.ts";
 import {
   askNotice,
+  callWaitingNotice,
   copyFailingNotice,
   ERRORED_NOTICE,
   HALTED_NOTICE,
@@ -644,6 +646,8 @@ export const createCloudRuntime = <Tag extends string>(
     let waiting = false;
     // When the turn last showed something new.
     let movedAt = startedAt;
+    // The tool calls the turn already said may wait for the user's permission, so each is mentioned once.
+    const mentioned = new Set<string>();
     // Copies still running are removed once written, however the wait ends.
     try {
       for (;;) {
@@ -702,6 +706,23 @@ export const createCloudRuntime = <Tag extends string>(
         if (progress.shown.length > 0) {
           movedAt = now();
           turn.apply(renderRecords(turn.state(), progress.shown, now()));
+        }
+
+        const call = waitingCallOf(copied.value.records);
+        if (
+          call !== null &&
+          !mentioned.has(call.id) &&
+          now() - call.at >= CALL_WAITING_AFTER_MS
+        ) {
+          mentioned.add(call.id);
+          turn.apply(
+            renderNotice(
+              turn.state(),
+              callWaitingNotice(call.name),
+              "commentary",
+              now(),
+            ),
+          );
         }
 
         // The history the app reads is built from the latest copy, so the turn names its prompt by that copy's uuid.
@@ -1664,6 +1685,9 @@ const ACTIVE_FOR_MS = 2 * 60_000;
 const FIRST_TICK_MS = 15_000;
 
 const WAIT_LIMIT_MS = 60 * 60_000;
+
+// How long a tool call shows no result before the turn says it may wait for the user's permission on claude.ai; most calls answer within seconds.
+const CALL_WAITING_AFTER_MS = 60_000;
 
 // How long idle copies keep failing, or find the session empty, before the chat is told.
 const NOTICE_AFTER_MS = 10 * 60_000;

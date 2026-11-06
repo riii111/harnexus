@@ -1605,6 +1605,40 @@ describe("createCloudRuntime idle copies", () => {
     expect(waitedWhileScheduled).toBe(30_000);
   });
 
+  test("says once that a tool call with no result for a minute may wait for permission on claude.ai, then follows its result", async () => {
+    const calling = [
+      prompt("p1", "add the repo"),
+      reply(
+        "a1",
+        "m1",
+        toolUse("t1", "mcp__claude-code-remote__add_repo", {}),
+        "tool_use",
+        new Date(0).toISOString(),
+      ),
+    ];
+    const env = linked({
+      copies: [
+        calling,
+        calling,
+        calling,
+        [...calling, toolResult("r1", "t1", "added"), endReply("a2", "done")],
+      ],
+      shown: null,
+    });
+    env.clock = 60_000;
+    const turn = env.turn("add the repo");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.texts()).toEqual([
+      expect.stringContaining(
+        "`mcp__claude-code-remote__add_repo` has shown no result for a while",
+      ),
+      "done",
+    ]);
+    expect(turn.outcome).toEqual({ status: "completed" });
+  });
+
   test("ends a turn sent from the app when the session left work to go on with by itself", async () => {
     const env = linked({
       copies: [
