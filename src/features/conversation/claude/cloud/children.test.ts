@@ -109,6 +109,13 @@ describe("waitingIn", () => {
     reply("a2", "m2", text("will check later"), "end_turn"),
   ];
 
+  const agent = (result: string) => [
+    prompt("p1", "look it up"),
+    reply("a1", "m1", toolUse("t1", "Agent", { prompt: "fetch" }), "tool_use"),
+    toolResult("r1", "t1", result),
+    reply("a2", "m2", text("here is what it found"), "end_turn"),
+  ];
+
   test.each([
     {
       name: "does not wait for a session it started, which tells it of its work itself",
@@ -188,6 +195,34 @@ describe("waitingIn", () => {
       name: "waits for a review it left running in the background",
       records: background,
       expected: true,
+    },
+    {
+      name: "waits for an agent it left running in the background",
+      records: agent(
+        "Async agent launched successfully.\nagentId: a43d9079443239dbf (internal ID)\nThe agent is working in the background.",
+      ),
+      expected: true,
+    },
+    {
+      name: "does not wait for an agent that ran in the foreground, whose result names it so it can be messaged again",
+      records: agent(
+        "This agent's report was delivered to you as a message from \"a43d9079443239dbf\" (its SubagentHandback call).\nagentId: a43d9079443239dbf (use SendMessage with to: 'a43d9079443239dbf' to continue this agent)",
+      ),
+      expected: false,
+    },
+    {
+      name: "does not wait for work a file it read only mentions",
+      records: [
+        prompt("p1", "look"),
+        reply("a1", "m1", toolUse("t1", "Read", {}), "tool_use"),
+        toolResult(
+          "r1",
+          "t1",
+          "Command running in background with ID: b42t71ybw.\nagentId: a43d9079443239dbf",
+        ),
+        reply("a2", "m2", text("read it"), "end_turn"),
+      ],
+      expected: false,
     },
     {
       name: "keeps waiting while the session only mentions the background work, such as checking on it",
