@@ -924,7 +924,7 @@ describe("createExternalConversations kept from running bound chats as Claude", 
     await runtime.run(claudes.running);
 
     expect(maybeBound.failure?.message).toContain(
-      "external-conversations.json",
+      "external-conversations folder",
     );
     expect(runs).toEqual(["turn-2"]);
   });
