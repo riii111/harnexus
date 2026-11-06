@@ -3,7 +3,7 @@ import { Result, TaggedError } from "better-result";
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
 import { isObject } from "../../lib/object.ts";
 import { createSerialQueue } from "../../lib/serial-queue.ts";
-import { failure, type ToolResult } from "./results.ts";
+import { failure, type FailureKind, type ToolResult } from "./results.ts";
 
 export type LinkStore = {
   get: (threadId: string) => object | undefined;
@@ -89,7 +89,9 @@ export const createAppToolCalls = ({
     const refusal = refuseTargets(targets, { allowSelf: true });
     if (refusal !== null) return failure(refusal);
     const called = await callApp(name, args, timeoutMs);
-    return called.isOk() ? called.value : failure(called.error.message);
+    return called.isOk()
+      ? called.value
+      : failure(called.error.message, kindOfError(called.error._tag));
   };
 
   const write = (
@@ -114,6 +116,7 @@ export const createAppToolCalls = ({
       if (unknownWrite !== null) {
         return failure(
           `An earlier ${unknownWrite} call has an unknown outcome and is never repeated automatically. ${unknownAdvice}`,
+          "not_sent",
         );
       }
 
@@ -122,7 +125,7 @@ export const createAppToolCalls = ({
       const refusal = refuseTargets(targets, { allowSelf: false });
       if (refusal !== null) return failure(refusal);
       const unsendable = await beforeSend();
-      if (unsendable !== null) return failure(unsendable);
+      if (unsendable !== null) return failure(unsendable, "not_sent");
       writesInFlight += 1;
       try {
         const called = await callApp(name, args, WRITE_TIMEOUT_MS);
@@ -131,13 +134,18 @@ export const createAppToolCalls = ({
             called.error._tag === "ServerRequestNotSent" ||
             called.error._tag === "MetaUnavailable"
           ) {
-            return failure(called.error.message);
+            return failure(called.error.message, "not_sent");
           }
+
+          // The server answered the call with an error, so it ran to a refusal and a corrected call may be sent.
+          if (called.error._tag === "ServerRequestRejected")
+            return failure(called.error.message, "rejected");
 
           // A malformed answer is still an answer to a call that ran, so like a lost one it leaves the outcome unknown.
           unknownWrite = label;
           return failure(
             `${called.error.message}. The ${label} call may or may not have taken effect and will not be repeated; ask the user to check the app.`,
+            "unknown",
           );
         }
 
@@ -148,6 +156,35 @@ export const createAppToolCalls = ({
         writesInFlight -= 1;
       }
     });
+
+  // Runs work that is not an app tool call, such as starting a Cloud session, under the same order, stop and unknown-outcome rules as a write.
+  const exclusive = <T>(
+    label: string,
+    run: () => Promise<T>,
+    isUnknown: (value: T) => boolean,
+  ): Promise<{ ran: T } | { refused: ToolResult }> => {
+    const queuedIn = currentGeneration();
+    return writes.run(CODEX_APP_SERVER, async () => {
+      if (unknownWrite !== null)
+        return {
+          refused: failure(
+            `An earlier ${unknownWrite} call has an unknown outcome and is never repeated automatically. ${unknownAdvice}`,
+            "not_sent",
+          ),
+        };
+      if (queuedIn !== generation) return { refused: notSentAfterStop(label) };
+      const refusal = refuseTargets([], { allowSelf: true });
+      if (refusal !== null) return { refused: failure(refusal) };
+      writesInFlight += 1;
+      try {
+        const value = await run();
+        if (isUnknown(value)) unknownWrite = label;
+        return { ran: value };
+      } finally {
+        writesInFlight -= 1;
+      }
+    });
+  };
 
   const currentGeneration = () => (stopped ? null : generation);
 
@@ -169,6 +206,7 @@ export const createAppToolCalls = ({
   return {
     read,
     write,
+    exclusive,
     currentGeneration,
     wasStopped: (queuedIn: number | null) => queuedIn !== generation,
     hasUnknownWrite: () => unknownWrite !== null,
@@ -189,7 +227,17 @@ export const createAppToolCalls = ({
 };
 
 export const notSentAfterStop = (name: string) =>
-  failure(`The turn was stopped before ${name} was sent, so it was not sent.`);
+  failure(
+    `The turn was stopped before ${name} was sent, so it was not sent.`,
+    "not_sent",
+  );
+
+// A read that never left can be sent again, and one the app refused ran; any other failure leaves its outcome unknown.
+const kindOfError = (tag: string): FailureKind => {
+  if (tag === "ServerRequestNotSent" || tag === "MetaUnavailable")
+    return "not_sent";
+  return tag === "ServerRequestRejected" ? "rejected" : "unknown";
+};
 
 // The request meta could not be built, so the call was never sent.
 export class MetaUnavailable extends TaggedError("MetaUnavailable")<{

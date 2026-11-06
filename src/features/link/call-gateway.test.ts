@@ -4,7 +4,9 @@ import { Result } from "better-result";
 
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
 import { createCallGateway } from "./call-gateway.ts";
+import type { StartCloud } from "./cloud-open.ts";
 import { createDelegationWatch, type FirstTurn } from "./delegations.ts";
+import { failure, type ToolResult } from "./results.ts";
 
 describe("createCallGateway", () => {
   test("sends a Codex thread's call to the app as given and returns the answer with the new thread", async () => {
@@ -525,6 +527,412 @@ describe("createCallGateway create_thread of a Claude thread", () => {
   });
 });
 
+describe("createCallGateway protocol 1", () => {
+  test("answers the version query with the operations it offers", async () => {
+    const { gateway, requests } = setup();
+
+    const answer = await gateway.handle(
+      JSON.stringify({ version: 1, query: "capabilities" }),
+    );
+
+    expect(JSON.parse(answer)).toEqual({
+      version: 1,
+      outcome: "done",
+      operations: [
+        "list_projects",
+        "create_thread",
+        "send_message_to_thread",
+        "read_thread",
+        "wait_threads",
+        "name_thread",
+        "cloud_chat",
+        "cloud_open",
+      ],
+    });
+    expect(requests).toEqual([]);
+  });
+
+  test("refuses a version it does not know, naming the one it offers", async () => {
+    const { gateway } = setup();
+
+    const answer = await gateway.handle(
+      JSON.stringify({ version: 2, query: "capabilities" }),
+    );
+
+    expect(JSON.parse(answer)).toMatchObject({
+      outcome: "invalid",
+      versions: [1],
+    });
+  });
+
+  test("answers cloud_open as invalid in the first protocol, as a bridge without it does", async () => {
+    const { gateway, requests } = setup();
+
+    const answer = await gateway.handle(
+      JSON.stringify({ threadId: CODEX, tool: "cloud_open", arguments: {} }),
+    );
+
+    expect(JSON.parse(answer).outcome).toBe("invalid");
+    expect(requests).toEqual([]);
+  });
+
+  test("names an answer the app marks as an error as rejected rather than a tool error", async () => {
+    const { gateway } = setup({
+      answer: () =>
+        Result.ok({
+          content: [{ type: "text", text: "thread not found" }],
+          isError: true,
+        }),
+    });
+
+    const answer = await gateway.handle(
+      JSON.stringify({ version: 1, threadId: CODEX, tool: "read_thread" }),
+    );
+
+    expect(JSON.parse(answer)).toEqual({
+      version: 1,
+      outcome: "rejected",
+      message: "thread not found",
+      result: {
+        content: [{ type: "text", text: "thread not found" }],
+        isError: true,
+      },
+    });
+  });
+
+  test.each([
+    { kind: "not_sent" as const },
+    { kind: "unknown" as const },
+    { kind: "invalid" as const },
+  ])("names a Claude thread's failed write as $kind", async ({ kind }) => {
+    const { gateway } = setup({
+      claude: [CLAUDE],
+      linkAnswer: () => failure("written for Claude", kind),
+    });
+
+    const answer = await gateway.handle(
+      JSON.stringify({
+        version: 1,
+        threadId: CLAUDE,
+        tool: "send_message_to_thread",
+        arguments: { threadId: "t", prompt: "hi" },
+      }),
+    );
+
+    expect(JSON.parse(answer)).toMatchObject({
+      version: 1,
+      outcome: kind,
+      message: "written for Claude",
+    });
+  });
+
+  test("keeps the tool error of the first protocol for a caller that names no version", async () => {
+    const { gateway } = setup({
+      claude: [CLAUDE],
+      linkAnswer: () => failure("written for Claude", "not_sent"),
+    });
+
+    const answer = await gateway.handle(
+      JSON.stringify({
+        threadId: CLAUDE,
+        tool: "send_message_to_thread",
+        arguments: { threadId: "t", prompt: "hi" },
+      }),
+    );
+
+    expect(JSON.parse(answer).outcome).toBe("tool_error");
+  });
+});
+
+describe("createCallGateway cloud_open", () => {
+  test("opens a Claude chat that links the session, in the project named", async () => {
+    const { gateway, requests, watch } = setup({
+      answer: () => {
+        watch.observe(CODEX, "th-cloud", {
+          model: "claude-sonnet-5-5",
+          effort: "high",
+        });
+        return Result.ok(CLIENT_ANSWER);
+      },
+    });
+
+    const answer = await cloudOpen(gateway, {
+      link: `https://claude.ai/code/${SESSION}`,
+      projectId: "p1",
+      title: "README",
+    });
+
+    expect(answer).toEqual({
+      version: 1,
+      outcome: "done",
+      result: {
+        threadId: "th-cloud",
+        cloudSessionId: SESSION,
+        url: `https://claude.ai/code/${SESSION}`,
+      },
+      model: "claude-sonnet-5-5",
+      effort: "high",
+    });
+    expect(requests.map((request) => request.params)).toEqual([
+      {
+        threadId: CODEX,
+        server: "codex_app",
+        tool: "create_thread",
+        arguments: {
+          prompt: `/cloud ${SESSION}`,
+          target: {
+            type: "project",
+            projectId: "p1",
+            environment: { type: "local" },
+          },
+          title: "☁️ README",
+          model: "claude-sonnet-5-5",
+          thinking: "high",
+        },
+      },
+    ]);
+  });
+
+  test("answers a session already linked with its chat, opening none", async () => {
+    const { gateway, requests } = setup();
+
+    const answer = await cloudOpen(gateway, { link: "session_01Linked" });
+
+    expect(answer).toMatchObject({
+      outcome: "done",
+      result: { threadId: "linked-chat", alreadyLinked: true },
+    });
+    expect(requests).toEqual([]);
+  });
+
+  test("refuses a second chat for a session it opened one for", async () => {
+    const { gateway, watch } = setup({
+      answer: () => {
+        watch.observe(CODEX, "th-cloud", { model: "m", effort: "high" });
+        return Result.ok(CLIENT_ANSWER);
+      },
+    });
+
+    await cloudOpen(gateway, { link: SESSION, projectId: "p1", model: "m" });
+    const again = await cloudOpen(gateway, { link: SESSION, projectId: "p1" });
+
+    expect(again).toMatchObject({
+      outcome: "rejected",
+      cloudSessionId: SESSION,
+    });
+    expect(String(again.message)).toContain("th-cloud");
+  });
+
+  test("frees the session for another try when the chat was surely not created", async () => {
+    let calls = 0;
+    const { gateway, requests } = setup({
+      answer: () => {
+        calls += 1;
+        return Result.err({ _tag: "ServerRequestNotSent", message: "closed" });
+      },
+    });
+
+    const first = await cloudOpen(gateway, { link: SESSION, projectId: "p1" });
+    const second = await cloudOpen(gateway, { link: SESSION, projectId: "p1" });
+
+    expect(first).toMatchObject({
+      outcome: "not_sent",
+      cloudSessionId: SESSION,
+    });
+    expect(second.outcome).toBe("not_sent");
+    expect(calls).toBe(2);
+    expect(requests).toHaveLength(2);
+  });
+
+  test("starts a session from a prompt in the folder of the project holding cwd", async () => {
+    const started: { prompt: string; cwd: string }[] = [];
+    const { gateway, requests, watch } = setup({
+      answer: () => {
+        if (requests.length === 1) return Result.ok(PROJECTS);
+        watch.observe(CODEX, "th-cloud", { model: "m", effort: "high" });
+        return Result.ok(CLIENT_ANSWER);
+      },
+      startCloud: async (prompt, cwd) => {
+        started.push({ prompt, cwd });
+        return Result.ok({ sessionId: SESSION, title: "Fix typo" });
+      },
+    });
+
+    const answer = await cloudOpen(gateway, {
+      prompt: "fix the typo",
+      cwd: "/work/app/src",
+      model: "m",
+    });
+
+    expect(started).toEqual([{ prompt: "fix the typo", cwd: "/work/app" }]);
+    expect(answer).toMatchObject({
+      outcome: "done",
+      result: { threadId: "th-cloud", cloudSessionId: SESSION },
+    });
+    expect(requests[1]?.params).toMatchObject({
+      arguments: { title: "☁️ Fix typo" },
+    });
+  });
+
+  test("names a start that did not report its session as unknown, opening no chat", async () => {
+    const { gateway, requests } = setup({
+      answer: () => Result.ok(PROJECTS),
+      startCloud: async () =>
+        Result.err({ message: "timed out", mayHaveStarted: true }),
+    });
+
+    const answer = await cloudOpen(gateway, {
+      prompt: "fix",
+      projectId: "p1",
+    });
+
+    expect(answer.outcome).toBe("unknown");
+    expect(requests).toHaveLength(1);
+  });
+
+  test("names a start that never ran as not sent", async () => {
+    const { gateway } = setup({
+      answer: () => Result.ok(PROJECTS),
+      startCloud: async () =>
+        Result.err({ message: "spawn ENOENT", mayHaveStarted: false }),
+    });
+
+    const answer = await cloudOpen(gateway, { prompt: "fix", projectId: "p1" });
+
+    expect(answer.outcome).toBe("not_sent");
+  });
+
+  test("starts no session for a Claude caller whose writes are stopped", async () => {
+    const started: string[] = [];
+    const { gateway, linkCalls } = setup({
+      claude: [CLAUDE],
+      linkAnswer: () => ({
+        content: [],
+        structuredContent: PROJECTS.structuredContent,
+      }),
+      linkRefusal: failure("The turn was stopped", "not_sent"),
+      startCloud: async (prompt) => {
+        started.push(prompt);
+        return Result.ok({ sessionId: SESSION, title: null });
+      },
+    });
+
+    const answer = await cloudOpen(
+      gateway,
+      { prompt: "fix", projectId: "p1" },
+      CLAUDE,
+    );
+
+    expect(answer).toMatchObject({ version: 1, outcome: "not_sent" });
+    expect(started).toEqual([]);
+    expect(linkCalls.map((call) => call.tool)).toEqual([
+      "list_projects",
+      "exclusive cloud_open",
+    ]);
+  });
+
+  test("tells a started session whose chat surely was not opened apart from a call never sent, keeping its id", async () => {
+    const { gateway } = setup({
+      claude: [CLAUDE],
+      linkAnswer: () => ({
+        content: [],
+        structuredContent: PROJECTS.structuredContent,
+      }),
+      created: { firstTurn: null, threadId: null, unknown: false, busy: false },
+      startCloud: async () => Result.ok({ sessionId: SESSION, title: null }),
+    });
+
+    const answer = await cloudOpen(
+      gateway,
+      { prompt: "fix", projectId: "p1" },
+      CLAUDE,
+    );
+
+    expect(answer).toMatchObject({
+      version: 1,
+      outcome: "chat_not_opened",
+      chatOutcome: "rejected",
+      cloudSessionId: SESSION,
+      url: `https://claude.ai/code/${SESSION}`,
+    });
+  });
+
+  test("lets the chat of a started session be opened with its link after it was not opened", async () => {
+    let calls = 0;
+    const { gateway, watch } = setup({
+      answer: () => {
+        calls += 1;
+        if (calls === 1) return Result.ok(PROJECTS);
+        if (calls === 2)
+          return Result.err({
+            _tag: "ServerRequestNotSent",
+            message: "closed",
+          });
+        watch.observe(CODEX, "th-cloud", { model: "m", effort: "high" });
+        return Result.ok(CLIENT_ANSWER);
+      },
+      startCloud: async () => Result.ok({ sessionId: SESSION, title: null }),
+    });
+
+    const first = await cloudOpen(gateway, { prompt: "fix", projectId: "p1" });
+    const retried = await cloudOpen(gateway, {
+      link: SESSION,
+      projectId: "p1",
+      model: "m",
+    });
+
+    expect(first).toMatchObject({
+      outcome: "chat_not_opened",
+      chatOutcome: "not_sent",
+    });
+    expect(retried).toMatchObject({
+      outcome: "done",
+      result: { threadId: "th-cloud" },
+    });
+  });
+
+  test.each([
+    { name: "both a link and a prompt", args: { link: SESSION, prompt: "x" } },
+    { name: "neither a link nor a prompt", args: {} },
+    { name: "a link that names no session", args: { link: "nope" } },
+    { name: "a relative cwd", args: { link: SESSION, cwd: "work" } },
+  ])("refuses $name before calling the app", async ({ args }) => {
+    const { gateway, requests } = setup();
+
+    const answer = await cloudOpen(gateway, args);
+
+    expect(answer.outcome).toBe("invalid");
+    expect(requests).toEqual([]);
+  });
+});
+
+const cloudOpen = async (
+  gateway: ReturnType<typeof setup>["gateway"],
+  args: Record<string, unknown>,
+  caller = CODEX,
+) =>
+  JSON.parse(
+    await gateway.handle(
+      JSON.stringify({
+        version: 1,
+        threadId: caller,
+        tool: "cloud_open",
+        arguments: args,
+      }),
+    ),
+  ) as Record<string, unknown>;
+
+const SESSION = "session_01NfjPqrX1AK5RmKyV182VYD";
+const PROJECTS = {
+  content: [],
+  structuredContent: {
+    projects: [
+      { projectId: "p1", path: "/work/app" },
+      { projectId: "p2", path: "/work/other" },
+    ],
+  },
+};
+
 const setup = ({
   answer = () => Result.ok({ content: [] }),
   claude = [],
@@ -541,7 +949,16 @@ const setup = ({
     busy: false,
   },
   armedMs = 600_000,
+  linkAnswer = (tool) => ({
+    content: [{ type: "text", text: `linked ${tool}` }],
+  }),
+  linkRefusal = null,
+  startCloud,
 }: {
+  linkAnswer?: (tool: string) => ToolResult;
+  // What the link answers instead of running work under its write rules, as after a stop.
+  linkRefusal?: ToolResult | null;
+  startCloud?: StartCloud;
   // The real errors are told apart by their tag alone.
   answer?: () => Result<unknown, { _tag: string; message: string }>;
   claude?: readonly string[];
@@ -572,7 +989,13 @@ const setup = ({
       return {
         call: async (tool, args) => {
           linkCalls.push({ tool, args });
-          return { content: [{ type: "text", text: `linked ${tool}` }] };
+          return linkAnswer(tool);
+        },
+        exclusive: async (label, run) => {
+          linkCalls.push({ tool: `exclusive ${label}`, args: null });
+          return linkRefusal === null
+            ? { ran: await run() }
+            : { refused: linkRefusal };
         },
         createChecked: async (args) => {
           linkCalls.push({ tool: "checked create_thread", args });
@@ -590,6 +1013,7 @@ const setup = ({
     cloudOwner: (sessionId) =>
       sessionId === "session_01Linked" ? "linked-chat" : undefined,
     firstTurnWaitMs: 50,
+    ...(startCloud !== undefined && { startCloud }),
   });
   return { gateway, requests, linkCalls, opened, watch };
 };

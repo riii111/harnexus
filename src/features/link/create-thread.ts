@@ -74,7 +74,8 @@ export const createThreadTool = ({
   ): Promise<CreateAttempt> => {
     const queuedIn = calls.currentGeneration();
     const model = await childModel(args.model);
-    if (model.isErr()) return notCreated(failure(modelRefusal(model.error)));
+    if (model.isErr())
+      return notCreated(failure(modelRefusal(model.error), "not_sent"));
     if (calls.wasStopped(queuedIn)) {
       return notCreated(notSentAfterStop("create_thread"));
     }
@@ -150,6 +151,7 @@ export const createThreadTool = ({
       calls.markUnknownWrite("create_thread");
       return failure(
         "The thread was created, but its id could not be learned from the app, so it cannot be read or messaged from here. Do not create another; ask the user to check the app.",
+        "unknown",
       );
     }
 
@@ -232,7 +234,10 @@ export const createThreadTool = ({
     const parsed = z.object(definition.inputSchema).safeParse(args);
     if (!parsed.success) {
       return notCreated(
-        failure(`Invalid arguments for create_thread: ${parsed.error.message}`),
+        failure(
+          `Invalid arguments for create_thread: ${parsed.error.message}`,
+          "invalid",
+        ),
       );
     }
 

@@ -15,6 +15,8 @@
     "feedback": "bun --no-env-file --config=/dev/null src/cli/feedback.ts",
     "open-app": "bun --no-env-file --config=/dev/null src/cli/open-app.ts",
     "call": "bun --no-env-file --config=/dev/null src/cli/call.ts",
+    "cloud": "bun --no-env-file --config=/dev/null src/cli/harnexus.ts cloud",
+    "install:cli": "bash scripts/install-cli.sh",
     "task": "bun --no-env-file --config=/dev/null src/cli/task.ts",
     "build:task": "bun --no-env-file --config=/dev/null src/cli/check-bun.ts && bun build --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig src/cli/task.ts --outfile dist/harnexus-task",
     "install:task:cloud": "bash scripts/install-cloud-task.sh",

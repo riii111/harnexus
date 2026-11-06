@@ -115,12 +115,16 @@ export const createCodexLink = ({
     const found = tools.find((entry) => entry.name === name) as
       | SdkMcpToolDefinition
       | undefined;
-    if (found === undefined) return failure(`${name} is not a Codex app tool.`);
+    if (found === undefined)
+      return failure(`${name} is not a Codex app tool.`, "invalid");
     const parsed = z.object(found.inputSchema).safeParse(args);
     // The tool's own handler runs, so its checks and the stop after an unknown write all still apply.
     return parsed.success
       ? found.handler(parsed.data, undefined)
-      : failure(`Invalid arguments for ${name}: ${parsed.error.message}`);
+      : failure(
+          `Invalid arguments for ${name}: ${parsed.error.message}`,
+          "invalid",
+        );
   };
 
   return {
@@ -128,6 +132,7 @@ export const createCodexLink = ({
     server: { name: CODEX_LINK_SERVER, tools },
     call,
     createChecked: created.createChecked,
+    exclusive: calls.exclusive,
     // Reads change nothing and reach only what the app lets this thread read, so they run without asking; creating and sending stay under the user's Claude permission rules.
     allowedTools: [...READ_TOOLS, ...BROWSER_ALLOWED_TOOLS].map(
       (name) => `mcp__${CODEX_LINK_SERVER}__${name}`,

@@ -4,7 +4,6 @@ import type { Readable, Writable } from "node:stream";
 
 import { readBridgeIdentity } from "../features/diagnostics/bridge-identity.ts";
 import { REPO } from "../features/diagnostics/repo.ts";
-import { codexHome } from "../features/task/request.ts";
 import { createCloudCheckouts } from "../infra/claude/cloud-checkouts.ts";
 import { cloudCli, sweepCloudLogs } from "../infra/claude/cloud.ts";
 import {
@@ -40,11 +39,13 @@ import {
 import { openThreadStore } from "../infra/thread-store.ts";
 import {
   loadCallSocketPath,
+  loadCodexHome,
   loadPermissionMode,
   loadShutdownGraceMs,
   loadStatePath,
   loadUnverifiedCodexPolicy,
 } from "../lib/config.ts";
+import { loadConnectionSettings } from "../lib/connection-settings.boundary.ts";
 import {
   announceBridgeStatus,
   openServerPipes,
@@ -162,10 +163,19 @@ async function withClaude(relay: {
     return plain;
   }
 
-  const [store] = await Promise.all([
+  const [store, settings] = await Promise.all([
     openThreadStore(statePath.value),
+    loadConnectionSettings(process.env),
     sweepCloudLogs(join(dirname(statePath.value), CLOUD_COPY_FOLDER)),
   ]);
+  // Unreadable settings leave every skill a skill, as when there are none.
+  if (settings.isErr()) {
+    logger.log({
+      event: "connection_settings_unavailable",
+      reason: settings.error._tag,
+    });
+  }
+
   // Without its thread store the bridge offers no Claude model and relays everything, so Codex threads keep working.
   if (store.isErr()) {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
@@ -238,7 +248,8 @@ async function withClaude(relay: {
       // Unreadable settings leave threads with none picked on the model default, which is still the level the app shows.
       effortRule(effortSettings, catalog.effortsOf)(model, picked),
     claudeModels: catalog.models,
-    codexHome: codexHome(process.env),
+    codexHome: loadCodexHome(process.env),
+    cloudSkills: settings.isOk() ? settings.value.cloudSkills : [],
     cronRecord: openCronRecord(cronRecordPath(statePath.value)),
     // Copies of Cloud sessions are written beside the thread state, apart from any project the user works in.
     cloud: {

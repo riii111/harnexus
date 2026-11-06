@@ -7,6 +7,7 @@ import type {
 import { parseJson } from "../../lib/json.boundary.ts";
 import { isObject } from "../../lib/object.ts";
 import { createSerialQueue } from "../../lib/serial-queue.ts";
+import { createCloudOpen, type StartCloud } from "./cloud-open.ts";
 import {
   type CreateOutcome,
   concludeCreate,
@@ -15,6 +16,7 @@ import {
   firstTurnRefusal,
   type TurnSettings,
 } from "./delegations.ts";
+import { failureKindOf } from "./results.ts";
 
 // The answer names what is known about the call, so the caller can tell a call that never left from one whose effect is unknown and must not be repeated.
 type GatewayAnswer =
@@ -46,23 +48,34 @@ type ToolAnswer = { content: unknown; isError?: boolean | undefined };
 type Link = {
   call: (name: string, args: unknown) => Promise<ToolAnswer>;
   createChecked: (args: unknown) => Promise<CreateOutcome & { busy: boolean }>;
+  exclusive: <T>(
+    label: string,
+    run: () => Promise<T>,
+    isUnknown: (value: T) => boolean,
+  ) => Promise<{ ran: T } | { refused: ToolAnswer }>;
 };
 
 // Serves the call socket's thread tools to harnexus-task, sending a Claude thread's calls through its codex_link.
 export const createCallGateway = ({
   isClaudeThread,
   openLink,
+  sessionLink = () => undefined,
   request,
   delegations,
   cloudOwner = () => undefined,
+  startCloud,
   firstTurnWaitMs = FIRST_TURN_WAIT_MS,
 }: {
   isClaudeThread: (threadId: string) => boolean;
   // The chat a Cloud session is linked to, however it was linked.
   cloudOwner?: (cloudSessionId: string) => string | undefined;
   openLink: (threadId: string) => Link;
+  // The link of the thread's running session, used before one of the gateway's own so a stop in the app also holds the socket's writes.
+  sessionLink?: (threadId: string) => Link | undefined;
   request: ServerRequest;
   delegations: Pick<DelegationWatch, "expect">;
+  // Starts a Cloud session for cloud_open; without it cloud_open only opens chats for sessions already started.
+  startCloud?: StartCloud;
   firstTurnWaitMs?: number;
 }) => {
   // Queued rather than refused, so a script's creates in a row each go out once the previous one is confirmed.
@@ -71,6 +84,8 @@ export const createCallGateway = ({
   const links = new Map<string, Link>();
 
   const linkOf = (threadId: string) => {
+    const running = sessionLink(threadId);
+    if (running !== undefined) return running;
     const known = links.get(threadId);
     if (known !== undefined) return known;
     const opened = openLink(threadId);
@@ -78,9 +93,13 @@ export const createCallGateway = ({
     return opened;
   };
 
-  const handle = async (line: string): Promise<GatewayAnswer> => {
+  // A request that names a version is answered by that version; one without is the first protocol, answered as before.
+  const handle = async (line: string): Promise<object> => {
     const parsed = parseJson(line);
-    const call = CALL.safeParse(parsed.isOk() ? parsed.value : undefined);
+    const value = parsed.isOk() ? parsed.value : undefined;
+    if (isObject(value) && Object.hasOwn(value, "version"))
+      return handleV1(value);
+    const call = CALL.safeParse(value);
     if (!call.success) {
       return {
         outcome: "invalid",
@@ -89,6 +108,42 @@ export const createCallGateway = ({
     }
 
     const { threadId, tool, arguments: args } = call.data;
+    return run(threadId, tool, args);
+  };
+
+  const handleV1 = async (value: Record<string, unknown>): Promise<object> => {
+    if (value.version !== PROTOCOL_VERSION)
+      return {
+        outcome: "invalid",
+        message: `protocol version ${JSON.stringify(value.version)} is not supported`,
+        versions: [PROTOCOL_VERSION],
+      };
+    if (QUERY_V1.safeParse(value).success)
+      return {
+        version: PROTOCOL_VERSION,
+        outcome: "done",
+        operations: TOOLS_V1,
+      };
+    const call = CALL_V1.safeParse(value);
+    if (!call.success)
+      return {
+        version: PROTOCOL_VERSION,
+        outcome: "invalid",
+        message: `expected {"version":1,"query":"capabilities"} or {"version":1,"threadId","tool","arguments"} with tool one of ${TOOLS_V1.join(", ")}`,
+      };
+    const { threadId, tool, arguments: args } = call.data;
+    const answer =
+      tool === "cloud_open"
+        ? await openCloud(threadId, args)
+        : await run(threadId, tool, args);
+    return { version: PROTOCOL_VERSION, ...structured(answer) };
+  };
+
+  const run = async (
+    threadId: string,
+    tool: Tool,
+    args: Record<string, unknown>,
+  ): Promise<GatewayAnswer> => {
     if (tool === "name_thread") return nameThread(threadId, args);
     if (tool === "cloud_chat") {
       const sessionId = args.sessionId;
@@ -213,9 +268,59 @@ export const createCallGateway = ({
       { timeoutMs: timeoutOf(tool, args) },
     );
 
+  // A Codex caller has no turn to stop, so its starts are only kept in order.
+  const codexStarts = createSerialQueue();
+
+  const openCloud = createCloudOpen({
+    call: async (caller, tool, args) =>
+      structured(await run(caller, tool, args)),
+    cloudOwner,
+    ...(startCloud !== undefined && { startCloud }),
+    guardStart: async (caller, start) => {
+      if (!isClaudeThread(caller))
+        return { ran: await codexStarts.run(caller, start) };
+      const guarded = await linkOf(caller).exclusive(
+        "cloud_open",
+        start,
+        (started) => (started.isErr() ? started.error.mayHaveStarted : false),
+      );
+      return "ran" in guarded
+        ? guarded
+        : {
+            refused: structured({
+              outcome: "tool_error",
+              result: guarded.refused,
+            }),
+          };
+    },
+  });
+
   return {
     handle: async (line: string) => JSON.stringify(await handle(line)),
   };
+};
+
+// The first protocol answers a failed tool as tool_error with text written for Claude; later ones name what is known of the call instead.
+const structured = (answer: { outcome: string; [key: string]: unknown }) => {
+  if (answer.outcome !== "tool_error") return answer;
+  const { result } = answer;
+  return {
+    ...answer,
+    outcome: isObject(result) ? failureKindOf(result) : "rejected",
+    message: textOf(result),
+  };
+};
+
+const textOf = (result: unknown) => {
+  const content = isObject(result) ? result.content : undefined;
+  const texts = Array.isArray(content)
+    ? content.flatMap((item) =>
+        isObject(item) && item.type === "text" && typeof item.text === "string"
+          ? [item.text]
+          : [],
+      )
+    : [];
+  return texts.length > 0 ? texts.join("\n") : "the call failed";
 };
 
 const BUSY: GatewayAnswer = {
@@ -310,9 +415,28 @@ type AppTool = (typeof APP_TOOLS)[number];
 // name_thread and cloud_chat are answered by the gateway itself: the app offers no tool that renames a thread, and only the bridge knows which chat shows a Cloud session.
 const TOOLS = [...APP_TOOLS, "name_thread", "cloud_chat"] as const;
 
+type Tool = (typeof TOOLS)[number];
+
 const CALL = z.strictObject({
   threadId: z.string().min(1),
   tool: z.enum(TOOLS),
+  arguments: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const PROTOCOL_VERSION = 1;
+
+// cloud_open is offered only to callers that asked for the version first, so an older bridge refuses it before anything is sent.
+export const TOOLS_V1 = [...TOOLS, "cloud_open"] as const;
+
+const QUERY_V1 = z.strictObject({
+  version: z.literal(PROTOCOL_VERSION),
+  query: z.literal("capabilities"),
+});
+
+const CALL_V1 = z.strictObject({
+  version: z.literal(PROTOCOL_VERSION),
+  threadId: z.string().min(1),
+  tool: z.enum(TOOLS_V1),
   arguments: z.record(z.string(), z.unknown()).default({}),
 });
 

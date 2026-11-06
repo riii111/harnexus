@@ -5,7 +5,11 @@ import { Result, TaggedError } from "better-result";
 
 export class CloudStartFailed extends TaggedError("CloudStartFailed")<{
   message: string;
+  // False only when claude never ran or stopped before starting anything, so starting again makes no second session.
+  mayHaveStarted: boolean;
 }> {}
+
+class NotStarted extends Error {}
 
 export type CloudStarted = { sessionId: string; title: string | null };
 
@@ -66,6 +70,10 @@ export const startCloudSession = (
         });
         let seen = "";
         let settled = false;
+        let spawned = false;
+        child.once("spawn", () => {
+          spawned = true;
+        });
         const finish = (outcome: () => void) => {
           if (settled) return;
           settled = true;
@@ -101,7 +109,7 @@ export const startCloudSession = (
           if (TRUST_PROMPT.test(plain))
             finish(() =>
               reject(
-                new Error(
+                new NotStarted(
                   `claude asks whether to trust ${cwd}; open claude there once and trust it`,
                 ),
               ),
@@ -110,7 +118,9 @@ export const startCloudSession = (
 
         child.stdout.on("data", read(new StringDecoder("utf8")));
         child.stderr.on("data", read(new StringDecoder("utf8")));
-        child.on("error", (error) => finish(() => reject(error)));
+        child.on("error", (error) =>
+          finish(() => reject(spawned ? error : new NotStarted(error.message))),
+        );
         child.on("close", () =>
           finish(() =>
             reject(
@@ -125,6 +135,7 @@ export const startCloudSession = (
     catch: (cause) =>
       new CloudStartFailed({
         message: cause instanceof Error ? cause.message : String(cause),
+        mayHaveStarted: !(cause instanceof NotStarted),
       }),
   });
 

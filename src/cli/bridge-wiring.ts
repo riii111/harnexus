@@ -63,6 +63,7 @@ export const connectClaudeThreads = ({
   cronRecord,
   permissionMode = "auto",
   cloud,
+  cloudSkills = [],
   send,
   log,
 }: {
@@ -87,11 +88,15 @@ export const connectClaudeThreads = ({
     // Where the reviews a Cloud session read are kept for their chats.
     reviewDir: string;
   };
+  // Skills the user set to mean /cloud when picked in an empty chat.
+  cloudSkills?: readonly string[];
   send: (message: object) => void;
   log: (event: ClaudeLogEvent | RouteEvent | CloudLogEvent) => void;
 }) => {
   // One store and one watch for created threads are shared, so a child is traced to its parent whichever part sees it first.
   const delegations = createDelegationWatch();
+  // The link of each thread's running session, so its socket calls share the stop, order and unknown-outcome state of the turn's own tool calls.
+  const sessionLinks = new Map<string, ReturnType<typeof createCodexLink>>();
   const openLink = (callerThreadId: string) =>
     createCodexLink({
       callerThreadId,
@@ -143,7 +148,11 @@ export const connectClaudeThreads = ({
     lastRecordOf,
     readHistory,
     renameThread,
-    openLink: (callerThreadId) => openLink(callerThreadId),
+    openLink: (callerThreadId) => {
+      const link = openLink(callerThreadId);
+      sessionLinks.set(callerThreadId, link);
+      return link;
+    },
     send,
     log,
     effortRule,
@@ -153,9 +162,17 @@ export const connectClaudeThreads = ({
   const callGateway = createCallGateway({
     isClaudeThread: threads.isSavedClaudeThread,
     openLink,
+    sessionLink: (threadId) => sessionLinks.get(threadId),
     request,
     delegations,
     cloudOwner: (cloudSessionId) => store.cloudOwner(cloudSessionId),
+    ...(cloud !== undefined && {
+      startCloud: (prompt: string, cwd: string) =>
+        startCloudSession(cloud.cli.file, prompt, {
+          cwd,
+          env: cloud.cli.env,
+        }),
+    }),
   });
   const reviews =
     cloud === undefined
@@ -183,6 +200,7 @@ export const connectClaudeThreads = ({
     send,
     log,
     renameThread,
+    cloudSkills,
     ...(reviews === undefined
       ? {}
       : {

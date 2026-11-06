@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 
 import { Result } from "better-result";
 
+import { loadCodexHome } from "../../lib/config.ts";
 import {
   isDirectory,
   pathExists,
@@ -42,8 +43,7 @@ export const absoluteOr = (value: string | undefined, fallback: string) =>
   // A relative directory is ignored, as the XDG spec has it, so the working directory never picks the templates or the state.
   value?.startsWith("/") ? value : fallback;
 
-export const codexHome = (env: Env) =>
-  absoluteOr(env.CODEX_HOME, join(homeOf(env), ".codex"));
+export const codexHome = (env: Env) => loadCodexHome(env, () => homeOf(env));
 
 export const configHome = (env: Env) =>
   join(

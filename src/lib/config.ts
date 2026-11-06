@@ -161,8 +161,30 @@ export const loadCallerSocketPath = (
     return Result.ok(defaultCallSocketPath(state));
   });
 
+// Where a caller finds the bridge's call socket, or null when it is off, so a caller can say so instead of failing to connect.
+export const loadCallerSocket = (
+  env: Record<string, string | undefined>,
+  home: () => string = homedir,
+) =>
+  callSocketSetting(env).andThen((setting) =>
+    setting.kind === "off"
+      ? Result.ok<string | null>(null)
+      : loadCallerSocketPath(env, home),
+  );
+
 const defaultCallSocketPath = (statePath: string) =>
   join(dirname(statePath), "call.sock");
+
+// Where the Codex App keeps its automations and worktrees; a relative CODEX_HOME is ignored, so the working directory never picks it.
+export const loadCodexHome = (
+  env: Record<string, string | undefined>,
+  home: () => string = homedir,
+) => {
+  const value = env.CODEX_HOME;
+  return value !== undefined && isAbsolute(value)
+    ? value
+    : join(home(), ".codex");
+};
 
 const DEFAULT_SHUTDOWN_GRACE_MS = 5000;
 
