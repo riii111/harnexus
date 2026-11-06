@@ -1,9 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { writeFileExclusive } from "../lib/fs.boundary.ts";
 import {
   readExternalConversations,
   updateExternalConversations,
@@ -130,15 +138,52 @@ describe("updateExternalConversations", () => {
     expect(kept.state.intents).toHaveLength(1);
   });
 
-  test("keeps only the latest revisions", async () => {
+  test("makes a change worked out on a revision since emptied again on the latest, never over the emptied number", async () => {
+    const folder = join(dir, "external-conversations");
+    await bind(folder, "t0");
+    const seen: number[] = [];
+
+    const stale = await updateExternalConversations(folder, (state) => {
+      seen.push(state.bindings.length);
+      // While this change is worked out from revision 1, other bridges make revisions up to 12, emptying the oldest.
+      if (seen.length === 1)
+        for (const revision of Array.from({ length: 11 }, (_, at) => at + 2))
+          writeFileSync(
+            join(folder, `${String(revision).padStart(12, "0")}.json`),
+            revision <= 4
+              ? ""
+              : JSON.stringify({
+                  version: 1,
+                  bindings: Array.from({ length: revision }, (_, at) => ({
+                    adapterId: "taskctl",
+                    conversationId: `t${at}`,
+                    threadId: `t${at}`,
+                  })),
+                  intents: [],
+                }),
+          );
+      return {
+        state: { ...state, intents: [...STATE.intents] },
+        result: null,
+      };
+    });
+
+    const kept = (await readExternalConversations(folder)).unwrap();
+    expect(stale.isOk()).toBe(true);
+    expect(seen).toEqual([1, 12]);
+    expect(kept.revision).toBe(13);
+    expect(kept.state.intents).toHaveLength(1);
+    expect(await readFile(join(folder, "000000000002.json"), "utf8")).toBe("");
+  });
+
+  test("never makes a revision whose number an emptied one holds", async () => {
     const folder = join(dir, "external-conversations");
     for (const threadId of Array.from({ length: 12 }, (_, at) => `t${at}`))
       await bind(folder, threadId);
 
-    const names = await readdir(folder);
+    const again = await writeFileExclusiveAt(join(folder, "000000000002.json"));
 
-    expect(names.sort()[0]).toBe("000000000005.json");
-    expect(names).toHaveLength(8);
+    expect(again).toBe(false);
   });
 
   test("leaves a revision it cannot read as it is", async () => {
@@ -152,3 +197,6 @@ describe("updateExternalConversations", () => {
     expect(await readdir(folder)).toEqual(["000000000001.json"]);
   });
 });
+
+const writeFileExclusiveAt = async (path: string) =>
+  (await writeFileExclusive(path, "{}")).unwrap();

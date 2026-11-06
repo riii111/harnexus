@@ -7,7 +7,7 @@ import {
   listDirectoryIfExists,
   prepareDirectory,
   readTextFileIfExists,
-  removeFile,
+  writeFileAtomic,
   writeFileExclusive,
 } from "../lib/fs.boundary.ts";
 import { parseJson } from "../lib/json.boundary.ts";
@@ -110,8 +110,8 @@ export const readExternalConversations = async (
           message: read.error.message,
         }),
       );
-    // Pruned after the folder was listed, so a newer revision stands; it is listed again.
-    if (read.value === null) continue;
+    // Emptied or gone after the folder was listed, so a newer revision stands; it is listed again.
+    if (read.value === null || read.value === "") continue;
     const parsed = STATE.safeParse(parseJson(read.value).unwrapOr(undefined));
     return parsed.success
       ? Result.ok({
@@ -173,12 +173,15 @@ export const updateExternalConversations = async <T>(
   );
 };
 
-// Older revisions are only read by a bridge that listed the folder before the newest was made, which then lists it again.
+// An older revision is emptied rather than removed, so its number stays taken and a bridge that worked from an older revision can never create it again and have its change passed over.
 const prune = async (dir: string, latest: number) => {
-  for (let revision = latest - KEPT_REVISIONS; revision > 0; revision--) {
-    const removed = await removeFile(join(dir, revisionName(revision)));
-    if (removed.isErr()) return;
-    if (revision <= latest - KEPT_REVISIONS - PRUNE_BATCH) return;
+  const until = Math.max(0, latest - KEPT_REVISIONS - PRUNE_BATCH);
+  for (let revision = latest - KEPT_REVISIONS; revision > until; revision--) {
+    const emptied = await writeFileAtomic(
+      join(dir, revisionName(revision)),
+      "",
+    );
+    if (emptied.isErr()) return;
   }
 };
 
