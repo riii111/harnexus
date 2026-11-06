@@ -551,7 +551,24 @@ describe("browser tabs linked in Claude input", () => {
     expect(browserCalls(toolCalls)).toEqual([]);
   });
 
+  test("lists the tab when the app's paste escaped the bracket-paren pair with a backslash", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns } = await harness([claude]);
+
+    turns.startTurn(
+      turnStart(10, `[Browser check]\\(${TAB_LINK}) Run check`),
+      undefined,
+    );
+    await until(() => claude.started());
+
+    expect(JSON.stringify(await firstPrompt(claude.prompt()))).toContain(
+      "<browser_tab_candidates>",
+    );
+  });
+
   test.each([
+    { name: "two backslashes", text: `[x]\\\\(${TAB_LINK})` },
+    { name: "a backslash before the link only", text: `[x](\\${TAB_LINK})` },
     {
       name: "a link whose encoding was changed",
       text: `[x](${TAB_LINK.replace("tabId=4", "tabId=%34")})`,

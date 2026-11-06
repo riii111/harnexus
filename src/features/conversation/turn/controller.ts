@@ -1090,7 +1090,7 @@ const addTabCandidates = (found: TabMention[], text: string) => {
   }
 };
 
-const TAB_LINK = /\]\((plugin:\/\/browser@openai-bundled\?[^)\s]+)\)/g;
+const TAB_LINK = /\]\\?\((plugin:\/\/browser@openai-bundled\?[^)\s]+)\)/g;
 const MAX_TAB_CANDIDATES = 8;
 
 const INVALID_REQUEST = -32600;

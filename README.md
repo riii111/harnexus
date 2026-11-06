@@ -54,7 +54,7 @@ Running `bun run open-app` again without an option clears that option.
 ## In-app browser
 
 A local Claude chat can open a page in the app's in-app browser, read it, and click or type in it, so Claude can check a page it built. Each action follows your approval mode.
-To use a tab you already have open, @-mention it in your message. Claude asks you to type `Allow` for that tab; the permission lasts for that turn only. The site approvals the app shows still apply.
+To use a tab you already have open, include its link in your message. Claude asks you to type `Allow` for that tab; the permission lasts for that turn only. The site approvals the app shows still apply.
 
 ## Claude Cloud sessions
 
