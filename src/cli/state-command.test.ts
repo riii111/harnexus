@@ -55,6 +55,29 @@ describe("harnexus state", () => {
     );
   });
 
+  test("creates the state folder when it does not exist yet", async () => {
+    const env = {
+      HARNEXUS_STATE_PATH: join(dir, "new", "state", "threads.json"),
+    };
+    const run = (args: string[], stdin = "") =>
+      runHarnexus(["state", ...args], {
+        env,
+        cwd: dir,
+        readStdin: async () => stdin,
+      });
+
+    const imported = await run(
+      ["import-cloud-links"],
+      exchange(["session_01A", null]),
+    );
+    const exported = await run(["export-cloud-links"]);
+
+    expect(imported.code).toBe(0);
+    expect(JSON.parse(exported.stdout).links).toMatchObject([
+      { sessionId: "session_01A", threadId: null },
+    ]);
+  });
+
   test("takes nothing in twice when the same reservations are imported again from stdin", async () => {
     await state(["import-cloud-links"], exchange(["session_01A", "chat-a"]));
     const before = await readFile(join(dir, "cloud-links.json"), "utf8");

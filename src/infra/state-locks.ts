@@ -220,6 +220,9 @@ export const enterMaintenance = async (
     MaintenanceRunning | BridgesRunning | StateLockFailed
   >
 > => {
+  // The state may not exist yet, such as before the app first ran, and an import may be what creates it.
+  const prepared = await prepareDirectory(stateDir);
+  if (prepared.isErr()) return Result.err(failed(stateDir)(prepared.error));
   const lock = await acquireLock(join(stateDir, MAINTENANCE_LOCK), 0, deps);
   if (lock.isErr())
     return Result.err(
