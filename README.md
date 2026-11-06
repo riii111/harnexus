@@ -76,6 +76,19 @@ To let a skill act as `/cloud` when you pick it in an empty Claude chat, list it
 { "cloudSkills": ["my-cloud-skill"] }
 ```
 
+To show another tool's conversations in their own chats, register its adapter program in the same file by an absolute path. Harnexus starts only that program and talks to it over its standard input and output. With `observe` it only reads the Cloud sessions shown here; with `write` it may also open chats, answer them and send to those sessions, and the Cloud review chats built into Harnexus are turned off.
+
+```json
+{
+  "externalConversationAdapter": {
+    "id": "my-adapter",
+    "command": "/absolute/path/to/adapter",
+    "args": [],
+    "mode": "observe"
+  }
+}
+```
+
 To open Cloud chats from scripts or skills, install the `harnexus` command, which runs this checkout with the current Bun:
 
 ```sh

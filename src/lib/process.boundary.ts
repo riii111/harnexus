@@ -1,5 +1,6 @@
 import { type ExecFileException, execFile, spawn } from "node:child_process";
 import { createReadStream, createWriteStream, writeSync } from "node:fs";
+import { createInterface } from "node:readline";
 
 import { Result, TaggedError } from "better-result";
 
@@ -134,6 +135,55 @@ export const startDetachedCommand = (file: string, args: readonly string[]) =>
         message: `cannot start ${file}`,
       }),
   });
+
+// A long-lived child spoken to by lines on its stdin and stdout; its stderr is left out, since the bridge's own stderr goes to the app.
+export type LineProcess = {
+  // False once the child's input is closed, so the line never reached it.
+  send: (line: string) => boolean;
+  stop: () => void;
+};
+
+export const startLineProcess = (
+  file: string,
+  args: readonly string[],
+  {
+    onLine,
+    onExit,
+  }: {
+    onLine: (line: string) => void;
+    // Called once, whether the child could not start, exited or was stopped.
+    onExit: () => void;
+  },
+): LineProcess => {
+  let ended = false;
+  const end = () => {
+    if (ended) return;
+    ended = true;
+    onExit();
+  };
+
+  const child = spawn(file, [...args], { stdio: ["pipe", "pipe", "ignore"] });
+  child.once("error", end);
+  child.once("close", end);
+  // A write to a child that has exited fails on the stream, which is ended rather than thrown.
+  child.stdin.on("error", () => child.stdin.destroy());
+  createInterface({ input: child.stdout, crlfDelay: Infinity }).on(
+    "line",
+    (line) => {
+      if (!ended) onLine(line);
+    },
+  );
+  return {
+    send: (line) => {
+      if (ended || child.stdin.destroyed || !child.stdin.writable) return false;
+      child.stdin.write(`${line}\n`);
+      return true;
+    },
+    stop: () => {
+      if (!ended) child.kill("SIGTERM");
+    },
+  };
+};
 
 // The one place a command's end is awaited, answering a failed command with its error rather than failing.
 export const captureCommand = (

@@ -10,6 +10,10 @@ import {
   serializeClaudeTurnEvent,
 } from "../features/conversation/claude/runtime.ts";
 import {
+  type ExternalLogEvent,
+  serializeExternalEvent,
+} from "../features/conversation/external/conversations.ts";
+import {
   isRouteEvent,
   type RouteEvent,
   serializeRouteEvent,
@@ -62,6 +66,9 @@ type LogEvent =
   | ObservationEvent
   | ClaudeLogEvent
   | CloudLogEvent
+  | ExternalLogEvent
+  | { event: "external_state_unavailable" }
+  | { event: "cloud_review_writer"; writer: "legacy" | "adapter" | "none" }
   | RouteEvent;
 
 type CallSocketFailure =
@@ -174,6 +181,12 @@ const serializeLogEvent = (entry: LogEvent) => {
       return { event: entry.event, count: entry.count };
     case "claude_cloud":
       return serializeCloudEvent(entry);
+    case "external_adapter":
+      return serializeExternalEvent(entry);
+    case "external_state_unavailable":
+      return { event: entry.event };
+    case "cloud_review_writer":
+      return { event: entry.event, writer: entry.writer };
     case "claude_turn":
       return isClaudeTurnEvent(entry)
         ? serializeClaudeTurnEvent(entry)
