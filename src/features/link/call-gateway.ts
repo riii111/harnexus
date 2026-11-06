@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import type { CloudLinkReservations } from "../../infra/cloud-links.ts";
 import type {
   ServerRequest,
   ServerRequestError,
@@ -55,7 +56,7 @@ type Link = {
   ) => Promise<{ ran: T } | { refused: ToolAnswer }>;
 };
 
-// Serves the call socket's thread tools to harnexus-task, sending a Claude thread's calls through its codex_link.
+// Serves the call socket's thread tools to local programs, sending a Claude thread's calls through its codex_link.
 export const createCallGateway = ({
   isClaudeThread,
   openLink,
@@ -63,12 +64,15 @@ export const createCallGateway = ({
   request,
   delegations,
   cloudOwner = () => undefined,
+  cloudLinks,
   startCloud,
   firstTurnWaitMs = FIRST_TURN_WAIT_MS,
 }: {
   isClaudeThread: (threadId: string) => boolean;
   // The chat a Cloud session is linked to, however it was linked.
   cloudOwner?: (cloudSessionId: string) => string | undefined;
+  // The chats cloud_open opened, by Cloud session.
+  cloudLinks: CloudLinkReservations;
   openLink: (threadId: string) => Link;
   // The link of the thread's running session, used before one of the gateway's own so a stop in the app also holds the socket's writes.
   sessionLink?: (threadId: string) => Link | undefined;
@@ -180,7 +184,7 @@ export const createCallGateway = ({
     return failedCall(answered.error);
   };
 
-  // Names the thread the call came from; harnexus-task sends only the worker's own thread.
+  // Names only the thread the call came from.
   const nameThread = async (
     threadId: string,
     args: Record<string, unknown>,
@@ -275,6 +279,7 @@ export const createCallGateway = ({
     call: async (caller, tool, args) =>
       structured(await run(caller, tool, args)),
     cloudOwner,
+    reservations: cloudLinks,
     ...(startCloud !== undefined && { startCloud }),
     guardStart: async (caller, start) => {
       if (!isClaudeThread(caller))

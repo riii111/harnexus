@@ -82,13 +82,6 @@ export type SpawnAdapter = (handlers: {
   onExit: () => void;
 }) => LineProcess;
 
-// Migration only: a review the old writer has in memory only, unsent, to be handed to the adapter's journal before the old bridge stops.
-// TODO(S5): remove with the old Cloud review writer.
-export type LegacyUnsentReview = {
-  parentThreadId: string;
-  review: Record<string, unknown>;
-};
-
 export type ExternalConversations = ReturnType<
   typeof createExternalConversations
 >;
@@ -179,7 +172,6 @@ export const createExternalConversations = ({
   >();
   const linkEvents = new Map<string, { sessionId: string; link: string }>();
   let sentKeys = new Map<string, string>();
-  let legacyUnsent: readonly LegacyUnsentReview[] = [];
 
   const sendLine = (message: object) =>
     current?.send(
@@ -453,13 +445,6 @@ export const createExternalConversations = ({
     markReady();
     for (const observation of observations.values())
       sendObservation(observation);
-    // TODO(S5): remove with the old Cloud review writer.
-    if (mode === "observe" && legacyUnsent.length > 0)
-      sendLine({
-        type: "event",
-        event: "migration_unsent_reviews",
-        entries: legacyUnsent,
-      });
   };
 
   // Takes the bindings the adapter declared from its own record; a binding only this bridge knows, such as one a first turn confirmed while the adapter was away, is kept and told to it.
@@ -824,17 +809,6 @@ export const createExternalConversations = ({
           linkedAt: observation.records.at(-1)?.uuid ?? null,
         });
       sendObservation(observation);
-    },
-
-    // TODO(S5): remove with the old Cloud review writer.
-    noteLegacyUnsent: (entries: readonly LegacyUnsentReview[]) => {
-      legacyUnsent = entries;
-      if (mode === "observe" && connected)
-        sendLine({
-          type: "event",
-          event: "migration_unsent_reviews",
-          entries,
-        });
     },
 
     isBound: (threadId: string) =>

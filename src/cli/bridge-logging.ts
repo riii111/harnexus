@@ -68,7 +68,6 @@ type LogEvent =
   | CloudLogEvent
   | ExternalLogEvent
   | { event: "external_state_unavailable" }
-  | { event: "cloud_review_writer"; writer: "legacy" | "adapter" | "none" }
   | RouteEvent;
 
 type CallSocketFailure =
@@ -76,7 +75,10 @@ type CallSocketFailure =
   | InferErr<ReturnType<typeof loadCallSocketPath>>["_tag"]
   | InferErr<Awaited<ReturnType<typeof serveLines>>>["_tag"];
 
-type StartupFailure = "ServerPipesUnavailable" | "UnverifiedCodex";
+type StartupFailure =
+  | "ServerPipesUnavailable"
+  | "UnverifiedCodex"
+  | "MaintenanceRunning";
 
 type LogFileFailure =
   | "StatePathNotAbsolute"
@@ -86,7 +88,8 @@ type LogFileFailure =
 type ClaudeUnavailable =
   | InferErr<ReturnType<typeof loadPermissionMode>>["_tag"]
   | InferErr<ReturnType<typeof loadStatePath>>["_tag"]
-  | InferErr<Awaited<ReturnType<typeof openThreadStore>>>["_tag"];
+  | InferErr<Awaited<ReturnType<typeof openThreadStore>>>["_tag"]
+  | "StateLockFailed";
 
 type EffortSettingsFailure = InferErr<
   Awaited<ReturnType<typeof loadEffortSettings>>
@@ -185,8 +188,6 @@ const serializeLogEvent = (entry: LogEvent) => {
       return serializeExternalEvent(entry);
     case "external_state_unavailable":
       return { event: entry.event };
-    case "cloud_review_writer":
-      return { event: entry.event, writer: entry.writer };
     case "claude_turn":
       return isClaudeTurnEvent(entry)
         ? serializeClaudeTurnEvent(entry)

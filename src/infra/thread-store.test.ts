@@ -75,16 +75,22 @@ describe("openThreadStore", () => {
     });
   });
 
-  test("saves the reviewer key earlier versions require to load the file", async () => {
+  test("saves only the fields it reads", async () => {
     const store = await openStore();
     await store.register(ENTRY);
 
     await store.setModel("thread-1", "claude-opus-5-5");
 
-    expect(JSON.parse(await readFile(path, "utf8")).threads[0]).toMatchObject({
-      model: "claude-opus-5-5",
-      reviewerThreadIds: [],
-    });
+    expect(
+      Object.keys(JSON.parse(await readFile(path, "utf8")).threads[0]).sort(),
+    ).toEqual([
+      "effort",
+      "messageIds",
+      "model",
+      "sessionId",
+      "threadId",
+      "worktree",
+    ]);
   });
 
   test("registers a thread with the effort it was given", async () => {
@@ -712,7 +718,6 @@ const CLOUD = { sessionId: "session_01Cloud", shown: null };
 const SAVED_RECORD = {
   ...ENTRY,
   sessionId: null,
-  reviewerThreadIds: [],
 };
 
 const openStore = async (files: Parameters<typeof openThreadStore>[1] = {}) => {

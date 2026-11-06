@@ -1,6 +1,7 @@
 import type { Result } from "better-result";
 
 import { parseCloudSessionId } from "../../infra/claude/cloud.ts";
+import type { CloudLinkReservations } from "../../infra/cloud-links.ts";
 import { projectOf, projectsIn } from "../../infra/codex/projects.ts";
 import { isObject } from "../../lib/object.ts";
 
@@ -34,6 +35,7 @@ export type GuardStart = (
 export const createCloudOpen = ({
   call,
   cloudOwner,
+  reservations,
   startCloud,
   guardStart,
 }: {
@@ -44,12 +46,11 @@ export const createCloudOpen = ({
     args: Record<string, unknown>,
   ) => Promise<Answer>;
   cloudOwner: (cloudSessionId: string) => string | undefined;
+  // One chat per session, kept across restarts, so a chat that takes its own /cloud as a request cannot open chats without end.
+  reservations: CloudLinkReservations;
   startCloud?: StartCloud;
   guardStart: GuardStart;
 }) => {
-  // One chat per session while this bridge runs, so a chat that takes its own /cloud as a request cannot open chats without end.
-  const opened = new Map<string, string | null>();
-
   const projectWhere = async (
     caller: string,
     named: string | null,
@@ -140,24 +141,27 @@ export const createCloudOpen = ({
         outcome: "done",
         result: { threadId: owner, ...session, alreadyLinked: true },
       };
-    if (opened.has(sessionId)) {
-      const threadId = opened.get(sessionId);
+    // Reserved before the app is asked, so two calls for one session cannot both open a chat.
+    const reserved = await reservations.reserve(sessionId);
+    if (reserved === null)
+      return notOpened(
+        notSent("the Cloud chat reservations cannot be read or written"),
+        session,
+        startedHere,
+      );
+    if (!reserved.reserved)
       return {
         outcome: "rejected",
         message:
-          threadId === null
-            ? `a chat for Cloud session ${sessionId} is being opened`
-            : `a chat for Cloud session ${sessionId} was already opened (threadId ${threadId}); use that chat`,
+          reserved.threadId === null
+            ? `a chat for Cloud session ${sessionId} is being opened, or its opening did not report back; check the app, and if no chat shows the session, send /cloud ${sessionId} in a new Claude chat`
+            : `a chat for Cloud session ${sessionId} was already opened (threadId ${reserved.threadId}); use that chat`,
         ...session,
       };
-    }
-
-    // Claimed before the app is asked, so two calls for one session cannot both open a chat.
-    opened.set(sessionId, null);
     if (projectId === null) {
       const where = await projectWhere(caller, null, checked.cwd);
       if ("failed" in where) {
-        opened.delete(sessionId);
+        await reservations.release(sessionId);
         return notOpened(where.failed, session, startedHere);
       }
 
@@ -173,7 +177,8 @@ export const createCloudOpen = ({
     });
     const threadId = answer.threadId;
     if (answer.outcome === "done" && typeof threadId === "string") {
-      opened.set(sessionId, threadId);
+      // A confirmation that is not written leaves the reservation without its chat, which is never opened again either way.
+      await reservations.confirm(sessionId, threadId);
       return {
         outcome: "done",
         result: { threadId, ...session },
@@ -183,7 +188,7 @@ export const createCloudOpen = ({
     }
 
     // Only a call the app surely did not act on frees the session for another try; a session already started keeps running, so it is named either way.
-    if (UNOPENED.has(answer.outcome)) opened.delete(sessionId);
+    if (UNOPENED.has(answer.outcome)) await reservations.release(sessionId);
     return notOpened(answer, session, startedHere);
   };
 };

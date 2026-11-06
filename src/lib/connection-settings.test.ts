@@ -48,8 +48,8 @@ describe("loadConnectionSettings", () => {
     await write(
       JSON.stringify({
         externalConversationAdapter: {
-          id: "taskctl",
-          command: "/opt/taskctl/bin/adapter",
+          id: "my-adapter",
+          command: "/opt/my-adapter/bin/adapter",
           mode: "observe",
         },
       }),
@@ -58,8 +58,8 @@ describe("loadConnectionSettings", () => {
     const loaded = await loadConnectionSettings({ XDG_CONFIG_HOME: dir });
 
     expect(loaded.unwrap().externalConversationAdapter).toEqual({
-      id: "taskctl",
-      command: "/opt/taskctl/bin/adapter",
+      id: "my-adapter",
+      command: "/opt/my-adapter/bin/adapter",
       args: [],
       mode: "observe",
     });

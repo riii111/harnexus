@@ -141,7 +141,7 @@ export const loadCallSocketPath = (
   statePath: string,
 ) =>
   callSocketSetting(env).map((setting) => {
-    // The socket lets any process of the user create and message threads in the app, so "off" closes it; it is open by default, since harnexus-task sends through it.
+    // The socket lets any process of the user create and message threads in the app, so "off" closes it; it is open by default, since harnexus call and harnexus cloud send through it.
     if (setting.kind === "off") return null;
     return setting.kind === "path"
       ? setting.path

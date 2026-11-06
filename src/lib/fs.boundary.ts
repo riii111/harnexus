@@ -4,12 +4,10 @@ import {
   chmodSync,
   constants,
   type Dirent,
-  ftruncateSync,
   mkdirSync,
-  openSync,
   renameSync,
   statSync,
-  writeSync,
+  unlinkSync,
 } from "node:fs";
 import {
   access,
@@ -397,30 +395,14 @@ export const createEmptyFile = (path: string) =>
     return Result.ok();
   });
 
-// Takes the lock at path for the life of the process, or answers false while another process holds it.
-export const holdProcessLock = (path: string) =>
-  Result.try({
-    try: () => {
-      try {
-        // macOS takes the lock with the open itself, and the kernel drops it when the holder exits, so a crash never leaves it behind.
-        const fd = openSync(path, LOCK_FLAGS, OWNER_ONLY);
-        ftruncateSync(fd);
-        writeSync(fd, `${process.pid}\n`);
-        // The descriptor is never closed, so the lock lasts as long as the process.
-        return true;
-      } catch (cause) {
-        if (isObject(cause) && cause.code === "EAGAIN") return false;
-        throw cause;
-      }
-    },
-    catch: (cause) =>
-      new FileWriteFailed({ path, cause, message: `cannot lock ${path}` }),
-  });
-
-const O_EXLOCK = 0x20;
-
-const LOCK_FLAGS =
-  constants.O_RDWR | constants.O_CREAT | constants.O_NONBLOCK | O_EXLOCK;
+// For an exit handler, which cannot wait; a file it fails to remove is left for its reader to judge.
+export const removeFileNow = (path: string) => {
+  try {
+    unlinkSync(path);
+  } catch {
+    // Nothing more can be done while the process exits.
+  }
+};
 
 export const removeFile = (path: string) =>
   Result.gen(async function* () {

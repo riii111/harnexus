@@ -35,7 +35,6 @@ import {
   type TurnOutcome,
   type TurnState,
 } from "../../turn/turn.view.ts";
-import type { CloudReview } from "./reviews.ts";
 import {
   type CloudDeps,
   createCloudRuntime,
@@ -83,7 +82,7 @@ describe("createCloudRuntime observations", () => {
     ]);
   });
 
-  test("without a review writer, only tells of a review the session read and sends it to no chat", async () => {
+  test("hands the tool output a session read to the observer and opens no chat for it", async () => {
     const output = JSON.stringify({
       status: "completed",
       reviewer: "0199-reviewer",
@@ -99,13 +98,12 @@ describe("createCloudRuntime observations", () => {
         ],
       ],
       link: { sessionId: CLOUD_ID, shown: null },
-      reviewWriter: false,
     });
 
     await env.runtime.run(env.turn("review").running);
     await env.tick();
 
-    expect(env.reviews).toEqual([]);
+    expect(env.children).toEqual([]);
     expect(env.observed.at(-1)?.records).toContain("u1");
   });
 
@@ -117,155 +115,6 @@ describe("createCloudRuntime observations", () => {
     expect(sent.isOk()).toBe(true);
     expect(env.sends).toEqual([{ cloud: CLOUD_ID, text: "ask" }]);
     expect(env.planned.at(-1)).toBe(10_000);
-  });
-});
-
-describe("createCloudRuntime reviews", () => {
-  const output = JSON.stringify({
-    status: "completed",
-    verdict: "LGTM",
-    taskId: "harnexus-1",
-    head: "abc1234def",
-    reviewer: "0199-reviewer",
-    answer: "判定: LGTM",
-  });
-
-  test("hands each review the session read after the app was shown to its chat, once", async () => {
-    const env = linked({
-      copies: [
-        [
-          prompt("p1", "review"),
-          reply("a1", "m1", toolUse("t1", "Bash", {}), "tool_use"),
-          toolResult("u1", "t1", output),
-          endReply("a2", "reviewed"),
-        ],
-      ],
-      shown: null,
-    });
-    const turn = env.turn("review");
-
-    await env.runtime.run(turn.running);
-    await env.tick();
-
-    expect(env.reviews).toEqual([
-      { parent: "thread-1", key: expect.stringMatching(/^[0-9a-f]{32}$/) },
-    ]);
-  });
-
-  test.each([
-    { name: "not kept", outcome: "not_kept", tries: 2 },
-    { name: "reserved", outcome: "reserved", tries: 1 },
-    { name: "unreadable", outcome: "unreadable", tries: 1 },
-  ])(
-    "hands a review the chat answered $name to the chat again only when it was certainly not sent",
-    async ({ outcome, tries }) => {
-      const env = linked({
-        copies: [
-          [
-            prompt("p1", "review"),
-            reply("a1", "m1", toolUse("t1", "Bash", {}), "tool_use"),
-            toolResult("u1", "t1", output),
-            endReply("a2", "reviewed"),
-          ],
-        ],
-        shown: null,
-      });
-      env.reviewOutcomes.push(outcome);
-
-      await env.runtime.run(env.turn("review").running);
-      await settle();
-      await env.tick();
-      await settle();
-
-      expect(env.reviews).toHaveLength(tries);
-    },
-  );
-
-  test.each([
-    {
-      name: "the first message of the chat it opened",
-      delegatedBy: "create_thread" as const,
-    },
-    {
-      name: "a later message to that chat",
-      delegatedBy: "send_message_to_thread" as const,
-    },
-  ])(
-    "shows a review sent as $name, without Claude",
-    async ({ delegatedBy }) => {
-      const env = setup({ copies: [] });
-      env.reviewKept.set("t1", {
-        key: "t1",
-        reviewer: "0199-reviewer",
-        verdict: "LGTM",
-        taskId: "harnexus-1",
-        head: "abc1234def",
-        answer: "判定: LGTM",
-      });
-      const turn = env.turn("/cloud-review t1", { delegatedBy });
-
-      await env.runtime.run(turn.running);
-
-      expect(turn.texts().at(-1)).toContain("判定: LGTM");
-      expect(turn.texts().at(-1)).toContain("`abc1234`");
-      expect(env.innerRuns).toEqual([]);
-      expect(env.links).toEqual([]);
-    },
-  );
-
-  test("sends a message typed in a reviewer's chat to the session that ran the reviewer, without Claude, and copies the worker's chat soon", async () => {
-    const env = setup({ copies: [] });
-    env.clouds.set("worker-chat", { sessionId: CLOUD_ID, shown: null });
-    env.owners.set(CLOUD_ID, "worker-chat");
-    env.runtime.listen(() => true);
-    env.reviewChats.set("thread-1", {
-      reviewer: "0199-reviewer",
-      session: CLOUD_ID,
-    });
-    const turn = env.turn("B1 は既存の挙動では？");
-
-    await env.runtime.run(turn.running);
-
-    expect(env.sends).toEqual([
-      {
-        cloud: CLOUD_ID,
-        text: expect.stringContaining("B1 は既存の挙動では？"),
-      },
-    ]);
-    expect(env.sends[0]?.text).toContain("--ask");
-    expect(env.sends[0]?.text).toContain("0199-reviewer");
-    expect(env.reviewAsks).toEqual([
-      { threadId: "thread-1", text: "B1 は既存の挙動では？" },
-    ]);
-    expect(turn.texts().at(-1)).toContain("Sent to the worker");
-    expect(env.innerRuns).toEqual([]);
-    expect(env.planned.at(-1)).toBe(10_000);
-  });
-
-  test("sends nothing when no chat here shows the session that ran the reviewer, since the answer could not come back", async () => {
-    const env = setup({ copies: [] });
-    env.reviewChats.set("thread-1", {
-      reviewer: "0199-reviewer",
-      session: CLOUD_ID,
-    });
-    const turn = env.turn("hello");
-
-    await env.runtime.run(turn.running);
-
-    expect(env.sends).toEqual([]);
-    expect(turn.texts().at(-1)).toContain("not sent");
-  });
-
-  test("says when the review it names is no longer kept", async () => {
-    const env = setup({ copies: [] });
-    const turn = env.turn("/cloud-review gone", {
-      delegatedBy: "send_message_to_thread",
-    });
-
-    await env.runtime.run(turn.running);
-
-    expect(turn.texts().at(-1)).toContain("no longer kept");
-    expect(env.innerRuns).toEqual([]);
   });
 });
 
@@ -574,7 +423,7 @@ describe("createCloudRuntime /cloud", () => {
     },
     {
       name: "another skill in an empty chat",
-      text: "[$cloud-review](/skills/cloud-review/SKILL.md) README の誤字を直して",
+      text: "[$fix-typos](/skills/fix-typos/SKILL.md) README の誤字を直して",
       held: false,
     },
   ])(
@@ -2261,14 +2110,11 @@ const setup = ({
   waitLimitMs,
   link,
   cloudSkills = [CLOUD_SKILL],
-  reviewWriter = true,
 }: {
   copies: SessionMessage[][];
   waitLimitMs?: number;
   link?: CloudLink;
   cloudSkills?: readonly string[];
-  // False as for a bridge whose adapter writes to chats, which starts no review writer.
-  reviewWriter?: boolean;
 }) => {
   const sessionIds = new Map<string, string | null>();
   const clouds = new Map<string, CloudLink>();
@@ -2307,8 +2153,6 @@ const setup = ({
     ownStarts,
     copyCalls: 0,
     childOutcomes: [] as string[],
-    reviewOutcomes: [] as string[],
-    reviews: [] as { parent: string; key: string }[],
     observed: [] as {
       sessionId: string;
       parentThreadId: string;
@@ -2316,12 +2160,6 @@ const setup = ({
       shownBefore: string | null;
       records: string[];
     }[],
-    reviewKept: new Map<string, CloudReview>(),
-    reviewChats: new Map<
-      string,
-      { reviewer: string; session: string | null }
-    >(),
-    reviewAsks: [] as { threadId: string; text: string }[],
     // When each idle copy was planned for, in order.
     planned: [] as number[],
     renames: [] as { threadId: string; name: string }[],
@@ -2507,19 +2345,6 @@ const setup = ({
         ? Result.err({ _tag: "AppRequestFailed" })
         : Result.ok(null);
     },
-    ...(reviewWriter && {
-      openReview: async (parent: string, review: CloudReview) => {
-        env.reviews.push({ parent, key: review.key });
-        env.reviewKept.set(review.key, review);
-        return env.reviewOutcomes.shift() ?? "done";
-      },
-      reviewOf: async (key: string) => env.reviewKept.get(key) ?? null,
-      reviewChatOf: async (threadId: string) =>
-        env.reviewChats.get(threadId) ?? null,
-      noteReviewAsk: async (threadId: string, text: string) => {
-        env.reviewAsks.push({ threadId, text });
-      },
-    }),
     observe: ({ records, ...observation }) => {
       env.observed.push({
         ...observation,

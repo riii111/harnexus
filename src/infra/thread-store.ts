@@ -499,11 +499,7 @@ const serializeState = (mappings: ReadonlyMap<string, ThreadMapping>) =>
   `${JSON.stringify(
     {
       version: STATE_VERSION,
-      // Earlier versions require this key, so the file stays readable after a rollback.
-      threads: [...mappings.values()].map((mapping) => ({
-        ...pickMappingFields(mapping),
-        reviewerThreadIds: [],
-      })),
+      threads: [...mappings.values()].map(pickMappingFields),
     },
     null,
     2,

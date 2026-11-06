@@ -2,8 +2,8 @@
 
 Use Claude alongside Codex in the Codex App.
 
-Keep Claude and Codex in the same workspace, with separate chats for each.
-Ask Claude to work on a task and Codex to review it, or send messages between chats without copying them by hand.
+Claude chats sit next to your Codex chats in the same workspace, with the app's approvals, questions, stop and history.
+Chats can send messages to each other without copying them by hand.
 Claude chats support image attachments, side chats, rewind, and resuming conversations.
 
 <img width="445" height="511" alt="Claude chat in the Codex App" src="https://github.com/user-attachments/assets/c5424fe5-50a6-48b9-bc43-98259c427658" />
@@ -76,7 +76,7 @@ To let a skill act as `/cloud` when you pick it in an empty Claude chat, list it
 { "cloudSkills": ["my-cloud-skill"] }
 ```
 
-To show another tool's conversations in their own chats, register its adapter program in the same file by an absolute path. Harnexus starts only that program and talks to it over its standard input and output. With `observe` it only reads the Cloud sessions shown here; with `write` it may also open chats, answer them and send to those sessions, and the Cloud review chats built into Harnexus are turned off.
+To show another tool's conversations in their own chats, register its adapter program in the same file by an absolute path. Harnexus starts only that program and talks to it over its standard input and output. With `observe` it only reads the Cloud sessions shown here; with `write` it may also open chats, answer them and send to those sessions.
 
 ```json
 {
@@ -98,6 +98,16 @@ harnexus cloud --prompt-file request.md
 ```
 
 Run it from a chat in the app. It opens a new chat for the session, or answers with the chat already showing it; it never switches the chat it runs in.
+It remembers the chat it opened for each session, so a session never gets a second one.
+
+To move those records to or from another tool, quit the app and stop every program that uses Harnexus, then run:
+
+```sh
+harnexus state export-cloud-links > cloud-links.json
+harnexus state import-cloud-links --file cloud-links.json
+```
+
+Both refuse while a Harnexus bridge is running, and an app opened meanwhile starts without Claude. Import only adds records; it never removes or changes one already kept.
 
 Cloud chats support text only. Rewind, compact, and side chats are unavailable.
 Stopping a turn in the app stops waiting for replies; to stop the Cloud session itself, use claude.ai.

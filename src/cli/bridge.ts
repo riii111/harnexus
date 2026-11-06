@@ -25,6 +25,10 @@ import {
   readLastRecordUuid,
 } from "../infra/claude/transcripts.ts";
 import {
+  cloudLinksPath,
+  openCloudLinkReservations,
+} from "../infra/cloud-links.ts";
+import {
   cronRecordPath,
   openCronRecord,
 } from "../infra/codex/automations.boundary.ts";
@@ -41,6 +45,7 @@ import {
   readExternalConversations,
   updateExternalConversations,
 } from "../infra/external-conversations.ts";
+import { enterAsBridge } from "../infra/state-locks.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import {
   loadCallSocketPath,
@@ -51,6 +56,7 @@ import {
   loadUnverifiedCodexPolicy,
 } from "../lib/config.ts";
 import { loadConnectionSettings } from "../lib/connection-settings.boundary.ts";
+import { removeFileNow } from "../lib/fs.boundary.ts";
 import {
   announceBridgeStatus,
   openServerPipes,
@@ -69,7 +75,6 @@ import {
 } from "./supervise.ts";
 
 const CLOUD_COPY_FOLDER = "cloud-copies";
-const CLOUD_REVIEW_FOLDER = "cloud-reviews";
 
 const EXTERNAL_CONVERSATIONS_FOLDER = "external-conversations";
 
@@ -107,6 +112,9 @@ if (
     process.exit(1);
   }
 }
+
+// Registered before anything reads or writes the state, so an offline state operation either sees this bridge or keeps it from starting.
+const presence = await enterStateAsBridge();
 
 const pipes = openServerPipes(SERVER_OUTPUT_FD, SERVER_INPUT_FD);
 if (pipes.isErr()) {
@@ -154,6 +162,29 @@ pipes.value.serverInput.destroy();
 await stopLingeringServer({ isRunning: server.isRunning, ...stopServer });
 process.exit(0);
 
+// Whether this bridge may use the state; it does not start at all while an offline state operation runs.
+async function enterStateAsBridge() {
+  const statePath = loadStatePath(process.env);
+  if (statePath.isErr()) return false;
+  const entered = await enterAsBridge(dirname(statePath.value));
+  if (entered.isOk()) {
+    const path = entered.value.presence;
+    process.once("exit", () => removeFileNow(path));
+    return true;
+  }
+
+  if (entered.error._tag === "MaintenanceRunning") {
+    logger.log({
+      event: "bridge_startup_failed",
+      reason: "MaintenanceRunning",
+    });
+    process.exit(1);
+  }
+
+  logger.log({ event: "claude_unavailable", reason: entered.error._tag });
+  return false;
+}
+
 // The relay with Claude threads, or the plain relay when Claude cannot run.
 async function withClaude(relay: {
   serverInput: Writable;
@@ -170,6 +201,9 @@ async function withClaude(relay: {
     logger.log({ event: "claude_unavailable", reason: statePath.error._tag });
     return plain;
   }
+
+  // A bridge an offline operation cannot see writes no state, so it relays everything as it would without its thread store.
+  if (!presence) return plain;
 
   const [store, settings] = await Promise.all([
     openThreadStore(statePath.value),
@@ -249,7 +283,7 @@ async function withClaude(relay: {
   // The bridge's own requests to the server are answered before the router reads the server output, so their responses never reach the app.
   const serverCalls = attachServerRequests(relay);
   let callSocketOpen = false;
-  const { router, closeAll, callGateway, reviewWriter } = connectClaudeThreads({
+  const { router, closeAll, callGateway } = connectClaudeThreads({
     store: store.value,
     permissionMode: permissionMode.value,
     request: serverCalls.request,
@@ -268,6 +302,9 @@ async function withClaude(relay: {
       // Unreadable settings leave threads with none picked on the model default, which is still the level the app shows.
       effortRule(effortSettings, catalog.effortsOf)(model, picked),
     claudeModels: catalog.models,
+    cloudLinks: openCloudLinkReservations(
+      cloudLinksPath(dirname(statePath.value)),
+    ),
     codexHome: loadCodexHome(process.env),
     cloudSkills: settings.isOk() ? settings.value.cloudSkills : [],
     external: {
@@ -298,7 +335,6 @@ async function withClaude(relay: {
     cloud: {
       cli: cloudCli(process.env),
       copyDir: join(dirname(statePath.value), CLOUD_COPY_FOLDER),
-      reviewDir: join(dirname(statePath.value), CLOUD_REVIEW_FOLDER),
       checkouts: createCloudCheckouts(
         join(
           dirname(statePath.value),
@@ -319,7 +355,6 @@ async function withClaude(relay: {
       }
     },
   });
-  logger.log({ event: "cloud_review_writer", writer: reviewWriter });
   // Not awaited: while another bridge holds the socket this one keeps waiting to take it over, and threads started before then go without CODEX_THREAD_ID.
   void openCallSocket(callGateway.handle).then((open) => {
     callSocketOpen = open;

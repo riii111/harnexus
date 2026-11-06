@@ -102,7 +102,7 @@ describe("harnexus call", () => {
 });
 
 describe("harnexus cloud", () => {
-  test("opens a chat for a session and prints it as harnexus-task cloud did", async () => {
+  test("opens a chat for a session and prints its result alone", async () => {
     const opened = {
       threadId: "th-cloud",
       cloudSessionId: SESSION,

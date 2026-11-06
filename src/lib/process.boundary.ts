@@ -51,6 +51,16 @@ export const signalProcess = (pid: number, signal: Signal) =>
       }),
   });
 
+// A process that exists counts as alive even when it belongs to another user, so a reused pid keeps what it owns held rather than freed.
+export const isProcessAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (cause) {
+    return !(isObject(cause) && cause.code === "ESRCH");
+  }
+};
+
 export class CommandFailed extends TaggedError("CommandFailed")<{
   command: string;
   cause: unknown;

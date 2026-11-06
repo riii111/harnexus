@@ -29,7 +29,7 @@ describe("createExternalConversations connection", () => {
         v: 1,
         type: "hello",
         bridgeId: "bridge-1",
-        adapterId: "taskctl",
+        adapterId: "my-adapter",
         mode: "observe",
         versions: [1],
       },
@@ -48,7 +48,7 @@ describe("createExternalConversations connection", () => {
     const { conversations, adapter, timers } = externalEnv();
 
     conversations.start();
-    adapter.latest().say({ v: 2, type: "hello", adapterId: "taskctl" });
+    adapter.latest().say({ v: 2, type: "hello", adapterId: "my-adapter" });
     timers.runAll();
 
     expect(adapter.processes).toHaveLength(1);
@@ -151,12 +151,12 @@ describe("createExternalConversations observations", () => {
     expect(linked?.records).toHaveLength(2);
   });
 
-  test("hands a review read while the adapter was stopped over once after it reconnects, and never one from before the link", async () => {
+  test("hands a record read while the adapter was stopped over once after it reconnects, and never one from before the link", async () => {
     const { conversations, adapter, timers } = externalEnv({
       mode: "observe",
       owners: { s1: "parent-1" },
     });
-    // What taskctl keeps: the records each link excludes and the reviews it handled.
+    // What an adapter keeps: the records each link excludes and the ones it handled.
     const excluded = new Set<string>();
     const handled: string[] = [];
     const consume = (event: Record<string, unknown>) => {

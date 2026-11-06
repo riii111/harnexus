@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { childChatName, openCloudChild } from "./child-chats.ts";
+import { openCloudChild } from "./child-chats.ts";
 
 const listed = (...projects: { projectId: string; path: string }[]) => ({
   content: [{ type: "text", text: JSON.stringify({ projects }) }],
@@ -69,17 +69,33 @@ describe("openCloudChild", () => {
   });
 });
 
-describe("childChatName", () => {
+describe("openCloudChild titles", () => {
   test.each([
     {
       title: "Harnexus vs T3 Code 調査 [riii111/harnexus#t3-code]",
-      expected: "☁️ Impl｜Harnexus vs T3 Code 調査",
+      expected: "☁️ Harnexus vs T3 Code 調査 [riii111/harnexus#t3-code]",
     },
-    { title: "[riii111/harnexus#t3-code]", expected: "☁️ Impl t3-code" },
-    { title: "worker", expected: "☁️ worker" },
-  ])("names a session titled $title", ({ title, expected }) => {
-    expect(
-      childChatName({ sessionId: "session_01NfjPqs5GNSgknfAaJ3mdYA", title }),
-    ).toBe(expected);
-  });
+    { title: null, expected: "☁️ session_01NfjPqs5GNSgknfAaJ3mdYA" },
+  ])(
+    "names the chat of a session titled $title",
+    async ({ title, expected }) => {
+      const titles: unknown[] = [];
+      await openCloudChild(
+        async (line) => {
+          const parsed = JSON.parse(line);
+          if (parsed.tool === "create_thread")
+            titles.push(parsed.arguments.title);
+          return JSON.stringify({
+            outcome: "done",
+            result: listed({ projectId: "p", path: "/work" }),
+          });
+        },
+        "parent",
+        "/work",
+        { sessionId: "session_01NfjPqs5GNSgknfAaJ3mdYA", title },
+      );
+
+      expect(titles).toEqual([expected]);
+    },
+  );
 });
