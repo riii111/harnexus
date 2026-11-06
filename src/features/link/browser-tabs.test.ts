@@ -886,7 +886,9 @@ const fakeTab = ({ id, state = AX_STATE }: { id: string; state?: string }) => {
 
 const runScript = (
   code: string | undefined,
-  tab: ReturnType<typeof fakeTab>,
+  tab: Omit<ReturnType<typeof fakeTab>, "markHandoff"> & {
+    markHandoff?: unknown;
+  },
 ) => {
   const cua = { getTab: async () => tab, createBrowserTab: async () => tab };
   const nodeRepl = { write: (text: string) => tab.written.push(text) };
