@@ -128,9 +128,10 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
         arrive(scheduled, at, (message) => read.includes(message));
       }
 
-      const background = BACKGROUND.exec(
+      const background = backgroundIdOf(
+        name,
         textsOf(block.content).join("\n"),
-      )?.[1];
+      );
       if (background !== undefined) running.add(background);
       if (DELETE_TRIGGER.test(name) && typeof input.trigger_id === "string")
         cancelled.add(input.trigger_id);
@@ -155,6 +156,15 @@ export const waitingIn = (records: readonly SessionMessage[]) => {
         !came && (trigger === null || !cancelled.has(trigger)),
     )
   );
+};
+
+// The work a tool's result says it left running in the background; only the tool that started it says so at the start of its result, so the same words in a foreground agent's report, or a file a tool read, start nothing.
+const backgroundIdOf = (tool: string, result: string) => {
+  const text = result.trimStart();
+  if (tool === BASH) return BASH_BACKGROUND.exec(text)?.[1];
+  return AGENT_TOOL.test(tool) && text.startsWith(ASYNC_AGENT)
+    ? AGENT_ID.exec(text)?.[1]
+    : undefined;
 };
 
 // Marks the scheduled messages that came with a message taken at a time: one taken before it was scheduled never is, since only the messages scheduled before it are looked at.
@@ -213,9 +223,13 @@ const openingTextOf = (record: SessionMessage) => {
 
 const SEND_LATER = /(?:^|__)send_later$/;
 const DELETE_TRIGGER = /(?:^|__)delete_trigger$/;
-// What Claude Code answers when it starts a command or an agent in the background, naming it.
-const BACKGROUND =
-  /(?:running in background with ID|agentId): ([A-Za-z0-9_-]{4,})/;
+// What Claude Code answers when it starts a command or an agent in the background, naming it; a foreground agent's result names its agent too, so it can be messaged again.
+const BASH = "Bash";
+const BASH_BACKGROUND =
+  /^Command running in background with ID: ([A-Za-z0-9_-]{4,})/;
+const AGENT_TOOL = /^(?:Agent|Task)$/;
+const ASYNC_AGENT = "Async agent launched successfully";
+const AGENT_ID = /agentId: ([A-Za-z0-9_-]{4,})/;
 // The notice Claude Code gives the session when background work ends, however it ended.
 const ENDED =
   /<task-id>([A-Za-z0-9_-]+)<\/task-id>[\s\S]*?<status>(?:completed|failed|killed|stopped)<\/status>/g;
