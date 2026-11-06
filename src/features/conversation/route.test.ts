@@ -12,6 +12,7 @@ import { type InferErr, Result } from "better-result";
 import { createModelCatalog, effortRule } from "../../infra/claude/models.ts";
 import { readClaudeSession } from "../../infra/claude/session.ts";
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
+import { createMemoryCloudLinks } from "../../infra/testing/cloud-links.ts";
 import { createCallGateway } from "../link/call-gateway.ts";
 import { createDelegationWatch } from "../link/delegations.ts";
 import type { LiveTurn } from "./history/history.view.ts";
@@ -39,6 +40,7 @@ describe("createRouter compatibility", () => {
     await router.fromServer(encode({ id: 1, result: { userAgent: null } }));
     let sequence = 0;
     const gateway = createCallGateway({
+      cloudLinks: createMemoryCloudLinks(),
       isClaudeThread: () => false,
       openLink: () => expect.unreachable("a Codex creator has no Claude link"),
       delegations: watch,

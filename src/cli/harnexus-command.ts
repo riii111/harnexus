@@ -3,6 +3,7 @@ import { readRegularTextFile } from "../lib/fs.boundary.ts";
 import { parseJson } from "../lib/json.boundary.ts";
 import { isObject } from "../lib/object.ts";
 import { type ClientAnswer, callV1, EXIT, exitOf } from "./call-client.ts";
+import { runState, STATE_USAGE } from "./state-command.ts";
 
 export type CommandRun = { code: number; stdout: string; stderr: string };
 
@@ -17,7 +18,7 @@ const NAME = "harnexus";
 const USAGE = `usage:
   ${NAME} cloud (--link SESSION_OR_URL | --prompt-file FILE) [--project PROJECT_ID] [--title TITLE] [--model MODEL] [--thinking THINKING]
   ${NAME} call < REQUEST_JSON
-`;
+${STATE_USAGE}`;
 
 // Exit statuses follow the call outcome, so 2 (never sent, safe to send again) is told apart from 3 (unknown, never send again).
 export const runHarnexus = async (
@@ -29,7 +30,8 @@ export const runHarnexus = async (
     return { code: 0, stdout: USAGE, stderr: "" };
   if (command === "cloud") return cloud(rest, deps);
   if (command === "call") return call(rest, deps);
-  return usageError("expected a subcommand: cloud, call");
+  if (command === "state") return runState(rest, deps);
+  return usageError("expected a subcommand: cloud, call, state");
 };
 
 const usageError = (message: string): CommandRun => ({

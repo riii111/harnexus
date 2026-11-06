@@ -21,6 +21,7 @@ import {
 import { fakeClaude } from "../infra/claude/testing/fake-claude.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import { createMemoryCronRecord } from "../infra/codex/testing/cron-record.ts";
+import { createMemoryCloudLinks } from "../infra/testing/cloud-links.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import { connectClaudeThreads } from "./bridge-wiring.ts";
 
@@ -473,6 +474,7 @@ const connect = (
   const catalog = createModelCatalog();
   return connectClaudeThreads({
     store,
+    cloudLinks: createMemoryCloudLinks(),
     findSession: async () => Result.ok(true),
     lastRecordOf: async () => Result.ok(null),
     readSession: async () => Result.ok([]),

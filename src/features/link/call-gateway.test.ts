@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { Result } from "better-result";
 
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
+import { createMemoryCloudLinks } from "../../infra/testing/cloud-links.ts";
 import { createCallGateway } from "./call-gateway.ts";
 import type { StartCloud } from "./cloud-open.ts";
 import { createDelegationWatch, type FirstTurn } from "./delegations.ts";
@@ -723,6 +724,41 @@ describe("createCallGateway cloud_open", () => {
     expect(String(again.message)).toContain("th-cloud");
   });
 
+  test("refuses a session whose earlier opening did not report back, naming how to link it by hand", async () => {
+    const cloudLinks = createMemoryCloudLinks();
+    cloudLinks.links.set(SESSION, null);
+    const { gateway, requests } = setup({ cloudLinks });
+
+    const answer = await cloudOpen(gateway, { link: SESSION, projectId: "p1" });
+
+    expect(answer).toMatchObject({ outcome: "rejected" });
+    expect(String(answer.message)).toContain(`/cloud ${SESSION}`);
+    expect(requests).toEqual([]);
+  });
+
+  test("keeps the reservation of a chat whose creation is unknown, so it is not opened again", async () => {
+    const { gateway, cloudLinks } = setup({
+      answer: () =>
+        Result.err({ _tag: "ServerRequestUnanswered", message: "t" }),
+    });
+
+    const first = await cloudOpen(gateway, { link: SESSION, projectId: "p1" });
+
+    expect(first.outcome).toBe("unknown");
+    expect(cloudLinks.links.get(SESSION)).toBeNull();
+  });
+
+  test("opens no chat when the reservations cannot be written", async () => {
+    const cloudLinks = createMemoryCloudLinks();
+    cloudLinks.reserve = async () => null;
+    const { gateway, requests } = setup({ cloudLinks });
+
+    const answer = await cloudOpen(gateway, { link: SESSION, projectId: "p1" });
+
+    expect(answer).toMatchObject({ outcome: "not_sent" });
+    expect(requests).toEqual([]);
+  });
+
   test("frees the session for another try when the chat was surely not created", async () => {
     let calls = 0;
     const { gateway, requests } = setup({
@@ -954,11 +990,13 @@ const setup = ({
   }),
   linkRefusal = null,
   startCloud,
+  cloudLinks = createMemoryCloudLinks(),
 }: {
   linkAnswer?: (tool: string) => ToolResult;
   // What the link answers instead of running work under its write rules, as after a stop.
   linkRefusal?: ToolResult | null;
   startCloud?: StartCloud;
+  cloudLinks?: ReturnType<typeof createMemoryCloudLinks>;
   // The real errors are told apart by their tag alone.
   answer?: () => Result<unknown, { _tag: string; message: string }>;
   claude?: readonly string[];
@@ -983,6 +1021,7 @@ const setup = ({
     return answer();
   }) as ServerRequest;
   const gateway = createCallGateway({
+    cloudLinks,
     isClaudeThread: (threadId) => claude.includes(threadId),
     openLink: (threadId) => {
       opened.push(threadId);
@@ -1015,7 +1054,7 @@ const setup = ({
     firstTurnWaitMs: 50,
     ...(startCloud !== undefined && { startCloud }),
   });
-  return { gateway, requests, linkCalls, opened, watch };
+  return { gateway, requests, linkCalls, opened, watch, cloudLinks };
 };
 
 const CODEX = "codex-thread";

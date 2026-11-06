@@ -47,6 +47,7 @@ import {
   sendToCloud,
 } from "../infra/claude/cloud.ts";
 import type { readClaudeSubagents } from "../infra/claude/session.ts";
+import type { CloudLinkReservations } from "../infra/cloud-links.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import { createThreadRequests } from "../infra/codex/thread-requests.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
@@ -71,6 +72,7 @@ export const connectClaudeThreads = ({
   cronRecord,
   permissionMode = "auto",
   cloud,
+  cloudLinks,
   cloudSkills = [],
   external,
   send,
@@ -95,6 +97,8 @@ export const connectClaudeThreads = ({
     copyDir: string;
     checkouts: CloudCheckouts;
   };
+  // The chats cloud_open opened, by Cloud session.
+  cloudLinks: CloudLinkReservations;
   // Skills the user set to mean /cloud when picked in an empty chat.
   cloudSkills?: readonly string[];
   // The chats bound to outside conversations and the adapter the user registered, if any, started once the threads are connected.
@@ -181,6 +185,7 @@ export const connectClaudeThreads = ({
     request,
     delegations,
     cloudOwner: (cloudSessionId) => store.cloudOwner(cloudSessionId),
+    cloudLinks,
     ...(cloud !== undefined && {
       startCloud: (prompt: string, cwd: string) =>
         startCloudSession(cloud.cli.file, prompt, {

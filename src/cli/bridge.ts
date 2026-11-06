@@ -25,6 +25,10 @@ import {
   readLastRecordUuid,
 } from "../infra/claude/transcripts.ts";
 import {
+  cloudLinksPath,
+  openCloudLinkReservations,
+} from "../infra/cloud-links.ts";
+import {
   cronRecordPath,
   openCronRecord,
 } from "../infra/codex/automations.boundary.ts";
@@ -41,6 +45,7 @@ import {
   readExternalConversations,
   updateExternalConversations,
 } from "../infra/external-conversations.ts";
+import { enterAsBridge } from "../infra/state-locks.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import {
   loadCallSocketPath,
@@ -51,6 +56,7 @@ import {
   loadUnverifiedCodexPolicy,
 } from "../lib/config.ts";
 import { loadConnectionSettings } from "../lib/connection-settings.boundary.ts";
+import { removeFileNow } from "../lib/fs.boundary.ts";
 import {
   announceBridgeStatus,
   openServerPipes,
@@ -107,6 +113,9 @@ if (
   }
 }
 
+// Registered before anything reads or writes the state, so an offline state operation either sees this bridge or keeps it from starting.
+const presence = await enterStateAsBridge();
+
 const pipes = openServerPipes(SERVER_OUTPUT_FD, SERVER_INPUT_FD);
 if (pipes.isErr()) {
   logger.log({ event: "bridge_startup_failed", reason: pipes.error._tag });
@@ -153,6 +162,29 @@ pipes.value.serverInput.destroy();
 await stopLingeringServer({ isRunning: server.isRunning, ...stopServer });
 process.exit(0);
 
+// Whether this bridge may use the state; it does not start at all while an offline state operation runs.
+async function enterStateAsBridge() {
+  const statePath = loadStatePath(process.env);
+  if (statePath.isErr()) return false;
+  const entered = await enterAsBridge(dirname(statePath.value));
+  if (entered.isOk()) {
+    const path = entered.value.presence;
+    process.once("exit", () => removeFileNow(path));
+    return true;
+  }
+
+  if (entered.error._tag === "MaintenanceRunning") {
+    logger.log({
+      event: "bridge_startup_failed",
+      reason: "MaintenanceRunning",
+    });
+    process.exit(1);
+  }
+
+  logger.log({ event: "claude_unavailable", reason: entered.error._tag });
+  return false;
+}
+
 // The relay with Claude threads, or the plain relay when Claude cannot run.
 async function withClaude(relay: {
   serverInput: Writable;
@@ -169,6 +201,9 @@ async function withClaude(relay: {
     logger.log({ event: "claude_unavailable", reason: statePath.error._tag });
     return plain;
   }
+
+  // A bridge an offline operation cannot see writes no state, so it relays everything as it would without its thread store.
+  if (!presence) return plain;
 
   const [store, settings] = await Promise.all([
     openThreadStore(statePath.value),
@@ -267,6 +302,9 @@ async function withClaude(relay: {
       // Unreadable settings leave threads with none picked on the model default, which is still the level the app shows.
       effortRule(effortSettings, catalog.effortsOf)(model, picked),
     claudeModels: catalog.models,
+    cloudLinks: openCloudLinkReservations(
+      cloudLinksPath(dirname(statePath.value)),
+    ),
     codexHome: loadCodexHome(process.env),
     cloudSkills: settings.isOk() ? settings.value.cloudSkills : [],
     external: {

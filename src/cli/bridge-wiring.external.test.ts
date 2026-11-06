@@ -10,6 +10,7 @@ import { cloudCli } from "../infra/claude/cloud.ts";
 import { createModelCatalog, effortRule } from "../infra/claude/models.ts";
 import { createMemoryCronRecord } from "../infra/codex/testing/cron-record.ts";
 import { EMPTY_EXTERNAL_STATE } from "../infra/external-conversations.ts";
+import { createMemoryCloudLinks } from "../infra/testing/cloud-links.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import { startLineProcess } from "../lib/process.boundary.ts";
 import { connectClaudeThreads } from "./bridge-wiring.ts";
@@ -79,6 +80,7 @@ const connectAdapter = async (mode: "observe" | "write") => {
   };
   const threads = connectClaudeThreads({
     store,
+    cloudLinks: createMemoryCloudLinks(),
     request: async () => Result.ok({}),
     startSession: () => expect.unreachable("no Claude session is started"),
     findSession: async () => Result.ok(true),
