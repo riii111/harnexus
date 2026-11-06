@@ -540,6 +540,38 @@ describe("createBrowserTabs scripts run by the browser server", () => {
     expect(tab.actions).not.toContain("click 6");
   });
 
+  test.each([
+    {
+      name: "kept for a later turn",
+      keepOpen: true,
+      marks: ["handoff"] as string[],
+    },
+    { name: "left temporary", keepOpen: false, marks: [] as string[] },
+  ])(
+    "marks the opened tab only when it is $name",
+    async ({ keepOpen, marks }) => {
+      const { browser, calls } = connect();
+      begin(browser, "turn-1");
+      await use(browser, "browser_open_tab", { url: PAGE, keepOpen });
+      const tab = fakeTab({ id: "12" });
+
+      await runScript(codes(calls())[0], tab);
+
+      expect(tab.marks).toEqual(marks);
+      expect(tab.written).toEqual(["harnexus-tab:12"]);
+    },
+  );
+
+  test("opens no tab as numbered when keeping it open fails", async () => {
+    const { browser, calls } = connect();
+    begin(browser, "turn-1");
+    await use(browser, "browser_open_tab", { url: PAGE, keepOpen: true });
+    const tab = { ...fakeTab({ id: "12" }), markHandoff: undefined };
+
+    await expect(runScript(codes(calls())[0], tab)).rejects.toThrow();
+    expect(tab.written).toEqual([]);
+  });
+
   test("open writes the marker with the new tab's id after the page state", async () => {
     const { browser, calls } = connect();
     begin(browser, "turn-1");
@@ -832,7 +864,11 @@ const AX_STATE = [
 const fakeTab = ({ id, state = AX_STATE }: { id: string; state?: string }) => {
   const actions: string[] = [];
   const written: string[] = [];
+  const marks: string[] = [];
   const tab = {
+    markHandoff: async () => {
+      marks.push("handoff");
+    },
     id,
     getAXState: async () => {
       actions.push("state");
@@ -845,7 +881,7 @@ const fakeTab = ({ id, state = AX_STATE }: { id: string; state?: string }) => {
       actions.push(`type ${element} ${JSON.stringify(text)}`);
     },
   };
-  return { ...tab, actions, written };
+  return { ...tab, actions, written, marks };
 };
 
 const runScript = (

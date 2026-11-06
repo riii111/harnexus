@@ -188,8 +188,8 @@ export const createBrowserTabs = ({
   const tools = [
     defineTool(
       "browser_open_tab",
-      "Open a web page in the Codex in-app browser. The new tab is numbered after the tabs this turn already opened, and its state is returned; the browser can only operate tabs opened this way during the turn. Only http and https pages open.",
-      { url: z.string().min(1) },
+      "Open a web page in the Codex in-app browser. The new tab is numbered after the tabs this turn already opened, and its state is returned; the browser can only operate tabs opened this way during the turn. Only http and https pages open. The tab closes when the turn ends; set keepOpen only when the work must continue in a later turn, and never open the page again if keeping it fails.",
+      { url: z.string().min(1), keepOpen: z.boolean().optional() },
       async (args) => {
         const url = openableUrl(args.url);
         if (url === null) {
@@ -201,7 +201,7 @@ export const createBrowserTabs = ({
         const opened = await execute(running, "write", {
           label: "browser_open_tab",
           title: "Opening a browser tab",
-          code: `{\n  const tab = await cua.createBrowserTab("iab", ${JSON.stringify(url)}, { visible: true });\n  nodeRepl.write(${JSON.stringify(TAB_MARKER)} + tab.id);\n}`,
+          code: openScript(url, args.keepOpen === true),
         });
         const marked = takeMarker(opened);
         if (opened.isError === true || marked.id === null) return marked.result;
@@ -412,6 +412,20 @@ const elementGuard = (element: number, row: string) => {
     `  if (line === undefined || line.trim() !== ${whole}) throw new Error("Element ${element} is no longer the one that was read; read the tab again.");`,
   ].join("\n");
 };
+
+const openScript = (url: string, keepOpen: boolean) =>
+  [
+    "{",
+    `  const tab = await cua.createBrowserTab("iab", ${JSON.stringify(url)}, { visible: true });`,
+    ...(keepOpen
+      ? [
+          '  if (typeof tab.markHandoff !== "function") throw new Error("This tab cannot be kept open for a later turn.");',
+          "  await tab.markHandoff();",
+        ]
+      : []),
+    `  nodeRepl.write(${JSON.stringify(TAB_MARKER)} + tab.id);`,
+    "}",
+  ].join("\n");
 
 const attachedScript = (tab: TabMention) =>
   // The app's own binding checks the tab's id, title and address against the link, so a tab that changed since the user attached it is an error.
