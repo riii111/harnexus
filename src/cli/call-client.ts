@@ -5,7 +5,8 @@ import { isObject } from "../lib/object.ts";
 import { requestLine } from "../lib/socket.boundary.ts";
 
 // A bridge that does not answer the version query, such as one from before it, is told apart from every outcome a call can have, since nothing was sent to it.
-export type ClientOutcome = CallOutcome | "unsupported";
+// chat_not_opened is cloud_open's own: the session it started runs on, so the prompt is not to be sent again.
+export type ClientOutcome = CallOutcome | "unsupported" | "chat_not_opened";
 
 export type ClientAnswer = {
   outcome: ClientOutcome;
@@ -24,6 +25,7 @@ export const EXIT = {
   model_mismatch: 6,
   first_turn_refused: 7,
   unsupported: 8,
+  chat_not_opened: 9,
 } as const satisfies Record<ClientOutcome, number>;
 
 export const exitOf = (outcome: unknown) =>

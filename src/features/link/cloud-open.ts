@@ -22,13 +22,20 @@ type Started = { sessionId: string; title: string | null };
 export type StartCloud = (
   prompt: string,
   cwd: string,
-) => Promise<Result<Started, { message: string }>>;
+) => Promise<Result<Started, { message: string; mayHaveStarted: boolean }>>;
+
+// Runs the start under the caller's write rules, or answers why it was not run.
+export type GuardStart = (
+  caller: string,
+  start: () => ReturnType<StartCloud>,
+) => Promise<{ ran: Awaited<ReturnType<StartCloud>> } | { refused: Answer }>;
 
 // Opens a chat that shows a Cloud session: a new Claude chat whose first message, /cloud, links it as if the user had typed it; a prompt first starts the session in the project's folder.
 export const createCloudOpen = ({
   call,
   cloudOwner,
   startCloud,
+  guardStart,
 }: {
   // Runs a call socket tool for the caller, so the chat is created with the same checks as any create_thread.
   call: (
@@ -38,6 +45,7 @@ export const createCloudOpen = ({
   ) => Promise<Answer>;
   cloudOwner: (cloudSessionId: string) => string | undefined;
   startCloud?: StartCloud;
+  guardStart: GuardStart;
 }) => {
   // One chat per session while this bridge runs, so a chat that takes its own /cloud as a request cannot open chats without end.
   const opened = new Map<string, string | null>();
@@ -103,11 +111,16 @@ export const createCloudOpen = ({
       if (folder === null)
         return notSent(`project ${where.found.projectId} has no folder`);
       projectId = where.found.projectId;
-      const started = await startCloud(checked.prompt, folder);
+      const prompt = checked.prompt;
+      const guarded = await guardStart(caller, () =>
+        startCloud(prompt, folder),
+      );
+      if ("refused" in guarded) return guarded.refused;
+      const started = guarded.ran;
       // claude --cloud may have started a session before it failed, so starting again could make a second one.
       if (started.isErr())
         return {
-          outcome: "unknown",
+          outcome: started.error.mayHaveStarted ? "unknown" : "not_sent",
           message: `claude --cloud did not report a session: ${started.error.message}`,
         };
       sessionId = started.value.sessionId;
@@ -115,6 +128,7 @@ export const createCloudOpen = ({
     }
 
     if (sessionId === null) return { outcome: "invalid", message: ONE_OF };
+    const startedHere = checked.prompt !== null;
     const session = {
       cloudSessionId: sessionId,
       url: `https://claude.ai/code/${sessionId}`,
@@ -144,7 +158,7 @@ export const createCloudOpen = ({
       const where = await projectWhere(caller, null, checked.cwd);
       if ("failed" in where) {
         opened.delete(sessionId);
-        return { ...where.failed, ...session };
+        return notOpened(where.failed, session, startedHere);
       }
 
       projectId = where.found.projectId;
@@ -170,9 +184,25 @@ export const createCloudOpen = ({
 
     // Only a call the app surely did not act on frees the session for another try; a session already started keeps running, so it is named either way.
     if (UNOPENED.has(answer.outcome)) opened.delete(sessionId);
-    return { ...answer, ...session };
+    return notOpened(answer, session, startedHere);
   };
 };
+
+// A session this call started stays running when its chat is surely not opened, so the caller is told to open one for it with link rather than to send the prompt again.
+const notOpened = (
+  answer: Answer,
+  session: { cloudSessionId: string; url: string },
+  startedHere: boolean,
+): Answer =>
+  startedHere && UNOPENED.has(answer.outcome)
+    ? {
+        ...answer,
+        outcome: "chat_not_opened",
+        chatOutcome: answer.outcome,
+        message: `Cloud session ${session.cloudSessionId} was started, but its chat was not opened (${answer.outcome}: ${typeof answer.message === "string" ? answer.message : "no message"}); open it with link ${session.cloudSessionId} instead of starting another`,
+        ...session,
+      }
+    : { ...answer, ...session };
 
 const UNOPENED = new Set(["not_sent", "rejected", "invalid"]);
 

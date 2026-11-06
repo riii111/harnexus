@@ -777,7 +777,8 @@ describe("createCallGateway cloud_open", () => {
   test("names a start that did not report its session as unknown, opening no chat", async () => {
     const { gateway, requests } = setup({
       answer: () => Result.ok(PROJECTS),
-      startCloud: async () => Result.err({ message: "timed out" }),
+      startCloud: async () =>
+        Result.err({ message: "timed out", mayHaveStarted: true }),
     });
 
     const answer = await cloudOpen(gateway, {
@@ -787,6 +788,107 @@ describe("createCallGateway cloud_open", () => {
 
     expect(answer.outcome).toBe("unknown");
     expect(requests).toHaveLength(1);
+  });
+
+  test("names a start that never ran as not sent", async () => {
+    const { gateway } = setup({
+      answer: () => Result.ok(PROJECTS),
+      startCloud: async () =>
+        Result.err({ message: "spawn ENOENT", mayHaveStarted: false }),
+    });
+
+    const answer = await cloudOpen(gateway, { prompt: "fix", projectId: "p1" });
+
+    expect(answer.outcome).toBe("not_sent");
+  });
+
+  test("starts no session for a Claude caller whose writes are stopped", async () => {
+    const started: string[] = [];
+    const { gateway, linkCalls } = setup({
+      claude: [CLAUDE],
+      linkAnswer: () => ({
+        content: [],
+        structuredContent: PROJECTS.structuredContent,
+      }),
+      linkRefusal: failure("The turn was stopped", "not_sent"),
+      startCloud: async (prompt) => {
+        started.push(prompt);
+        return Result.ok({ sessionId: SESSION, title: null });
+      },
+    });
+
+    const answer = await cloudOpen(
+      gateway,
+      { prompt: "fix", projectId: "p1" },
+      CLAUDE,
+    );
+
+    expect(answer).toMatchObject({ version: 1, outcome: "not_sent" });
+    expect(started).toEqual([]);
+    expect(linkCalls.map((call) => call.tool)).toEqual([
+      "list_projects",
+      "exclusive cloud_open",
+    ]);
+  });
+
+  test("tells a started session whose chat surely was not opened apart from a call never sent, keeping its id", async () => {
+    const { gateway } = setup({
+      claude: [CLAUDE],
+      linkAnswer: () => ({
+        content: [],
+        structuredContent: PROJECTS.structuredContent,
+      }),
+      created: { firstTurn: null, threadId: null, unknown: false, busy: false },
+      startCloud: async () => Result.ok({ sessionId: SESSION, title: null }),
+    });
+
+    const answer = await cloudOpen(
+      gateway,
+      { prompt: "fix", projectId: "p1" },
+      CLAUDE,
+    );
+
+    expect(answer).toMatchObject({
+      version: 1,
+      outcome: "chat_not_opened",
+      chatOutcome: "rejected",
+      cloudSessionId: SESSION,
+      url: `https://claude.ai/code/${SESSION}`,
+    });
+  });
+
+  test("lets the chat of a started session be opened with its link after it was not opened", async () => {
+    let calls = 0;
+    const { gateway, watch } = setup({
+      answer: () => {
+        calls += 1;
+        if (calls === 1) return Result.ok(PROJECTS);
+        if (calls === 2)
+          return Result.err({
+            _tag: "ServerRequestNotSent",
+            message: "closed",
+          });
+        watch.observe(CODEX, "th-cloud", { model: "m", effort: "high" });
+        return Result.ok(CLIENT_ANSWER);
+      },
+      startCloud: async () => Result.ok({ sessionId: SESSION, title: null }),
+    });
+
+    const first = await cloudOpen(gateway, { prompt: "fix", projectId: "p1" });
+    const retried = await cloudOpen(gateway, {
+      link: SESSION,
+      projectId: "p1",
+      model: "m",
+    });
+
+    expect(first).toMatchObject({
+      outcome: "chat_not_opened",
+      chatOutcome: "not_sent",
+    });
+    expect(retried).toMatchObject({
+      outcome: "done",
+      result: { threadId: "th-cloud" },
+    });
   });
 
   test.each([
@@ -807,12 +909,13 @@ describe("createCallGateway cloud_open", () => {
 const cloudOpen = async (
   gateway: ReturnType<typeof setup>["gateway"],
   args: Record<string, unknown>,
+  caller = CODEX,
 ) =>
   JSON.parse(
     await gateway.handle(
       JSON.stringify({
         version: 1,
-        threadId: CODEX,
+        threadId: caller,
         tool: "cloud_open",
         arguments: args,
       }),
@@ -849,9 +952,12 @@ const setup = ({
   linkAnswer = (tool) => ({
     content: [{ type: "text", text: `linked ${tool}` }],
   }),
+  linkRefusal = null,
   startCloud,
 }: {
   linkAnswer?: (tool: string) => ToolResult;
+  // What the link answers instead of running work under its write rules, as after a stop.
+  linkRefusal?: ToolResult | null;
   startCloud?: StartCloud;
   // The real errors are told apart by their tag alone.
   answer?: () => Result<unknown, { _tag: string; message: string }>;
@@ -884,6 +990,12 @@ const setup = ({
         call: async (tool, args) => {
           linkCalls.push({ tool, args });
           return linkAnswer(tool);
+        },
+        exclusive: async (label, run) => {
+          linkCalls.push({ tool: `exclusive ${label}`, args: null });
+          return linkRefusal === null
+            ? { ran: await run() }
+            : { refused: linkRefusal };
         },
         createChecked: async (args) => {
           linkCalls.push({ tool: "checked create_thread", args });

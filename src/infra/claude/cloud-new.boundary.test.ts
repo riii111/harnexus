@@ -77,6 +77,29 @@ describe("startCloudSession", () => {
     expect(run.isErr() && run.error.message).toBe("Still starting");
   });
 
+  test("names a start that could not run in the folder as one that started nothing", async () => {
+    const { file, root } = await fakeClaude("");
+
+    const run = await startCloudSession(file, "summarize it", {
+      cwd: join(root, "gone"),
+      env: { PATH: process.env.PATH },
+    });
+
+    expect(run.isErr() && run.error.mayHaveStarted).toBe(false);
+  });
+
+  test("names a start that printed no session in time as one that may have started", async () => {
+    const { file, root } = await fakeClaude(`printf 'starting\\n'`);
+
+    const run = await startCloudSession(file, "summarize it", {
+      cwd: root,
+      env: { PATH: process.env.PATH },
+      timeoutMs: 1_000,
+    });
+
+    expect(run.isErr() && run.error.mayHaveStarted).toBe(true);
+  });
+
   test("gives BSD script a pipe as its input, as on macOS", async () => {
     const { file, root } = await fakeClaude(
       `printf 'View: https://claude.ai/code/session_01NfjPqrHtNPEcDZP4SkBFGT\\n'`,

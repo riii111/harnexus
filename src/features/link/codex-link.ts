@@ -132,6 +132,7 @@ export const createCodexLink = ({
     server: { name: CODEX_LINK_SERVER, tools },
     call,
     createChecked: created.createChecked,
+    exclusive: calls.exclusive,
     // Reads change nothing and reach only what the app lets this thread read, so they run without asking; creating and sending stay under the user's Claude permission rules.
     allowedTools: [...READ_TOOLS, ...BROWSER_ALLOWED_TOOLS].map(
       (name) => `mcp__${CODEX_LINK_SERVER}__${name}`,

@@ -48,6 +48,11 @@ type ToolAnswer = { content: unknown; isError?: boolean | undefined };
 type Link = {
   call: (name: string, args: unknown) => Promise<ToolAnswer>;
   createChecked: (args: unknown) => Promise<CreateOutcome & { busy: boolean }>;
+  exclusive: <T>(
+    label: string,
+    run: () => Promise<T>,
+    isUnknown: (value: T) => boolean,
+  ) => Promise<{ ran: T } | { refused: ToolAnswer }>;
 };
 
 // Serves the call socket's thread tools to harnexus-task, sending a Claude thread's calls through its codex_link.
@@ -258,10 +263,31 @@ export const createCallGateway = ({
       { timeoutMs: timeoutOf(tool, args) },
     );
 
+  // A Codex caller has no turn to stop, so its starts are only kept in order.
+  const codexStarts = createSerialQueue();
+
   const openCloud = createCloudOpen({
-    call: (caller, tool, args) => run(caller, tool, args),
+    call: async (caller, tool, args) =>
+      structured(await run(caller, tool, args)),
     cloudOwner,
     ...(startCloud !== undefined && { startCloud }),
+    guardStart: async (caller, start) => {
+      if (!isClaudeThread(caller))
+        return { ran: await codexStarts.run(caller, start) };
+      const guarded = await linkOf(caller).exclusive(
+        "cloud_open",
+        start,
+        (started) => (started.isErr() ? started.error.mayHaveStarted : false),
+      );
+      return "ran" in guarded
+        ? guarded
+        : {
+            refused: structured({
+              outcome: "tool_error",
+              result: guarded.refused,
+            }),
+          };
+    },
   });
 
   return {
@@ -274,9 +300,9 @@ const structured = (answer: { outcome: string; [key: string]: unknown }) => {
   if (answer.outcome !== "tool_error") return answer;
   const { result } = answer;
   return {
+    ...answer,
     outcome: isObject(result) ? failureKindOf(result) : "rejected",
     message: textOf(result),
-    result,
   };
 };
 

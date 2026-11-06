@@ -137,6 +137,10 @@ export const createAppToolCalls = ({
             return failure(called.error.message, "not_sent");
           }
 
+          // The server answered the call with an error, so it ran to a refusal and a corrected call may be sent.
+          if (called.error._tag === "ServerRequestRejected")
+            return failure(called.error.message, "rejected");
+
           // A malformed answer is still an answer to a call that ran, so like a lost one it leaves the outcome unknown.
           unknownWrite = label;
           return failure(
@@ -152,6 +156,35 @@ export const createAppToolCalls = ({
         writesInFlight -= 1;
       }
     });
+
+  // Runs work that is not an app tool call, such as starting a Cloud session, under the same order, stop and unknown-outcome rules as a write.
+  const exclusive = <T>(
+    label: string,
+    run: () => Promise<T>,
+    isUnknown: (value: T) => boolean,
+  ): Promise<{ ran: T } | { refused: ToolResult }> => {
+    const queuedIn = currentGeneration();
+    return writes.run(CODEX_APP_SERVER, async () => {
+      if (unknownWrite !== null)
+        return {
+          refused: failure(
+            `An earlier ${unknownWrite} call has an unknown outcome and is never repeated automatically. ${unknownAdvice}`,
+            "not_sent",
+          ),
+        };
+      if (queuedIn !== generation) return { refused: notSentAfterStop(label) };
+      const refusal = refuseTargets([], { allowSelf: true });
+      if (refusal !== null) return { refused: failure(refusal) };
+      writesInFlight += 1;
+      try {
+        const value = await run();
+        if (isUnknown(value)) unknownWrite = label;
+        return { ran: value };
+      } finally {
+        writesInFlight -= 1;
+      }
+    });
+  };
 
   const currentGeneration = () => (stopped ? null : generation);
 
@@ -173,6 +206,7 @@ export const createAppToolCalls = ({
   return {
     read,
     write,
+    exclusive,
     currentGeneration,
     wasStopped: (queuedIn: number | null) => queuedIn !== generation,
     hasUnknownWrite: () => unknownWrite !== null,

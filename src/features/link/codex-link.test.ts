@@ -960,10 +960,9 @@ describe("createCodexLink call failure kinds", () => {
       kind: "not_sent",
     },
     {
-      // Writes after it are held back as after a lost answer, so the caller is told the same.
-      name: "a write the server refused as unknown",
+      name: "a write the server refused as rejected",
       answer: () => Result.err(rejected()),
-      kind: "unknown",
+      kind: "rejected",
     },
     {
       name: "a write the app answered as an error as rejected",
@@ -977,6 +976,52 @@ describe("createCodexLink call failure kinds", () => {
     const result = await link.call("send_message_to_thread", SEND_ARGS);
 
     expect(failureKindOf(result)).toBe(kind);
+  });
+
+  test("lets a write the server refused be sent again, unlike one whose answer was lost", async () => {
+    let calls = 0;
+    const { link, requests } = await connect({
+      answer: () => {
+        calls += 1;
+        return calls === 1
+          ? Result.err(rejected())
+          : Result.ok(textAnswer("sent"));
+      },
+    });
+
+    await link.call("send_message_to_thread", SEND_ARGS);
+    const again = await link.call("send_message_to_thread", SEND_ARGS);
+
+    expect(again.isError).toBeFalsy();
+    expect(requests).toHaveLength(2);
+    expect(link.hasUnsettledWrite()).toBe(false);
+  });
+
+  test("runs exclusive work only while writes are accepted, and holds later writes after an unknown one", async () => {
+    const { link, requests } = await connect();
+    const ran: string[] = [];
+
+    link.stopWrites();
+    const stopped = await link.exclusive(
+      "cloud_open",
+      async () => ran.push("a"),
+      () => false,
+    );
+    link.acceptWrites();
+    const lost = await link.exclusive(
+      "cloud_open",
+      async () => ran.push("b"),
+      () => true,
+    );
+    const after = await link.call("send_message_to_thread", SEND_ARGS);
+
+    expect("refused" in stopped && failureKindOf(stopped.refused)).toBe(
+      "not_sent",
+    );
+    expect("ran" in lost).toBe(true);
+    expect(ran).toEqual(["b"]);
+    expect(failureKindOf(after)).toBe("not_sent");
+    expect(requests).toEqual([]);
   });
 
   test("names a message to the caller itself as rejected and bad arguments as invalid", async () => {
