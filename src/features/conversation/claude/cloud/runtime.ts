@@ -256,6 +256,8 @@ export const createCloudRuntime = <Tag extends string>(
   const hurriedAt = new Map<string, number>();
   // When each thread was linked, so a session whose container is still starting is copied often until its first records come.
   const linkedAt = new Map<string, number>();
+  // The threads whose last idle copy found them booting, which alone bring the wait between ticks below POLL_MS.
+  const booting = new Set<string>();
   // Where the chat was last left with each session: the question or stop it was shown, or the last record of a turn the user stopped following or that showed nothing new for the wait limit. The idle copies open a turn for the session again only once it moves past that; kept in memory, so after a restart the chat is told once more.
   const seen = new Map<string, string | null>();
   const park = (threadId: string, follow: Follow) =>
@@ -448,11 +450,13 @@ export const createCloudRuntime = <Tag extends string>(
         ? `${STOPPED_AFTER_START}\n\n${LINKED}`
         : LINKED,
     );
-    // A session still running its turn, such as one just started, is copied again within seconds rather than after the idle wait.
+    // A session still running its turn is copied again soon rather than after the idle wait, and one with no records yet, such as one just started, within seconds.
     const { kind } = sessionStateOf(copied.value.records);
-    if (kind === "starting" || kind === "working") {
+    if (kind === "starting") {
       linkedAt.set(threadId, now());
       hurry(threadId, STARTING_POLL_MS);
+    } else if (kind === "working") {
+      hurry(threadId);
     }
 
     // A chat another chat opened has the name it was given; a failed rename leaves the name as it was.
@@ -988,6 +992,7 @@ export const createCloudRuntime = <Tag extends string>(
       dueAt.delete(threadId);
       hurriedAt.delete(threadId);
       linkedAt.delete(threadId);
+      booting.delete(threadId);
       seen.delete(threadId);
       failingSince.delete(threadId);
       emptySince.delete(threadId);
@@ -998,6 +1003,8 @@ export const createCloudRuntime = <Tag extends string>(
       if (closed) return;
       if ((dueAt.get(threadId) ?? 0) > now()) continue;
       const copied = await copyIdle(threadId);
+      if (copied === "starting") booting.add(threadId);
+      else booting.delete(threadId);
       if (copied === "skipped") continue;
       dueAt.set(threadId, now() + IDLE_WAIT_MS[copied]);
     }
@@ -1010,6 +1017,7 @@ export const createCloudRuntime = <Tag extends string>(
     const { busy, halted } = stateOf(threadId);
     // A halted thread is never copied again, so it waits like an idle one rather than waking the copies every POLL_MS; its notice is tried again until the chat takes it.
     if (halted) {
+      linkedAt.delete(threadId);
       noticeLink(threadId, "halted", HALTED_NOTICE);
       return "idle";
     }
@@ -1024,10 +1032,10 @@ export const createCloudRuntime = <Tag extends string>(
       now() - (hurriedAt.get(threadId) ?? Number.NEGATIVE_INFINITY) <
       WORKING_FOR_MS;
     // Until a session just linked shows its first records, which come once its container runs, it is copied every few seconds so its first reply is not held back by the wait.
-    const booting =
+    const justLinked =
       now() - (linkedAt.get(threadId) ?? Number.NEGATIVE_INFINITY) <
       STARTING_FOR_MS;
-    if (!booting) linkedAt.delete(threadId);
+    if (!justLinked) linkedAt.delete(threadId);
     if (copied.isErr()) {
       const since = failingSince.get(threadId) ?? now();
       failingSince.set(threadId, since);
@@ -1041,9 +1049,8 @@ export const createCloudRuntime = <Tag extends string>(
         );
       }
 
-      if (stateOf(threadId).halted) return "idle";
-      if (booting) return "starting";
-      return starting ? "working" : "idle";
+      // A failing copy is not tried at the booting rate, so a Cloud that refuses copies is not asked three times as often.
+      return starting && !stateOf(threadId).halted ? "working" : "idle";
     }
 
     // A turn that ran while this copy was made saved a newer one, which this copy may be older than.
@@ -1097,7 +1104,7 @@ export const createCloudRuntime = <Tag extends string>(
       }
     }
 
-    if (last === undefined && booting) return "starting";
+    if (last === undefined && justLinked) return "starting";
     if (working) return "working";
     // A session that goes on by itself does so when an event comes, such as a PR it watches changing, so it is copied often enough for the chat to show that soon.
     return state.kind === "resumes_later" ? "waiting" : "idle";
@@ -1119,7 +1126,7 @@ export const createCloudRuntime = <Tag extends string>(
   // The wait until the earliest idle copy is due, kept between POLL_MS, or STARTING_POLL_MS while a session just linked has no records yet, and IDLE_MS.
   const nextWait = () => {
     if (soon !== null) return soon;
-    const least = linkedAt.size > 0 ? STARTING_POLL_MS : POLL_MS;
+    const least = booting.size > 0 ? STARTING_POLL_MS : POLL_MS;
     let wait = IDLE_MS;
     for (const threadId of threads.cloudThreadIds()) {
       wait = Math.min(wait, (dueAt.get(threadId) ?? 0) - now());
