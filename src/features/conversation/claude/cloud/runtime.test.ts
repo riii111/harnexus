@@ -85,22 +85,22 @@ describe("createCloudRuntime observations", () => {
   test("hands the tool output a session read to the observer and opens no chat for it", async () => {
     const output = JSON.stringify({
       status: "completed",
-      reviewer: "0199-reviewer",
-      answer: "判定: LGTM",
+      runner: "0199-runner",
+      answer: "結果: 完了",
     });
     const env = setup({
       copies: [
         [
-          prompt("p1", "review"),
+          prompt("p1", "run the task"),
           reply("a1", "m1", toolUse("t1", "Bash", {}), "tool_use"),
           toolResult("u1", "t1", output),
-          endReply("a2", "reviewed"),
+          endReply("a2", "finished"),
         ],
       ],
       link: { sessionId: CLOUD_ID, shown: null },
     });
 
-    await env.runtime.run(env.turn("review").running);
+    await env.runtime.run(env.turn("run the task").running);
     await env.tick();
 
     expect(env.children).toEqual([]);
@@ -152,7 +152,7 @@ describe("createCloudRuntime deleted threads", () => {
 });
 
 describe("createCloudRuntime child sessions", () => {
-  const CHILD = "session_01NfjPqs5GNSgknfAaJ3mdYA";
+  const CHILD = "session_01ChildFixtureSession000";
   const started = (id: string) =>
     JSON.stringify({ ccr: { id, title: "worker" } });
 
@@ -1642,7 +1642,7 @@ describe("createCloudRuntime idle copies", () => {
           toolResult(
             "r1",
             "t1",
-            JSON.stringify({ ccr: { id: "session_01NfjPqs5GNSgknfAaJ3mdYA" } }),
+            JSON.stringify({ ccr: { id: "session_01ChildFixtureSession000" } }),
           ),
           endReply("a3", "started a worker"),
         ],

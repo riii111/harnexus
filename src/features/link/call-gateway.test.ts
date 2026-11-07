@@ -212,7 +212,7 @@ describe("createCallGateway", () => {
         JSON.stringify({
           threadId,
           tool: "name_thread",
-          arguments: { name: "決済を再送する PR#12" },
+          arguments: { name: "サンプルの作業 #12" },
         }),
       );
 
@@ -223,7 +223,7 @@ describe("createCallGateway", () => {
       expect(requests).toEqual([
         {
           method: "thread/name/set",
-          params: { threadId, name: "決済を再送する PR#12" },
+          params: { threadId, name: "サンプルの作業 #12" },
           timeoutMs: 60_000,
         },
       ]);

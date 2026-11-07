@@ -30,7 +30,7 @@ describe("openCloudChild", () => {
       "parent",
       "/Users/me/src/harnexus",
       {
-        sessionId: "session_01NfjPqs5GNSgknfAaJ3mdYA",
+        sessionId: "session_01ChildFixtureSession000",
         title: "worker",
       },
     );
@@ -40,7 +40,7 @@ describe("openCloudChild", () => {
       threadId: "parent",
       tool: "create_thread",
       arguments: {
-        prompt: "/cloud session_01NfjPqs5GNSgknfAaJ3mdYA",
+        prompt: "/cloud session_01ChildFixtureSession000",
         target: {
           type: "project",
           projectId: "p",
@@ -61,7 +61,7 @@ describe("openCloudChild", () => {
       },
       "parent",
       "/nowhere",
-      { sessionId: "session_01NfjPqs5GNSgknfAaJ3mdYA", title: null },
+      { sessionId: "session_01ChildFixtureSession000", title: null },
     );
 
     expect(outcome).toBe("no_project");
@@ -72,10 +72,10 @@ describe("openCloudChild", () => {
 describe("openCloudChild titles", () => {
   test.each([
     {
-      title: "Harnexus vs T3 Code 調査 [riii111/harnexus#t3-code]",
-      expected: "☁️ Harnexus vs T3 Code 調査 [riii111/harnexus#t3-code]",
+      title: "サンプル調査 [owner/repo#topic]",
+      expected: "☁️ サンプル調査 [owner/repo#topic]",
     },
-    { title: null, expected: "☁️ session_01NfjPqs5GNSgknfAaJ3mdYA" },
+    { title: null, expected: "☁️ session_01ChildFixtureSession000" },
   ])(
     "names the chat of a session titled $title",
     async ({ title, expected }) => {
@@ -92,7 +92,7 @@ describe("openCloudChild titles", () => {
         },
         "parent",
         "/work",
-        { sessionId: "session_01NfjPqs5GNSgknfAaJ3mdYA", title },
+        { sessionId: "session_01ChildFixtureSession000", title },
       );
 
       expect(titles).toEqual([expected]);

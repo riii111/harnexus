@@ -184,7 +184,7 @@ export const createThreadTool = ({
     requested: string | undefined,
   ): Promise<Result<string, ModelListUnreadable | NoDefaultModel>> => {
     if (requested !== undefined) return Result.ok(requested);
-    // Existing review callers rely on the default Codex model; a Claude worker is selected explicitly.
+    // Callers that name no model rely on the default Codex model; a Claude model is chosen explicitly.
     let cursor: string | null = null;
     for (let page = 0; page < MAX_MODEL_PAGES; page += 1) {
       const listed = await request(
@@ -214,7 +214,7 @@ export const createThreadTool = ({
 
   const definition = defineTool(
     "create_thread",
-    "Start a worker or reviewer in a new Codex app thread and send it the first prompt. Wait for its completion with wait_threads and read its answer with read_thread.",
+    "Start a new Codex app thread and send it the first prompt. Wait for its completion with wait_threads and read its answer with read_thread.",
     {
       prompt: z.string().min(1),
       target: CREATE_TARGET,
@@ -223,7 +223,7 @@ export const createThreadTool = ({
         .string()
         .optional()
         .describe(
-          "A Claude or Codex model for the worker or reviewer; leave it out to use the app's default Codex model.",
+          "A Claude or Codex model for the new thread; leave it out to use the app's default Codex model.",
         ),
       thinking: z.string().optional(),
     },
@@ -282,7 +282,7 @@ const readModelPage = (value: unknown) => {
 
 const CREATED_THREAD_WAIT_MS = 30_000;
 const MAX_MODEL_PAGES = 10;
-// TODO: replace each type with z.literal once P8b records the enum values on the app; until then the three forms the app defines are kept and the app checks the values.
+// TODO: replace each type with z.literal once the enum values the app accepts are recorded; until then the three forms the app defines are kept and the app checks the values.
 const CREATE_TARGET = z
   .union([
     z.strictObject({

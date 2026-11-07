@@ -3,8 +3,6 @@ import { StringDecoder } from "node:string_decoder";
 
 import { Result, TaggedError } from "better-result";
 
-import { isObject } from "./object.ts";
-
 export class ProcessRunFailed extends TaggedError("ProcessRunFailed")<{
   // Whether the process may have reached the model; false when it never started.
   started: boolean;
@@ -20,15 +18,6 @@ export type ProcessRun = {
 };
 
 const OUTPUT_LIMIT = 16 * 1024 * 1024;
-
-export const processAlive = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (cause) {
-    return isObject(cause) && cause.code === "EPERM";
-  }
-};
 
 const signalGroup = (pid: number, signal: NodeJS.Signals) => {
   try {

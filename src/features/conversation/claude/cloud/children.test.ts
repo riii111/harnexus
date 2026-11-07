@@ -10,9 +10,9 @@ import {
 } from "../../testing/session-record.ts";
 import { childSessionsIn, waitingIn } from "./children.ts";
 
-const CHILD = "session_01NfjPqs5GNSgknfAaJ3mdYA";
+const CHILD = "session_01ChildFixtureSession000";
 const CREATE = "mcp__claude-code-remote__create_session";
-const created = (id: string, title = "[riii111/harnexus#178]") =>
+const created = (id: string, title = "[owner/repo#1]") =>
   JSON.stringify({
     ccr: { id, title, session_status: "SESSION_STATUS_PENDING" },
   });
@@ -26,7 +26,7 @@ describe("childSessionsIn", () => {
     ];
 
     expect(childSessionsIn(records)).toEqual([
-      { sessionId: CHILD, title: "[riii111/harnexus#178]" },
+      { sessionId: CHILD, title: "[owner/repo#1]" },
     ]);
   });
 
@@ -74,12 +74,12 @@ describe("waitingIn", () => {
     reply("a2", "m2", text("waiting for the worker"), "end_turn"),
   ];
   const background = [
-    prompt("p1", "review it"),
+    prompt("p1", "run the checks"),
     reply(
       "a1",
       "m1",
       toolUse("t1", "Bash", {
-        command: "bun run check-all",
+        command: "bun test",
         run_in_background: true,
       }),
       "tool_use",
@@ -92,7 +92,7 @@ describe("waitingIn", () => {
     reply(
       "a2",
       "m2",
-      text("Asked Codex; it takes a minute or two."),
+      text("Started the checks; they take a minute or two."),
       "end_turn",
     ),
   ];
@@ -192,7 +192,7 @@ describe("waitingIn", () => {
       expected: false,
     },
     {
-      name: "waits for a review it left running in the background",
+      name: "waits for a command it left running in the background",
       records: background,
       expected: true,
     },

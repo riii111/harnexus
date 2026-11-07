@@ -57,8 +57,8 @@ describe("openThreadStore", () => {
         threads: [
           {
             ...SAVED_RECORD,
-            reviewerThreadIds: ["reviewer-1"],
-            requesterThreadIds: ["worker-1"],
+            reviewerThreadIds: ["thread-2"],
+            requesterThreadIds: ["thread-3"],
           },
         ],
       }),
