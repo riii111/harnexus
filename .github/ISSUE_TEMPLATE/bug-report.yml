@@ -38,7 +38,7 @@ body:
     attributes:
       label: When it happened
       description: Date and time with your time zone, so it can be found in the report's log.
-      placeholder: 2026-10-24 18:30 JST
+      placeholder: 2026-10-24 18:30 UTC
     validations:
       required: true
   - type: input

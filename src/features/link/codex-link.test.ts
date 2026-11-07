@@ -1423,11 +1423,11 @@ const HEARTBEAT = {
 };
 const CRON = {
   name: "Plan",
-  prompt: "$task-dispatch 予定",
+  prompt: "$summary 今週の予定",
   rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=17;BYMINUTE=0",
   status: "ACTIVE",
 };
-const CRON_TOML = `version = 1\nid = "made"\nkind = "cron"\nname = "Plan"\nprompt = "$task-dispatch 予定"\n`;
+const CRON_TOML = `version = 1\nid = "made"\nkind = "cron"\nname = "Plan"\nprompt = "$summary 今週の予定"\n`;
 const RUN_SETTINGS = {
   model: "claude-fixture",
   target: { type: "project", projectId: "project-1" },

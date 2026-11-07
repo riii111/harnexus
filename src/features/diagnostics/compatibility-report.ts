@@ -18,7 +18,7 @@ export const compatibilityRecord = (
 export const compatibilityNotification = (
   reason: CompatibilityEvent["reason"],
 ) =>
-  `display notification "${reason === "InitializeResponseChanged" ? "Codex の初期化応答" : "Codex のモデル一覧応答"}の形式が変わったため、Claude を無効にしました。bun run doctor で詳細を確認してください。" with title "harnexus を使えません"`;
+  `display notification "Claude was turned off because the format of Codex's ${reason === "InitializeResponseChanged" ? "initialize response" : "model list response"} changed. Run bun run doctor for details." with title "harnexus is unavailable"`;
 
 export const compatibilityCheck = (record: unknown): Check => {
   const name = "Last protocol incompatibility";

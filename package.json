@@ -14,7 +14,6 @@
     "doctor": "bun --no-env-file --config=/dev/null src/cli/doctor.ts",
     "feedback": "bun --no-env-file --config=/dev/null src/cli/feedback.ts",
     "open-app": "bun --no-env-file --config=/dev/null src/cli/open-app.ts",
-    "call": "bun --no-env-file --config=/dev/null src/cli/call.ts",
     "cloud": "bun --no-env-file --config=/dev/null src/cli/harnexus.ts cloud",
     "install:cli": "bash scripts/install-cli.sh"
   },

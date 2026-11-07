@@ -270,15 +270,15 @@ sub notify_fallback {
 sub notification_script {
   my ($failure) = @_;
   my %reasons = (
-    UnverifiedCodex => "この Codex の版はまだ確認されていません",
-    BunUnavailable => "Bun を起動できません",
-    BridgeStartupTimeout => "harnexus の起動が時間内に完了しませんでした",
-    BridgeStartupFailed => "harnexus を起動できません",
+    UnverifiedCodex => "this Codex version has not been verified yet",
+    BunUnavailable => "Bun cannot be started",
+    BridgeStartupTimeout => "harnexus did not finish starting in time",
+    BridgeStartupFailed => "harnexus cannot be started",
   );
   my $reason = $reasons{$failure->{reason}} // $reasons{BridgeStartupFailed};
   my $version = $failure->{version} // "";
-  $reason .= "（$version）" if $version =~ /^\d+\.\d+\.\d+[a-zA-Z0-9.+-]*$/;
-  return 'display notification "Claude を使わずに標準の Codex で起動しました。理由: ' . $reason . '。bun run doctor で詳細を確認できます。" with title "harnexus を使えません"';
+  $reason .= " ($version)" if $version =~ /^\d+\.\d+\.\d+[a-zA-Z0-9.+-]*$/;
+  return 'display notification "Started the standard Codex without Claude because ' . $reason . '. Run bun run doctor for details." with title "harnexus is unavailable"';
 }
 
 sub fail {

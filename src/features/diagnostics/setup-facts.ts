@@ -57,9 +57,6 @@ export const collectSetupFacts = async (
   };
 };
 
-export const readPinnedBun = async (repo: string) =>
-  pinnedBunOf(await readManifest(repo));
-
 const pinnedBunOf = (manifest: Record<string, unknown>) => {
   const manager = manifest.packageManager;
   return typeof manager === "string" && manager.startsWith("bun@")

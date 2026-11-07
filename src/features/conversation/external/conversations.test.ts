@@ -630,7 +630,7 @@ describe("createExternalRuntime turns", () => {
       id: 7,
       op: "post",
       conversationId: "c1",
-      text: "判定: LGTM",
+      text: "結果: 完了",
     });
     await settle();
     const own = fakeTurn("own-1", { startedBy: "claude" });
@@ -638,7 +638,7 @@ describe("createExternalRuntime turns", () => {
     await settle();
 
     expect(ownStarts).toEqual(["chat-1"]);
-    expect(own.texts()).toEqual(["判定: LGTM"]);
+    expect(own.texts()).toEqual(["結果: 完了"]);
     expect(adapter.latest().responses()).toEqual([
       expect.objectContaining({ id: 7, outcome: "done", threadId: "chat-1" }),
     ]);

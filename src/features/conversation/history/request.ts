@@ -66,7 +66,7 @@ export const createHistoryRequests = ({
   log: (event: HistoryEvent) => void;
   subagentHistory: (threadId: string) => HistoryTurn[] | undefined;
   subagents: SubagentsOfThread;
-  // The records the bridge kept for a thread that has no Claude record, such as a Cloud reviewer's chat.
+  // The records the bridge kept for a thread that has no Claude record, such as a chat opened for a Cloud session.
   keptRecords?: (threadId: string) => Promise<readonly SessionMessage[] | null>;
 }) => {
   // The app asks for a turn page and then each turn's items at once, so requests arriving while a read runs share it.

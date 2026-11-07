@@ -487,7 +487,7 @@ const EXCEPTION: Exception = {
   from: "features/link/codex-link.ts",
   to: "features/conversation/models.ts",
   reason: "fixture",
-  until: "RA-02",
+  until: "ISSUE-1",
 };
 
 const TSCONFIG = JSON.stringify({

@@ -32,7 +32,7 @@ export const parseTimeArgument = (
 
   return Result.err(
     new TimeArgumentInvalid({
-      message: `${name} must be a duration such as 30m, 2h or 3d, or a time such as 2026-10-24T18:30 or 2026-10-24T18:30+09:00, within the last 7 days`,
+      message: `${name} must be a duration such as 30m, 2h or 3d, or a time such as 2026-10-24T18:30 or 2026-10-24T18:30Z, within the last 7 days`,
     }),
   );
 };

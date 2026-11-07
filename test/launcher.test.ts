@@ -253,7 +253,7 @@ describe("startup fallback", () => {
         (await readNotification(env.FAKE_NOTIFICATION_REPORT as string)).join(
           " ",
         ),
-      ).toContain("起動が時間内に完了しませんでした");
+      ).toContain("did not finish starting in time");
     },
     TIMEOUT,
   );
@@ -304,7 +304,7 @@ describe("startup fallback", () => {
   test.each([
     {
       name: "an unverified Codex when asked to fall back",
-      expectedReason: "この Codex の版はまだ確認されていません（9.0.0）",
+      expectedReason: "this Codex version has not been verified yet (9.0.0)",
       expectedRecord: { reason: "UnverifiedCodex", version: "9.0.0" },
       overrides: {
         FAKE_CODEX_VERSION: "codex-cli 9.0.0",
@@ -313,7 +313,7 @@ describe("startup fallback", () => {
     },
     {
       name: "a Bun process that exits before readiness",
-      expectedReason: "harnexus を起動できません",
+      expectedReason: "harnexus cannot be started",
       expectedRecord: {
         reason: "BridgeStartupFailed",
         version: "0.158.0-alpha.2.1",
@@ -344,7 +344,7 @@ describe("startup fallback", () => {
       const notification = await readNotification(
         env.FAKE_NOTIFICATION_REPORT as string,
       );
-      expect(notification.join(" ")).toContain("harnexus を使えません");
+      expect(notification.join(" ")).toContain("harnexus is unavailable");
       expect(notification.join(" ")).toContain("bun run doctor");
       expect(notification.join(" ")).toContain(expectedReason);
     },
@@ -756,7 +756,7 @@ describe("refusals", () => {
       (await readNotification(env.FAKE_NOTIFICATION_REPORT as string)).join(
         " ",
       ),
-    ).toContain("Bun を起動できません");
+    ).toContain("Bun cannot be started");
   });
 
   test("refuses a symlink to the launcher as the Codex path", async () => {

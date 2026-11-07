@@ -240,28 +240,6 @@ const writeTemporary = async (path: string, content: string) => {
   return temporary;
 };
 
-export const isFile = async (path: string) =>
-  (await stat(path).catch(() => null))?.isFile() ?? false;
-
-export const fileIdentity = async (path: string) => {
-  const found = await stat(path).catch(() => null);
-  return found?.isFile()
-    ? {
-        // The device and inode tell a file swapped in at the path from one changed in place.
-        dev: found.dev,
-        ino: found.ino,
-        size: found.size,
-        modifiedMs: Math.trunc(found.mtimeMs),
-      }
-    : null;
-};
-
-export const isDirectory = async (path: string) =>
-  (await stat(path).catch(() => null))?.isDirectory() ?? false;
-
-export const pathExists = async (path: string) =>
-  (await stat(path).catch(() => null)) !== null;
-
 export const realPathOrSelf = (path: string) =>
   realpath(resolve(path)).catch(() => resolve(path));
 
