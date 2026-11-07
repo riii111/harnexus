@@ -254,6 +254,8 @@ export const createCloudRuntime = <Tag extends string>(
   const dueAt = new Map<string, number>();
   // When each thread's idle copy was last brought forward, such as when its chat was linked or a turn ended.
   const hurriedAt = new Map<string, number>();
+  // When each thread was linked, so a session whose container is still starting is copied often until its first records come.
+  const linkedAt = new Map<string, number>();
   // Where the chat was last left with each session: the question or stop it was shown, or the last record of a turn the user stopped following or that showed nothing new for the wait limit. The idle copies open a turn for the session again only once it moves past that; kept in memory, so after a restart the chat is told once more.
   const seen = new Map<string, string | null>();
   const park = (threadId: string, follow: Follow) =>
@@ -262,7 +264,8 @@ export const createCloudRuntime = <Tag extends string>(
   const failingSince = new Map<string, number>();
   const emptySince = new Map<string, number>();
   const linkNoticed = new Map<string, LinkNotice>();
-  let soon = false;
+  // The wait for the copies planned while a tick ran, brought forward by hurry.
+  let soon: number | null = null;
   let closed = false;
 
   const stateOf = (threadId: string): CloudThread =>
@@ -445,9 +448,13 @@ export const createCloudRuntime = <Tag extends string>(
         ? `${STOPPED_AFTER_START}\n\n${LINKED}`
         : LINKED,
     );
-    // A session still running its turn, such as one just started, is copied again soon rather than after the idle wait.
+    // A session still running its turn, such as one just started, is copied again within seconds rather than after the idle wait.
     const { kind } = sessionStateOf(copied.value.records);
-    if (kind === "starting" || kind === "working") hurry(threadId);
+    if (kind === "starting" || kind === "working") {
+      linkedAt.set(threadId, now());
+      hurry(threadId, STARTING_POLL_MS);
+    }
+
     // A chat another chat opened has the name it was given; a failed rename leaves the name as it was.
     if (typed && renameThread !== undefined)
       void renameThread(
@@ -980,6 +987,7 @@ export const createCloudRuntime = <Tag extends string>(
       if (linked.includes(threadId)) continue;
       dueAt.delete(threadId);
       hurriedAt.delete(threadId);
+      linkedAt.delete(threadId);
       seen.delete(threadId);
       failingSince.delete(threadId);
       emptySince.delete(threadId);
@@ -998,7 +1006,7 @@ export const createCloudRuntime = <Tag extends string>(
   // Whether the session was in the middle of a recent turn, waits to go on by itself, or was skipped when the thread is busy or no longer linked; a halted thread counts as idle.
   const copyIdle = async (
     threadId: string,
-  ): Promise<"working" | "waiting" | "idle" | "skipped"> => {
+  ): Promise<"starting" | "working" | "waiting" | "idle" | "skipped"> => {
     const { busy, halted } = stateOf(threadId);
     // A halted thread is never copied again, so it waits like an idle one rather than waking the copies every POLL_MS; its notice is tried again until the chat takes it.
     if (halted) {
@@ -1015,6 +1023,11 @@ export const createCloudRuntime = <Tag extends string>(
     const starting =
       now() - (hurriedAt.get(threadId) ?? Number.NEGATIVE_INFINITY) <
       WORKING_FOR_MS;
+    // Until a session just linked shows its first records, which come once its container runs, it is copied every few seconds so its first reply is not held back by the wait.
+    const booting =
+      now() - (linkedAt.get(threadId) ?? Number.NEGATIVE_INFINITY) <
+      STARTING_FOR_MS;
+    if (!booting) linkedAt.delete(threadId);
     if (copied.isErr()) {
       const since = failingSince.get(threadId) ?? now();
       failingSince.set(threadId, since);
@@ -1028,7 +1041,9 @@ export const createCloudRuntime = <Tag extends string>(
         );
       }
 
-      return starting && !stateOf(threadId).halted ? "working" : "idle";
+      if (stateOf(threadId).halted) return "idle";
+      if (booting) return "starting";
+      return starting ? "working" : "idle";
     }
 
     // A turn that ran while this copy was made saved a newer one, which this copy may be older than.
@@ -1061,6 +1076,7 @@ export const createCloudRuntime = <Tag extends string>(
       state.kind !== "replied" &&
       seen.get(threadId) !== stateKeyOf(all, state);
     if (all.length > 0) {
+      linkedAt.delete(threadId);
       emptySince.delete(threadId);
       if (linkNoticed.get(threadId) === "not_started")
         linkNoticed.delete(threadId);
@@ -1081,6 +1097,7 @@ export const createCloudRuntime = <Tag extends string>(
       }
     }
 
+    if (last === undefined && booting) return "starting";
     if (working) return "working";
     // A session that goes on by itself does so when an event comes, such as a PR it watches changing, so it is copied often enough for the chat to show that soon.
     return state.kind === "resumes_later" ? "waiting" : "idle";
@@ -1099,15 +1116,16 @@ export const createCloudRuntime = <Tag extends string>(
     log({ event: "claude_cloud", step: "link_notice", kind });
   };
 
-  // The wait until the earliest idle copy is due, kept between POLL_MS and IDLE_MS.
+  // The wait until the earliest idle copy is due, kept between POLL_MS, or STARTING_POLL_MS while a session just linked has no records yet, and IDLE_MS.
   const nextWait = () => {
-    if (soon) return POLL_MS;
+    if (soon !== null) return soon;
+    const least = linkedAt.size > 0 ? STARTING_POLL_MS : POLL_MS;
     let wait = IDLE_MS;
     for (const threadId of threads.cloudThreadIds()) {
       wait = Math.min(wait, (dueAt.get(threadId) ?? 0) - now());
     }
 
-    return Math.max(POLL_MS, wait);
+    return Math.max(least, wait);
   };
 
   const plan = (ms: number) => {
@@ -1117,23 +1135,23 @@ export const createCloudRuntime = <Tag extends string>(
       await tick();
       ticking = false;
       const next = nextWait();
-      soon = false;
+      soon = null;
       plan(next);
     }, ms);
   };
 
   // Brings a thread's idle copy forward; a copy already running plans the next one itself.
-  const hurry = (threadId: string) => {
+  const hurry = (threadId: string, ms: number = POLL_MS) => {
     dueAt.set(threadId, 0);
     hurriedAt.set(threadId, now());
     if (ticking) {
-      soon = true;
+      soon = Math.min(soon ?? ms, ms);
       return;
     }
 
     if (closed) return;
     cancelTick?.();
-    plan(POLL_MS);
+    plan(ms);
   };
 
   const stopFollowing = (threadId: string) => {
@@ -1548,11 +1566,18 @@ const FAST_POLL_FOR_MS = 60_000;
 
 const POLL_MS = 10_000;
 
+// The wait between idle copies of a session just linked that has no records yet, as one whose container is still starting.
+const STARTING_POLL_MS = FAST_POLL_MS;
+
+// How long after linking a session with no records it is copied at STARTING_POLL_MS, before falling back to POLL_MS.
+const STARTING_FOR_MS = 3 * 60_000;
+
 const WAITING_POLL_MS = 30_000;
 
 const IDLE_MS = 5 * 60_000;
 // The wait before a thread's next idle copy, by how its last one found the session.
 const IDLE_WAIT_MS = {
+  starting: STARTING_POLL_MS,
   working: POLL_MS,
   waiting: WAITING_POLL_MS,
   idle: IDLE_MS,
