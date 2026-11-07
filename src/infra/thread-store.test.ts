@@ -49,7 +49,7 @@ describe("openThreadStore", () => {
     });
   });
 
-  test("loads a file that still lists reviewer and requester threads without them", async () => {
+  test("ignores unknown fields when loading a saved thread", async () => {
     await writeFile(
       path,
       JSON.stringify({
@@ -57,8 +57,8 @@ describe("openThreadStore", () => {
         threads: [
           {
             ...SAVED_RECORD,
-            reviewerThreadIds: ["thread-2"],
-            requesterThreadIds: ["thread-3"],
+            extraLabels: ["example"],
+            extraIds: ["id-1"],
           },
         ],
       }),
