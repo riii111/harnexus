@@ -1714,10 +1714,10 @@ describe("createCloudRuntime idle copies", () => {
     await env.tick();
     await env.tick();
 
-    expect(env.planned).toEqual([15_000, 10_000, 10_000, 300_000]);
+    expect(env.planned).toEqual([15_000, 3_000, 10_000, 300_000]);
   });
 
-  test("copies a session soon while it has no records yet after linking it, as one whose container is still starting", async () => {
+  test("copies a session every 3 seconds while it has no records yet after linking it, as one whose container is still starting", async () => {
     const env = setup({ copies: [[]] });
     env.runtime.listen(() => true);
 
@@ -1725,10 +1725,50 @@ describe("createCloudRuntime idle copies", () => {
     await env.tick();
     await env.tick();
 
-    expect(env.planned).toEqual([15_000, 10_000, 10_000, 10_000]);
+    expect(env.planned).toEqual([15_000, 3_000, 3_000, 3_000]);
   });
 
-  test("copies a session soon after linking it when a copy fails, and after the idle wait once linking is long past", async () => {
+  test("copies a session that still has no records 3 minutes after linking it every 10 seconds", async () => {
+    const env = setup({ copies: [[]] });
+    env.runtime.listen(() => true);
+
+    await env.runtime.run(env.turn(`/cloud ${CLOUD_ID}`).running);
+    await env.tick();
+    env.clock += 3 * 60_000;
+    await env.tick();
+    await env.tick();
+
+    expect(env.planned).toEqual([15_000, 3_000, 3_000, 10_000, 10_000]);
+  });
+
+  test("starts a Cloud session and copies it 3 seconds after linking, as one whose container is still starting", async () => {
+    const env = setup({ copies: [[]] });
+    env.runtime.listen(() => true);
+
+    await env.runtime.run(env.turn("/cloud README の誤字を直して").running);
+
+    expect(env.planned).toEqual([15_000, 3_000]);
+  });
+
+  test("copies a session linked while its turn runs 10 seconds later, as before, since only a session with no records is copied every 3 seconds", async () => {
+    const at = "2026-11-01T00:00:00Z";
+    const env = setup({
+      copies: [
+        [
+          prompt("p1", "summarize", at),
+          reply("a1", "m1", thinking("hmm"), "end_turn", at),
+        ],
+      ],
+    });
+    env.clock = Date.parse(at);
+    env.runtime.listen(() => true);
+
+    await env.runtime.run(env.turn(`/cloud ${CLOUD_ID}`).running);
+
+    expect(env.planned).toEqual([15_000, 10_000]);
+  });
+
+  test("copies a session soon after linking it when a copy fails, without the 3 second wait, and after the idle wait once linking is long past", async () => {
     const env = setup({ copies: [[]] });
     env.runtime.listen(() => true);
 
@@ -1738,7 +1778,7 @@ describe("createCloudRuntime idle copies", () => {
     env.clock += 10 * 60_000;
     await env.tick();
 
-    expect(env.planned).toEqual([15_000, 10_000, 10_000, 300_000]);
+    expect(env.planned).toEqual([15_000, 3_000, 10_000, 300_000]);
   });
 
   test("copies soon only the thread whose session is working, and the others after the idle wait", async () => {
