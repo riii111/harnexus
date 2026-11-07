@@ -384,7 +384,8 @@ const firstLine = (text: string) =>
       ?.replace(/^Error:\s*/, ""),
   );
 
-const COPY_PROMPT = "/cost";
+// /cost scans the past week's local transcripts for usage, so query only the current context.
+const COPY_PROMPT = "/context";
 
 const LOG_FOLDER = "logs";
 

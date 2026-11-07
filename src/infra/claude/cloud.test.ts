@@ -247,7 +247,7 @@ describe("copyCloudSession", () => {
     }
   });
 
-  test("teleports with the /cost prompt in its own folder and returns the stable copy", async () => {
+  test("teleports with the /context prompt in its own folder and returns the stable copy", async () => {
     const copier = await copying([{ answer: COPIED }]);
 
     const copied = await copier.copy();
@@ -260,7 +260,7 @@ describe("copyCloudSession", () => {
           "--teleport",
           "session_01Nfj",
           "-p",
-          "/cost",
+          "/context",
           "--output-format",
           "json",
           "--debug-file",
