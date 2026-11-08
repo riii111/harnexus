@@ -3,14 +3,20 @@ import { describe, expect, test } from "bun:test";
 import { bridgeSettings } from "./bridge-identity.ts";
 
 describe("bridgeSettings", () => {
-  test("reads an empty environment as every default", () => {
+  test("reads an empty environment as every default, with the call socket closed", () => {
     expect(bridgeSettings({})).toEqual({
       permissionMode: "auto",
       unverifiedCodex: "run",
       statePath: "default",
       logPath: "default",
-      callSocket: "default",
+      callSocket: "off",
     });
+  });
+
+  test("names a call socket opened with on as the default path", () => {
+    expect(bridgeSettings({ HARNEXUS_CALL_SOCKET: "on" }).callSocket).toBe(
+      "default",
+    );
   });
 
   test("names custom paths only by kind", () => {

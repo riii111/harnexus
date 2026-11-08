@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { Result } from "better-result";
 
 import { runCommand } from "../../lib/process.boundary.ts";
-import { type ProcessRun, ProcessRunFailed } from "../../lib/run.boundary.ts";
+import { type ProcessRun, runProcess } from "../../lib/run.boundary.ts";
 import { bundledClaude } from "./bundled-claude.boundary.ts";
 import { createCloudCheckouts } from "./cloud-checkouts.ts";
 import {
@@ -34,10 +34,9 @@ type Call = {
   cwd: string;
 };
 
-const cliAnswering = (
-  answer: Result<ProcessRun, ProcessRunFailed>,
-  calls: Call[] = [],
-): CloudCli => ({
+type RunAnswer = Awaited<ReturnType<typeof runProcess>>;
+
+const cliAnswering = (answer: RunAnswer, calls: Call[] = []): CloudCli => ({
   file: "/usr/local/bin/claude",
   env: { HOME: "/Users/someone" },
   run: async (file, args, input, options) => {
@@ -45,6 +44,27 @@ const cliAnswering = (
     return answer;
   },
 });
+
+// Failures come from real runs, since only runProcess builds its error.
+const failedRun = (file: string, args: readonly string[], timeoutMs: number) =>
+  runProcess(file, args, "", {
+    cwd: "/",
+    env: process.env,
+    timeoutMs,
+    killGraceMs: 50,
+  });
+
+const NEVER_STARTED = await failedRun("/nonexistent/claude", [], 1_000);
+
+// A child in its own process group keeps the pipes open past the SIGKILL of the run's group.
+const LOST_AFTER_START = await failedRun(
+  process.execPath,
+  [
+    "-e",
+    "require('node:child_process').spawn('sleep', ['2'], { detached: true, stdio: 'inherit' }).unref()",
+  ],
+  50,
+);
 
 const exited = (stdout: string, status = 0, stderr = ""): ProcessRun => ({
   status,
@@ -188,13 +208,8 @@ describe("sendToCloud", () => {
     },
     {
       name: "a CLI that never started",
-      run: Result.err(
-        new ProcessRunFailed({
-          started: false,
-          message: "spawn claude ENOENT",
-        }),
-      ),
-      message: "spawn claude ENOENT",
+      run: NEVER_STARTED,
+      message: NEVER_STARTED.isErr() ? NEVER_STARTED.error.message : "ran",
     },
   ])("reports $name as rejected", async ({ run, message }) => {
     const sent = await sendToCloud(
@@ -213,7 +228,7 @@ describe("sendToCloud", () => {
   test.each([
     {
       name: "a timeout",
-      run: Result.ok<ProcessRun, ProcessRunFailed>({
+      run: Result.ok<ProcessRun, never>({
         status: 143,
         stdout: "",
         stderr: "",
@@ -222,9 +237,7 @@ describe("sendToCloud", () => {
     },
     {
       name: "a process lost after it started",
-      run: Result.err<ProcessRun, ProcessRunFailed>(
-        new ProcessRunFailed({ started: true, message: "pid 9 did not exit" }),
-      ),
+      run: LOST_AFTER_START,
     },
     { name: "an exit without a result", run: Result.ok(exited("Sent.\n")) },
   ])("reports $name as unknown", async ({ run }) => {

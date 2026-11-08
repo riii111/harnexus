@@ -223,7 +223,7 @@ const differs = (expected: string | null, actual: string | null) =>
   // A value the app leaves out cannot confirm what was asked, so it refuses the turn like a different one; a setting nobody asked for is not checked.
   expected !== null && expected !== actual;
 
-export const refusalOf = (expected: TurnSettings, actual: TurnSettings) =>
+const refusalOf = (expected: TurnSettings, actual: TurnSettings) =>
   (["model", "effort"] as const)
     .filter((key) => differs(expected[key], actual[key]))
     .map((key) =>
@@ -325,7 +325,7 @@ const outputTexts = (body: unknown) => {
   return texts;
 };
 
-export const isDelegatingTool = (name: string) => DELEGATING_TOOLS.has(name);
+const isDelegatingTool = (name: string) => DELEGATING_TOOLS.has(name);
 
 // Thread reads can truncate the input; keep its available prefix for correlation.
 export const delegationFields = (text: string) => ({

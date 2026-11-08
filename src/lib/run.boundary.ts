@@ -3,7 +3,7 @@ import { StringDecoder } from "node:string_decoder";
 
 import { Result, TaggedError } from "better-result";
 
-export class ProcessRunFailed extends TaggedError("ProcessRunFailed")<{
+class ProcessRunFailed extends TaggedError("ProcessRunFailed")<{
   // Whether the process may have reached the model; false when it never started.
   started: boolean;
   message: string;

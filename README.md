@@ -67,7 +67,7 @@ To follow a [Claude Code cloud session](https://code.claude.com/docs/en/claude-c
 The conversation appears in the chat, and messages you send go to the Cloud session.
 The chat stays busy until the session is done, including while it waits for a message it scheduled to itself or for work it left running in the background.
 Worker sessions it creates also open as chats in the same project.
-To start a new Cloud session instead, send `/cloud` followed by your request, or ask an agent in the app to do it in the Cloud. This needs `claude` signed in on this Mac. The session starts in Auto mode, so it and the workers it starts rarely stop for permission prompts.
+To start a new Cloud session instead, send `/cloud` followed by your request. This needs `claude` signed in on this Mac. The session starts in Auto mode, so it and the workers it starts rarely stop for permission prompts.
 Updates may take a few minutes to appear when you are not sending messages.
 
 To let a skill act as `/cloud` when you pick it in an empty Claude chat, list it in `~/.config/harnexus/connection.json` and restart the app:
@@ -89,15 +89,18 @@ To show another tool's conversations in their own chats, register its adapter pr
 }
 ```
 
-To open Cloud chats from scripts or skills, install the `harnexus` command, which runs this checkout with the current Bun:
+To open Cloud chats from scripts, skills, or an agent in a chat, use the `harnexus` command. It talks to the app through a call socket, which is closed by default because any program you run could use it to create and message chats.
+Quit the app, open it with the socket, then install the command, which runs this checkout with the current Bun:
 
 ```sh
+HARNEXUS_CALL_SOCKET=on bun run open-app
 bun run install:cli            # ~/.local/bin/harnexus; use --prefix DIR for another folder
 harnexus cloud --link https://claude.ai/code/session_01AbC...
 harnexus cloud --prompt-file request.md
 ```
 
-Run it from a chat in the app. It opens a new chat for the session, or answers with the chat already showing it; it never switches the chat it runs in.
+Include `HARNEXUS_CALL_SOCKET=on` each time you run `bun run open-app`, such as after an update; without it the socket closes.
+Run the command from a chat in the app. It opens a new chat for the session, or answers with the chat already showing it; it never switches the chat it runs in.
 It remembers the chat it opened for each session, so a session never gets a second one.
 
 To move those records to or from another tool, quit the app and stop every program that uses Harnexus, then run:

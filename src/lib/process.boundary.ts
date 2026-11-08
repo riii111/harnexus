@@ -88,7 +88,7 @@ export const readCommandOutput = (
       }),
   });
 
-export type CommandOutput = {
+type CommandOutput = {
   status: number;
   stdout: string;
   stderr: string;

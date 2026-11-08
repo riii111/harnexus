@@ -74,7 +74,7 @@ describe("createHistoryRequests.answer", () => {
     });
   });
 
-  test("answers the records the bridge kept for a thread with no session, such as a Cloud reviewer's chat", async () => {
+  test("answers the records the bridge kept for a thread with no session, such as a Cloud chat", async () => {
     const { ask, reads } = setup({ records: {}, kept: conversation() });
 
     const page = await ask("thread/turns/list", 7, {});

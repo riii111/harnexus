@@ -76,6 +76,32 @@ describe("harnexus call", () => {
     expect(run.code).toBe(2);
   });
 
+  test("reaches a bridge opened with on from a shell without the variable", async () => {
+    const received = await fakeBridge((line) =>
+      isQuery(line)
+        ? CAPABILITIES
+        : JSON.stringify({ version: 1, outcome: "done", result: {} }),
+    );
+
+    const run = await harnexus(["call"], {
+      stdin: JSON.stringify({ tool: "read_thread", arguments: {} }),
+      env: unsetBesideState(),
+    });
+
+    expect(received).toHaveLength(2);
+    expect(run.code).toBe(0);
+  });
+
+  test("tells a shell without the variable how to open a closed socket", async () => {
+    const run = await harnexus(["cloud", "--link", SESSION], {
+      env: unsetBesideState(),
+    });
+
+    expect(run.stderr).toContain("call socket is closed");
+    expect(run.stderr).toContain("HARNEXUS_CALL_SOCKET=on bun run open-app");
+    expect(run.code).toBe(2);
+  });
+
   test("names a call whose answer was lost after it was sent as unknown", async () => {
     const received = await fakeBridge((line) =>
       isQuery(line) ? CAPABILITIES : null,
@@ -196,6 +222,11 @@ const fakeBridge = async (answer: (line: string) => string | null) => {
 };
 
 const socketPath = () => join(dir, "call.sock");
+
+const unsetBesideState = () => ({
+  HARNEXUS_CALL_SOCKET: "",
+  HARNEXUS_STATE_PATH: join(dir, "threads.json"),
+});
 
 const harnexus = async (
   argv: readonly string[],

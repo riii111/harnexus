@@ -6,7 +6,7 @@ class ArgumentsInvalid extends TaggedError("ArgumentsInvalid")<{
   message: string;
 }> {}
 
-export type OptionTypes = Record<
+type OptionTypes = Record<
   string,
   { type: "string" | "boolean"; short?: string; multiple?: boolean }
 >;
