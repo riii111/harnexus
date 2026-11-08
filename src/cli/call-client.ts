@@ -35,6 +35,11 @@ export const exitOf = (outcome: unknown) =>
 
 const PROTOCOL_VERSION = 1;
 
+// A missing or refused socket is what a bridge that keeps the socket closed, its default, leaves.
+const NOT_LISTENING = new Set(["ENOENT", "ECONNREFUSED"]);
+const CLOSED_HINT =
+  "; no bridge listens there, and the call socket is closed unless the app was opened with HARNEXUS_CALL_SOCKET=on (quit the app, then run HARNEXUS_CALL_SOCKET=on bun run open-app)";
+
 // Longer than the longest wait_threads the bridge allows, so the bridge always answers first.
 const ANSWER_TIMEOUT_MS = 15 * 60_000;
 const QUERY_TIMEOUT_MS = 10_000;
@@ -62,7 +67,9 @@ export const callV1 = async (
   if (query.isErr())
     return {
       outcome: "not_sent",
-      message: `${path}: ${query.error.code ?? query.error.message}`,
+      message: `${path}: ${query.error.code ?? query.error.message}${
+        NOT_LISTENING.has(query.error.code ?? "") ? CLOSED_HINT : ""
+      }`,
     };
   const offered = parseJson(query.value).unwrapOr(null);
   if (

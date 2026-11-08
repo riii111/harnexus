@@ -111,6 +111,7 @@ export const loadUnverifiedCodexPolicy = (
 const CALL_SOCKET_ENV = "HARNEXUS_CALL_SOCKET";
 
 type CallSocketSetting =
+  | { kind: "unset" }
   | { kind: "off" }
   | { kind: "default" }
   | { kind: "path"; path: string };
@@ -119,10 +120,8 @@ const callSocketSetting = (
   env: Record<string, string | undefined>,
 ): Result<CallSocketSetting, CallSocketPathNotAbsolute> => {
   const value = env[CALL_SOCKET_ENV];
-  if (value === undefined || value === "" || value === "on") {
-    return Result.ok({ kind: "default" });
-  }
-
+  if (value === undefined || value === "") return Result.ok({ kind: "unset" });
+  if (value === "on") return Result.ok({ kind: "default" });
   if (value === "off") return Result.ok({ kind: "off" });
   if (!isAbsolute(value)) {
     return Result.err(
@@ -141,24 +140,11 @@ export const loadCallSocketPath = (
   statePath: string,
 ) =>
   callSocketSetting(env).map((setting) => {
-    // The socket lets any process of the user create and message threads in the app, so "off" closes it; it is open by default, since harnexus call and harnexus cloud send through it.
-    if (setting.kind === "off") return null;
+    // The socket lets any process of the user create and message threads in the app, so the bridge opens it only when asked to.
+    if (setting.kind === "unset" || setting.kind === "off") return null;
     return setting.kind === "path"
       ? setting.path
       : defaultCallSocketPath(statePath);
-  });
-
-// Where a caller finds the bridge's call socket.
-const loadCallerSocketPath = (
-  env: Record<string, string | undefined>,
-  home: () => string = homedir,
-) =>
-  Result.gen(function* () {
-    // Read through the bridge's own setting, so a value the bridge refuses is refused here too.
-    const setting = yield* callSocketSetting(env);
-    if (setting.kind === "path") return Result.ok(setting.path);
-    const state = yield* loadStatePath(env, home);
-    return Result.ok(defaultCallSocketPath(state));
   });
 
 // Where a caller finds the bridge's call socket, or null when it is off, so a caller can say so instead of failing to connect.
@@ -166,11 +152,15 @@ export const loadCallerSocket = (
   env: Record<string, string | undefined>,
   home: () => string = homedir,
 ) =>
-  callSocketSetting(env).andThen((setting) =>
-    setting.kind === "off"
-      ? Result.ok<string | null>(null)
-      : loadCallerSocketPath(env, home),
-  );
+  Result.gen(function* () {
+    // Read through the bridge's own setting, so a value the bridge refuses is refused here too.
+    const setting = yield* callSocketSetting(env);
+    if (setting.kind === "off") return Result.ok<string | null>(null);
+    if (setting.kind === "path") return Result.ok(setting.path);
+    // Unset still looks at the default path, since an app opened with "on" serves it while a terminal may lack the variable.
+    const state = yield* loadStatePath(env, home);
+    return Result.ok(defaultCallSocketPath(state));
+  });
 
 const defaultCallSocketPath = (statePath: string) =>
   join(dirname(statePath), "call.sock");

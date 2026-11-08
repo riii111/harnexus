@@ -17,6 +17,17 @@ describe("environmentCommands", () => {
     expect(commands).toContainEqual(["unsetenv", "HARNEXUS_PERMISSION_MODE"]);
     expect(commands.flat()).not.toContain("secret");
   });
+  test("registers again the call socket a rerun keeps", () => {
+    const commands = environmentCommands(
+      registeredEnvironment(
+        { app: "/app", launcher: "/launcher", codex: "/codex", bun: "/bun" },
+        {},
+        { HARNEXUS_CALL_SOCKET: "on" },
+      ),
+    );
+
+    expect(commands).toContainEqual(["setenv", "HARNEXUS_CALL_SOCKET", "on"]);
+  });
   test("unsets every owned variable when returning to standard", () => {
     expect(environmentCommands({})).toEqual([
       ["unsetenv", "CODEX_CLI_PATH"],

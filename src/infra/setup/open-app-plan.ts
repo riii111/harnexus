@@ -8,14 +8,19 @@ type OpenAppPaths = {
 export const registeredEnvironment = (
   paths: OpenAppPaths,
   env: Record<string, string | undefined>,
+  registered: Record<string, string> = {},
 ): Record<string, string> => ({
   CODEX_CLI_PATH: paths.launcher,
   HARNEXUS_CODEX_PATH: paths.codex,
   HARNEXUS_BUN_PATH: paths.bun,
   ...Object.fromEntries(
     PASSED_ENV.flatMap((name) => {
-      const value = env[name];
-      return value === undefined || value === "" ? [] : [[name, value]];
+      const value = isSet(env[name])
+        ? env[name]
+        : KEPT_ENV.has(name)
+          ? registered[name]
+          : undefined;
+      return isSet(value) ? [[name, value]] : [];
     }),
   ),
 });
@@ -24,12 +29,13 @@ export const openArguments = (
   paths: OpenAppPaths,
   mode: "harnexus" | "standard",
   env: Record<string, string | undefined>,
+  registered: Record<string, string> = {},
 ) => [
   "-a",
   paths.app,
   ...(mode === "standard"
     ? []
-    : Object.entries(registeredEnvironment(paths, env)).flatMap(
+    : Object.entries(registeredEnvironment(paths, env, registered)).flatMap(
         ([key, value]) => ["--env", `${key}=${value}`],
       )),
 ];
@@ -54,3 +60,9 @@ export const isAppRunning = <T extends { command: string }>(
 };
 
 const PASSED_ENV = REGISTERED_ENV_NAMES.slice(3);
+
+// The call socket is closed unless asked for, so a rerun after an update, often from a shell without the variable, must not close a socket the user opened; off closes it.
+const KEPT_ENV: ReadonlySet<string> = new Set(["HARNEXUS_CALL_SOCKET"]);
+
+const isSet = (value: string | undefined): value is string =>
+  value !== undefined && value !== "";

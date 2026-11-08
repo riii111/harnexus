@@ -272,6 +272,7 @@ function launchdChecks(
         bun: process.execPath,
       },
       setup.env,
+      read.value.env,
     ),
     read.value.env,
     read.value.agent,

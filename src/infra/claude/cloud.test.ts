@@ -36,10 +36,7 @@ type Call = {
 
 type RunAnswer = Awaited<ReturnType<typeof runProcess>>;
 
-const cliAnswering = (
-  answer: RunAnswer,
-  calls: Call[] = [],
-): CloudCli => ({
+const cliAnswering = (answer: RunAnswer, calls: Call[] = []): CloudCli => ({
   file: "/usr/local/bin/claude",
   env: { HOME: "/Users/someone" },
   run: async (file, args, input, options) => {

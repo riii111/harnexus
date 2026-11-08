@@ -124,18 +124,18 @@ describe("loadUnverifiedCodexPolicy", () => {
 });
 
 describe("loadCallSocketPath", () => {
-  test("keeps the socket closed when the variable is off", () => {
-    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: "off" }, STATE);
+  test.each([
+    { name: "unset", value: undefined },
+    { name: "empty", value: "" },
+    { name: "off", value: "off" },
+  ])("keeps the socket closed when the variable is $name", ({ value }) => {
+    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: value }, STATE);
 
     expect(path.isOk() && path.value).toBeNull();
   });
 
-  test.each([
-    { name: "unset", value: undefined },
-    { name: "empty", value: "" },
-    { name: "on", value: "on" },
-  ])("places the socket beside the thread store when $name", ({ value }) => {
-    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: value }, STATE);
+  test("places the socket beside the thread store when on", () => {
+    const path = loadCallSocketPath({ HARNEXUS_CALL_SOCKET: "on" }, STATE);
 
     expect(path.isOk() && path.value).toBe("/state/harnexus/call.sock");
   });
@@ -174,8 +174,13 @@ describe("loadCallerSocket", () => {
       expected: "/s/h/call.sock",
     },
     {
-      name: "nothing beside the default thread store",
+      name: "nothing at the path a bridge opened with on serves",
       env: {},
+      expected: "/home/u/.local/state/harnexus/call.sock",
+    },
+    {
+      name: "an empty value at the path a bridge opened with on serves",
+      env: { HARNEXUS_CALL_SOCKET: "" },
       expected: "/home/u/.local/state/harnexus/call.sock",
     },
   ])("finds the socket for $name", ({ env, expected }) => {
@@ -188,6 +193,17 @@ describe("loadCallerSocket", () => {
     expect(
       loadCallerSocket({ HARNEXUS_CALL_SOCKET: "off" }).unwrap(),
     ).toBeNull();
+  });
+
+  test("finds from a shell without the variable the socket a bridge opened with on", () => {
+    const bridge = loadCallSocketPath(
+      { HARNEXUS_CALL_SOCKET: "on" },
+      loadStatePath({}, () => "/home/u").unwrap(),
+    );
+
+    expect(loadCallerSocket({}, () => "/home/u").unwrap()).toBe(
+      bridge.unwrap(),
+    );
   });
 
   test("rejects a relative path as the bridge does", () => {

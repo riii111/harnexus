@@ -2,7 +2,10 @@ import { isAbsolute, join, resolve } from "node:path";
 
 import { parseProcesses } from "../features/diagnostics/doctor-report.ts";
 import { REPO } from "../features/diagnostics/repo.ts";
-import { configureLaunchd } from "../infra/setup/launchd.boundary.ts";
+import {
+  configureLaunchd,
+  readLaunchd,
+} from "../infra/setup/launchd.boundary.ts";
 import {
   isAppRunning,
   openArguments,
@@ -33,16 +36,22 @@ const paths = {
   bun: process.execPath,
 };
 
+const current = mode === "standard" ? null : await readLaunchd();
+if (current?.isErr()) {
+  process.stderr.write(`harnexus: ${current.error.message}\n`);
+  process.exit(1);
+}
+
+const kept = current?.isOk() ? current.value.env : {};
+const environment = registeredEnvironment(paths, process.env, kept);
+
 const problem = await findProblem();
 if (problem !== null) {
   process.stderr.write(`harnexus: ${problem}\n`);
   process.exit(1);
 }
 
-const registered = await configureLaunchd(
-  registeredEnvironment(paths, process.env),
-  mode === "standard",
-);
+const registered = await configureLaunchd(environment, mode === "standard");
 if (registered.isErr()) {
   process.stderr.write(
     `harnexus: ${registered.error.message}; session setup may be incomplete, rerun open-app\n`,
@@ -52,7 +61,7 @@ if (registered.isErr()) {
 
 const opened = await readCommandOutput(
   "/usr/bin/open",
-  openArguments(paths, mode, process.env),
+  openArguments(paths, mode, process.env, kept),
 );
 if (opened.isErr()) {
   process.stderr.write(`harnexus: cannot open ${APP}\n`);
@@ -87,7 +96,7 @@ async function findProblem() {
   if (state.isErr()) return state.error.message;
   const log = loadLogPath(process.env, state.value);
   if (log.isErr()) return log.error.message;
-  const socket = loadCallSocketPath(process.env, state.value);
+  const socket = loadCallSocketPath(environment, state.value);
   if (socket.isErr()) return socket.error.message;
   if (!isAbsolute(paths.codex)) {
     return "HARNEXUS_CODEX_PATH must be an absolute path";
