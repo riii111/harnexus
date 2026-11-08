@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { enterAsBridge } from "../infra/state-locks.ts";
+import { acquireLock, enterAsBridge, LOCK_DEPS } from "../infra/state-locks.ts";
 import { runHarnexus } from "./harnexus-command.ts";
 
 let dir: string;
@@ -131,16 +131,39 @@ describe("harnexus state", () => {
     },
   );
 
-  test("never lets a bridge start and an import go on at once", async () => {
-    for (let round = 0; round < 20; round++) {
-      const [imported, bridge] = await Promise.all([
-        state(["import-cloud-links"], exchange([`session_${round}`, null])),
-        enterAsBridge(dir),
-      ]);
+  test("refuses a bridge while an import holds the state", async () => {
+    const fileLock = (
+      await acquireLock(join(dir, "cloud-links.json.lock"), 0)
+    ).unwrap();
+    const waiting = deferred();
+    const resume = deferred();
+    const deps = {
+      env: { HARNEXUS_STATE_PATH: join(dir, "threads.json") },
+      cwd: dir,
+      readStdin: async () => exchange(["session_01A", null]),
+      locks: {
+        ...LOCK_DEPS,
+        sleep: async () => {
+          waiting.resolve();
+          await resume.promise;
+        },
+      },
+    };
+    const importing = runHarnexus(["state", "import-cloud-links"], deps);
 
-      expect(imported.code === 0 && bridge.isOk()).toBe(false);
-      if (bridge.isOk()) await rm(bridge.value.presence);
+    try {
+      await waiting.promise;
+      const bridge = await enterAsBridge(dir);
+
+      expect(bridge.isErr() && bridge.error._tag).toBe("MaintenanceRunning");
+    } finally {
+      await fileLock.release();
+      resume.resolve();
     }
+
+    const imported = await importing;
+    expect(imported.code).toBe(0);
+    expect(JSON.parse(imported.stdout).result.imported).toBe(1);
   });
 
   test.each([
@@ -152,3 +175,11 @@ describe("harnexus state", () => {
     expect(refused.code).toBe(5);
   });
 });
+
+const deferred = () => {
+  let resolve = () => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+};
