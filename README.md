@@ -4,9 +4,9 @@ Use Claude in the Codex App.
 
 Lightweight and secure, with few dependencies.
 
-Built on Anthropic's official Claude Agent SDK, following [Anthropic's authentication requirements](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use). Sign-in is handled by Claude Code.
-
 <img width="445" height="511" alt="Claude chat in the Codex App" src="https://github.com/user-attachments/assets/c5424fe5-50a6-48b9-bc43-98259c427658" />
+
+Built on Anthropic's official Claude Agent SDK, following [Anthropic's authentication requirements](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use). Sign-in is handled by Claude Code.
 
 ## Get started
 
