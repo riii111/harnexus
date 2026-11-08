@@ -6,13 +6,14 @@ Lightweight and secure, with few dependencies.
 
 <img width="445" height="511" alt="Claude chat in the Codex App" src="https://github.com/user-attachments/assets/c5424fe5-50a6-48b9-bc43-98259c427658" />
 
-Built on Anthropic's official Claude Agent SDK, following [Anthropic's authentication requirements](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use). Sign-in is handled by Claude Code.
+Built on Anthropic's official Claude Agent SDK. Sign-in is handled by Claude Code.
 
 ## Get started
 
 - Experimental; macOS only.
 - ChatGPT app at `/Applications/ChatGPT.app` (override with `HARNEXUS_APP_PATH`).
 - Claude Code already signed in.
+- API keys and cloud provider accounts are not supported.
 - Anthropic [currently counts Agent SDK and third-party app usage toward subscription limits](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
 
 ```sh
