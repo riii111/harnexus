@@ -49,7 +49,7 @@ HARNEXUS_PERMISSION_MODE=default bun run open-app
 ```
 
 Launch options are saved for future app launches.
-Running `bun run open-app` again without an option clears that option, except the call socket described under Claude Cloud sessions.
+Running `bun run open-app` again without an option clears that option.
 
 ## In-app browser
 
@@ -99,7 +99,7 @@ harnexus cloud --link https://claude.ai/code/session_01AbC...
 harnexus cloud --prompt-file request.md
 ```
 
-Later runs of `bun run open-app` keep the socket open; to close it, quit the app and run `HARNEXUS_CALL_SOCKET=off bun run open-app`.
+Include `HARNEXUS_CALL_SOCKET=on` each time you run `bun run open-app`, such as after an update; without it the socket closes.
 Run the command from a chat in the app. It opens a new chat for the session, or answers with the chat already showing it; it never switches the chat it runs in.
 It remembers the chat it opened for each session, so a session never gets a second one.
 

@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  isAppRunning,
-  openArguments,
-  registeredEnvironment,
-} from "./open-app-plan.ts";
+import { isAppRunning, openArguments } from "./open-app-plan.ts";
 
 describe("openArguments", () => {
   test("opens the app with the launcher as its Codex CLI and the paths the launcher needs", () => {
@@ -45,63 +41,12 @@ describe("openArguments", () => {
     expect(args.join(" ")).not.toContain("sk-fixture");
   });
 
-  test("passes the call socket registered earlier to the app", () => {
-    const args = openArguments(
-      PATHS,
-      "harnexus",
-      {},
-      { HARNEXUS_CALL_SOCKET: "on" },
-    );
-
-    expect(args.slice(-2)).toEqual(["--env", "HARNEXUS_CALL_SOCKET=on"]);
-  });
-
   test("opens the app as it normally runs in standard mode", () => {
     const args = openArguments(PATHS, "standard", {
       HARNEXUS_LOG_PATH: "/tmp/harnexus.log",
     });
 
     expect(args).toEqual(["-a", "/Applications/ChatGPT.app"]);
-  });
-});
-
-describe("registeredEnvironment", () => {
-  test.each([
-    { name: "unset", shell: {} },
-    { name: "empty", shell: { HARNEXUS_CALL_SOCKET: "" } },
-  ])(
-    "keeps a call socket registered earlier when the shell leaves it $name",
-    ({ shell }) => {
-      const env = registeredEnvironment(PATHS, shell, {
-        HARNEXUS_CALL_SOCKET: "on",
-      });
-
-      expect(env.HARNEXUS_CALL_SOCKET).toBe("on");
-    },
-  );
-
-  test("lets the shell close a call socket registered earlier", () => {
-    const env = registeredEnvironment(
-      PATHS,
-      { HARNEXUS_CALL_SOCKET: "off" },
-      { HARNEXUS_CALL_SOCKET: "/run/h/call.sock" },
-    );
-
-    expect(env.HARNEXUS_CALL_SOCKET).toBe("off");
-  });
-
-  test("clears every other option the shell leaves out", () => {
-    const env = registeredEnvironment(
-      PATHS,
-      {},
-      { HARNEXUS_PERMISSION_MODE: "default", HARNEXUS_LOG_PATH: "/tmp/h.log" },
-    );
-
-    expect(env).toEqual({
-      CODEX_CLI_PATH: "/work/harnexus/bin/harnexus-codex",
-      HARNEXUS_CODEX_PATH: "/Applications/ChatGPT.app/codex",
-      HARNEXUS_BUN_PATH: "/usr/local/bin/bun",
-    });
   });
 });
 
