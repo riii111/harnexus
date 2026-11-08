@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 
 import {
   loadCallerSocket,
-  loadCallerSocketPath,
   loadCodexHome,
   loadCallSocketPath,
   loadLogPath,
@@ -159,7 +158,7 @@ describe("loadCallSocketPath", () => {
 
 const STATE = "/state/harnexus/threads.json";
 
-describe("loadCallerSocketPath", () => {
+describe("loadCallerSocket", () => {
   test.each([
     {
       name: "an absolute socket path",
@@ -180,32 +179,24 @@ describe("loadCallerSocketPath", () => {
       expected: "/home/u/.local/state/harnexus/call.sock",
     },
   ])("finds the socket for $name", ({ env, expected }) => {
-    const path = loadCallerSocketPath(env, () => "/home/u");
+    const path = loadCallerSocket(env, () => "/home/u");
 
     expect(path.isOk() && path.value).toBe(expected);
   });
 
-  test("rejects a relative path as the bridge does", () => {
-    const path = loadCallerSocketPath(
-      { HARNEXUS_CALL_SOCKET: "h.sock" },
-      () => "/home/u",
-    );
-
-    expect(path.isErr() && path.error._tag).toBe("CallSocketPathNotAbsolute");
-  });
-});
-
-describe("loadCallerSocket", () => {
   test("is null when the socket is off", () => {
     expect(
       loadCallerSocket({ HARNEXUS_CALL_SOCKET: "off" }).unwrap(),
     ).toBeNull();
   });
 
-  test("is the default socket beside the thread state otherwise", () => {
-    expect(loadCallerSocket({}, () => "/home/u").unwrap()).toBe(
-      "/home/u/.local/state/harnexus/call.sock",
+  test("rejects a relative path as the bridge does", () => {
+    const path = loadCallerSocket(
+      { HARNEXUS_CALL_SOCKET: "h.sock" },
+      () => "/home/u",
     );
+
+    expect(path.isErr() && path.error._tag).toBe("CallSocketPathNotAbsolute");
   });
 });
 

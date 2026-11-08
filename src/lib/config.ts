@@ -149,7 +149,7 @@ export const loadCallSocketPath = (
   });
 
 // Where a caller finds the bridge's call socket.
-export const loadCallerSocketPath = (
+const loadCallerSocketPath = (
   env: Record<string, string | undefined>,
   home: () => string = homedir,
 ) =>

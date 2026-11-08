@@ -8,7 +8,6 @@ import {
   delegationSource,
   type FirstTurn,
   firstTurnRefusal,
-  refusalOf,
 } from "./delegations.ts";
 
 describe("createDelegationWatch", () => {
@@ -492,8 +491,10 @@ test.each([
     actual: { model: "gpt-other", effort: null },
     text: "asked for model gpt-other instead of gpt-worker and did not say which effort (expected low)",
   },
-])("refusalOf names $name", ({ actual, text }) => {
-  expect(refusalOf(EXPECTED, actual)).toBe(text);
+])("a refused first turn names $name", ({ actual, text }) => {
+  const refusal = firstTurnRefusal(firstTurn({ actual, refused: true }));
+
+  expect(refusal?.kind === "settings" && refusal.difference).toBe(text);
 });
 
 const NAMING_WORKER = { structuredContent: { threadId: "th-worker" } };
