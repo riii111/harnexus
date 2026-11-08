@@ -8,8 +8,10 @@ Claude chats support image attachments, side chats, rewind, and resuming convers
 
 <img width="445" height="511" alt="Claude chat in the Codex App" src="https://github.com/user-attachments/assets/c5424fe5-50a6-48b9-bc43-98259c427658" />
 
-Experimental. macOS only. Requires a Claude account signed in through Claude Code.
-Usage counts toward your Claude plan under [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance).
+Experimental. macOS only.
+Claude runs through Anthropic's official Claude Agent SDK on your own Claude Code login; harnexus never reads or stores your credentials.
+Usage counts toward your own Claude plan under [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance).
+Anthropic explains how Agent SDK and third-party app usage counts toward your plan in [Use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
 API keys and cloud provider accounts are not supported.
 
 ## Get started
