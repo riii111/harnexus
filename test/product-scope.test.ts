@@ -8,7 +8,7 @@ const ROOT = join(import.meta.dir, "..");
 const SELF = relative(ROOT, import.meta.path);
 
 // Outside tools the product must not depend on, import, fetch or name.
-const OUTSIDE_TOOLS = ["taskctl", "pr-wake", "harnexus-task"];
+const OUTSIDE_TOOLS = ["harnexus-crew", "pr-wake"];
 
 // The personal workflow and its parsed review output, by the names they were shipped under.
 const PERSONAL_WORKFLOW = [
