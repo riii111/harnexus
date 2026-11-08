@@ -8,7 +8,7 @@
         "@anthropic-ai/claude-agent-sdk": "0.3.317",
         "@modelcontextprotocol/sdk": "1.30.1",
         "better-result": "3.0.1",
-        "zod": "4.4.3",
+        "zod": "4.6.7",
       },
       "devDependencies": {
         "@stylistic/eslint-plugin": "5.10.0",
@@ -21,7 +21,7 @@
     },
   },
   "overrides": {
-    "zod": "4.4.3",
+    "zod": "4.6.7",
   },
   "packages": {
     "@anthropic-ai/claude-agent-sdk": ["@anthropic-ai/claude-agent-sdk@0.3.317", "", { "optionalDependencies": { "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.317", "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.317", "@anthropic-ai/claude-agent-sdk-linux-arm64": "0.3.317", "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "0.3.317", "@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.317", "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "0.3.317", "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.317", "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.317" }, "peerDependencies": { "@anthropic-ai/sdk": ">=0.93.0", "@modelcontextprotocol/sdk": "^1.29.0", "zod": "^4.0.0" } }, "sha512-qoRB5svuBNXm5N5miBj3RS2JyA7daGcdOCopQIdJXMxaYREIvR7P1FFiFhSLwIjh61D9ir8f/8OFm5LyDJspEA=="],
@@ -516,7 +516,7 @@
 
     "yocto-queue": ["yocto-queue@0.1.0", "", {}, "sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q=="],
 
-    "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
+    "zod": ["zod@4.6.7", "", {}, "sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg=="],
 
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
 
