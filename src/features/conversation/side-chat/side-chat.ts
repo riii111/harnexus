@@ -237,7 +237,7 @@ export const createSideChats = ({
     }
   };
 
-  const keeps = () => saved.writable;
+  const keeps = () => saved.usable;
 
   const release = (threadId: string, ended: ThreadEnd) => {
     if (ended !== "deleted") return;
@@ -252,6 +252,11 @@ export const createSideChats = ({
     requested: string | undefined,
   ): Promise<Refusal | null> | null => {
     const sideChat = current(threadId);
+    // Which side chats were kept is unknown, so a message to a thread that might be one is not sent without what it was to hand over.
+    if (sideChat === undefined && !saved.usable && !isClaudeThread(threadId)) {
+      return Promise.resolve("side_chat_state_unknown");
+    }
+
     if (sideChat === undefined) return null;
     if (sideChat.stopped) return Promise.resolve("side_chat_stopped");
     const claude = runsOnClaude(threadId, requested ?? sideChat.choice);

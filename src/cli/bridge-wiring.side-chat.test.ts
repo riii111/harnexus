@@ -114,43 +114,67 @@ describe("connectClaudeThreads with a saved side chat of a Claude thread", () =>
     expect(JSON.parse(String(reopened)).result.model).toBe("gpt-fixture");
   });
 
-  test("takes no message in a side chat still named in a state file that cannot be read after a restart", async () => {
+  test.each([
+    { name: "text that is no JSON", content: "not json" },
+    { name: "a truncated record", content: '{"threadId":"th-side"' },
+  ])(
+    "takes no message in a side chat whose saved file holds $name after a restart",
+    async ({ content }) => {
+      const opening = await connect();
+      await opening.router.fromApp(SAVED_FORK);
+      await opening.router.fromServer(SIDE_CHAT_OPENED);
+      await until(async () => (await opening.saved()) === 1);
+      opening.closeAll();
+      await writeFile(
+        join(
+          sideChatsPath(dir),
+          `${Buffer.from("th-side").toString("hex")}.json`,
+        ),
+        content,
+      );
+
+      const restarted = await connect();
+      const refused = await restarted.router.fromApp(TURN_ON_CODEX);
+      restarted.closeAll();
+
+      expect(refused).toBeNull();
+      expect(restarted.injects).toEqual([]);
+      expect(restarted.sent).toContainEqual({
+        id: 10,
+        error: expect.objectContaining({
+          message: expect.stringContaining("could not confirm"),
+        }),
+      });
+    },
+  );
+
+  test("sends nothing to a thread that might be a side chat and opens none while the folder cannot be listed", async () => {
     const opening = await connect();
     await opening.router.fromApp(SAVED_FORK);
     await opening.router.fromServer(SIDE_CHAT_OPENED);
     await until(async () => (await opening.saved()) === 1);
     opening.closeAll();
-    await writeFile(
-      sideChatsPath(dir),
-      '{"version":1,"sideChats":[{"threadId":"th-side"',
-    );
+    await rm(sideChatsPath(dir), { recursive: true });
+    await writeFile(sideChatsPath(dir), "a file where the folder should be");
 
     const restarted = await connect();
-    const refused = await restarted.router.fromApp(TURN_ON_CODEX);
+    const sent = await restarted.router.fromApp(TURN_ON_CODEX);
+    const forked = await restarted.router.fromApp(SAVED_FORK);
     restarted.closeAll();
 
-    expect(refused).toBeNull();
+    expect(sent).toBeNull();
+    expect(forked).toBeNull();
     expect(restarted.injects).toEqual([]);
     expect(restarted.sent).toContainEqual({
       id: 10,
       error: expect.objectContaining({
-        message: expect.stringContaining("could not confirm"),
+        message: expect.stringContaining("cannot tell whether this thread"),
       }),
     });
-  });
-
-  test("does not open a side chat it could not restore while the state file cannot be read", async () => {
-    await writeFile(sideChatsPath(dir), "not json");
-
-    const bridge = await connect();
-    const refused = await bridge.router.fromApp(SAVED_FORK);
-    bridge.closeAll();
-
-    expect(refused).toBeNull();
-    expect(bridge.sent).toContainEqual({
+    expect(restarted.sent).toContainEqual({
       id: 9,
       error: expect.objectContaining({
-        message: expect.stringContaining("cannot be read"),
+        message: expect.stringContaining("was not opened"),
       }),
     });
   });
@@ -183,9 +207,7 @@ const connect = async ({
 }: { inject?: ServerRequest } = {}) => {
   const store = (await openThreadStore(join(dir, "threads.json"))).unwrap();
   const opened = await openSideChatStore(sideChatsPath(dir));
-  const sideChats = opened.isOk()
-    ? opened.value
-    : unreadableSideChats(opened.error.threadIds);
+  const sideChats = opened.isOk() ? opened.value : unreadableSideChats();
   if (store.get("th-main") === undefined) {
     await store.register({
       threadId: "th-main",

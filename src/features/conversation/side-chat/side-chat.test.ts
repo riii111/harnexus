@@ -516,7 +516,7 @@ describe("createSideChats.remember on a side chat the server keeps", () => {
 
   test("tells whether the file that keeps side chats can be used", () => {
     const readable = setup().sideChats;
-    const unreadable = setup({ saved: unreadableSideChats([]) }).sideChats;
+    const unreadable = setup({ saved: unreadableSideChats() }).sideChats;
 
     expect(readable.keeps()).toBe(true);
     expect(unreadable.keeps()).toBe(false);
@@ -745,15 +745,18 @@ describe("createSideChats restoring saved side chats", () => {
     },
   );
 
-  test("stops the side chats still named in a file that cannot be read", async () => {
-    const saved = unreadableSideChats(["th-side"]);
-    const { sideChats, injects, restored } = setup({ saved, claudeSides: [] });
+  test("sends no message to a thread that might be a side chat when the folder cannot be listed", async () => {
+    const saved = unreadableSideChats();
+    const { sideChats, injects } = setup({
+      saved,
+      claudeSides: ["th-claude"],
+    });
 
-    const first = await sideChats.beforeTurn("th-side", "gpt-fixture");
+    const unknown = await sideChats.beforeTurn("th-side", "gpt-fixture");
+    const claude = sideChats.beforeTurn("th-claude", "claude-fixture");
 
-    expect(first).toBe("side_chat_stopped");
-    expect(sideChats.isStopped("th-side")).toBe(true);
-    expect(restored).toEqual([]);
+    expect(unknown).toBe("side_chat_state_unknown");
+    expect(claude).toBeNull();
     expect(injects).toEqual([]);
   });
 
@@ -911,7 +914,7 @@ const savedWith = async (record: SavedSideChat) => {
 
 const failingStore = (): SideChatStore => ({
   all: () => [],
-  writable: true,
+  usable: true,
   save: async () => Result.err(NOT_SAVED),
   remove: async () => Result.err(NOT_SAVED),
 });

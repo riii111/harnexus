@@ -230,7 +230,7 @@ async function withClaude(relay: {
     return plain;
   }
 
-  // The file is left as it is, and the side chats still named in it take no more messages, since what they were to hand over is unknown.
+  // Which side chats were kept is unknown, so the router sends nothing to a thread that might be one.
   if (sideChatStore.isErr()) {
     logger.log({ event: "side_chat_state_unavailable" });
   }
@@ -298,7 +298,7 @@ async function withClaude(relay: {
     store: store.value,
     sideChatStore: sideChatStore.isOk()
       ? sideChatStore.value
-      : unreadableSideChats(sideChatStore.error.threadIds),
+      : unreadableSideChats(),
     permissionMode: permissionMode.value,
     request: serverCalls.request,
     startSession: (session, signal) =>
