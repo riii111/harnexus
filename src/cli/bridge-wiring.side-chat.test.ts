@@ -160,10 +160,14 @@ describe("connectClaudeThreads with a saved side chat of a Claude thread", () =>
     const restarted = await connect();
     const sent = await restarted.router.fromApp(TURN_ON_CODEX);
     const forked = await restarted.router.fromApp(SAVED_FORK);
+    const pickedClaude = await restarted.router.fromApp(PICK_CLAUDE);
+    await restarted.router.fromApp(TURN_ON_CLAUDE);
     restarted.closeAll();
 
     expect(sent).toBeNull();
     expect(forked).toBeNull();
+    expect(pickedClaude).toBeNull();
+    expect(restarted.sessions).toEqual([]);
     expect(restarted.injects).toEqual([]);
     expect(restarted.sent).toContainEqual({
       id: 10,
@@ -320,6 +324,12 @@ const PICK_CODEX = line({
   id: 12,
   method: "thread/settings/update",
   params: { threadId: "th-side", model: "gpt-fixture" },
+});
+
+const PICK_CLAUDE = line({
+  id: 14,
+  method: "thread/settings/update",
+  params: { threadId: "th-side", model: MODEL, cwd: "/fixture/work" },
 });
 
 const TURN_ON_CODEX = line({

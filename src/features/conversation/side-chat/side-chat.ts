@@ -280,6 +280,16 @@ export const createSideChats = ({
     requested: string | undefined,
   ): Refusal | "pass" | null => {
     const sideChat = current(threadId);
+    // Picking Claude would make a thread that might be a side chat a Claude thread, which no longer reads as unknown.
+    if (
+      sideChat === undefined &&
+      !saved.usable &&
+      !isClaudeThread(threadId) &&
+      isClaudeModel(requested)
+    ) {
+      return "side_chat_state_unknown";
+    }
+
     if (sideChat === undefined) return null;
     if (sideChat.stopped) return "side_chat_stopped";
     if (requested === undefined) return null;

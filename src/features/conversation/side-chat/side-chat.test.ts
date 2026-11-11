@@ -754,9 +754,18 @@ describe("createSideChats restoring saved side chats", () => {
 
     const unknown = await sideChats.beforeTurn("th-side", "gpt-fixture");
     const claude = sideChats.beforeTurn("th-claude", "claude-fixture");
+    const picked = sideChats.beforeSettings("th-side", "claude-fixture");
+    const pickedCodex = sideChats.beforeSettings("th-side", "gpt-fixture");
+    const pickedOnClaude = sideChats.beforeSettings(
+      "th-claude",
+      "claude-fixture",
+    );
 
     expect(unknown).toBe("side_chat_state_unknown");
     expect(claude).toBeNull();
+    expect(picked).toBe("side_chat_state_unknown");
+    expect(pickedCodex).toBeNull();
+    expect(pickedOnClaude).toBeNull();
     expect(injects).toEqual([]);
   });
 
