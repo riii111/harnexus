@@ -31,11 +31,12 @@ type ThreadOpen = {
   createdModel: string | null;
   forkOf: string | null;
   history: ReturnType<History["load"]> | null;
+  shownModel: string | null;
   params: Record<string, unknown>;
   sideChat: Opened | null;
 };
 
-// createdModel is the Claude model a thread/start asked for, which the server never sees; history is the Claude thread's record being read while the server opens the thread; sideChat is where the main conversation stood when a side chat of a Claude thread opened.
+// createdModel is the Claude model a thread/start asked for, which the server never sees; history is the Claude thread's record being read while the server opens the thread; shownModel is the Codex model a reopened side chat was switched to, which the response shows in place of the Claude thread's; sideChat is where the main conversation stood when a side chat of a Claude thread opened.
 export type Pending =
   | { kind: "initialize" }
   | { kind: "modelList" }
@@ -75,7 +76,7 @@ type Deps = {
     ThreadValues,
     "adopt" | "threadOf" | "modeOf" | "effortOf" | "consumePick"
   >;
-  sideChats: Pick<SideChats, "remember" | "showsCodex">;
+  sideChats: Pick<SideChats, "remember" | "release" | "showsCodex">;
   subagents: Pick<SubagentRequests, "withChildren" | "remember">;
   compatibility: ReturnType<typeof createCompatibility>;
   claudeModels: ModelCatalog["models"];
@@ -92,6 +93,7 @@ export const openingThread = (
   createdModel: null,
   forkOf: null,
   history: null,
+  shownModel: null,
   sideChat: null,
   ...opened,
   params,
@@ -137,6 +139,7 @@ export const createServerResponses = ({
         return rewriteThreadOpen(line, message, result, request);
       case "threadEnd":
         turns.releaseThread(request.threadId, request.ended);
+        sideChats.release(request.threadId, request.ended);
         return line;
     }
   };
@@ -224,6 +227,19 @@ export const createServerResponses = ({
   ): Buffer | Promise<Buffer> => {
     const result = isObject(message.result) ? message.result : {};
     const thread = isObject(result.thread) ? result.thread : {};
+    if (request.shownModel !== null) {
+      return encode({
+        ...message,
+        result: {
+          ...result,
+          model: request.shownModel,
+          ...("model" in thread && {
+            thread: { ...thread, model: request.shownModel },
+          }),
+        },
+      });
+    }
+
     const model = threads.threadOf(threadId)?.model;
     if (model === undefined) return line;
     const reasoningEffort = shownEffort(threads.effortOf(threadId));

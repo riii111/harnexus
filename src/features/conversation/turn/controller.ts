@@ -961,6 +961,14 @@ export const createTurnController = <Tag extends string>({
       threads.adoptFork(threadId, thread, sourceId);
       return runtime.noteFork(threadId);
     },
+    restoreFork: (
+      threadId: string,
+      thread: Thread,
+      source: { sessionId: string; at: string } | null,
+    ) => {
+      threads.restoreFork(threadId, thread, source);
+      return runtime.noteFork(threadId);
+    },
     claudeBegun: (threadId: string) =>
       // A saved thread, a Claude conversation or a turn on its way means Claude already holds part of the thread.
       store.get(threadId) !== undefined ||

@@ -45,6 +45,11 @@ import {
   readExternalConversations,
   updateExternalConversations,
 } from "../infra/external-conversations.ts";
+import {
+  openSideChatStore,
+  sideChatsPath,
+  unreadableSideChats,
+} from "../infra/side-chat-store.ts";
 import { enterAsBridge } from "../infra/state-locks.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import {
@@ -205,8 +210,9 @@ async function withClaude(relay: {
   // A bridge an offline operation cannot see writes no state, so it relays everything as it would without its thread store.
   if (!presence) return plain;
 
-  const [store, settings] = await Promise.all([
+  const [store, sideChatStore, settings] = await Promise.all([
     openThreadStore(statePath.value),
+    openSideChatStore(sideChatsPath(dirname(statePath.value))),
     loadConnectionSettings(process.env),
     sweepCloudLogs(join(dirname(statePath.value), CLOUD_COPY_FOLDER)),
   ]);
@@ -222,6 +228,11 @@ async function withClaude(relay: {
   if (store.isErr()) {
     logger.log({ event: "claude_unavailable", reason: store.error._tag });
     return plain;
+  }
+
+  // Which side chats were kept is unknown, so the router sends nothing to a thread that might be one.
+  if (sideChatStore.isErr()) {
+    logger.log({ event: "side_chat_state_unavailable" });
   }
 
   const adapter = settings.isOk()
@@ -285,6 +296,9 @@ async function withClaude(relay: {
   let callSocketOpen = false;
   const { router, closeAll, callGateway } = connectClaudeThreads({
     store: store.value,
+    sideChatStore: sideChatStore.isOk()
+      ? sideChatStore.value
+      : unreadableSideChats(),
     permissionMode: permissionMode.value,
     request: serverCalls.request,
     startSession: (session, signal) =>
