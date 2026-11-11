@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,7 +19,11 @@ import {
 import { fakeClaude } from "../infra/claude/testing/fake-claude.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import { createMemoryCronRecord } from "../infra/codex/testing/cron-record.ts";
-import { openSideChatStore, sideChatsPath } from "../infra/side-chat-store.ts";
+import {
+  openSideChatStore,
+  sideChatsPath,
+  unreadableSideChats,
+} from "../infra/side-chat-store.ts";
 import { createMemoryCloudLinks } from "../infra/testing/cloud-links.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
 import { connectClaudeThreads } from "./bridge-wiring.ts";
@@ -79,6 +83,78 @@ describe("connectClaudeThreads with a saved side chat of a Claude thread", () =>
     });
   });
 
+  test("reopens a side chat picked on Codex before a restart on that model after it", async () => {
+    const opening = await connect();
+    await opening.router.fromApp(SAVED_FORK);
+    await opening.router.fromServer(SIDE_CHAT_OPENED);
+    await opening.router.fromApp(PICK_CODEX);
+    await until(async () => (await opening.savedChoice()) === "gpt-fixture");
+    opening.closeAll();
+
+    const restarted = await connect();
+    const resume = line({
+      id: 13,
+      method: "thread/resume",
+      params: { threadId: "th-side" },
+    });
+    const forwarded = await restarted.router.fromApp(resume);
+    const reopened = await restarted.router.fromServer(
+      line({
+        id: 13,
+        result: {
+          thread: { id: "th-side", model: MODEL, cwd: "/fixture/work" },
+          model: MODEL,
+          cwd: "/fixture/work",
+        },
+      }),
+    );
+    restarted.closeAll();
+
+    expect(forwarded).toBe(resume);
+    expect(JSON.parse(String(reopened)).result.model).toBe("gpt-fixture");
+  });
+
+  test("takes no message in a side chat still named in a state file that cannot be read after a restart", async () => {
+    const opening = await connect();
+    await opening.router.fromApp(SAVED_FORK);
+    await opening.router.fromServer(SIDE_CHAT_OPENED);
+    await until(async () => (await opening.saved()) === 1);
+    opening.closeAll();
+    await writeFile(
+      sideChatsPath(dir),
+      '{"version":1,"sideChats":[{"threadId":"th-side"',
+    );
+
+    const restarted = await connect();
+    const refused = await restarted.router.fromApp(TURN_ON_CODEX);
+    restarted.closeAll();
+
+    expect(refused).toBeNull();
+    expect(restarted.injects).toEqual([]);
+    expect(restarted.sent).toContainEqual({
+      id: 10,
+      error: expect.objectContaining({
+        message: expect.stringContaining("could not confirm"),
+      }),
+    });
+  });
+
+  test("does not open a side chat it could not restore while the state file cannot be read", async () => {
+    await writeFile(sideChatsPath(dir), "not json");
+
+    const bridge = await connect();
+    const refused = await bridge.router.fromApp(SAVED_FORK);
+    bridge.closeAll();
+
+    expect(refused).toBeNull();
+    expect(bridge.sent).toContainEqual({
+      id: 9,
+      error: expect.objectContaining({
+        message: expect.stringContaining("cannot be read"),
+      }),
+    });
+  });
+
   test("keeps a side chat that stopped on an unknown hand-over stopped after a restart", async () => {
     const opening = await connect({ inject: unanswered() });
     await opening.router.fromApp(SAVED_FORK);
@@ -106,7 +182,10 @@ const connect = async ({
   inject = async () => Result.ok({}),
 }: { inject?: ServerRequest } = {}) => {
   const store = (await openThreadStore(join(dir, "threads.json"))).unwrap();
-  const sideChats = (await openSideChatStore(sideChatsPath(dir))).unwrap();
+  const opened = await openSideChatStore(sideChatsPath(dir));
+  const sideChats = opened.isOk()
+    ? opened.value
+    : unreadableSideChats(opened.error.threadIds);
   if (store.get("th-main") === undefined) {
     await store.register({
       threadId: "th-main",
@@ -159,6 +238,8 @@ const connect = async ({
     injects,
     sent,
     sessions,
+    savedChoice: async () =>
+      (await openSideChatStore(sideChatsPath(dir))).unwrap().all()[0]?.choice,
     saved: async () =>
       (await openSideChatStore(sideChatsPath(dir))).unwrap().all().length,
   };
@@ -211,6 +292,12 @@ const SIDE_CHAT_OPENED = line({
     model: "gpt-fixture",
     cwd: "/fixture/work",
   },
+});
+
+const PICK_CODEX = line({
+  id: 12,
+  method: "thread/settings/update",
+  params: { threadId: "th-side", model: "gpt-fixture" },
 });
 
 const TURN_ON_CODEX = line({

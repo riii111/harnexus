@@ -5,6 +5,7 @@ import type { readClaudeSession } from "../../../infra/claude/session.ts";
 import type { readLastRecordUuid } from "../../../infra/claude/transcripts.ts";
 import type { ServerRequest } from "../../../infra/codex/server-requests.ts";
 import type {
+  NotSavedReason,
   SavedSideChat,
   SideChatStore,
 } from "../../../infra/side-chat-store.ts";
@@ -49,7 +50,7 @@ type SideChat = {
 
 export type SideChatEvent = {
   event: "side_chat_not_saved";
-  error: "FileWriteFailed" | "FileSyncFailed";
+  error: NotSavedReason;
 };
 
 class MainThreadUnreadable extends TaggedError("MainThreadUnreadable")<{
@@ -186,7 +187,7 @@ export const createSideChats = ({
     const record =
       kept === null
         ? null
-        : savedOf(threadId, parent, instructions, kept.claudeThread);
+        : savedOf(threadId, parent, instructions, model, kept.claudeThread);
     sideChats.set(threadId, {
       parent,
       choice: model,
@@ -227,7 +228,7 @@ export const createSideChats = ({
           point === "unread"
             ? { agent: "Claude", unread: true }
             : { agent: "Claude", point },
-        choice: undefined,
+        choice: record.choice ?? undefined,
         ranOnCodex: false,
         // Without where the main conversation stood, a restored side chat could not tell what to hand over.
         stopped: record.stopped || point === "unread",
@@ -235,6 +236,8 @@ export const createSideChats = ({
       });
     }
   };
+
+  const keeps = () => saved.writable;
 
   const release = (threadId: string, ended: ThreadEnd) => {
     if (ended !== "deleted") return;
@@ -283,6 +286,11 @@ export const createSideChats = ({
 
     // A model picked before the first message only marks the choice, so picking the other agent again leaves the side chat as it was.
     sideChat.choice = requested;
+    if (sideChat.saved !== null && sideChat.saved.choice !== requested) {
+      sideChat.saved = { ...sideChat.saved, choice: requested };
+      void keep(saved.save(sideChat.saved));
+    }
+
     if (claude || !isClaudeThread(threadId)) return null;
     // A Codex main thread's side chat taken up by Claude before its first message goes back to the server's thread.
     if (sideChat.parent.agent === "Codex") dropFork(threadId);
@@ -292,11 +300,14 @@ export const createSideChats = ({
   const isStopped = (threadId: string) =>
     sideChats.get(threadId)?.stopped === true;
 
-  // Whether a Claude side chat was switched to a Codex model before its first message, which the server's answers then report.
-  const showsCodex = (threadId: string) => {
+  // The Codex model a Claude side chat was switched to before its first message, which the server's answers then report.
+  const codexChoiceOf = (threadId: string): string | undefined => {
     const choice = current(threadId)?.choice;
-    return choice !== undefined && !isClaudeModel(choice);
+    return choice !== undefined && !isClaudeModel(choice) ? choice : undefined;
   };
+
+  const showsCodex = (threadId: string) =>
+    codexChoiceOf(threadId) !== undefined;
 
   const current = (threadId: string) => {
     const sideChat = sideChats.get(threadId);
@@ -360,7 +371,7 @@ export const createSideChats = ({
     if (result.isErr()) {
       log({
         event: "side_chat_not_saved",
-        error: result.error.cause._tag,
+        error: result.error.reason,
       });
     }
 
@@ -386,10 +397,12 @@ export const createSideChats = ({
     pointOf,
     referenceOf,
     remember,
+    keeps,
     release,
     beforeTurn,
     beforeSettings,
     isStopped,
+    codexChoiceOf,
     showsCodex,
   };
 };
@@ -401,6 +414,7 @@ const savedOf = (
   threadId: string,
   parent: Parent,
   instructions: string | null,
+  choice: string | undefined,
   claude: Thread | null,
 ): SavedSideChat | null => {
   if (parent.agent !== "Claude") return null;
@@ -409,6 +423,7 @@ const savedOf = (
     claude,
     point: "unread" in parent ? "unread" : parent.point,
     instructions,
+    choice: choice ?? null,
     stopped: false,
   };
 };

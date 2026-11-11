@@ -7,6 +7,7 @@ import {
   openSideChatStore,
   type SavedSideChat,
   sideChatsPath,
+  unreadableSideChats,
 } from "./side-chat-store.ts";
 
 let dir: string;
@@ -50,15 +51,38 @@ describe("openSideChatStore", () => {
     expect(reopened.all()).toEqual([{ ...ON_CLAUDE, stopped: true }]);
   });
 
+  test("keeps the side chats other stores sharing the file saved", async () => {
+    const first = await openStore();
+    const second = await openStore();
+
+    await first.save(ON_CLAUDE);
+    await second.save(ON_CODEX);
+    await first.save({ ...ON_CLAUDE, stopped: true });
+    await second.remove("th-codex");
+    const reopened = await openStore();
+    await second.save(ON_CODEX);
+
+    expect(reopened.all()).toEqual([{ ...ON_CLAUDE, stopped: true }]);
+    expect((await openStore()).all().map(({ threadId }) => threadId)).toEqual([
+      "th-claude-side",
+      "th-codex",
+    ]);
+  });
+
   test.each([
-    { name: "text that is no JSON", content: "not json" },
-    { name: "another version", content: '{"version":2,"sideChats":[]}' },
+    { name: "text that is no JSON", content: "not json", threadIds: [] },
     {
-      name: "a side chat with an empty thread id",
+      name: "another version",
+      content: '{"version":2,"sideChats":[{"threadId":"th-old"}]}',
+      threadIds: ["th-old"],
+    },
+    {
+      name: "a side chat with an empty model",
       content: JSON.stringify({
         version: 1,
-        sideChats: [{ ...ON_CLAUDE, threadId: "" }],
+        sideChats: [{ ...ON_CLAUDE, claude: { model: "", cwd: "/w" } }],
       }),
+      threadIds: ["th-claude-side"],
     },
     {
       name: "a side chat with a field it does not know",
@@ -66,6 +90,7 @@ describe("openSideChatStore", () => {
         version: 1,
         sideChats: [{ ...ON_CLAUDE, extra: true }],
       }),
+      threadIds: ["th-claude-side"],
     },
     {
       name: "one thread twice",
@@ -73,10 +98,11 @@ describe("openSideChatStore", () => {
         version: 1,
         sideChats: [ON_CLAUDE, ON_CLAUDE],
       }),
+      threadIds: ["th-claude-side"],
     },
   ])(
-    "refuses a file holding $name and leaves it as it is",
-    async ({ content }) => {
+    "refuses a file holding $name, names its readable threads and leaves it as it is",
+    async ({ content, threadIds }) => {
       await writeFile(path, content);
 
       const opened = await openSideChatStore(path);
@@ -84,6 +110,7 @@ describe("openSideChatStore", () => {
       expect(opened.isErr() && opened.error._tag).toBe(
         "SideChatStateUnreadable",
       );
+      expect(opened.isErr() && opened.error.threadIds).toEqual(threadIds);
       expect(await readFile(path, "utf8")).toBe(content);
     },
   );
@@ -97,14 +124,45 @@ describe("openSideChatStore", () => {
     expect(written).toEqual({ version: 1, sideChats: [ON_CLAUDE] });
   });
 
-  test("keeps a change in memory and reports it when its write fails", async () => {
+  test("reports a failed write and holds nothing from it", async () => {
     const opened = await openSideChatStore(join(dir, "missing", "file.json"));
     const store = opened.isOk() ? opened.value : expect.unreachable();
 
     const saved = await store.save(ON_CLAUDE);
 
     expect(saved.isErr() && saved.error._tag).toBe("SideChatNotSaved");
-    expect(store.all()).toEqual([ON_CLAUDE]);
+    expect(store.all()).toEqual([]);
+  });
+
+  test("saves nothing over a file that became unreadable after it was opened", async () => {
+    const store = await openStore();
+    await writeFile(path, "not json");
+
+    const saved = await store.save(ON_CLAUDE);
+
+    expect(saved.isErr() && saved.error.reason).toBe("SideChatStateUnreadable");
+    expect(await readFile(path, "utf8")).toBe("not json");
+  });
+});
+
+describe("unreadableSideChats", () => {
+  test("names each thread as a stopped side chat and saves nothing", async () => {
+    const store = unreadableSideChats(["th-a"]);
+
+    const saved = await store.save(ON_CODEX);
+
+    expect(store.all()).toEqual([
+      {
+        threadId: "th-a",
+        claude: null,
+        point: "unread",
+        instructions: null,
+        choice: null,
+        stopped: true,
+      },
+    ]);
+    expect(store.writable).toBe(false);
+    expect(saved.isErr() && saved.error.reason).toBe("SideChatStateUnreadable");
   });
 });
 
@@ -123,6 +181,7 @@ const ON_CLAUDE: SavedSideChat = {
     cwd: "/work/tree",
   },
   instructions: "You are in a side conversation.",
+  choice: "claude-opus-5-5",
   stopped: false,
 };
 
@@ -131,5 +190,6 @@ const ON_CODEX: SavedSideChat = {
   claude: null,
   point: null,
   instructions: null,
+  choice: null,
   stopped: false,
 };

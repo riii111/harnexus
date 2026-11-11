@@ -48,7 +48,7 @@ import {
 import {
   openSideChatStore,
   sideChatsPath,
-  unsavedSideChats,
+  unreadableSideChats,
 } from "../infra/side-chat-store.ts";
 import { enterAsBridge } from "../infra/state-locks.ts";
 import { openThreadStore } from "../infra/thread-store.ts";
@@ -230,7 +230,7 @@ async function withClaude(relay: {
     return plain;
   }
 
-  // Side chats whose file cannot be used are still opened, but a restart loses them; the file is left as it is.
+  // The file is left as it is, and the side chats still named in it take no more messages, since what they were to hand over is unknown.
   if (sideChatStore.isErr()) {
     logger.log({ event: "side_chat_state_unavailable" });
   }
@@ -298,7 +298,7 @@ async function withClaude(relay: {
     store: store.value,
     sideChatStore: sideChatStore.isOk()
       ? sideChatStore.value
-      : unsavedSideChats(),
+      : unreadableSideChats(sideChatStore.error.threadIds),
     permissionMode: permissionMode.value,
     request: serverCalls.request,
     startSession: (session, signal) =>

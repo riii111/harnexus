@@ -352,7 +352,10 @@ export const createRouter = ({
       known === undefined
         ? request.params
         : pinDirectory(request.params, known);
-    if (threadId !== undefined && known !== undefined) {
+    // A side chat switched to Codex before its first message is reopened on that model, which a Claude thread would refuse.
+    const chosen =
+      threadId === undefined ? undefined : sideChats.codexChoiceOf(threadId);
+    if (threadId !== undefined && known !== undefined && chosen === undefined) {
       const checked = checkThread(params, known, undefined);
       if (checked.isErr()) {
         refuse("thread/resume", request, checked.error.refusal);
@@ -370,7 +373,9 @@ export const createRouter = ({
       call,
       openingThread(params, {
         createdModel: created ? String(params.model) : null,
-        history: reopened ? history.load(threadId) : null,
+        history:
+          reopened && chosen === undefined ? history.load(threadId) : null,
+        shownModel: chosen ?? null,
       }),
     );
     if (!isClaudeModel(params.model)) {
@@ -419,6 +424,12 @@ export const createRouter = ({
     // Claude's conversation is forked whole, so a fork from an earlier turn would carry the turns after it.
     if (fromTurn) {
       refuse("thread/fork", request, "unsupported_request");
+      return null;
+    }
+
+    // A side chat the file cannot keep would reach a restart as a Codex thread with none of the Claude conversation, so it is not opened.
+    if (attached && !sideChats.keeps()) {
+      refuse("thread/fork", request, "side_chat_not_kept");
       return null;
     }
 

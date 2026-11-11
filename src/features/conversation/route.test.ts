@@ -2247,6 +2247,45 @@ describe("saved side chats of a Claude thread moved to Codex", () => {
     expect(JSON.stringify(injects[0]?.[1])).toContain("list the files");
   });
 
+  test("reopens a side chat picked on Codex on that model, which a Claude thread would refuse, and shows it in place of Claude's", async () => {
+    const { router, events } = setup(["th-claude"], {
+      records: { "th-claude": conversation() },
+    });
+    await router.fromApp(savedSideChatFork());
+    await router.fromServer(threadResponse(9, "th-side"));
+    await router.fromApp(
+      encode({
+        id: 12,
+        method: "thread/settings/update",
+        params: { threadId: "th-side", model: "gpt-fixture" },
+      }),
+    );
+    const resume = encode({
+      id: 13,
+      method: "thread/resume",
+      params: { threadId: "th-side", model: "gpt-fixture" },
+    });
+
+    const forwarded = await router.fromApp(resume);
+    const reopened = parse(
+      await router.fromServer(
+        encode({
+          id: 13,
+          result: {
+            thread: { id: "th-side", model: CLAUDE, cwd: "/fixture/work" },
+            model: CLAUDE,
+            cwd: "/fixture/work",
+          },
+        }),
+      ),
+    );
+
+    expect(forwarded).toBe(resume);
+    expect(reopened.result.model).toBe("gpt-fixture");
+    expect(reopened.result.thread.model).toBe("gpt-fixture");
+    expect(events).toEqual([]);
+  });
+
   test("saves the side chat with where the main conversation stood and drops it once it moved to Codex", async () => {
     const { router, sideChatStore } = setup(["th-claude"], {
       records: { "th-claude": conversation() },
@@ -2264,6 +2303,7 @@ describe("saved side chats of a Claude thread moved to Codex", () => {
         claude: { model: CLAUDE, cwd: "/fixture/work" },
         point: expect.objectContaining({ sessionId: "session-th-claude" }),
         instructions: SIDE_CHAT_INSTRUCTIONS,
+        choice: null,
         stopped: false,
       },
     ]);

@@ -8,6 +8,7 @@ import type { ServerRequest } from "../../../infra/codex/server-requests.ts";
 import {
   type SavedSideChat,
   type SideChatStore,
+  unreadableSideChats,
   unsavedSideChats,
 } from "../../../infra/side-chat-store.ts";
 import type { RewindPoint } from "../../../infra/thread-store.ts";
@@ -493,7 +494,9 @@ describe("createSideChats.remember on a side chat the server keeps", () => {
     );
     await settle();
 
-    expect(saved.all()).toEqual([{ ...SAVED_ON_CLAUDE, claude: null }]);
+    expect(saved.all()).toEqual([
+      { ...SAVED_ON_CLAUDE, claude: null, choice: "gpt-fixture" },
+    ]);
   });
 
   test("logs a side chat it could not save", async () => {
@@ -509,6 +512,14 @@ describe("createSideChats.remember on a side chat the server keeps", () => {
       event: "side_chat_not_saved",
       error: "FileWriteFailed",
     });
+  });
+
+  test("tells whether the file that keeps side chats can be used", () => {
+    const readable = setup().sideChats;
+    const unreadable = setup({ saved: unreadableSideChats([]) }).sideChats;
+
+    expect(readable.keeps()).toBe(true);
+    expect(unreadable.keeps()).toBe(false);
   });
 });
 
@@ -607,6 +618,24 @@ describe("createSideChats.beforeTurn on a side chat the server keeps", () => {
 
     expect(refusal).toBeNull();
     expect(saved.all()).toEqual([]);
+  });
+});
+
+describe("createSideChats.beforeSettings on a side chat the server keeps", () => {
+  test("saves the model picked before the first message and restores it", async () => {
+    const saved = unsavedSideChats();
+    const { sideChats } = setup({ saved });
+    sideChats.remember(
+      "th-side",
+      claudeSide(await pointOf(sideChats), undefined, KEPT),
+    );
+
+    sideChats.beforeSettings("th-side", "gpt-fixture");
+    await settle();
+    const restarted = setup({ saved, claudeSides: [] });
+
+    expect(saved.all()[0]?.choice).toBe("gpt-fixture");
+    expect(restarted.sideChats.codexChoiceOf("th-side")).toBe("gpt-fixture");
   });
 });
 
@@ -715,6 +744,18 @@ describe("createSideChats restoring saved side chats", () => {
       expect(injects).toEqual([]);
     },
   );
+
+  test("stops the side chats still named in a file that cannot be read", async () => {
+    const saved = unreadableSideChats(["th-side"]);
+    const { sideChats, injects, restored } = setup({ saved, claudeSides: [] });
+
+    const first = await sideChats.beforeTurn("th-side", "gpt-fixture");
+
+    expect(first).toBe("side_chat_stopped");
+    expect(sideChats.isStopped("th-side")).toBe(true);
+    expect(restored).toEqual([]);
+    expect(injects).toEqual([]);
+  });
 
   test("leaves out and drops a saved side chat whose Claude conversation began", async () => {
     const saved = await savedWith(SAVED_ON_CLAUDE);
@@ -858,6 +899,7 @@ const SAVED_ON_CLAUDE: SavedSideChat = {
     cwd: "/fixture/work",
   },
   instructions: INSTRUCTIONS,
+  choice: null,
   stopped: false,
 };
 
@@ -869,6 +911,7 @@ const savedWith = async (record: SavedSideChat) => {
 
 const failingStore = (): SideChatStore => ({
   all: () => [],
+  writable: true,
   save: async () => Result.err(NOT_SAVED),
   remove: async () => Result.err(NOT_SAVED),
 });
@@ -882,7 +925,7 @@ const MAIN = { model: "claude-fixture", cwd: "/fixture/work" };
 
 const NOT_SAVED = {
   _tag: "SideChatNotSaved",
-  cause: { _tag: "FileWriteFailed" },
+  reason: "FileWriteFailed",
   message: "cannot save the side chats",
 } as InferErr<Awaited<ReturnType<SideChatStore["save"]>>>;
 
