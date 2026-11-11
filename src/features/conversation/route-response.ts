@@ -75,7 +75,7 @@ type Deps = {
     ThreadValues,
     "adopt" | "threadOf" | "modeOf" | "effortOf" | "consumePick"
   >;
-  sideChats: Pick<SideChats, "remember" | "showsCodex">;
+  sideChats: Pick<SideChats, "remember" | "release" | "showsCodex">;
   subagents: Pick<SubagentRequests, "withChildren" | "remember">;
   compatibility: ReturnType<typeof createCompatibility>;
   claudeModels: ModelCatalog["models"];
@@ -137,6 +137,7 @@ export const createServerResponses = ({
         return rewriteThreadOpen(line, message, result, request);
       case "threadEnd":
         turns.releaseThread(request.threadId, request.ended);
+        sideChats.release(request.threadId, request.ended);
         return line;
     }
   };

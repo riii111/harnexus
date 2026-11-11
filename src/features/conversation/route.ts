@@ -26,7 +26,11 @@ import {
   type Pending,
   type ResponseEvent,
 } from "./route-response.ts";
-import type { createSideChats, Opened } from "./side-chat/side-chat.ts";
+import type {
+  createSideChats,
+  Opened,
+  SideChatEvent,
+} from "./side-chat/side-chat.ts";
 import type { SubagentRequests } from "./subagents/requests.ts";
 import type { SubagentRestoreEvent } from "./subagents/restore.ts";
 import {
@@ -52,6 +56,7 @@ export type RouteEvent =
   | ResponseEvent
   | { event: "claude_request_refused"; method: RefusedMethod; reason: Refusal }
   | HistoryEvent
+  | SideChatEvent
   | SubagentRestoreEvent<{ _tag: SubagentsReadTag }>;
 
 const ROUTE_EVENTS: Record<RouteEvent["event"], true> = {
@@ -63,6 +68,7 @@ const ROUTE_EVENTS: Record<RouteEvent["event"], true> = {
   claude_history_answered: true,
   claude_history_unreadable: true,
   claude_subagents_unreadable: true,
+  side_chat_not_saved: true,
 };
 
 export const isRouteEvent = (entry: { event: string }): entry is RouteEvent =>
@@ -381,7 +387,10 @@ export const createRouter = ({
   const routeFork = (call: AppCall) => {
     const { line, message, request } = call;
     const { params } = request;
-    const sideChat = params.ephemeral === true;
+    const ephemeral = params.ephemeral === true;
+    // The app keeps a side chat attached to its source in place of an ephemeral one; the server keeps it through a restart.
+    const attached = !ephemeral && params.attachToSource === true;
+    const sideChat = ephemeral || attached;
     const instructions =
       typeof params.developerInstructions === "string"
         ? params.developerInstructions
@@ -389,7 +398,7 @@ export const createRouter = ({
     const requested = requestedModel(params);
     const fromTurn = params.lastTurnId != null || params.beforeTurnId != null;
     if (!threads.isClaudeThread(params.threadId)) {
-      if (!sideChat || fromTurn || typeof params.threadId !== "string") {
+      if (!ephemeral || fromTurn || typeof params.threadId !== "string") {
         return line;
       }
 
@@ -454,6 +463,7 @@ export const createRouter = ({
           : { agent: "Claude", unread: true },
         instructions,
         model: requested,
+        kept: attached ? { claudeThread: codex ? null : source } : null,
       });
     });
   };
@@ -492,6 +502,7 @@ export const createRouter = ({
               : { agent: "Codex", unread: true },
             instructions,
             model: requested,
+            kept: null,
           },
         }),
       );
@@ -680,6 +691,7 @@ export const serializeRouteEvent = (entry: RouteEvent) => {
       };
     case "claude_history_unreadable":
     case "claude_subagents_unreadable":
+    case "side_chat_not_saved":
       return { event: entry.event, error: entry.error };
   }
 };

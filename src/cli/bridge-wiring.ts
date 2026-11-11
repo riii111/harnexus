@@ -50,6 +50,10 @@ import type { readClaudeSubagents } from "../infra/claude/session.ts";
 import type { CloudLinkReservations } from "../infra/cloud-links.ts";
 import type { ServerRequest } from "../infra/codex/server-requests.ts";
 import { createThreadRequests } from "../infra/codex/thread-requests.ts";
+import {
+  type SideChatStore,
+  unsavedSideChats,
+} from "../infra/side-chat-store.ts";
 import type { ThreadStore } from "../infra/thread-store.ts";
 import type { AdapterSettings } from "../lib/connection-settings.boundary.ts";
 import { resizeImage } from "../lib/image.boundary.ts";
@@ -75,6 +79,7 @@ export const connectClaudeThreads = ({
   cloudLinks,
   cloudSkills = [],
   external,
+  sideChatStore = unsavedSideChats(),
   send,
   log,
 }: {
@@ -107,6 +112,8 @@ export const connectClaudeThreads = ({
     bridgeId: string;
     store: ExternalStateStore;
   };
+  // The side chats of Claude threads that the server keeps through a restart and that have sent no message yet.
+  sideChatStore?: SideChatStore;
   send: (message: object) => void;
   log: (
     event: ClaudeLogEvent | RouteEvent | CloudLogEvent | ExternalLogEvent,
@@ -329,6 +336,9 @@ export const connectClaudeThreads = ({
     claudeBegun: turns.claudeBegun,
     dropFork: turns.dropFork,
     noteSideChat: threads.noteSideChat,
+    restoreFork: turns.restoreFork,
+    saved: sideChatStore,
+    log,
   });
   const router = createRouter({
     turns,

@@ -12,6 +12,7 @@ import { type InferErr, Result } from "better-result";
 import { createModelCatalog, effortRule } from "../../infra/claude/models.ts";
 import { readClaudeSession } from "../../infra/claude/session.ts";
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
+import { unsavedSideChats } from "../../infra/side-chat-store.ts";
 import { createMemoryCloudLinks } from "../../infra/testing/cloud-links.ts";
 import { createCallGateway } from "../link/call-gateway.ts";
 import { createDelegationWatch } from "../link/delegations.ts";
@@ -2197,6 +2198,143 @@ describe("side chats of a Claude thread moved to Codex", () => {
   });
 });
 
+describe("saved side chats of a Claude thread moved to Codex", () => {
+  test("lets the server take and report a Codex model picked before the first message instead of refusing it as on a Claude thread", async () => {
+    const { router, calls, events } = setup(["th-claude"], {
+      records: { "th-claude": conversation() },
+    });
+    await router.fromApp(savedSideChatFork());
+    await router.fromServer(threadResponse(9, "th-side"));
+    const update = encode({
+      id: 12,
+      method: "thread/settings/update",
+      params: { threadId: "th-side", model: "gpt-fixture" },
+    });
+    const updated = encode({
+      method: "thread/settings/updated",
+      params: { threadId: "th-side", threadSettings: { model: "gpt-fixture" } },
+    });
+
+    expect(router.fromApp(update)).toBe(update);
+    expect(router.fromServer(updated)).toBe(updated);
+    expect(calls.map(([name]) => name)).toEqual(["adoptFork"]);
+    expect(events).toEqual([]);
+  });
+
+  test("hands the conversation up to the fork to the side chat with its first message and then leaves it to Codex", async () => {
+    const { router, calls, injects } = setup(["th-claude"], {
+      records: { "th-claude": conversation() },
+    });
+    await router.fromApp(savedSideChatFork());
+    await router.fromServer(threadResponse(9, "th-side"));
+    await router.fromApp(
+      encode({
+        id: 12,
+        method: "thread/settings/update",
+        params: { threadId: "th-side", model: "gpt-fixture" },
+      }),
+    );
+    const first = sideChatTurn({ model: "gpt-fixture" });
+    const next = sideChatTurn({});
+
+    const started = await router.fromApp(first);
+    const continued = router.fromApp(next);
+
+    expect(started).toBe(first);
+    expect(continued).toBe(next);
+    expect(calls.map(([name]) => name)).toEqual(["adoptFork", "dropFork"]);
+    expect(injects.map(([threadId]) => threadId)).toEqual(["th-side"]);
+    expect(JSON.stringify(injects[0]?.[1])).toContain("list the files");
+  });
+
+  test("saves the side chat with where the main conversation stood and drops it once it moved to Codex", async () => {
+    const { router, sideChatStore } = setup(["th-claude"], {
+      records: { "th-claude": conversation() },
+    });
+
+    await router.fromApp(
+      savedSideChatFork({ developerInstructions: SIDE_CHAT_INSTRUCTIONS }),
+    );
+    await router.fromServer(threadResponse(9, "th-side"));
+    await until(() => sideChatStore.all().length === 1);
+
+    expect(sideChatStore.all()).toEqual([
+      {
+        threadId: "th-side",
+        claude: { model: CLAUDE, cwd: "/fixture/work" },
+        point: expect.objectContaining({ sessionId: "session-th-claude" }),
+        instructions: SIDE_CHAT_INSTRUCTIONS,
+        stopped: false,
+      },
+    ]);
+
+    await router.fromApp(sideChatTurn({ model: "gpt-fixture" }));
+    await until(() => sideChatStore.all().length === 0);
+
+    expect(sideChatStore.all()).toEqual([]);
+  });
+
+  test("saves a side chat opened on Codex without a Claude thread and hands it the conversation with its first message", async () => {
+    const { router, calls, injects, sideChatStore } = setup(["th-claude"], {
+      records: { "th-claude": conversation() },
+    });
+
+    await router.fromApp(savedSideChatFork({ model: "gpt-fixture" }));
+    await router.fromServer(threadResponse(9, "th-side"));
+    await until(() => sideChatStore.all().length === 1);
+    const savedClaude = sideChatStore.all()[0]?.claude;
+    const first = sideChatTurn({ model: "gpt-fixture" });
+    const started = await router.fromApp(first);
+
+    expect(savedClaude).toBeNull();
+    expect(started).toBe(first);
+    expect(calls.map(([name]) => name)).toEqual(["dropFork"]);
+    expect(injects).toHaveLength(1);
+  });
+
+  test("still refuses a Codex model picked in a branch of a Claude thread that is no side chat", async () => {
+    const { router, events, sideChatStore } = setup(["th-claude"], {
+      records: { "th-claude": conversation() },
+    });
+    await router.fromApp(
+      encode({
+        id: 9,
+        method: "thread/fork",
+        params: { threadId: "th-claude" },
+      }),
+    );
+    await router.fromServer(threadResponse(9, "th-side"));
+
+    const update = await router.fromApp(
+      encode({
+        id: 12,
+        method: "thread/settings/update",
+        params: { threadId: "th-side", model: "gpt-fixture" },
+      }),
+    );
+
+    expect(update).toBeNull();
+    expect(events).toContainEqual({
+      event: "claude_request_refused",
+      method: "thread/settings/update",
+      reason: "codex_model",
+    });
+    expect(sideChatStore.all()).toEqual([]);
+  });
+
+  test("leaves a saved side chat of a Codex thread to the server without reading the main thread", async () => {
+    const { router, mainReads } = setup();
+    const fork = encode({
+      id: 9,
+      method: "thread/fork",
+      params: { threadId: "th-codex", attachToSource: true },
+    });
+
+    expect(router.fromApp(fork)).toBe(fork);
+    expect(mainReads).toEqual([]);
+  });
+});
+
 describe("side chats of a Codex thread moved to Claude", () => {
   test("reads the main thread while the side chat is asked for and hands it to the side chat Claude runs", async () => {
     const { router, calls, notes, mainReads } = setup();
@@ -2325,6 +2463,13 @@ const sideChatFork = (change: object = {}) =>
     params: { threadId: "th-claude", ephemeral: true, ...change },
   });
 
+const savedSideChatFork = (change: object = {}) =>
+  encode({
+    id: 9,
+    method: "thread/fork",
+    params: { threadId: "th-claude", attachToSource: true, ...change },
+  });
+
 const sideChatTurn = (change: object) =>
   encode({
     id: 10,
@@ -2381,6 +2526,7 @@ const setup = (
 ) => {
   const injects: [string, object[]][] = [];
   const mainReads: string[] = [];
+  const sideChatStore = unsavedSideChats();
   const notes = new Map<string, SideChatContext>();
   const readSession = (sessionId: string) =>
     readClaudeSession(sessionId, {
@@ -2547,6 +2693,9 @@ const setup = (
         calls.push(["dropFork", threadId]);
         threads.delete(threadId);
       },
+      restoreFork: async () => {},
+      saved: sideChatStore,
+      log: (event) => events.push(event),
     }),
   });
   return {
@@ -2566,6 +2715,7 @@ const setup = (
     injects,
     mainReads,
     notes,
+    sideChatStore,
   };
 };
 

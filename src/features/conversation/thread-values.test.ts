@@ -74,6 +74,61 @@ describe("ThreadValues.forgetThread", () => {
   });
 });
 
+describe("ThreadValues.restoreFork", () => {
+  test("restores a fork as a Claude thread pinned where its source stood", () => {
+    const { values } = fixture();
+
+    values.restoreFork(
+      "th-fork",
+      { model: "model-a", cwd: "/work/tree" },
+      {
+        sessionId: "se-main",
+        at: "record-9",
+      },
+    );
+
+    expect(values.isClaudeThread("th-fork")).toBe(true);
+    expect(values.threadOf("th-fork")).toEqual({
+      model: "model-a",
+      cwd: "/work/tree",
+    });
+    expect(values.forkSourceOf("th-fork")).toBe("se-main");
+    expect(values.forkPinOf("th-fork")).toBe("record-9");
+  });
+
+  test("restores a fork of a source with no conversation without a source to fork from", () => {
+    const { values } = fixture();
+
+    values.restoreFork(
+      "th-fork",
+      { model: "model-a", cwd: "/work/tree" },
+      null,
+    );
+
+    expect(values.isClaudeThread("th-fork")).toBe(true);
+    expect(values.forkSourceOf("th-fork")).toBeNull();
+  });
+
+  test("leaves a thread the store already holds as it is", () => {
+    const { values } = fixture();
+
+    values.restoreFork(
+      "th-1",
+      { model: "model-z", cwd: "/elsewhere" },
+      {
+        sessionId: "se-main",
+        at: "record-9",
+      },
+    );
+
+    expect(values.threadOf("th-1")).toEqual({
+      model: "model-a",
+      cwd: "/work/tree",
+    });
+    expect(values.forkSourceOf("th-1")).toBeNull();
+  });
+});
+
 const fixture = () => {
   const record = {
     threadId: "th-1",
