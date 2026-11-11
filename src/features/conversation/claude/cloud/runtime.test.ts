@@ -247,7 +247,7 @@ describe("createCloudRuntime archived threads", () => {
     await env.runtime.run(turn.running);
 
     expect(turn.outcome).toEqual({ status: "interrupted" });
-    expect(turn.texts().join(" ")).not.toContain("late reply");
+    expect(turn.texts()).toEqual([]);
     expect(env.sessionIds.get("thread-1")).toBe("copy-0");
     expect(env.discarded).toContain("copy-1");
   });
@@ -267,6 +267,74 @@ describe("createCloudRuntime archived threads", () => {
 
     expect(turn.outcome).toEqual({ status: "completed" });
     expect(turn.texts()).toEqual([]);
+    expect(env.discarded).toContain("copy-1");
+  });
+
+  test("tells nothing of a question the session asked when the thread was archived while the copy was saved", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "hi"), askQuestion("a1", "q1")]],
+      shown: null,
+    });
+    env.duringSave = () => {
+      env.archived.add("thread-1");
+    };
+
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.outcome).toEqual({ status: "interrupted" });
+    expect(turn.texts()).toEqual([]);
+  });
+
+  test("tells nothing in a turn of Claude's own when the thread was archived while the copy was saved", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "hi"), askQuestion("a1", "q1")]],
+      shown: null,
+    });
+    env.duringSave = () => {
+      env.archived.add("thread-1");
+    };
+
+    const turn = env.turn("", { startedBy: "claude" });
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(turn.texts()).toEqual([]);
+  });
+
+  test("tells nothing of its link in a turn of Claude's own opened before the thread was archived", async () => {
+    const env = linked({ copies: [[prompt("p1", "hi")]], shown: null });
+    env.copyStop = "ran_model";
+    env.runtime.listen((threadId) => {
+      env.ownStarts.push(threadId);
+      return true;
+    });
+    await env.tick();
+    expect(env.ownStarts).toEqual(["thread-1"]);
+    env.archived.add("thread-1");
+    const turn = env.turn("", { startedBy: "claude" });
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(turn.texts()).toEqual([]);
+  });
+
+  test("drops the copy held for a turn of Claude's own that ended without showing it", async () => {
+    const env = linked({
+      copies: [
+        [prompt("p1", "hi"), endReply("r1", "ok"), prompt("p2", "more")],
+      ],
+      shown: "r1",
+    });
+    env.runtime.listen(() => true);
+    await env.tick();
+    env.archived.add("thread-1");
+
+    env.runtime.threadIdle("thread-1");
+
     expect(env.discarded).toContain("copy-1");
   });
 

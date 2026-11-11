@@ -282,7 +282,12 @@ export const createTurnController = <Tag extends string>({
 
   const startOwnTurn = (threadId: string) => {
     const thread = threads.threadOf(threadId);
-    if (thread === undefined || closed || changingConversations.has(threadId))
+    if (
+      thread === undefined ||
+      closed ||
+      changingConversations.has(threadId) ||
+      threads.isCloudArchived(threadId)
+    )
       return false;
     const turn: TurnInput = {
       items: [],
@@ -547,6 +552,11 @@ export const createTurnController = <Tag extends string>({
                 }),
               )
             : Result.ok();
+        }
+
+        // A turn of Claude's own accepted before its chat was archived starts nothing, since its start notices would show the chat as running again.
+        if (input.startedBy === "claude" && threads.isCloudArchived(threadId)) {
+          return Result.ok();
         }
 
         // Without the saved id a restart could run the same message again, so the turn does not start.

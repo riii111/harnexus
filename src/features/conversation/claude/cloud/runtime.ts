@@ -598,9 +598,13 @@ export const createCloudRuntime = <Tag extends string>(
     const stopWaiting = () => {
       park(threadId, follow);
       log({ event: "claude_cloud", step: "stopped" });
-      turn.apply(
-        renderNotice(turn.state(), STOPPED_WAITING, "commentary", now()),
-      );
+      // An archived chat is told nothing, since a new message would bring it back into the list.
+      if (!threads.isCloudArchived(threadId)) {
+        turn.apply(
+          renderNotice(turn.state(), STOPPED_WAITING, "commentary", now()),
+        );
+      }
+
       turn.finish({ status: "interrupted" }, null);
     };
 
@@ -707,6 +711,12 @@ export const createCloudRuntime = <Tag extends string>(
           copied.value.copy,
           follow.last ?? threads.cloudOf(threadId)?.shown ?? null,
         );
+        // The save took time, in which the chat may have been archived.
+        if (threads.isCloudArchived(threadId)) {
+          stopWaiting();
+          return;
+        }
+
         // Checked after the save, so a message sent meanwhile is waited for too.
         if (
           progress.ended &&
@@ -835,6 +845,13 @@ export const createCloudRuntime = <Tag extends string>(
     const { threadId } = turn;
     const { pendingOwn: taken, pendingNotice } = stateOf(threadId);
     keep(threadId, { pendingOwn: null, pendingNotice: null });
+    // A chat archived after its turn opened shows nothing, however much was held for it.
+    if (threads.isCloudArchived(threadId)) {
+      if (taken !== null) await discardCopy(taken.copy);
+      turn.finish({ status: "completed" }, null);
+      return;
+    }
+
     if (pendingNotice !== null) {
       turn.apply(
         renderNotice(turn.state(), pendingNotice, "final_answer", now()),
@@ -852,7 +869,6 @@ export const createCloudRuntime = <Tag extends string>(
       return;
     }
 
-    // A chat archived after its turn opened shows nothing, so the copy is dropped.
     if (threads.isCloudArchived(threadId)) {
       await discardCopy(copied.value.copy);
       turn.finish({ status: "completed" }, null);
@@ -871,6 +887,11 @@ export const createCloudRuntime = <Tag extends string>(
     }
 
     await keepCopy(threadId, copied.value.copy, keyOfLast(all) ?? cloud.shown);
+    if (threads.isCloudArchived(threadId)) {
+      turn.finish({ status: "completed" }, null);
+      return;
+    }
+
     // A session still working, or waiting for a message it scheduled, keeps the turn running until it hands the next move back, as a turn sent from the app does.
     const last = keyOfLast(all);
     const state = sessionStateOf(all);
@@ -1080,15 +1101,21 @@ export const createCloudRuntime = <Tag extends string>(
       return archiveSyncedAt !== null;
     }
 
-    // A chat archived or unarchived while the list was read is newer than the list, so it is left as it is.
-    const unchanged = (threadId: string) =>
+    const unchangedSinceRead = (threadId: string) =>
       revisions.get(threadId) === threads.archiveRevisionOf(threadId);
+    // A chat archived or unarchived while the list was read is newer than the list, so it is left as it is.
     const archive = threads
       .cloudThreadIds()
-      .filter((threadId) => unchanged(threadId) && listed.value.has(threadId));
+      .filter(
+        (threadId) =>
+          unchangedSinceRead(threadId) && listed.value.has(threadId),
+      );
     const unarchive = threads
       .archivedCloudThreadIds()
-      .filter((threadId) => unchanged(threadId) && !listed.value.has(threadId));
+      .filter(
+        (threadId) =>
+          unchangedSinceRead(threadId) && !listed.value.has(threadId),
+      );
     await Promise.all([
       ...archive.map((threadId) => threads.setCloudArchived(threadId, true)),
       ...unarchive.map((threadId) => threads.setCloudArchived(threadId, false)),
@@ -1375,6 +1402,13 @@ export const createCloudRuntime = <Tag extends string>(
     },
     threadIdle: (threadId) => {
       keep(threadId, { busy: false });
+      // A turn of Claude's own that ended without taking what was held for it, such as one dropped because its chat was archived, leaves a copy no turn will show.
+      const { pendingOwn, pendingNotice } = stateOf(threadId);
+      if (pendingOwn !== null || pendingNotice !== null) {
+        keep(threadId, { pendingOwn: null, pendingNotice: null });
+        if (pendingOwn !== null) void discardCopy(pendingOwn.copy);
+      }
+
       inner.threadIdle(threadId);
     },
     listen: (start) => {
