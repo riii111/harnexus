@@ -326,13 +326,16 @@ export const harness = async (
   });
   const runs = new Map<string, Promise<void>>();
   const idled: string[] = [];
+  let startOwnTurn: (threadId: string) => boolean = () => false;
   const turns = createTurnController({
     store,
     threads,
     runtime: {
-      ...(ownTurnsShown
-        ? runtime
-        : { ...runtime, listen: () => runtime.listen(() => false) }),
+      ...runtime,
+      listen: (start) => {
+        startOwnTurn = start;
+        runtime.listen(ownTurnsShown ? start : () => false);
+      },
       run: (turn) => {
         const ran = runtime.run(turn);
         runs.set(turn.turnId, ran);
@@ -372,6 +375,7 @@ export const harness = async (
     runtime,
     sessionLinks,
     idled,
+    startOwnTurn: (threadId: string) => startOwnTurn(threadId),
   };
 };
 

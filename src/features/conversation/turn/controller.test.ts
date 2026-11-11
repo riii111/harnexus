@@ -9,6 +9,7 @@ import type { ClaudeSessionSettings } from "../../../infra/claude/session.ts";
 import { fakeClaude } from "../../../infra/claude/testing/fake-claude.ts";
 import type { ServerRequest } from "../../../infra/codex/server-requests.ts";
 import {
+  createEmptyFile,
   FileRemoveFailed,
   removeFile,
   writeFileAtomic,
@@ -683,6 +684,95 @@ describe("releaseThread", () => {
       });
     },
   );
+});
+
+describe("releaseThread and restoreThread of a Cloud thread", () => {
+  const CLOUD = { sessionId: "session_01Cloud", shown: null };
+
+  test("holds the thread as archived once it is archived and as copied again once it is restored", async () => {
+    const { turns, store } = await harness([fakeClaude(SUBSCRIPTION)]);
+    await store.register({
+      threadId: "th-cloud",
+      model: "claude-opus-5-5",
+      worktree: dir,
+    });
+    await store.linkCloud("th-cloud", CLOUD, "copy-1");
+    expect(store.cloudThreadIds()).toEqual(["th-cloud"]);
+
+    turns.releaseThread("th-cloud", "archived");
+    await until(() => store.archivedCloudThreadIds().length === 1);
+    expect(store.cloudThreadIds()).toEqual([]);
+
+    turns.restoreThread("th-cloud");
+    await until(() => store.cloudThreadIds().length === 1);
+
+    expect(store.archivedCloudThreadIds()).toEqual([]);
+    expect(store.get("th-cloud")?.cloud).toEqual(CLOUD);
+  });
+
+  test("opens no turn of Claude's own for an archived thread", async () => {
+    const { turns, store, sent, startOwnTurn } = await harness([
+      fakeClaude(SUBSCRIPTION),
+    ]);
+    await store.register({
+      threadId: "th-cloud",
+      model: "claude-opus-5-5",
+      worktree: dir,
+    });
+    await store.linkCloud("th-cloud", CLOUD, "copy-1");
+    turns.releaseThread("th-cloud", "archived");
+    await until(() => store.archivedCloudThreadIds().length === 1);
+
+    expect(startOwnTurn("th-cloud")).toBe(false);
+
+    expect(turnStartedNotices(sent)).toEqual([]);
+  });
+
+  test("starts nothing of a turn of Claude's own accepted before its thread was archived", async () => {
+    const marking = { held: false };
+    const gate = createGate();
+    const { turns, store, sent, idled, startOwnTurn } = await harness(
+      [fakeClaude(SUBSCRIPTION)],
+      {
+        files: {
+          createMarker: async (path) => {
+            if (marking.held) await gate.promise;
+            return createEmptyFile(path);
+          },
+        },
+      },
+    );
+    await store.register({
+      threadId: "th-cloud",
+      model: "claude-opus-5-5",
+      worktree: dir,
+    });
+    await store.linkCloud("th-cloud", CLOUD, "copy-1");
+    marking.held = true;
+    expect(startOwnTurn("th-cloud")).toBe(true);
+    turns.releaseThread("th-cloud", "archived");
+    await until(() => store.archivedCloudThreadIds().length === 1);
+
+    gate.open();
+    await until(() => idled.includes("th-cloud"));
+
+    expect(turnStartedNotices(sent)).toEqual([]);
+  });
+
+  test("leaves a thread that is deleted copied until its runtime unlinks it", async () => {
+    const { turns, store } = await harness([fakeClaude(SUBSCRIPTION)]);
+    await store.register({
+      threadId: "th-cloud",
+      model: "claude-opus-5-5",
+      worktree: dir,
+    });
+    await store.linkCloud("th-cloud", CLOUD, "copy-1");
+
+    turns.releaseThread("th-cloud", "deleted");
+
+    expect(store.archivedCloudThreadIds()).toEqual([]);
+    expect(store.cloudThreadIds()).toEqual(["th-cloud"]);
+  });
 });
 
 describe("turn/interrupt", () => {
@@ -1742,3 +1832,10 @@ const UNANSWERED = {
   method: "mcpServer/tool/call",
   message: "the server closed before answering mcpServer/tool/call",
 } as InferErr<Awaited<ReturnType<ServerRequest>>>;
+
+const turnStartedNotices = (sent: Sent[]) =>
+  sent.filter(
+    (message) =>
+      message.method === "turn/started" ||
+      message.method === "thread/status/changed",
+  );

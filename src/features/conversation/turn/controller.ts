@@ -282,7 +282,12 @@ export const createTurnController = <Tag extends string>({
 
   const startOwnTurn = (threadId: string) => {
     const thread = threads.threadOf(threadId);
-    if (thread === undefined || closed || changingConversations.has(threadId))
+    if (
+      thread === undefined ||
+      closed ||
+      changingConversations.has(threadId) ||
+      threads.isCloudArchived(threadId)
+    )
       return false;
     const turn: TurnInput = {
       items: [],
@@ -547,6 +552,11 @@ export const createTurnController = <Tag extends string>({
                 }),
               )
             : Result.ok();
+        }
+
+        // A turn of Claude's own accepted before its chat was archived starts nothing, since its start notices would show the chat as running again.
+        if (input.startedBy === "claude" && threads.isCloudArchived(threadId)) {
+          return Result.ok();
         }
 
         // Without the saved id a restart could run the same message again, so the turn does not start.
@@ -980,6 +990,8 @@ export const createTurnController = <Tag extends string>({
     },
     // Called once the server answered that it archived or deleted the thread.
     releaseThread: (threadId: string, ended: ThreadEnd) => {
+      // The archive is already done, so a thread with work in progress also stops being copied.
+      if (ended === "archived") void threads.setCloudArchived(threadId, true);
       // A thread with a turn or an app request in progress keeps its state, since that work still uses it.
       const kept =
         turnsInFlight.has(threadId) ||
@@ -992,6 +1004,10 @@ export const createTurnController = <Tag extends string>({
       }
 
       log({ event: "claude_turn", step: "thread_released", ended, kept });
+    },
+    // Called once the server answered that it unarchived the thread.
+    restoreThread: (threadId: string) => {
+      void threads.setCloudArchived(threadId, false);
     },
   };
 };
@@ -1028,6 +1044,7 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
     case "session_not_saved":
     case "model_not_saved":
     case "effort_not_saved":
+    case "archive_not_saved":
     case "run_state_not_saved":
       return { event: entry.event, step: entry.step, error: entry.error };
     case "thread_released":

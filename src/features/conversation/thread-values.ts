@@ -21,7 +21,11 @@ export type ThreadValueEvent =
   | { event: "claude_turn"; step: "effort_unsupported" }
   | { event: "claude_turn"; step: UnsavedStep; error: StoreTag };
 
-type UnsavedStep = "session_not_saved" | "model_not_saved" | "effort_not_saved";
+type UnsavedStep =
+  | "session_not_saved"
+  | "model_not_saved"
+  | "effort_not_saved"
+  | "archive_not_saved";
 
 // runWrite is generic in the operation's error, so the store's own tags are listed; a new tag there fails to compile here.
 export type StoreTag =
@@ -30,6 +34,7 @@ export type StoreTag =
   | ErrorTag<ReturnType<ThreadStore["addMessageId"]>>
   | ErrorTag<ReturnType<ThreadStore["setModel"]>>
   | ErrorTag<ReturnType<ThreadStore["setEffort"]>>
+  | ErrorTag<ReturnType<ThreadStore["setCloudArchived"]>>
   | "ThreadNotFound"
   | "PreviousWriteUnsettled"
   | "WriteNotStarted"
@@ -55,6 +60,12 @@ export const createThreadValues = (
   };
   // Overrides apply ahead of the store, including when a save fails.
   const overrides = new Map<string, Overrides>();
+  // The latest archive decision per Cloud thread, kept ahead of the store, whose save finishes later and in order.
+  const archiveMarks = new Map<
+    string,
+    { archived: boolean; revision: number }
+  >();
+  let revisions = 0;
   const valuesOf = (threadId: string) => {
     let values = overrides.get(threadId);
     if (values === undefined) {
@@ -336,11 +347,31 @@ export const createThreadValues = (
   };
 
   const unlinkCloud = (threadId: string) => {
+    archiveMarks.delete(threadId);
     const values = overrides.get(threadId);
     if (values !== undefined) delete values.sessionId;
     prune(threadId);
     return logUnsaved("session_not_saved", store.unlinkCloud(threadId));
   };
+
+  const isCloudArchived = (threadId: string) =>
+    archiveMarks.get(threadId)?.archived ??
+    store.get(threadId)?.archived === true;
+
+  const setCloudArchived = async (threadId: string, archived: boolean) => {
+    if (cloudOf(threadId) === null) return;
+    revisions += 1;
+    archiveMarks.set(threadId, { archived, revision: revisions });
+    await logUnsaved(
+      "archive_not_saved",
+      store.setCloudArchived(threadId, archived),
+    );
+  };
+
+  const cloudThreadsWhere = (archived: boolean) =>
+    [...store.cloudThreadIds(), ...store.archivedCloudThreadIds()].filter(
+      (threadId) => isCloudArchived(threadId) === archived,
+    );
 
   const consumePick = (threadId: string) => {
     const values = overrides.get(threadId);
@@ -382,7 +413,12 @@ export const createThreadValues = (
     linkCloud,
     unlinkCloud,
     setCloudCopy,
-    cloudThreadIds: () => store.cloudThreadIds(),
+    cloudThreadIds: () => cloudThreadsWhere(false),
+    archivedCloudThreadIds: () => cloudThreadsWhere(true),
+    isCloudArchived,
+    archiveRevisionOf: (threadId: string) =>
+      archiveMarks.get(threadId)?.revision ?? 0,
+    setCloudArchived,
     cloudOwner: (cloudSessionId: string) => store.cloudOwner(cloudSessionId),
   };
 };

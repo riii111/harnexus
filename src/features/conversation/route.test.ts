@@ -1352,6 +1352,50 @@ describe("thread/archive and thread/delete of a Claude thread", () => {
   );
 });
 
+describe("thread/unarchive of a Claude thread", () => {
+  const request = (threadId: string) =>
+    encode({ id: 7, method: "thread/unarchive", params: { threadId } });
+
+  test("passes the request as the same bytes and restores the thread once the server answers with success", async () => {
+    const { router, calls } = setup(["th-claude"]);
+    const line = request("th-claude");
+    const answer = encode({ id: 7, result: { thread: { id: "th-claude" } } });
+
+    const forwarded = router.fromApp(line);
+    expect(calls).toEqual([]);
+    const out = await router.fromServer(answer);
+
+    expect(forwarded).toBe(line);
+    expect(out).toBe(answer);
+    expect(calls).toEqual([["restoreThread", "th-claude"]]);
+  });
+
+  test("keeps the thread archived when the server refuses", async () => {
+    const { router, calls } = setup(["th-claude"]);
+    await router.fromApp(request("th-claude"));
+    const refusal = encode({
+      id: 7,
+      error: { code: -32600, message: "no archived rollout found" },
+    });
+
+    const out = await router.fromServer(refusal);
+
+    expect(out).toBe(refusal);
+    expect(calls).toEqual([]);
+  });
+
+  test("leaves a thread that is not Claude's to the server alone", async () => {
+    const { router, calls } = setup(["th-claude"]);
+    const line = request("th-codex");
+
+    const forwarded = router.fromApp(line);
+    await router.fromServer(encode({ id: 7, result: {} }));
+
+    expect(forwarded).toBe(line);
+    expect(calls).toEqual([]);
+  });
+});
+
 describe("thread/settings/update", () => {
   // The app sends its previous collaboration mode along with the model just picked, as observed with App 26.924.
   test("keeps the thread's model picked again over a stale collaboration mode", () => {
@@ -2658,6 +2702,9 @@ const setup = (
       liveTurnOf: (threadId) => live.get(threadId) ?? null,
       releaseThread: (threadId, ended) => {
         calls.push(["releaseThread", threadId, ended]);
+      },
+      restoreThread: (threadId) => {
+        calls.push(["restoreThread", threadId]);
       },
     },
     threads: {
