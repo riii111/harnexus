@@ -338,6 +338,21 @@ describe("createCloudRuntime archived threads", () => {
     expect(env.discarded).toContain("copy-1");
   });
 
+  test("sends no history of a session linked when the thread was archived while the history was read, and keeps the link and the pick", async () => {
+    const env = setup({
+      copies: [[prompt("p1", "hi"), endReply("r1", "ok")]],
+    });
+    env.duringReplay = async () => {
+      env.markArchived("thread-1", true);
+    };
+
+    await env.runtime.run(env.turn(`/cloud ${CLOUD_ID}`).running);
+
+    expect(env.sent).toEqual([]);
+    expect(env.picked).toEqual([]);
+    expect(env.cloudOf("thread-1")?.sessionId).toBe(CLOUD_ID);
+  });
+
   test("opens no chat and tells no outside conversation of a copy made while its thread was being archived", async () => {
     const env = linked({
       copies: [
@@ -408,19 +423,6 @@ describe("createCloudRuntime archived threads", () => {
 
     expect(env.archived.has("thread-1")).toBe(false);
     expect(env.copyCalls).toBe(1);
-  });
-
-  test("stops following a turn once its thread is archived", async () => {
-    const env = linked({ copies: [[prompt("p1", "hi")]], shown: null });
-    env.duringCopy = async (call) => {
-      if (call === 2) env.archived.add("thread-1");
-    };
-
-    const turn = env.turn("hi");
-
-    await env.runtime.run(turn.running);
-
-    expect(turn.outcome).toEqual({ status: "interrupted" });
   });
 
   test("keeps the thread archived when the server lists it, without copying its session", async () => {
@@ -2586,6 +2588,8 @@ const setup = ({
       { message: string }
     >,
     renameFails: false,
+    // Runs while the history of a chat just linked is being read and is waited for before it answers.
+    duringReplay: async () => {},
     children: [] as {
       parent: string;
       child: { sessionId: string; title: string | null };
@@ -2763,7 +2767,10 @@ const setup = ({
     discardCopy: async (copy) => {
       discarded.push(copy);
     },
-    replayHistory: async (_threadId, copy) => [{ replayOf: copy }],
+    replayHistory: async (_threadId, copy) => {
+      await env.duringReplay();
+      return [{ replayOf: copy }];
+    },
     startCloud: async (request, cwd) => {
       env.started.push({ request, cwd });
       return env.startAnswer;

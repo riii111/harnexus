@@ -499,7 +499,8 @@ export const createCloudRuntime = <Tag extends string>(
       copied.value.copy,
       turn.record.worktree,
     );
-    if (replayed.length === 0) return;
+    // The history read took time, in which the chat may have been archived, so it is left to the next time the chat is opened.
+    if (replayed.length === 0 || threads.isCloudArchived(threadId)) return;
     for (const notification of replayed) send(notification);
     threads.consumePick(threadId);
   };

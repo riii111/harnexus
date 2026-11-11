@@ -75,28 +75,23 @@ describe("ThreadValues.forgetThread", () => {
 });
 
 describe("ThreadValues.setCloudArchived", () => {
-  test("holds the decision at once and saves each decision in order, so a decision made while an earlier one saves wins", async () => {
+  test("holds each decision at once, numbered so a read started earlier can tell, and saves them in order so one made while an earlier saves wins", async () => {
     const { values, saves } = fixture({ cloud: true, holdSaves: true });
 
+    const first = values.archiveRevisionOf("th-1");
     const archiving = values.setCloudArchived("th-1", true);
+    const second = values.archiveRevisionOf("th-1");
     expect(values.isCloudArchived("th-1")).toBe(true);
     expect(values.cloudThreadIds()).toEqual([]);
     const unarchiving = values.setCloudArchived("th-1", false);
+    expect(values.archiveRevisionOf("th-1")).toBeGreaterThan(second);
+    expect(second).toBeGreaterThan(first);
     saves.release();
     await Promise.all([archiving, unarchiving]);
 
     expect(saves.saved).toEqual([true, false]);
     expect(values.isCloudArchived("th-1")).toBe(false);
     expect(values.cloudThreadIds()).toEqual(["th-1"]);
-  });
-
-  test("numbers each decision, so a read started earlier can tell the thread changed", async () => {
-    const { values } = fixture({ cloud: true });
-    const before = values.archiveRevisionOf("th-1");
-
-    await values.setCloudArchived("th-1", true);
-
-    expect(values.archiveRevisionOf("th-1")).toBeGreaterThan(before);
   });
 
   test("saves nothing for a thread with no Cloud link", async () => {
