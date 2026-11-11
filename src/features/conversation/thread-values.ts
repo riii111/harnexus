@@ -21,7 +21,11 @@ export type ThreadValueEvent =
   | { event: "claude_turn"; step: "effort_unsupported" }
   | { event: "claude_turn"; step: UnsavedStep; error: StoreTag };
 
-type UnsavedStep = "session_not_saved" | "model_not_saved" | "effort_not_saved";
+type UnsavedStep =
+  | "session_not_saved"
+  | "model_not_saved"
+  | "effort_not_saved"
+  | "archive_not_saved";
 
 // runWrite is generic in the operation's error, so the store's own tags are listed; a new tag there fails to compile here.
 export type StoreTag =
@@ -30,6 +34,7 @@ export type StoreTag =
   | ErrorTag<ReturnType<ThreadStore["addMessageId"]>>
   | ErrorTag<ReturnType<ThreadStore["setModel"]>>
   | ErrorTag<ReturnType<ThreadStore["setEffort"]>>
+  | ErrorTag<ReturnType<ThreadStore["setCloudArchived"]>>
   | "ThreadNotFound"
   | "PreviousWriteUnsettled"
   | "WriteNotStarted"
@@ -330,6 +335,15 @@ export const createThreadValues = (
     return logUnsaved("session_not_saved", store.unlinkCloud(threadId));
   };
 
+  const setCloudArchived = async (threadId: string, archived: boolean) => {
+    if (cloudOf(threadId) === null) return;
+    if ((store.get(threadId)?.archived === true) === archived) return;
+    await logUnsaved(
+      "archive_not_saved",
+      store.setCloudArchived(threadId, archived),
+    );
+  };
+
   const consumePick = (threadId: string) => {
     const values = overrides.get(threadId);
     if (values?.picked !== true) return false;
@@ -370,6 +384,10 @@ export const createThreadValues = (
     unlinkCloud,
     setCloudCopy,
     cloudThreadIds: () => store.cloudThreadIds(),
+    archivedCloudThreadIds: () => store.archivedCloudThreadIds(),
+    isCloudArchived: (threadId: string) =>
+      store.get(threadId)?.archived === true,
+    setCloudArchived,
     cloudOwner: (cloudSessionId: string) => store.cloudOwner(cloudSessionId),
   };
 };

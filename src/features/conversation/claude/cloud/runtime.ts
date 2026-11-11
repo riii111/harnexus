@@ -82,6 +82,13 @@ type CloudEvent =
   | { event: "claude_cloud"; step: "link_notice"; kind: LinkNotice }
   | { event: "claude_cloud"; step: "copied"; records: number; ms: number }
   | { event: "claude_cloud"; step: "copy_failed"; error: string }
+  | { event: "claude_cloud"; step: "archive_sync_failed"; error: string }
+  | {
+      event: "claude_cloud";
+      step: "archive_synced";
+      archived: number;
+      unarchived: number;
+    }
   | { event: "claude_cloud"; step: "thread_not_renamed"; error: string };
 
 // The thread has halted after an earlier copy that may have run a model turn, so no further copy is made.
@@ -111,6 +118,9 @@ export type CloudDeps = {
     | "cloudOf"
     | "cloudOwner"
     | "cloudThreadIds"
+    | "archivedCloudThreadIds"
+    | "isCloudArchived"
+    | "setCloudArchived"
     | "linkCloud"
     | "unlinkCloud"
     | "setCloudCopy"
@@ -148,6 +158,10 @@ export type CloudDeps = {
     shownBefore: string | null;
     records: readonly SessionMessage[];
   }) => void;
+  // Every thread the server holds as archived, so a chat archived or unarchived apart from this bridge stops or resumes being copied too.
+  archivedThreadIds?: () => Promise<
+    Result<ReadonlySet<string>, { _tag: string }>
+  >;
   // Starts a Cloud session from a request in a folder, as claude --cloud does.
   startCloud?: (
     request: string,
@@ -224,6 +238,7 @@ export const createCloudRuntime = <Tag extends string>(
     startCloud,
     cloudSkills = [],
     observe,
+    archivedThreadIds,
     now = Date.now,
     sleep = defaultSleep,
     schedule = defaultSchedule,
@@ -266,6 +281,8 @@ export const createCloudRuntime = <Tag extends string>(
   const failingSince = new Map<string, number>();
   const emptySince = new Map<string, number>();
   const linkNoticed = new Map<string, LinkNotice>();
+  // When the server's archived threads were last read, or null before the first read succeeds.
+  let archiveSyncedAt: number | null = null;
   // The wait for the copies planned while a tick ran, brought forward by hurry.
   let soon: number | null = null;
   let closed = false;
@@ -582,7 +599,12 @@ export const createCloudRuntime = <Tag extends string>(
       for (;;) {
         const delay = copies.wait(waiting, copyFailingSince !== null);
         if (delay !== null) await delay;
-        if (follow.stop || closed || turn.state().interrupting) {
+        if (
+          follow.stop ||
+          closed ||
+          turn.state().interrupting ||
+          threads.isCloudArchived(threadId)
+        ) {
           park(threadId, follow);
           log({ event: "claude_cloud", step: "stopped" });
           turn.apply(
@@ -986,6 +1008,8 @@ export const createCloudRuntime = <Tag extends string>(
 
   // Copies each linked thread with no turn running whose idle copy is due, and opens a turn of Claude's own for what it shows past where the app was shown.
   const tick = async () => {
+    // Which chats are archived is unknown until the server has answered once, and a copy of an archived chat would bring it back, so nothing is copied before.
+    if (!(await syncArchived())) return;
     const linked = threads.cloudThreadIds();
     for (const threadId of dueAt.keys()) {
       if (linked.includes(threadId)) continue;
@@ -1010,10 +1034,51 @@ export const createCloudRuntime = <Tag extends string>(
     }
   };
 
+  // Whether the archived chats are known, after reading them from the server when the last read is old.
+  const syncArchived = async () => {
+    if (archivedThreadIds === undefined) return true;
+    if (archiveSyncedAt !== null && now() - archiveSyncedAt < ARCHIVE_SYNC_MS) {
+      return true;
+    }
+
+    const listed = await archivedThreadIds();
+    if (listed.isErr()) {
+      log({
+        event: "claude_cloud",
+        step: "archive_sync_failed",
+        error: listed.error._tag,
+      });
+      return archiveSyncedAt !== null;
+    }
+
+    const archive = threads
+      .cloudThreadIds()
+      .filter((threadId) => listed.value.has(threadId));
+    const unarchive = threads
+      .archivedCloudThreadIds()
+      .filter((threadId) => !listed.value.has(threadId));
+    await Promise.all([
+      ...archive.map((threadId) => threads.setCloudArchived(threadId, true)),
+      ...unarchive.map((threadId) => threads.setCloudArchived(threadId, false)),
+    ]);
+    archiveSyncedAt = now();
+    if (archive.length > 0 || unarchive.length > 0) {
+      log({
+        event: "claude_cloud",
+        step: "archive_synced",
+        archived: archive.length,
+        unarchived: unarchive.length,
+      });
+    }
+
+    return true;
+  };
+
   // Whether the session was in the middle of a recent turn, waits to go on by itself, or was skipped when the thread is busy or no longer linked; a halted thread counts as idle.
   const copyIdle = async (
     threadId: string,
   ): Promise<"starting" | "working" | "waiting" | "idle" | "skipped"> => {
+    if (threads.isCloudArchived(threadId)) return "skipped";
     const { busy, halted } = stateOf(threadId);
     // A halted thread is never copied again, so it waits like an idle one rather than waking the copies every POLL_MS; its notice is tried again until the chat takes it.
     if (halted) {
@@ -1027,6 +1092,12 @@ export const createCloudRuntime = <Tag extends string>(
     if (cloud === null) return "skipped";
     const reading = threads.sessionIdOf(threadId);
     const copied = await copyOf(threadId, cloud.sessionId);
+    // A chat archived while its copy was made would be brought back by a turn of Claude's own, so the copy is dropped.
+    if (threads.isCloudArchived(threadId)) {
+      if (copied.isOk()) await discardCopy(copied.value.copy);
+      return "skipped";
+    }
+
     // A session just started may have no records to copy until its container runs, so a copy soon after the thread was hurried is tried again soon.
     const starting =
       now() - (hurriedAt.get(threadId) ?? Number.NEGATIVE_INFINITY) <
@@ -1501,6 +1572,13 @@ export const serializeCloudEvent = (entry: CloudEvent) => {
       return { event: entry.event, step: entry.step, state: entry.state };
     case "link_notice":
       return { event: entry.event, step: entry.step, kind: entry.kind };
+    case "archive_synced":
+      return {
+        event: entry.event,
+        step: entry.step,
+        archived: entry.archived,
+        unarchived: entry.unarchived,
+      };
     case "copied":
       return {
         event: entry.event,
@@ -1509,6 +1587,7 @@ export const serializeCloudEvent = (entry: CloudEvent) => {
         ms: entry.ms,
       };
     case "copy_failed":
+    case "archive_sync_failed":
     case "thread_not_renamed":
       return { event: entry.event, step: entry.step, error: entry.error };
     default:
@@ -1595,6 +1674,9 @@ const WORKING_FOR_MS = 10 * 60_000;
 const ACTIVE_FOR_MS = 2 * 60_000;
 
 const FIRST_TICK_MS = 15_000;
+
+// How long the archived chats read from the server hold before they are read again.
+const ARCHIVE_SYNC_MS = 5 * 60_000;
 
 const WAIT_LIMIT_MS = 60 * 60_000;
 

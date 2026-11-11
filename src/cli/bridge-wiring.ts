@@ -258,6 +258,7 @@ export const connectClaudeThreads = ({
     send,
     log,
     renameThread,
+    archivedThreadIds: appThreads.archivedThreadIds,
     cloudSkills,
     ...(conversations !== null && { observe: conversations.observe }),
     ...(cloud === undefined

@@ -29,6 +29,8 @@ type ThreadMapping = {
   readonly rewind?: RewindPoint;
   // Set on a thread linked to a Cloud session, whose sessionId then names the latest local copy of it.
   readonly cloud?: CloudLink;
+  // Set on a Cloud thread the app archived, whose session is not copied until the thread is unarchived.
+  readonly archived?: true;
   readonly model: string;
   // The effort level the app last picked for the thread, or null to leave Claude on the user's settings.
   readonly effort: string | null;
@@ -297,8 +299,23 @@ const createThreadStore = (
 
     cloudThreadIds: () =>
       [...mappings.values()]
-        .filter((mapping) => mapping.cloud !== undefined)
+        .filter((mapping) => mapping.cloud !== undefined && !mapping.archived)
         .map((mapping) => mapping.threadId),
+
+    archivedCloudThreadIds: () =>
+      [...mappings.values()]
+        .filter((mapping) => mapping.cloud !== undefined && mapping.archived)
+        .map((mapping) => mapping.threadId),
+
+    setCloudArchived: (threadId: string, archived: boolean) =>
+      update(threadId, (mapping) => {
+        if (mapping.cloud === undefined || !!mapping.archived === archived) {
+          return mapping;
+        }
+
+        const { archived: _archived, ...unarchived } = mapping;
+        return archived ? { ...unarchived, archived: true } : unarchived;
+      }),
 
     linkCloud: (threadId: string, cloud: CloudLink, copySessionId: string) =>
       // The check runs in the file queue with the write, so of two threads linking one session at once only the first gets it.
@@ -331,7 +348,7 @@ const createThreadStore = (
     unlinkCloud: (threadId: string) =>
       update(threadId, (mapping) => {
         if (mapping.cloud === undefined) return mapping;
-        const { cloud: _cloud, ...unlinked } = mapping;
+        const { cloud: _cloud, archived: _archived, ...unlinked } = mapping;
         return withSession(unlinked, null);
       }),
 
@@ -529,6 +546,7 @@ const pickMappingFields = (mapping: ThreadMapping): ThreadMapping => ({
   sessionId: mapping.sessionId,
   ...(mapping.rewind === undefined ? {} : { rewind: { ...mapping.rewind } }),
   ...(mapping.cloud === undefined ? {} : { cloud: { ...mapping.cloud } }),
+  ...(mapping.archived === true ? { archived: true as const } : {}),
   model: mapping.model,
   effort: mapping.effort,
   worktree: mapping.worktree,
@@ -547,6 +565,7 @@ const isThreadMapping = (value: unknown): value is ThreadMapping =>
     (isObject(value.cloud) &&
       isNonEmptyString(value.cloud.sessionId) &&
       (value.cloud.shown === null || isNonEmptyString(value.cloud.shown)))) &&
+  (value.archived === undefined || value.archived === true) &&
   isNonEmptyString(value.model) &&
   (value.effort === null || isNonEmptyString(value.effort)) &&
   isNonEmptyString(value.worktree) &&

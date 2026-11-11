@@ -74,7 +74,45 @@ describe("ThreadValues.forgetThread", () => {
   });
 });
 
-const fixture = () => {
+describe("ThreadValues.setCloudArchived", () => {
+  test("saves the mark on a Cloud thread only when it changes it", async () => {
+    const { values, saved, record } = fixture({ cloud: true });
+
+    await values.setCloudArchived("th-1", true);
+    record.archived = true;
+    await values.setCloudArchived("th-1", true);
+    await values.setCloudArchived("th-1", false);
+
+    expect(saved).toEqual([true, false]);
+  });
+
+  test("saves nothing for a thread with no Cloud link", async () => {
+    const { values, saved } = fixture({ cloud: false });
+
+    await values.setCloudArchived("th-1", true);
+
+    expect(saved).toEqual([]);
+  });
+
+  test("logs a mark that could not be saved, since the thread stays copied until the next read", async () => {
+    const { values, events } = fixture({ cloud: true, saveFails: true });
+
+    await values.setCloudArchived("th-1", true);
+
+    expect(events).toEqual([
+      {
+        event: "claude_turn",
+        step: "archive_not_saved",
+        error: "ThreadNotFound",
+      },
+    ]);
+  });
+});
+
+const fixture = ({
+  cloud = false,
+  saveFails = false,
+}: { cloud?: boolean; saveFails?: boolean } = {}) => {
   const record = {
     threadId: "th-1",
     sessionId: "se-1",
@@ -84,17 +122,34 @@ const fixture = () => {
     messageIds: [],
     runState: "idle",
   } as ThreadRecord & { model: string; sessionId: string | null };
-  const writable = record as { model: string; sessionId: string | null };
+  const writable = record as {
+    model: string;
+    sessionId: string | null;
+    archived?: true;
+  };
+  const saved: boolean[] = [];
+  const events: unknown[] = [];
   const store = {
-    get: (threadId: string) => (threadId === "th-1" ? record : undefined),
+    get: (threadId: string) =>
+      threadId === "th-1"
+        ? {
+            ...record,
+            ...(cloud && { cloud: { sessionId: "cs", shown: null } }),
+            ...(writable.archived && { archived: true }),
+          }
+        : undefined,
+    setCloudArchived: async (_threadId: string, archived: boolean) => {
+      saved.push(archived);
+      return saveFails ? Result.err({ _tag: "ThreadNotFound" }) : Result.ok();
+    },
     setModel: async () => Result.ok(),
     setEffort: async () => Result.ok(),
     setSessionId: async () => Result.ok(),
   } as unknown as ThreadStore;
   const values = createThreadValues(
     store,
-    () => {},
+    (event) => events.push(event),
     (() => null) as EffortRule,
   );
-  return { values, record: writable };
+  return { values, record: writable, saved, events };
 };

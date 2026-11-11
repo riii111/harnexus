@@ -46,7 +46,8 @@ export type Pending =
       history: ReturnType<History["load"]> | null;
     }
   | { kind: "childList"; params: Record<string, unknown> }
-  | { kind: "threadEnd"; threadId: string; ended: ThreadEnd };
+  | { kind: "threadEnd"; threadId: string; ended: ThreadEnd }
+  | { kind: "threadRestore"; threadId: string };
 
 export type ResponseEvent =
   | { event: "model_id_collision"; model: string }
@@ -70,6 +71,7 @@ type Deps = {
     ) => Promise<void>;
     liveTurnOf: (threadId: string) => LiveTurn | null;
     releaseThread: (threadId: string, ended: ThreadEnd) => void;
+    restoreThread: (threadId: string) => void;
   };
   threads: Pick<
     ThreadValues,
@@ -137,6 +139,9 @@ export const createServerResponses = ({
         return rewriteThreadOpen(line, message, result, request);
       case "threadEnd":
         turns.releaseThread(request.threadId, request.ended);
+        return line;
+      case "threadRestore":
+        turns.restoreThread(request.threadId);
         return line;
     }
   };

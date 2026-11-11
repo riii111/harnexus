@@ -290,6 +290,67 @@ describe("ThreadStore Cloud links", () => {
     expect(reopened.cloudThreadIds()).toEqual(["thread-2"]);
   });
 
+  test("holds an archived Cloud thread apart from the copied ones and restores that in a new store", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.register({ ...ENTRY, threadId: "thread-2" });
+    await store.linkCloud("thread-1", CLOUD, "copy-1");
+    await store.linkCloud(
+      "thread-2",
+      { ...CLOUD, sessionId: "session_02" },
+      "copy-2",
+    );
+
+    const archived = await store.setCloudArchived("thread-1", true);
+    const reopened = await openStore();
+
+    expect(archived.isOk()).toBe(true);
+    expect(reopened.cloudThreadIds()).toEqual(["thread-2"]);
+    expect(reopened.archivedCloudThreadIds()).toEqual(["thread-1"]);
+    expect(reopened.get("thread-1")).toMatchObject({
+      archived: true,
+      cloud: CLOUD,
+    });
+    expect(reopened.cloudOwner("session_01Cloud")).toBe("thread-1");
+  });
+
+  test("copies an archived Cloud thread again once it is unarchived", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.linkCloud("thread-1", CLOUD, "copy-1");
+    await store.setCloudArchived("thread-1", true);
+
+    await store.setCloudArchived("thread-1", false);
+    const reopened = await openStore();
+
+    expect(reopened.cloudThreadIds()).toEqual(["thread-1"]);
+    expect(reopened.archivedCloudThreadIds()).toEqual([]);
+    expect(reopened.get("thread-1")?.archived).toBeUndefined();
+  });
+
+  test("leaves a thread with no Cloud link unmarked when archived", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+
+    await store.setCloudArchived("thread-1", true);
+
+    expect(store.get("thread-1")?.archived).toBeUndefined();
+    expect(store.archivedCloudThreadIds()).toEqual([]);
+  });
+
+  test("forgets the archived mark with the link, so a session linked again is copied", async () => {
+    const store = await openStore();
+    await store.register(ENTRY);
+    await store.linkCloud("thread-1", CLOUD, "copy-1");
+    await store.setCloudArchived("thread-1", true);
+
+    await store.unlinkCloud("thread-1");
+    const reopened = await openStore();
+
+    expect(reopened.get("thread-1")?.archived).toBeUndefined();
+    expect(reopened.get("thread-1")?.cloud).toBeUndefined();
+  });
+
   test("refuses a thread that already holds a conversation", async () => {
     const store = await openStore();
     await store.register(ENTRY);

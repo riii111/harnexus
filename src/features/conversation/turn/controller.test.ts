@@ -685,6 +685,46 @@ describe("releaseThread", () => {
   );
 });
 
+describe("releaseThread and restoreThread of a Cloud thread", () => {
+  const CLOUD = { sessionId: "session_01Cloud", shown: null };
+
+  test("holds the thread as archived once it is archived and as copied again once it is restored", async () => {
+    const { turns, store } = await harness([fakeClaude(SUBSCRIPTION)]);
+    await store.register({
+      threadId: "th-cloud",
+      model: "claude-opus-5-5",
+      worktree: dir,
+    });
+    await store.linkCloud("th-cloud", CLOUD, "copy-1");
+    expect(store.cloudThreadIds()).toEqual(["th-cloud"]);
+
+    turns.releaseThread("th-cloud", "archived");
+    await until(() => store.archivedCloudThreadIds().length === 1);
+    expect(store.cloudThreadIds()).toEqual([]);
+
+    turns.restoreThread("th-cloud");
+    await until(() => store.cloudThreadIds().length === 1);
+
+    expect(store.archivedCloudThreadIds()).toEqual([]);
+    expect(store.get("th-cloud")?.cloud).toEqual(CLOUD);
+  });
+
+  test("leaves a thread that is deleted copied until its runtime unlinks it", async () => {
+    const { turns, store } = await harness([fakeClaude(SUBSCRIPTION)]);
+    await store.register({
+      threadId: "th-cloud",
+      model: "claude-opus-5-5",
+      worktree: dir,
+    });
+    await store.linkCloud("th-cloud", CLOUD, "copy-1");
+
+    turns.releaseThread("th-cloud", "deleted");
+
+    expect(store.archivedCloudThreadIds()).toEqual([]);
+    expect(store.cloudThreadIds()).toEqual(["th-cloud"]);
+  });
+});
+
 describe("turn/interrupt", () => {
   test("replies before the turn completes as interrupted", async () => {
     const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });

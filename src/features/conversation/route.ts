@@ -85,6 +85,7 @@ type Turns = {
   answerRequest: (response: Record<string, unknown>) => boolean;
   liveTurnOf: (threadId: string) => LiveTurn | null;
   releaseThread: (threadId: string, ended: ThreadEnd) => void;
+  restoreThread: (threadId: string) => void;
 };
 
 type RouterThreads = Pick<
@@ -318,6 +319,12 @@ export const createRouter = ({
         threadId: String(call.request.params.threadId),
         ended,
       });
+
+  const routeThreadRestore = (call: AppCall) =>
+    awaitResponse(call, {
+      kind: "threadRestore",
+      threadId: String(call.request.params.threadId),
+    });
 
   const routeThreadRead = ({ line, request }: AppCall) => {
     const { id, params } = request;
@@ -573,6 +580,7 @@ export const createRouter = ({
     ["thread/fork", routeFork],
     ["thread/archive", forClaudeThread(routeThreadEnd("archived"))],
     ["thread/delete", forClaudeThread(routeThreadEnd("deleted"))],
+    ["thread/unarchive", forClaudeThread(routeThreadRestore)],
     ["thread/list", routeThreadList],
     ["turn/start", routeTurnStart],
     ["turn/steer", routeTurnSteer],
