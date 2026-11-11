@@ -233,6 +233,115 @@ describe("createCloudRuntime archived threads", () => {
     expect(env.copyCalls).toBe(1);
   });
 
+  test("shows nothing of a reply copied after its thread was archived", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "hi"), endReply("r1", "late reply")]],
+      shown: null,
+    });
+    env.duringCopy = async () => {
+      env.archived.add("thread-1");
+    };
+
+    const turn = env.turn("hi");
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.outcome).toEqual({ status: "interrupted" });
+    expect(turn.texts().join(" ")).not.toContain("late reply");
+    expect(env.sessionIds.get("thread-1")).toBe("copy-0");
+    expect(env.discarded).toContain("copy-1");
+  });
+
+  test("shows nothing in a turn of Claude's own that opened before its thread was archived", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "hi"), endReply("r1", "late reply")]],
+      shown: null,
+    });
+    env.duringCopy = async () => {
+      env.archived.add("thread-1");
+    };
+
+    const turn = env.turn("", { startedBy: "claude" });
+
+    await env.runtime.run(turn.running);
+
+    expect(turn.outcome).toEqual({ status: "completed" });
+    expect(turn.texts()).toEqual([]);
+    expect(env.discarded).toContain("copy-1");
+  });
+
+  test("opens no chat and tells no outside conversation of a copy made while its thread was being archived", async () => {
+    const env = linked({
+      copies: [
+        [
+          prompt("p0", "earlier"),
+          endReply("r0", "ok"),
+          prompt("p1", "start a worker"),
+          reply(
+            "a1",
+            "m1",
+            toolUse("t1", "mcp__claude-code-remote__create_session", {}),
+            "tool_use",
+          ),
+          toolResult(
+            "u1",
+            "t1",
+            JSON.stringify({
+              ccr: { id: "session_01ChildFixtureSession000", title: "worker" },
+            }),
+          ),
+          endReply("a2", "started"),
+        ],
+      ],
+      shown: "r0",
+    });
+    env.runtime.listen(() => true);
+    env.duringCopy = async () => {
+      env.archived.add("thread-1");
+    };
+
+    await env.tick();
+
+    expect(env.copyCalls).toBe(1);
+    expect(env.children).toEqual([]);
+    expect(env.observed).toEqual([]);
+  });
+
+  test("leaves a thread archived while the server's list was being read as archived", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "hi"), endReply("r1", "ok")]],
+      shown: "r1",
+    });
+    env.runtime.listen(() => true);
+    env.serverArchived = new Set();
+    env.duringArchiveList = async () => {
+      env.markArchived("thread-1", true);
+    };
+
+    await env.tick();
+
+    expect(env.archived.has("thread-1")).toBe(true);
+    expect(env.copyCalls).toBe(0);
+  });
+
+  test("leaves a thread unarchived while the server's list was being read as copied", async () => {
+    const env = linked({
+      copies: [[prompt("p1", "hi"), endReply("r1", "ok")]],
+      shown: "r1",
+    });
+    env.runtime.listen(() => true);
+    env.archived.add("thread-1");
+    env.serverArchived = new Set(["thread-1"]);
+    env.duringArchiveList = async () => {
+      env.markArchived("thread-1", false);
+    };
+
+    await env.tick();
+
+    expect(env.archived.has("thread-1")).toBe(false);
+    expect(env.copyCalls).toBe(1);
+  });
+
   test("stops following a turn once its thread is archived", async () => {
     const env = linked({ copies: [[prompt("p1", "hi")]], shown: null });
     env.duringCopy = async (call) => {
@@ -2340,6 +2449,7 @@ const setup = ({
   const sessionIds = new Map<string, string | null>();
   const clouds = new Map<string, CloudLink>();
   const archived = new Set<string>();
+  const revisions = new Map<string, number>();
   const owners = new Map<string, string>();
   const links: { threadId: string; cloud: CloudLink; copy: string }[] = [];
   const picked: string[] = [];
@@ -2366,6 +2476,14 @@ const setup = ({
     owners,
     clouds,
     archived,
+    // Archives or unarchives a thread as the app does, which a read of the server's list started earlier does not see.
+    markArchived: (threadId: string, value: boolean) => {
+      revisions.set(threadId, (revisions.get(threadId) ?? 0) + 1);
+      if (value) archived.add(threadId);
+      else archived.delete(threadId);
+    },
+    // Runs while the server's list is being read and is waited for before it answers.
+    duringArchiveList: async () => {},
     // The threads the server holds as archived, which are the archived ones of the store unless a test sets others, and the tag of the failure it answers with instead.
     serverArchived: null as ReadonlySet<string> | null,
     archiveListFailure: null as string | null,
@@ -2487,9 +2605,9 @@ const setup = ({
       archivedCloudThreadIds: () =>
         [...clouds.keys()].filter((threadId) => archived.has(threadId)),
       isCloudArchived: (threadId) => archived.has(threadId),
+      archiveRevisionOf: (threadId) => revisions.get(threadId) ?? 0,
       setCloudArchived: async (threadId, value) => {
-        if (value) archived.add(threadId);
-        else archived.delete(threadId);
+        env.markArchived(threadId, value);
       },
       sessionIdOf: (threadId) => sessionIds.get(threadId) ?? null,
       consumePick: (threadId) => {
@@ -2529,8 +2647,10 @@ const setup = ({
     },
     archivedThreadIds: async () => {
       env.archiveListCalls += 1;
+      const listed = env.serverArchived ?? new Set(archived);
+      await env.duringArchiveList();
       return env.archiveListFailure === null
-        ? Result.ok(env.serverArchived ?? new Set(archived))
+        ? Result.ok(listed)
         : Result.err({ _tag: env.archiveListFailure });
     },
     sendToCloud: async (cloud, sentText) => {

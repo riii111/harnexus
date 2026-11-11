@@ -75,30 +75,45 @@ describe("ThreadValues.forgetThread", () => {
 });
 
 describe("ThreadValues.setCloudArchived", () => {
-  test("saves the mark on a Cloud thread only when it changes it", async () => {
-    const { values, saved, record } = fixture({ cloud: true });
+  test("holds the decision at once and saves each decision in order, so a decision made while an earlier one saves wins", async () => {
+    const { values, saves } = fixture({ cloud: true, holdSaves: true });
+
+    const archiving = values.setCloudArchived("th-1", true);
+    expect(values.isCloudArchived("th-1")).toBe(true);
+    expect(values.cloudThreadIds()).toEqual([]);
+    const unarchiving = values.setCloudArchived("th-1", false);
+    saves.release();
+    await Promise.all([archiving, unarchiving]);
+
+    expect(saves.saved).toEqual([true, false]);
+    expect(values.isCloudArchived("th-1")).toBe(false);
+    expect(values.cloudThreadIds()).toEqual(["th-1"]);
+  });
+
+  test("numbers each decision, so a read started earlier can tell the thread changed", async () => {
+    const { values } = fixture({ cloud: true });
+    const before = values.archiveRevisionOf("th-1");
 
     await values.setCloudArchived("th-1", true);
-    record.archived = true;
-    await values.setCloudArchived("th-1", true);
-    await values.setCloudArchived("th-1", false);
 
-    expect(saved).toEqual([true, false]);
+    expect(values.archiveRevisionOf("th-1")).toBeGreaterThan(before);
   });
 
   test("saves nothing for a thread with no Cloud link", async () => {
-    const { values, saved } = fixture({ cloud: false });
+    const { values, saves } = fixture({ cloud: false });
 
     await values.setCloudArchived("th-1", true);
 
-    expect(saved).toEqual([]);
+    expect(saves.saved).toEqual([]);
+    expect(values.isCloudArchived("th-1")).toBe(false);
   });
 
-  test("logs a mark that could not be saved, since the thread stays copied until the next read", async () => {
+  test("keeps the thread archived while it runs and logs a decision that could not be saved", async () => {
     const { values, events } = fixture({ cloud: true, saveFails: true });
 
     await values.setCloudArchived("th-1", true);
 
+    expect(values.isCloudArchived("th-1")).toBe(true);
     expect(events).toEqual([
       {
         event: "claude_turn",
@@ -112,7 +127,8 @@ describe("ThreadValues.setCloudArchived", () => {
 const fixture = ({
   cloud = false,
   saveFails = false,
-}: { cloud?: boolean; saveFails?: boolean } = {}) => {
+  holdSaves = false,
+}: { cloud?: boolean; saveFails?: boolean; holdSaves?: boolean } = {}) => {
   const record = {
     threadId: "th-1",
     sessionId: "se-1",
@@ -122,12 +138,14 @@ const fixture = ({
     messageIds: [],
     runState: "idle",
   } as ThreadRecord & { model: string; sessionId: string | null };
-  const writable = record as {
-    model: string;
-    sessionId: string | null;
-    archived?: true;
-  };
-  const saved: boolean[] = [];
+  const writable = record as { model: string; sessionId: string | null };
+  const saves = { saved: [] as boolean[], release: () => {} };
+  const held = holdSaves
+    ? new Promise<void>((resolve) => {
+        saves.release = resolve;
+      })
+    : Promise.resolve();
+  let storeArchived = false;
   const events: unknown[] = [];
   const store = {
     get: (threadId: string) =>
@@ -135,12 +153,17 @@ const fixture = ({
         ? {
             ...record,
             ...(cloud && { cloud: { sessionId: "cs", shown: null } }),
-            ...(writable.archived && { archived: true }),
+            ...(storeArchived && { archived: true }),
           }
         : undefined,
+    cloudThreadIds: () => (cloud && !storeArchived ? ["th-1"] : []),
+    archivedCloudThreadIds: () => (cloud && storeArchived ? ["th-1"] : []),
     setCloudArchived: async (_threadId: string, archived: boolean) => {
-      saved.push(archived);
-      return saveFails ? Result.err({ _tag: "ThreadNotFound" }) : Result.ok();
+      await held;
+      saves.saved.push(archived);
+      if (saveFails) return Result.err({ _tag: "ThreadNotFound" });
+      storeArchived = archived;
+      return Result.ok();
     },
     setModel: async () => Result.ok(),
     setEffort: async () => Result.ok(),
@@ -151,5 +174,5 @@ const fixture = ({
     (event) => events.push(event),
     (() => null) as EffortRule,
   );
-  return { values, record: writable, saved, events };
+  return { values, record: writable, saves, events };
 };

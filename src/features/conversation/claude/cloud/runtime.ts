@@ -120,6 +120,7 @@ export type CloudDeps = {
     | "cloudThreadIds"
     | "archivedCloudThreadIds"
     | "isCloudArchived"
+    | "archiveRevisionOf"
     | "setCloudArchived"
     | "linkCloud"
     | "unlinkCloud"
@@ -594,6 +595,15 @@ export const createCloudRuntime = <Tag extends string>(
     let movedAt = startedAt;
     // The tool calls the turn already said may wait for the user's permission, so each is mentioned once.
     const mentioned = new Set<string>();
+    const stopWaiting = () => {
+      park(threadId, follow);
+      log({ event: "claude_cloud", step: "stopped" });
+      turn.apply(
+        renderNotice(turn.state(), STOPPED_WAITING, "commentary", now()),
+      );
+      turn.finish({ status: "interrupted" }, null);
+    };
+
     // Copies still running are removed once written, however the wait ends.
     try {
       for (;;) {
@@ -605,18 +615,20 @@ export const createCloudRuntime = <Tag extends string>(
           turn.state().interrupting ||
           threads.isCloudArchived(threadId)
         ) {
-          park(threadId, follow);
-          log({ event: "claude_cloud", step: "stopped" });
-          turn.apply(
-            renderNotice(turn.state(), STOPPED_WAITING, "commentary", now()),
-          );
-          turn.finish({ status: "interrupted" }, null);
+          stopWaiting();
           return;
         }
 
         const ended = await copies.next(copyFailingSince !== null);
         if (ended === null) continue;
         const { copied } = ended;
+        // A reply copied after the chat was archived is not shown, since it would bring the chat back.
+        if (threads.isCloudArchived(threadId)) {
+          if (copied.isOk()) await discardCopy(copied.value.copy);
+          stopWaiting();
+          return;
+        }
+
         // The session only grows between compactions, so an overlapping copy without the last record shown read it before that record arrived; a compaction is taken by the next copy that does not overlap.
         const shownLast = follow.last ?? follow.after;
         if (
@@ -840,6 +852,13 @@ export const createCloudRuntime = <Tag extends string>(
       return;
     }
 
+    // A chat archived after its turn opened shows nothing, so the copy is dropped.
+    if (threads.isCloudArchived(threadId)) {
+      await discardCopy(copied.value.copy);
+      turn.finish({ status: "completed" }, null);
+      return;
+    }
+
     const all = copied.value.records;
     const shown = all.slice(indexAfter(all, cloud.shown));
     log({ event: "claude_cloud", step: "own_turn" });
@@ -939,6 +958,11 @@ export const createCloudRuntime = <Tag extends string>(
       records: all.length,
       ms: now() - startedAt,
     });
+    // A copy of a chat archived meanwhile is dropped by its caller, so it opens no chat and tells no one.
+    if (threads.isCloudArchived(threadId)) {
+      return Result.ok({ copy: copied.value, records: all });
+    }
+
     noticeChildren(threadId, all);
     // A copy made while the chat is being linked is told of by the link itself.
     const cloud = threads.cloudOf(threadId);
@@ -1041,6 +1065,11 @@ export const createCloudRuntime = <Tag extends string>(
       return true;
     }
 
+    const revisions = new Map(
+      [...threads.cloudThreadIds(), ...threads.archivedCloudThreadIds()].map(
+        (threadId) => [threadId, threads.archiveRevisionOf(threadId)],
+      ),
+    );
     const listed = await archivedThreadIds();
     if (listed.isErr()) {
       log({
@@ -1051,12 +1080,15 @@ export const createCloudRuntime = <Tag extends string>(
       return archiveSyncedAt !== null;
     }
 
+    // A chat archived or unarchived while the list was read is newer than the list, so it is left as it is.
+    const unchanged = (threadId: string) =>
+      revisions.get(threadId) === threads.archiveRevisionOf(threadId);
     const archive = threads
       .cloudThreadIds()
-      .filter((threadId) => listed.value.has(threadId));
+      .filter((threadId) => unchanged(threadId) && listed.value.has(threadId));
     const unarchive = threads
       .archivedCloudThreadIds()
-      .filter((threadId) => !listed.value.has(threadId));
+      .filter((threadId) => unchanged(threadId) && !listed.value.has(threadId));
     await Promise.all([
       ...archive.map((threadId) => threads.setCloudArchived(threadId, true)),
       ...unarchive.map((threadId) => threads.setCloudArchived(threadId, false)),

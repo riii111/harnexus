@@ -60,6 +60,12 @@ export const createThreadValues = (
   };
   // Overrides apply ahead of the store, including when a save fails.
   const overrides = new Map<string, Overrides>();
+  // The latest archive decision per Cloud thread, kept ahead of the store, whose save finishes later and in order.
+  const archiveMarks = new Map<
+    string,
+    { archived: boolean; revision: number }
+  >();
+  let revisions = 0;
   const valuesOf = (threadId: string) => {
     let values = overrides.get(threadId);
     if (values === undefined) {
@@ -329,20 +335,31 @@ export const createThreadValues = (
   };
 
   const unlinkCloud = (threadId: string) => {
+    archiveMarks.delete(threadId);
     const values = overrides.get(threadId);
     if (values !== undefined) delete values.sessionId;
     prune(threadId);
     return logUnsaved("session_not_saved", store.unlinkCloud(threadId));
   };
 
+  const isCloudArchived = (threadId: string) =>
+    archiveMarks.get(threadId)?.archived ??
+    store.get(threadId)?.archived === true;
+
   const setCloudArchived = async (threadId: string, archived: boolean) => {
     if (cloudOf(threadId) === null) return;
-    if ((store.get(threadId)?.archived === true) === archived) return;
+    revisions += 1;
+    archiveMarks.set(threadId, { archived, revision: revisions });
     await logUnsaved(
       "archive_not_saved",
       store.setCloudArchived(threadId, archived),
     );
   };
+
+  const cloudThreadsWhere = (archived: boolean) =>
+    [...store.cloudThreadIds(), ...store.archivedCloudThreadIds()].filter(
+      (threadId) => isCloudArchived(threadId) === archived,
+    );
 
   const consumePick = (threadId: string) => {
     const values = overrides.get(threadId);
@@ -383,10 +400,11 @@ export const createThreadValues = (
     linkCloud,
     unlinkCloud,
     setCloudCopy,
-    cloudThreadIds: () => store.cloudThreadIds(),
-    archivedCloudThreadIds: () => store.archivedCloudThreadIds(),
-    isCloudArchived: (threadId: string) =>
-      store.get(threadId)?.archived === true,
+    cloudThreadIds: () => cloudThreadsWhere(false),
+    archivedCloudThreadIds: () => cloudThreadsWhere(true),
+    isCloudArchived,
+    archiveRevisionOf: (threadId: string) =>
+      archiveMarks.get(threadId)?.revision ?? 0,
     setCloudArchived,
     cloudOwner: (cloudSessionId: string) => store.cloudOwner(cloudSessionId),
   };
