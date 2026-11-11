@@ -5,10 +5,22 @@ import { type InferErr, Result } from "better-result";
 
 import { readClaudeSession } from "../../../infra/claude/session.ts";
 import type { ServerRequest } from "../../../infra/codex/server-requests.ts";
+import {
+  type SavedSideChat,
+  type SideChatStore,
+  unreadableSideChats,
+  unsavedSideChats,
+} from "../../../infra/side-chat-store.ts";
 import type { RewindPoint } from "../../../infra/thread-store.ts";
 import { prompt, reply, text } from "../testing/session-record.ts";
+import type { Thread } from "../thread-request.ts";
 import type { SideChatContext } from "../thread-values.ts";
-import { createSideChats, type ForkPoint, type Opened } from "./side-chat.ts";
+import {
+  createSideChats,
+  type ForkPoint,
+  type Opened,
+  type SideChatEvent,
+} from "./side-chat.ts";
 
 describe("createSideChats.pointOf", () => {
   test("fixes the side chat at the main conversation's last record", async () => {
@@ -387,6 +399,7 @@ describe("createSideChats.beforeTurn on a side chat of a Codex thread", () => {
       parent: { agent: "Codex", unread: true },
       instructions: INSTRUCTIONS,
       model: undefined,
+      kept: null,
     });
 
     const switched = await sideChats.beforeTurn("th-side", "claude-fixture");
@@ -430,6 +443,7 @@ describe("createSideChats.beforeTurn on a side chat of a Claude thread", () => {
       parent: { agent: "Claude", unread: true },
       instructions: INSTRUCTIONS,
       model: undefined,
+      kept: null,
     });
 
     const moved = await sideChats.beforeTurn("th-side", "gpt-fixture");
@@ -441,11 +455,344 @@ describe("createSideChats.beforeTurn on a side chat of a Claude thread", () => {
   });
 });
 
+describe("createSideChats.remember on a side chat the server keeps", () => {
+  test("saves where the main conversation stood so a restart can hand it over", async () => {
+    const saved = unsavedSideChats();
+    const { sideChats } = setup({ saved });
+
+    sideChats.remember(
+      "th-side",
+      claudeSide(await pointOf(sideChats), undefined, KEPT),
+    );
+    await settle();
+
+    expect(saved.all()).toEqual([SAVED_ON_CLAUDE]);
+  });
+
+  test("saves nothing for a side chat the server drops on a restart", async () => {
+    const saved = unsavedSideChats();
+    const { sideChats } = setup({ saved });
+
+    sideChats.remember(
+      "th-side",
+      claudeSide(await pointOf(sideChats), undefined),
+    );
+    await settle();
+
+    expect(saved.all()).toEqual([]);
+  });
+
+  test("saves a side chat opened on Codex without a Claude thread to restore", async () => {
+    const saved = unsavedSideChats();
+    const { sideChats } = setup({ saved, claudeSides: [] });
+
+    sideChats.remember(
+      "th-side",
+      claudeSide(await pointOf(sideChats), "gpt-fixture", {
+        claudeThread: null,
+      }),
+    );
+    await settle();
+
+    expect(saved.all()).toEqual([
+      { ...SAVED_ON_CLAUDE, claude: null, choice: "gpt-fixture" },
+    ]);
+  });
+
+  test("logs a side chat it could not save", async () => {
+    const { sideChats, logged } = setup({ saved: failingStore() });
+
+    sideChats.remember(
+      "th-side",
+      claudeSide(await pointOf(sideChats), undefined, KEPT),
+    );
+    await settle();
+
+    expect(logged).toContainEqual({
+      event: "side_chat_not_saved",
+      error: "FileWriteFailed",
+    });
+  });
+
+  test("tells whether the file that keeps side chats can be used", () => {
+    const readable = setup().sideChats;
+    const unreadable = setup({ saved: unreadableSideChats() }).sideChats;
+
+    expect(readable.keeps()).toBe(true);
+    expect(unreadable.keeps()).toBe(false);
+  });
+});
+
+describe("createSideChats.beforeTurn on a side chat the server keeps", () => {
+  test("drops the saved side chat once its first message moved to Codex", async () => {
+    const saved = unsavedSideChats();
+    const { sideChats, injects } = setup({ saved });
+    sideChats.remember(
+      "th-side",
+      claudeSide(await pointOf(sideChats), undefined, KEPT),
+    );
+
+    const refusal = await sideChats.beforeTurn("th-side", "gpt-fixture");
+    await settle();
+
+    expect(refusal).toBeNull();
+    expect(injects).toHaveLength(1);
+    expect(saved.all()).toEqual([]);
+  });
+
+  test("saves a hand-over of unknown outcome before the brief is written, so a restart cannot write it twice", async () => {
+    const saved = unsavedSideChats();
+    const during: SavedSideChat[][] = [];
+    const { sideChats } = setup({
+      saved,
+      onInject: () => during.push([...saved.all()]),
+    });
+    sideChats.remember(
+      "th-side",
+      claudeSide(await pointOf(sideChats), undefined, KEPT),
+    );
+
+    await sideChats.beforeTurn("th-side", "gpt-fixture");
+
+    expect(during).toEqual([[{ ...SAVED_ON_CLAUDE, stopped: true }]]);
+  });
+
+  test("saves the side chat as it was after a rejected hand-over, so a restart can send the message again", async () => {
+    const saved = unsavedSideChats();
+    const { sideChats, results } = setup({ saved });
+    sideChats.remember(
+      "th-side",
+      claudeSide(await pointOf(sideChats), undefined, KEPT),
+    );
+    results.push(Result.err(REJECTED));
+
+    const refusal = await sideChats.beforeTurn("th-side", "gpt-fixture");
+    await settle();
+
+    expect(refusal).toBe("side_chat_not_briefed");
+    expect(saved.all()).toEqual([SAVED_ON_CLAUDE]);
+  });
+
+  test("keeps a side chat whose hand-over has an unknown outcome saved as stopped", async () => {
+    const saved = unsavedSideChats();
+    const { sideChats, results } = setup({ saved });
+    sideChats.remember(
+      "th-side",
+      claudeSide(await pointOf(sideChats), undefined, KEPT),
+    );
+    results.push(Result.err(UNANSWERED));
+
+    const refusal = await sideChats.beforeTurn("th-side", "gpt-fixture");
+    await settle();
+
+    expect(refusal).toBe("side_chat_stopped");
+    expect(saved.all()).toEqual([{ ...SAVED_ON_CLAUDE, stopped: true }]);
+  });
+
+  test("sends nothing when the stop marker cannot be saved before the hand-over", async () => {
+    const { sideChats, injects, dropped } = setup({ saved: failingStore() });
+    sideChats.remember(
+      "th-side",
+      claudeSide(await pointOf(sideChats), undefined, KEPT),
+    );
+
+    const refusal = await sideChats.beforeTurn("th-side", "gpt-fixture");
+
+    expect(refusal).toBe("side_chat_not_briefed");
+    expect(injects).toEqual([]);
+    expect(dropped).toEqual([]);
+  });
+
+  test("drops the saved side chat once Claude began its conversation", async () => {
+    const saved = unsavedSideChats();
+    const { sideChats, begun } = setup({ saved });
+    sideChats.remember(
+      "th-side",
+      claudeSide(await pointOf(sideChats), undefined, KEPT),
+    );
+    await settle();
+    begun.add("th-side");
+
+    const refusal = await sideChats.beforeTurn("th-side", "gpt-fixture");
+    await settle();
+
+    expect(refusal).toBeNull();
+    expect(saved.all()).toEqual([]);
+  });
+});
+
+describe("createSideChats.beforeSettings on a side chat the server keeps", () => {
+  test("saves the model picked before the first message and restores it", async () => {
+    const saved = unsavedSideChats();
+    const { sideChats } = setup({ saved });
+    sideChats.remember(
+      "th-side",
+      claudeSide(await pointOf(sideChats), undefined, KEPT),
+    );
+
+    sideChats.beforeSettings("th-side", "gpt-fixture");
+    await settle();
+    const restarted = setup({ saved, claudeSides: [] });
+
+    expect(saved.all()[0]?.choice).toBe("gpt-fixture");
+    expect(restarted.sideChats.codexChoiceOf("th-side")).toBe("gpt-fixture");
+  });
+});
+
+describe("createSideChats.release", () => {
+  test.each([
+    { name: "a deleted thread", ended: "deleted" as const, expected: [] },
+    {
+      name: "an archived thread",
+      ended: "archived" as const,
+      expected: [SAVED_ON_CLAUDE],
+    },
+  ])(
+    "leaves the saved side chat of $name as $expected",
+    async ({ ended, expected }) => {
+      const saved = unsavedSideChats();
+      const { sideChats } = setup({ saved });
+      sideChats.remember(
+        "th-side",
+        claudeSide(await pointOf(sideChats), undefined, KEPT),
+      );
+      await settle();
+      expect(saved.all()).toEqual([SAVED_ON_CLAUDE]);
+
+      sideChats.release("th-side", ended);
+      await settle();
+
+      expect(saved.all()).toEqual(expected);
+    },
+  );
+});
+
+describe("createSideChats restoring saved side chats", () => {
+  test("takes up a side chat again with the conversation fixed where it stood and hands it to Codex", async () => {
+    const saved = await savedWith(SAVED_ON_CLAUDE);
+    const { sideChats, restored, noted, injects, record, dropped } = setup({
+      saved,
+      claudeSides: [],
+    });
+    record.push(prompt("u3", "said after the fork"));
+
+    const picked = sideChats.beforeSettings("th-side", "gpt-fixture");
+    const refusal = await sideChats.beforeTurn("th-side", "gpt-fixture");
+
+    expect(restored).toEqual([
+      ["th-side", MAIN, { sessionId: "session-main", at: "a2" }],
+    ]);
+    expect(noted.get("th-side")).toEqual({
+      instructions: INSTRUCTIONS,
+      reference: null,
+    });
+    expect(picked).toBeNull();
+    expect(refusal).toBeNull();
+    expect(injects.map(([threadId]) => threadId)).toEqual(["th-side"]);
+    expect(briefText(injects)).toContain("first answer");
+    expect(briefText(injects)).not.toContain("said after the fork");
+    expect(dropped).toEqual(["th-side"]);
+    await settle();
+    expect(saved.all()).toEqual([]);
+  });
+
+  test("restores no Claude thread for a side chat opened on Codex but still hands it the conversation", async () => {
+    const saved = await savedWith({ ...SAVED_ON_CLAUDE, claude: null });
+    const { sideChats, restored, injects } = setup({
+      saved,
+      claudeSides: [],
+    });
+
+    const refusal = await sideChats.beforeTurn("th-side", undefined);
+
+    expect(restored).toEqual([]);
+    expect(refusal).toBeNull();
+    expect(injects).toHaveLength(1);
+  });
+
+  test("keeps a restored side chat on Claude when no Codex model is picked", async () => {
+    const saved = await savedWith(SAVED_ON_CLAUDE);
+    const { sideChats, injects } = setup({ saved, claudeSides: ["th-side"] });
+
+    const refusal = await sideChats.beforeTurn("th-side", "claude-fixture");
+
+    expect(refusal).toBeNull();
+    expect(injects).toEqual([]);
+  });
+
+  test.each([
+    {
+      name: "a hand-over of unknown outcome",
+      record: { ...SAVED_ON_CLAUDE, stopped: true },
+    },
+    {
+      name: "a main conversation that could not be read",
+      record: { ...SAVED_ON_CLAUDE, point: "unread" as const },
+    },
+  ])(
+    "takes no message in a side chat restored after $name",
+    async ({ record }) => {
+      const saved = await savedWith(record);
+      const { sideChats, injects } = setup({ saved });
+
+      const first = await sideChats.beforeTurn("th-side", "gpt-fixture");
+      const next = await sideChats.beforeTurn("th-side", undefined);
+
+      expect(first).toBe("side_chat_stopped");
+      expect(next).toBe("side_chat_stopped");
+      expect(sideChats.isStopped("th-side")).toBe(true);
+      expect(injects).toEqual([]);
+    },
+  );
+
+  test("sends no message to a thread that might be a side chat when the folder cannot be listed", async () => {
+    const saved = unreadableSideChats();
+    const { sideChats, injects } = setup({
+      saved,
+      claudeSides: ["th-claude"],
+    });
+
+    const unknown = await sideChats.beforeTurn("th-side", "gpt-fixture");
+    const claude = sideChats.beforeTurn("th-claude", "claude-fixture");
+    const picked = sideChats.beforeSettings("th-side", "claude-fixture");
+    const pickedCodex = sideChats.beforeSettings("th-side", "gpt-fixture");
+    const pickedOnClaude = sideChats.beforeSettings(
+      "th-claude",
+      "claude-fixture",
+    );
+
+    expect(unknown).toBe("side_chat_state_unknown");
+    expect(claude).toBeNull();
+    expect(picked).toBe("side_chat_state_unknown");
+    expect(pickedCodex).toBeNull();
+    expect(pickedOnClaude).toBeNull();
+    expect(injects).toEqual([]);
+  });
+
+  test("leaves out and drops a saved side chat whose Claude conversation began", async () => {
+    const saved = await savedWith(SAVED_ON_CLAUDE);
+    const { restored } = setup({ saved, begun: ["th-side"] });
+    await settle();
+
+    expect(restored).toEqual([]);
+    expect(saved.all()).toEqual([]);
+  });
+});
+
 type Injected = Awaited<ReturnType<ServerRequest>>;
 
 const setup = ({
   sessions = { "th-main": "session-main" } as Record<string, string>,
   claudeSides = ["th-side"],
+  saved = unsavedSideChats(),
+  begun: begunThreads = [],
+  onInject = () => {},
+}: {
+  sessions?: Record<string, string>;
+  claudeSides?: string[];
+  saved?: SideChatStore;
+  begun?: string[];
+  onInject?: () => void;
 } = {}) => {
   const record: SessionMessage[] = [
     prompt("u1", "first question"),
@@ -455,7 +802,7 @@ const setup = ({
   ];
   const injects: [string, object[]][] = [];
   const dropped: string[] = [];
-  const begun = new Set<string>();
+  const begun = new Set<string>(begunThreads);
   const rewinds = new Map<string, RewindPoint>();
   const results: Injected[] = [];
   const reading = { unreadable: false };
@@ -466,6 +813,9 @@ const setup = ({
     asc: page([FINISHED_TURN], null),
   };
   const listed: object[] = [];
+  const restored: [string, Thread, { sessionId: string; at: string } | null][] =
+    [];
+  const logged: SideChatEvent[] = [];
   const sideChats = createSideChats({
     sessionIdOf: (threadId) => sessions[threadId] ?? null,
     rewindOf: (threadId) => rewinds.get(threadId),
@@ -484,6 +834,7 @@ const setup = ({
       return answer === "refused" ? Result.err(REJECTED) : Result.ok(answer);
     },
     inject: async (threadId, items) => {
+      onInject();
       injects.push([threadId, items]);
       return results.shift() ?? Result.ok({});
     },
@@ -494,9 +845,16 @@ const setup = ({
       claudeThreads.delete(threadId);
     },
     noteSideChat: (threadId, context) => noted.set(threadId, context),
+    restoreFork: async (threadId, thread, source) => {
+      restored.push([threadId, thread, source]);
+    },
+    saved,
+    log: (event) => logged.push(event),
   });
   return {
     sideChats,
+    restored,
+    logged,
     injects,
     dropped,
     begun,
@@ -516,10 +874,15 @@ const pointOf = async (sideChats: ReturnType<typeof setup>["sideChats"]) => {
   return point.isOk() ? point.value : null;
 };
 
-const claudeSide = (point: ForkPoint, model: string | undefined): Opened => ({
+const claudeSide = (
+  point: ForkPoint,
+  model: string | undefined,
+  kept: Opened["kept"] = null,
+): Opened => ({
   parent: { agent: "Claude", point },
-  instructions: null,
+  instructions: INSTRUCTIONS,
   model,
+  kept,
 });
 
 const codexSide = (
@@ -529,14 +892,54 @@ const codexSide = (
   parent: { agent: "Codex", reference },
   instructions: INSTRUCTIONS,
   model,
+  kept: null,
 });
 
 const INSTRUCTIONS = "You are in a side conversation, not the main thread.";
+
+const KEPT = {
+  claudeThread: { model: "claude-fixture", cwd: "/fixture/work" },
+};
+
+const SAVED_ON_CLAUDE: SavedSideChat = {
+  threadId: "th-side",
+  claude: { model: "claude-fixture", cwd: "/fixture/work" },
+  point: {
+    sessionId: "session-main",
+    at: "a2",
+    model: "claude-fixture",
+    cwd: "/fixture/work",
+  },
+  instructions: INSTRUCTIONS,
+  choice: null,
+  stopped: false,
+};
+
+const savedWith = async (record: SavedSideChat) => {
+  const saved = unsavedSideChats();
+  await saved.save(record);
+  return saved;
+};
+
+const failingStore = (): SideChatStore => ({
+  all: () => [],
+  usable: true,
+  save: async () => Result.err(NOT_SAVED),
+  remove: async () => Result.err(NOT_SAVED),
+});
+
+const settle = () => Bun.sleep(0);
 
 const briefText = (injects: [string, object[]][]) =>
   JSON.stringify(injects[0]?.[1] ?? null);
 
 const MAIN = { model: "claude-fixture", cwd: "/fixture/work" };
+
+const NOT_SAVED = {
+  _tag: "SideChatNotSaved",
+  reason: "FileWriteFailed",
+  message: "cannot save the side chats",
+} as InferErr<Awaited<ReturnType<SideChatStore["save"]>>>;
 
 const REJECTED = {
   _tag: "ServerRequestRejected",

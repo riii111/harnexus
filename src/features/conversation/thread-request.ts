@@ -155,6 +155,10 @@ const REFUSAL_MESSAGES = {
     "this side chat already sent a message on another model; open a new side chat to ask that one",
   side_chat_not_briefed:
     "the Claude conversation could not be handed to Codex, so the message was not sent; send it again",
+  side_chat_not_kept:
+    "the folder that keeps side chats across a restart cannot be read, so this side chat was not opened; fix the side-chats folder beside threads.json, then restart the app",
+  side_chat_state_unknown:
+    "the folder that keeps side chats across a restart cannot be read, so Harnexus cannot tell whether this thread is a side chat that still needs the Claude conversation, and sent nothing; fix the side-chats folder beside threads.json and restart the app, or if you remove it, open a new side chat, since old ones lose what they were to hand over",
   side_chat_stopped:
     "Harnexus could not confirm that this side chat received the Claude conversation, so it takes no more messages; open a new side chat",
   codex_incompatible:

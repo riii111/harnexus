@@ -146,6 +146,18 @@ export const createThreadValues = (
     }
   };
 
+  // A saved side chat's fork comes back as it stood, pinned where its source stood when the side chat opened.
+  const restoreFork = (
+    threadId: string,
+    thread: Thread,
+    source: { sessionId: string; at: string } | null,
+  ) => {
+    if (store.get(threadId) !== undefined) return;
+    const values = valuesOf(threadId);
+    values.adopted = thread;
+    if (source !== null) values.forkSource = source;
+  };
+
   const noteSideChat = (threadId: string, context: SideChatContext) => {
     valuesOf(threadId).sideChat = context;
   };
@@ -380,6 +392,7 @@ export const createThreadValues = (
     rewindOf: (threadId: string) => store.get(threadId)?.rewind,
     adopt,
     adoptFork,
+    restoreFork,
     forgetFork,
     forgetThread,
     noteSideChat,
