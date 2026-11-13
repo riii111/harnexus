@@ -173,6 +173,41 @@ describe("startCloudSession", () => {
     expect(run.isErr() && run.error.message).toContain("trust");
   });
 
+  test("says when claude asks to trust the folder with cursor moves between its words", async () => {
+    const { file, root } = await fakeClaude(
+      `printf 'Is\\033[1Cthis\\033[1Ca\\033[1Cproject\\033[1Cyou\\033[1Ccreated\\033[1Cor\\033[1Cone\\033[1Cyou\\033[1Ctrust?\\r\\nEnter\\033[1Cto\\033[1Cconfirm\\033[1C·\\033[1CEsc\\033[1Cto\\033[1Ccancel\\r\\n'`,
+    );
+
+    const run = await startCloudSession(file, "summarize it", {
+      cwd: root,
+      env: { PATH: process.env.PATH },
+      timeoutMs: 10_000,
+    });
+
+    expect(run.isErr() && run.error.message).toBe(
+      `claude asks whether to trust ${root}; open claude there once and trust it`,
+    );
+  });
+
+  test("fails at once with the question when claude waits on another dialog", async () => {
+    const { file, root } = await fakeClaude(
+      `printf 'Turn\\033[1Con\\033[1Cthe\\033[1Cnew\\033[1Cmode?\\r\\n\\033[2C1.\\033[1CYes\\r\\nEnter\\033[1Cto\\033[1Cconfirm\\033[1C·\\033[1CEsc\\033[1Cto\\033[1Ccancel\\r\\n'`,
+    );
+    const started = Date.now();
+
+    const run = await startCloudSession(file, "summarize it", {
+      cwd: root,
+      env: { PATH: process.env.PATH },
+      timeoutMs: 10_000,
+    });
+
+    expect(run.isErr() && run.error).toMatchObject({
+      message: `claude asks "Turn on the new mode?" before starting in ${root}; open claude there once and answer it`,
+      mayHaveStarted: false,
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
   test("fails with what claude printed last when it starts nothing", async () => {
     const { file, root } = await fakeClaude(
       `printf 'Not logged in\\n'; exit 1`,

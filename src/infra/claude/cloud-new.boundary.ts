@@ -106,7 +106,7 @@ export const startCloudSession = (
             return;
           }
 
-          if (TRUST_PROMPT.test(plain))
+          if (TRUST_PROMPT.test(plain)) {
             finish(() =>
               reject(
                 new NotStarted(
@@ -114,6 +114,21 @@ export const startCloudSession = (
                 ),
               ),
             );
+            return;
+          }
+
+          // No one here can answer a dialog, so waiting for the timeout only delays the same failure.
+          const confirm = CONFIRM_PROMPT.exec(plain);
+          if (confirm !== null) {
+            const question = questionBefore(plain.slice(0, confirm.index));
+            finish(() =>
+              reject(
+                new NotStarted(
+                  `claude asks ${question === null ? "a question" : `"${question}"`} before starting in ${cwd}; open claude there once and answer it`,
+                ),
+              ),
+            );
+          }
         };
 
         child.stdout.on("data", read(new StringDecoder("utf8")));
@@ -162,21 +177,36 @@ const ESC = String.fromCharCode(27);
 const BEL = String.fromCharCode(7);
 const CONTROL = new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, "g");
 const TITLE_SET = new RegExp(`${ESC}\\][^${BEL}]*(${BEL}|${ESC}\\\\)`, "g");
+const CURSOR_FORWARD = new RegExp(`${ESC}\\[(\\d*)C`, "g");
 
+// claude draws the gaps between words of a dialog as cursor moves, so they become spaces before the other controls are dropped.
 const withoutEscapes = (text: string) =>
-  text.replace(CONTROL, "").replace(TITLE_SET, "").replace(/\r/g, "\n");
+  text
+    .replace(CURSOR_FORWARD, (_, count: string) =>
+      " ".repeat(Number(count || "1")),
+    )
+    .replace(CONTROL, "")
+    .replace(TITLE_SET, "")
+    .replace(/\r/g, "\n");
 
-const lastLine = (text: string) =>
+const lines = (text: string) =>
   text
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => line !== "")
+    .filter((line) => line !== "");
+
+const lastLine = (text: string) => lines(text).at(-1) ?? null;
+
+const questionBefore = (text: string) =>
+  lines(text)
+    .filter((line) => line.endsWith("?"))
     .at(-1) ?? null;
 
 const VIEW =
   /View:\s*https:\/\/claude\.ai\/code\/((?:session|cse)_[A-Za-z0-9]{8,64})(?=[^A-Za-z0-9])/;
 const CREATED = /Created cloud session:\s*([^\n]*)/;
 const TRUST_PROMPT = /Is this a project you created or one you trust\?/;
+const CONFIRM_PROMPT = /Enter\s*to\s*confirm/;
 const OUTPUT_KEPT = 64 * 1024;
 const START_TIMEOUT_MS = 90_000;
 const KILL_AFTER_MS = 3_000;
