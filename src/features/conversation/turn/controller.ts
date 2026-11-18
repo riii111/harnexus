@@ -13,7 +13,7 @@ import { isManualTurnTrigger } from "../../../infra/codex/protocol/turn-trigger.
 import type { ServerRequest } from "../../../infra/codex/server-requests.ts";
 import type { ThreadRecord, ThreadStore } from "../../../infra/thread-store.ts";
 import { isObject } from "../../../lib/object.ts";
-import { delegatedMessage } from "../../link/delegations.ts";
+import { automationPrompt, delegatedMessage } from "../../link/delegations.ts";
 import type { LiveTurn } from "../history/history.view.ts";
 import {
   type AppRequest,
@@ -183,7 +183,11 @@ export const createTurnController = <Tag extends string>({
     }
 
     const delegated = delegatedMessage(params);
-    const input = messageInput(params.input, delegated, true);
+    const input = messageInput(
+      params.input,
+      delegated ?? automationPrompt(params),
+      true,
+    );
     if (typeof input === "string") {
       return refuse(id, input);
     }

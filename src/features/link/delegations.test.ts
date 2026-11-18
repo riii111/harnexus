@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   answeredThreadId,
+  automationPrompt,
   concludeCreate,
   createDelegationWatch,
   delegatedMessage,
@@ -469,9 +470,46 @@ describe("delegatedMessage", () => {
       toolOutput: { name: "fork_thread", output: REPLY },
       expected: null,
     },
+    {
+      name: "an automation run",
+      toolOutput: { name: "automation_update", output: "run" },
+      expected: null,
+    },
     { name: "no tool output", toolOutput: undefined, expected: null },
   ])("reads $name", ({ toolOutput, expected }) => {
     expect(delegatedMessage({ threadId: "th-worker", toolOutput })).toEqual(
+      expected,
+    );
+  });
+});
+
+describe("automationPrompt", () => {
+  test.each([
+    {
+      name: "an automation_update output",
+      toolOutput: {
+        name: "automation_update",
+        namespace: "codex_app",
+        output: "$task-dispatch plan",
+      },
+      expected: {
+        tool: "automation_update",
+        text: "$task-dispatch plan",
+        sourceThreadId: null,
+        toolOutput: {
+          name: "automation_update",
+          namespace: "codex_app",
+          output: "$task-dispatch plan",
+        },
+      },
+    },
+    {
+      name: "a message from another thread",
+      toolOutput: { name: "send_message_to_thread", output: REPLY },
+      expected: null,
+    },
+  ])("reads $name", ({ toolOutput, expected }) => {
+    expect(automationPrompt({ threadId: "th-run", toolOutput })).toEqual(
       expected,
     );
   });
