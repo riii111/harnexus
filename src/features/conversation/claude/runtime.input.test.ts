@@ -701,6 +701,46 @@ describe("browser tabs linked in Claude input", () => {
   });
 });
 
+describe("automation runs on a Claude thread", () => {
+  test("runs the prompt of an automation a model made, which the app sends as the automation_update output", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent } = await harness([claude]);
+
+    turns.startTurn(
+      withInput(
+        {
+          ...turnStart(10, ""),
+          params: {
+            ...turnStart(10, "").params,
+            input: [],
+            toolOutput: {
+              name: "automation_update",
+              namespace: "codex_app",
+              output: "$task-dispatch plan",
+            },
+          },
+        },
+        [],
+      ),
+      undefined,
+    );
+    await until(() => claude.started());
+    const [prompt] = await readPrompts(claude, 1);
+    claude.emit(sdk(answer("msg-1", "done")));
+    claude.emit(sdk(success()));
+    await until(() => turnCompleted(sent) !== undefined);
+
+    expect(JSON.stringify(prompt?.message.content)).toContain(
+      "$task-dispatch plan",
+    );
+    expect(
+      completedItems(sent).filter((item) => item.type === "functionCallOutput"),
+    ).toMatchObject([
+      { name: "automation_update", output: "$task-dispatch plan" },
+    ]);
+  });
+});
+
 describe("images in Claude input", () => {
   test("sends an attached image ahead of the typed text while the turn shows the input as the app sent it", async () => {
     const bytes = pngBytes(40, 30);

@@ -272,13 +272,21 @@ export const delegationSource = (params: Record<string, unknown>) => {
   return message?.tool === "create_thread" ? message.sourceThreadId : null;
 };
 
-// The message another thread sent, which arrives as the output of the codex_app call that sent it.
-export const delegatedMessage = (params: Record<string, unknown>) => {
+export const delegatedMessage = (params: Record<string, unknown>) =>
+  toolMessage(params, DELEGATING_TOOLS);
+
+export const automationPrompt = (params: Record<string, unknown>) =>
+  toolMessage(params, AUTOMATION_TOOLS);
+
+const toolMessage = (
+  params: Record<string, unknown>,
+  tools: ReadonlySet<string>,
+) => {
   const output = params.toolOutput;
   if (
     !isObject(output) ||
     typeof output.name !== "string" ||
-    !isDelegatingTool(output.name)
+    !tools.has(output.name)
   ) {
     return null;
   }
@@ -325,8 +333,6 @@ const outputTexts = (body: unknown) => {
   return texts;
 };
 
-const isDelegatingTool = (name: string) => DELEGATING_TOOLS.has(name);
-
 // Thread reads can truncate the input; keep its available prefix for correlation.
 export const delegationFields = (text: string) => ({
   source: sourceThread(text, false) ?? "",
@@ -351,9 +357,13 @@ const unescapeXml = (text: string) =>
     .replaceAll("&apos;", "'")
     .replaceAll("&amp;", "&");
 
+// The message another thread sent arrives as the output of the codex_app call that sent it.
 const DELEGATING_TOOLS: ReadonlySet<string> = new Set([
   "create_thread",
   "send_message_to_thread",
 ]);
+
+// Each run of an automation a model made brings its prompt as the output of the automation_update call that made it, not as typed text.
+const AUTOMATION_TOOLS: ReadonlySet<string> = new Set(["automation_update"]);
 
 const SOURCE_THREAD = /<source_thread_id>\s*([^<\s]+)\s*<\/source_thread_id>/g;
