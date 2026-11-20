@@ -1650,6 +1650,31 @@ describe("createTurnController archiving its own thread", () => {
     expect(toolCalls).toEqual([]);
   });
 
+  test("keeps the thread when a background reply starts a turn as the thread becomes idle", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings, toolCalls } = await harness([claude], {
+      linkRequest: async () => Result.ok(TOOL_ANSWER),
+      onSend: (message) => {
+        if (
+          message.method === "turn/completed" &&
+          message.params.turn.id === "turn-1"
+        )
+          claude.emit(sdk(answer("msg-background", "background reply")));
+      },
+    });
+    turns.startTurn(turnStart(10, "tidy up"), undefined);
+    await until(() => claude.prompted());
+    const asked = await archiveOwnThread(settings[0]);
+    claude.emit(sdk(success()));
+    await until(() => startedTurns(sent).length === 2);
+    claude.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 2);
+    await settle();
+
+    expect(asked.isError).toBeFalsy();
+    expect(toolCalls).toEqual([]);
+  });
+
   test("keeps the thread when another turn waits behind the one that asked to archive it", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
     const { turns, sent, store, settings, toolCalls } = await harness(

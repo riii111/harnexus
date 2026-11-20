@@ -375,7 +375,9 @@ export const createTurnController = <Tag extends string>({
         if (inFlight.size > 0) return;
         turnsInFlight.delete(threadId);
         runtime.threadIdle(threadId);
-        if (archiveAfter !== null) void archiveSelf(archiveAfter);
+        // Becoming idle can start a turn for a background reply that Claude already received.
+        if (archiveAfter !== null && !turnsInFlight.has(threadId))
+          void archiveSelf(archiveAfter);
       },
     );
   };
