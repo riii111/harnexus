@@ -1584,6 +1584,122 @@ describe("turn/start carrying another thread's message", () => {
   });
 });
 
+describe("createTurnController archiving its own thread", () => {
+  test("archives the thread once its completed turn is saved and nothing waits behind it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const atArchive: { completed: string[]; runState: unknown }[] = [];
+    const { turns, sent, store, settings, toolCalls, events } = await harness(
+      [claude],
+      {
+        linkRequest: async () => {
+          atArchive.push({
+            completed: completedTurnStatuses(sent),
+            runState: store.get(THREAD)?.runState,
+          });
+          return Result.ok(TOOL_ANSWER);
+        },
+      },
+    );
+    turns.startTurn(turnStart(10, "tidy up"), undefined);
+    await until(() => claude.prompted());
+
+    const asked = await archiveOwnThread(settings[0]);
+    const duringTurn = toolCalls.length;
+    claude.emit(sdk(answer("msg-1", "done")));
+    claude.emit(sdk(success()));
+    await until(() => atArchive.length === 1);
+    await settle();
+
+    expect(asked.isError).toBeFalsy();
+    expect(duringTurn).toBe(0);
+    expect(atArchive).toEqual([{ completed: ["completed"], runState: "idle" }]);
+    expect(toolCalls).toEqual([
+      expect.objectContaining({
+        threadId: THREAD,
+        tool: "set_thread_archived",
+        arguments: { threadId: THREAD, archived: true },
+      }),
+    ]);
+    expect(events).toContainEqual({
+      event: "claude_turn",
+      step: "archived_after_turn",
+      outcome: "archived",
+    });
+  });
+
+  test("keeps the thread when the turn that asked to archive it is interrupted", async () => {
+    const claude = fakeClaude(SUBSCRIPTION, { stillQueued: [] });
+    const { turns, sent, store, settings, toolCalls } = await harness(
+      [claude],
+      { linkRequest: async () => Result.ok(TOOL_ANSWER) },
+    );
+    turns.startTurn(turnStart(10, "tidy up"), undefined);
+    await until(() => claude.prompted());
+    const asked = await archiveOwnThread(settings[0]);
+
+    turns.interruptTurn(interrupt(20, "turn-1"));
+    await until(() => claude.interrupts() === 1);
+    claude.emit(
+      sdk(result({ subtype: "error_during_execution", is_error: true })),
+    );
+    await until(() => store.get(THREAD)?.runState === "idle");
+    await settle();
+
+    expect(asked.isError).toBeFalsy();
+    expect(completedTurnStatuses(sent)).toEqual(["interrupted"]);
+    expect(toolCalls).toEqual([]);
+  });
+
+  test("keeps the thread when a background reply starts a turn as the thread becomes idle", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, settings, toolCalls } = await harness([claude], {
+      linkRequest: async () => Result.ok(TOOL_ANSWER),
+      onSend: (message) => {
+        if (
+          message.method === "turn/completed" &&
+          message.params.turn.id === "turn-1"
+        )
+          claude.emit(sdk(answer("msg-background", "background reply")));
+      },
+    });
+    turns.startTurn(turnStart(10, "tidy up"), undefined);
+    await until(() => claude.prompted());
+    const asked = await archiveOwnThread(settings[0]);
+    claude.emit(sdk(success()));
+    await until(() => startedTurns(sent).length === 2);
+    claude.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 2);
+    await settle();
+
+    expect(asked.isError).toBeFalsy();
+    expect(toolCalls).toEqual([]);
+  });
+
+  test("keeps the thread when another turn waits behind the one that asked to archive it", async () => {
+    const claude = fakeClaude(SUBSCRIPTION);
+    const { turns, sent, store, settings, toolCalls } = await harness(
+      [claude],
+      { linkRequest: async () => Result.ok(TOOL_ANSWER) },
+    );
+    turns.startTurn(turnStart(10, "tidy up"), undefined);
+    await until(() => responseTo(sent, 10) !== undefined);
+    const asked = await archiveOwnThread(settings[0]);
+    turns.startTurn(turnStart(11, "one more thing"), undefined);
+    await until(() => responseTo(sent, 11) !== undefined);
+
+    claude.emit(sdk(success()));
+    await until(() => startedTurns(sent).length === 2);
+    claude.emit(sdk(success()));
+    await until(() => completedTurnStatuses(sent).length === 2);
+    await until(() => store.get(THREAD)?.runState === "idle");
+    await settle();
+
+    expect(asked.isError).toBeFalsy();
+    expect(completedTurnStatuses(sent)).toEqual(["completed", "completed"]);
+    expect(toolCalls).toEqual([]);
+  });
+});
+
 describe("another thread's message arriving on a busy thread", () => {
   test("joins the running turn as Codex steers it and lets Claude answer the sender", async () => {
     const claude = fakeClaude(SUBSCRIPTION);
@@ -1788,22 +1904,11 @@ const messageReviewer = async (session: ClaudeSessionSettings | undefined) => {
   return sent ?? expect.unreachable("no message was sent");
 };
 
-// One server instance takes one connection, so every message goes through the same client.
 const messageThreads = async (
   session: ClaudeSessionSettings | undefined,
   threadIds: string[],
 ) => {
-  const tools = session?.toolServers?.codex_link;
-  if (tools === undefined) {
-    return expect.unreachable("Claude has no thread tool server");
-  }
-
-  const server = createSdkMcpServer({ name: "codex_link", tools });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
-  await server.instance.connect(serverTransport);
-  const client = new Client({ name: "test", version: "0" });
-  await client.connect(clientTransport);
+  const client = await linkClient(session);
   const results = [];
   for (const threadId of threadIds) {
     results.push(
@@ -1815,6 +1920,28 @@ const messageThreads = async (
   }
 
   return results;
+};
+
+const archiveOwnThread = async (session: ClaudeSessionSettings | undefined) =>
+  (await linkClient(session)).callTool({
+    name: "set_thread_archived",
+    arguments: { archived: true },
+  });
+
+// One server instance takes one connection, so every call goes through the same client.
+const linkClient = async (session: ClaudeSessionSettings | undefined) => {
+  const tools = session?.toolServers?.codex_link;
+  if (tools === undefined) {
+    return expect.unreachable("Claude has no thread tool server");
+  }
+
+  const server = createSdkMcpServer({ name: "codex_link", tools });
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  await server.instance.connect(serverTransport);
+  const client = new Client({ name: "test", version: "0" });
+  await client.connect(clientTransport);
+  return client;
 };
 
 const DUPLICATE = (id: number) => ({

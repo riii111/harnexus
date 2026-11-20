@@ -39,7 +39,8 @@ You're all set. Go build something!
 ### Claude in the Codex App
 
 Use Claude in regular app chats.
-Claude can coordinate work with Codex through the Codex App Server, creating chats and messaging them directly.
+Claude can coordinate work with Codex through the Codex App Server, creating chats, messaging them directly and archiving them once done.
+A chat that archives itself is archived after its reply, unless that turn is stopped or another message is waiting.
 
 ### In-app browser
 

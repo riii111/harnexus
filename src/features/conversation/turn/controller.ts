@@ -14,6 +14,7 @@ import type { ServerRequest } from "../../../infra/codex/server-requests.ts";
 import type { ThreadRecord, ThreadStore } from "../../../infra/thread-store.ts";
 import { isObject } from "../../../lib/object.ts";
 import { automationPrompt, delegatedMessage } from "../../link/delegations.ts";
+import { type FailureKind, failureKindOf } from "../../link/results.ts";
 import type { LiveTurn } from "../history/history.view.ts";
 import {
   type AppRequest,
@@ -92,6 +93,11 @@ export type TurnEvent<
       step: "thread_released";
       ended: ThreadEnd;
       kept: boolean;
+    }
+  | {
+      event: "claude_turn";
+      step: "archived_after_turn";
+      outcome: "archived" | FailureKind;
     };
 
 type MaterializeThread = (
@@ -104,6 +110,7 @@ type ActiveTurn<Tag extends string> = {
   turn: RunningTurn<Tag>;
   link: TurnLink | null;
   outcomeUnknown: boolean;
+  completed: boolean;
 };
 
 // answered is set when the app got the turn as soon as it was accepted, so a turn that cannot run is shown as failed rather than refused; a turn Claude started on its own answers no request.
@@ -361,12 +368,18 @@ export const createTurnController = <Tag extends string>({
       send({ id, result: { turn: waiting.turn } });
     }
 
-    void runTurn(request, thread, threadId, turn, messageId).then(() => {
-      inFlight.delete(request.turnId);
-      if (inFlight.size > 0) return;
-      turnsInFlight.delete(threadId);
-      runtime.threadIdle(threadId);
-    });
+    void runTurn(request, thread, threadId, turn, messageId).then(
+      (archiveAfter) => {
+        inFlight.delete(request.turnId);
+        // A turn waiting behind this one means more work was asked of the thread, so it is not archived under that work.
+        if (inFlight.size > 0) return;
+        turnsInFlight.delete(threadId);
+        runtime.threadIdle(threadId);
+        // Becoming idle can start a turn for a background reply that Claude already received.
+        if (archiveAfter !== null && !turnsInFlight.has(threadId))
+          void archiveSelf(archiveAfter);
+      },
+    );
   };
 
   const steerableTurn = (threadId: string) => {
@@ -511,7 +524,7 @@ export const createTurnController = <Tag extends string>({
     threadId: string,
     input: TurnInput,
     messageId: string | null,
-  ) => {
+  ): Promise<TurnLink | null> => {
     const queued = { threadId, thread, input, messageId };
     if (store.get(threadId) === undefined) {
       const registered = await store.register({
@@ -526,7 +539,7 @@ export const createTurnController = <Tag extends string>({
       ) {
         forgetMessage(threadId, messageId);
         refuseTurn(request, queued, "thread_not_saved", registered.error);
-        return;
+        return null;
       }
 
       // A turn accepted just before this one may have registered the thread first, with its own model and directory.
@@ -536,13 +549,14 @@ export const createTurnController = <Tag extends string>({
       if (change !== null) {
         forgetMessage(threadId, messageId);
         refuseTurn(request, queued, change);
-        return;
+        return null;
       }
 
       threads.markRegistered(threadId);
     }
 
     let responded = false;
+    let archiveAfter: TurnLink | null = null;
     const ran = await store.runWrite(
       threadId,
       async (record, recovered) => {
@@ -606,7 +620,11 @@ export const createTurnController = <Tag extends string>({
               message: "the recovery prompt was not sent to Claude",
             }),
           );
-        if (link === null || !link.hasUnsettledWrite()) return Result.ok();
+        if (link === null || !link.hasUnsettledWrite()) {
+          if (active.completed) archiveAfter = link;
+          return Result.ok();
+        }
+
         // An undecided write stays on its link, so the session goes with it and the turn the user continues with starts on a new link.
         runtime.dropSession(threadId, link);
         return Result.err(
@@ -618,7 +636,7 @@ export const createTurnController = <Tag extends string>({
       (error) => error._tag === "TurnOutcomeUnknown",
       () => request.allowRecovery && !closed && !request.stopped,
     );
-    if (ran.isOk()) return;
+    if (ran.isOk()) return archiveAfter;
     const notRun = (error: { _tag: StoreTag; message: string }) => {
       if (responded) {
         log({
@@ -644,6 +662,18 @@ export const createTurnController = <Tag extends string>({
       ThreadNotFound: notRun,
       WriteNotStarted: notRun,
       RunStateNotSaved: notRun,
+    });
+    return null;
+  };
+
+  const archiveSelf = async (link: TurnLink) => {
+    const archived = await link.archiveAfterTurn();
+    if (archived === null) return;
+    // No turn is left to tell Claude how its archive went, so the outcome only reaches the log.
+    log({
+      event: "claude_turn",
+      step: "archived_after_turn",
+      outcome: archived.isError === true ? failureKindOf(archived) : "archived",
     });
   };
 
@@ -818,6 +848,7 @@ export const createTurnController = <Tag extends string>({
       turn,
       link: null,
       outcomeUnknown: false,
+      completed: false,
     };
     return active;
   };
@@ -860,6 +891,7 @@ export const createTurnController = <Tag extends string>({
         notification.params.turn.status !== "inProgress" &&
         !wasFinished
       ) {
+        active.completed = notification.params.turn.status === "completed";
         log({
           event: "claude_turn",
           step: "finished",
@@ -1058,6 +1090,8 @@ export const serializeTurnEvent = (entry: TurnEvent) => {
         ended: entry.ended,
         kept: entry.kept,
       };
+    case "archived_after_turn":
+      return { event: entry.event, step: entry.step, outcome: entry.outcome };
   }
 };
 

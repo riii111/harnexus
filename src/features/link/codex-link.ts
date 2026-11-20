@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { CronRecord } from "../../infra/codex/automations.boundary.ts";
 import type { ServerRequest } from "../../infra/codex/server-requests.ts";
+import { createArchiveTool } from "./archive-thread.ts";
 import { createAutomationTool } from "./automation.ts";
 import {
   BROWSER_ALLOWED_TOOLS,
@@ -49,6 +50,7 @@ export const createCodexLink = ({
     ...waits,
   });
 
+  const archive = createArchiveTool({ callerThreadId, calls });
   const browser = createBrowserTabs({ callerThreadId, store, request });
   const tools = [
     ...browser.tools,
@@ -71,6 +73,7 @@ export const createCodexLink = ({
       },
       (args) => write("send_message_to_thread", args, [args.threadId]),
     ),
+    archive.definition,
     createAutomationTool({ callerThreadId, codexHome, cronRecord, calls }),
     defineTool(
       "read_thread",
@@ -147,9 +150,12 @@ export const createCodexLink = ({
       calls.stopWrites();
       browser.endTurn("Stop");
     },
+    archiveAfterTurn: archive.archiveAfterTurn,
     // The turn that accepts writes again is also the only one that may use the browser.
     acceptWrites: (turn?: BrowserTurn) => {
       calls.acceptWrites();
+      // A request left by a turn that was stopped or failed belongs to that turn, so a later one never archives the thread for it.
+      archive.dropRequest();
       if (turn !== undefined) browser.beginTurn(turn);
     },
   };

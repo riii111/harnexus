@@ -894,6 +894,112 @@ describe("createCodexLink automation_update", () => {
   });
 });
 
+describe("createCodexLink set_thread_archived", () => {
+  test.each([
+    { name: "archives", archived: true },
+    { name: "unarchives", archived: false },
+  ])("$name another thread through the app at once", async ({ archived }) => {
+    const { client, requests } = await connect();
+
+    const result = await client.callTool({
+      name: "set_thread_archived",
+      arguments: { threadId: OTHER_REVIEWER, archived },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(requests.map((request) => request.params)).toEqual([
+      {
+        threadId: CALLER,
+        server: "codex_app",
+        tool: "set_thread_archived",
+        arguments: { threadId: OTHER_REVIEWER, archived },
+      },
+    ]);
+  });
+
+  test.each([
+    { name: "without a threadId", args: { archived: true } },
+    { name: "naming itself", args: { threadId: CALLER, archived: true } },
+  ])(
+    "holds the caller's own archive asked $name until the ended turn sends it once",
+    async ({ args }) => {
+      const { client, link, requests } = await connect();
+
+      const asked = await client.callTool({
+        name: "set_thread_archived",
+        arguments: args,
+      });
+      const duringTurn = requests.length;
+      link.finishTurn();
+      const archived = await link.archiveAfterTurn();
+      const again = await link.archiveAfterTurn();
+
+      expect(asked.isError).toBeFalsy();
+      expect(duringTurn).toBe(0);
+      expect(archived?.isError).toBeFalsy();
+      expect(again).toBeNull();
+      expect(requests.map((request) => request.params)).toEqual([
+        {
+          threadId: CALLER,
+          server: "codex_app",
+          tool: "set_thread_archived",
+          arguments: { threadId: CALLER, archived: true },
+        },
+      ]);
+    },
+  );
+
+  test("drops the caller's own archive once the next turn accepts writes", async () => {
+    const { client, link, requests } = await connect();
+    await client.callTool({
+      name: "set_thread_archived",
+      arguments: { archived: true },
+    });
+    link.stopWrites();
+
+    link.acceptWrites();
+    link.finishTurn();
+    const archived = await link.archiveAfterTurn();
+
+    expect(archived).toBeNull();
+    expect(requests).toEqual([]);
+  });
+
+  test("refuses to unarchive the running caller without calling the app", async () => {
+    const { client, link, requests } = await connect();
+
+    const result = await client.callTool({
+      name: "set_thread_archived",
+      arguments: { archived: false },
+    });
+    link.finishTurn();
+
+    expect(result.isError).toBe(true);
+    expect(await link.archiveAfterTurn()).toBeNull();
+    expect(requests).toEqual([]);
+  });
+
+  test("sends no archive of the caller after a write whose answer was lost", async () => {
+    let lost = true;
+    const { client, link, requests } = await connect({
+      answer: () =>
+        lost ? Result.err(unanswered()) : Result.ok(textAnswer("ok")),
+    });
+    await send(client);
+    lost = false;
+    await client.callTool({
+      name: "set_thread_archived",
+      arguments: { archived: true },
+    });
+
+    link.finishTurn();
+    const archived = await link.archiveAfterTurn();
+
+    expect(archived !== null && failureKindOf(archived)).toBe("not_sent");
+    expect(requests).toHaveLength(1);
+  });
+});
+
 describe("createCodexLink call", () => {
   test("runs a tool by name the same way as the tool itself", async () => {
     const { link, requests } = await connect({

@@ -103,10 +103,13 @@ export const createAppToolCalls = ({
       onSuccess = async (result) => result,
       beforeSend = () => null,
       label = name,
+      afterTurn = false,
     }: {
       // Names the call to the user when it is refused or its outcome is unknown, where the tool's own name would not say what was asked.
       label?: string;
       queuedIn?: number | null;
+      // A write the ended turn left for afterwards, such as archiving the caller, is not dropped by that turn's stop and may target the caller.
+      afterTurn?: boolean;
       onSuccess?: (result: ToolResult) => Promise<ToolResult>;
       beforeSend?: () => string | null | Promise<string | null>;
     } = {},
@@ -121,8 +124,8 @@ export const createAppToolCalls = ({
       }
 
       // A write queued behind another is dropped once its turn is stopped, since nobody is left to act on its result.
-      if (queuedIn !== generation) return notSentAfterStop(label);
-      const refusal = refuseTargets(targets, { allowSelf: false });
+      if (!afterTurn && queuedIn !== generation) return notSentAfterStop(label);
+      const refusal = refuseTargets(targets, { allowSelf: afterTurn });
       if (refusal !== null) return failure(refusal);
       const unsendable = await beforeSend();
       if (unsendable !== null) return failure(unsendable, "not_sent");
