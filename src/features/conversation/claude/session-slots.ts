@@ -16,6 +16,7 @@ export type CodexLink = Pick<
   | "hasUnsettledWrite"
   | "stopWrites"
   | "finishTurn"
+  | "archiveAfterTurn"
   | "acceptWrites"
 >;
 

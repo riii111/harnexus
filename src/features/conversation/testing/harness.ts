@@ -281,6 +281,7 @@ export const harness = async (
               hasUnsettledWrite: unsettledWrite,
               stopWrites: () => gates.push("stop"),
               finishTurn: () => gates.push("stop"),
+              archiveAfterTurn: async () => null,
               acceptWrites: () => gates.push("accept"),
             }
           : createCodexLink({
