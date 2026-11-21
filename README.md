@@ -11,12 +11,20 @@ Open the review from the sidebar and keep talking to Codex there.
 
 Or try asking your ChatGPT dot to bring Claude in to review a plan.
 
-## Availability
+## Get started
 
 harnexus is experimental and runs on macOS with the ChatGPT app and a signed-in Claude Code account.
 A macOS installer is not yet available.
 
-If you already have harnexus set up, start a new chat in your project and choose a Claude model.
+With the harnexus CLI installed, quit the ChatGPT app completely and run:
+
+```sh
+harnexus open-app
+```
+
+Start a new chat in your project and choose a Claude model.
+To return to standard Codex, quit the app completely and run `harnexus open-app --standard`.
+Your chats stay in place.
 
 ## How it works
 
@@ -68,6 +76,22 @@ Each worker session opens its own chat in the same project.
 - Claude Code permission rules still apply.
 - The app's **Approve for me** setting does not control Claude approvals.
 
-## Help
+For manual approvals, quit the app completely and run:
 
-If a chat will not start, [report the problem](https://github.com/riii111/harnexus/issues/new?template=bug-report.yml).
+```sh
+HARNEXUS_PERMISSION_MODE=default harnexus open-app
+```
+
+## Troubleshooting
+
+If Claude is missing or a chat will not start, quit the app completely and run `harnexus open-app` again.
+To check your setup, run `harnexus doctor`.
+
+To collect diagnostics from the last two hours, run:
+
+```sh
+harnexus feedback --since 2h
+```
+
+Review the output before attaching it to a [bug report](https://github.com/riii111/harnexus/issues/new?template=bug-report.yml).
+Run `harnexus --help` for the full command list.
