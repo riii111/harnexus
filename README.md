@@ -1,21 +1,22 @@
 # harnexus
 
-Use Claude in the Codex App. Ask Claude to implement a change and have Codex review it. Claude can use the Codex app-server to create a separate Codex chat, send it the review request, and read its reply. Open that chat from the sidebar to inspect the review and ask Codex a follow-up.
+Use Claude in the Codex App.
+
+<img width="445" height="511" alt="Claude chat in the Codex App" src="https://github.com/user-attachments/assets/c5424fe5-50a6-48b9-bc43-98259c427658" />
+
+Ask Claude to implement a change and have Codex review it. Claude uses the Codex app-server to create a separate chat, send the review request, and read the reply. You can open that chat from the sidebar and ask Codex a follow-up.
 
 ## How it works
 
 ![The Codex App connects through harnexus to the bundled Codex app-server and the Claude Agent SDK. Claude can use the app-server to create and message another chat.](docs/harnexus.svg)
 
-harnexus runs on your Mac as a local app-server proxy. It relays ordinary Codex chats to the bundled app-server and runs Claude chats through Anthropic's official Claude Agent SDK using your existing Claude Code sign-in.
-
-<img width="445" height="511" alt="Claude chat in the Codex App" src="https://github.com/user-attachments/assets/c5424fe5-50a6-48b9-bc43-98259c427658" />
+harnexus runs on your Mac as an app-server proxy. Codex chats use the app’s bundled Codex. Claude chats use Anthropic’s [official Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) with your existing Claude Code login. Before sending a prompt, harnexus rejects API-key or third-party provider authentication.
 
 ## Get started
 
 - Experimental; macOS only.
 - ChatGPT app at `/Applications/ChatGPT.app` (override with `HARNEXUS_APP_PATH`).
-- Bun installed and Claude Code already signed in.
-- Before sending a prompt, harnexus checks that Claude Code is using your subscription login. It rejects API-key or third-party provider authentication.
+- Claude Code already signed in.
 - Anthropic [currently counts Agent SDK and third-party app usage toward subscription limits](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
 
 ```sh
@@ -34,14 +35,13 @@ Start a new chat in your project and choose a Claude model.
 
 - Claude chats cannot switch to Codex, but you can use Codex in a side chat.
 
-By default, `open-app` uses the Codex bundled with the ChatGPT app. It configures the macOS launch environment and a LaunchAgent without patching the app or replacing your shell’s `PATH`. To switch back, see [Return to standard Codex](#return-to-standard-codex).
+To return to standard Codex, quit the app completely and run `bun run open-app --standard`.
 
 ## Features
 
 ### Claude in the Codex App
 
-Use Claude in regular app chats.
-Claude can coordinate work with Codex through the Codex App Server, creating chats, messaging them directly and archiving them once done.
+Claude can archive chats when the work is done.
 A chat that archives itself is archived after its reply, unless that turn is stopped or another message is waiting.
 
 ### In-app browser
@@ -102,4 +102,4 @@ Quit the app completely, then run:
 bun run open-app --standard
 ```
 
-This clears the registered launch settings and removes the harnexus LaunchAgent. Your chats and harnexus data stay in place.
+`open-app` configures the macOS launch environment and a LaunchAgent. `--standard` clears those settings and removes the LaunchAgent. Your chats and harnexus data stay in place.
