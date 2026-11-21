@@ -61,8 +61,8 @@ if (opened.isErr()) {
 
 process.stdout.write(
   mode === "standard"
-    ? `Opened ${APP} without harnexus. Run bun run doctor to see that no bridge is left running.\n`
-    : `Opened ${APP} with harnexus. Run bun run doctor to check the setup.\n`,
+    ? `Opened ${APP} without harnexus. Run harnexus doctor to see that no bridge is left running.\n`
+    : `Opened ${APP} with harnexus. Run harnexus doctor to check the setup.\n`,
 );
 
 async function findProblem() {

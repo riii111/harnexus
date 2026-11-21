@@ -13,26 +13,19 @@ Or try asking your ChatGPT dot to bring Claude in to review a plan.
 
 ## Get started
 
-Clone, install, and reopen your ChatGPT app.
 You can switch back to standard Codex at any time.
 
-On macOS, sign in to Claude Code if you haven’t already, then run:
-
-```sh
-git clone https://github.com/riii111/harnexus.git
-cd harnexus
-bun install
-```
+On macOS, sign in to Claude Code if you haven’t already.
 
 Quit the ChatGPT app completely, then open it with harnexus:
 
 ```sh
-bun run open-app
+harnexus open-app
 ```
 
 Start a new chat in your project and choose a Claude model.
 
-To switch back, quit the app completely and run `bun run open-app --standard`.
+To switch back, quit the app completely and run `harnexus open-app --standard`.
 Your chats stay in place.
 
 ## How it works
@@ -88,10 +81,10 @@ Each worker session opens its own chat in the same project.
 For manual approvals, quit the app and reopen with:
 
 ```sh
-HARNEXUS_PERMISSION_MODE=default bun run open-app
+HARNEXUS_PERMISSION_MODE=default harnexus open-app
 ```
 
-- Launch options persist until you rerun `bun run open-app`; omitted options are cleared.
+- Launch options persist until you rerun `harnexus open-app`; omitted options are cleared.
 
 ## Troubleshooting
 
@@ -101,19 +94,18 @@ Set `HARNEXUS_APP_PATH` if yours is elsewhere.
 `open-app` configures the macOS launch environment and a LaunchAgent.
 `--standard` clears those settings and removes the LaunchAgent.
 
-If Claude is missing or a chat will not start, quit the app completely and run `bun run open-app` again.
-Also rerun it after moving the harnexus folder or changing Bun's location.
+If Claude is missing or a chat will not start, quit the app completely and run `harnexus open-app` again.
 
 Run diagnostics:
 
 ```sh
-bun run doctor
+harnexus doctor
 ```
 
 Collect diagnostics for a bug report:
 
 ```sh
-bun run feedback --since 2h
+harnexus feedback --since 2h
 ```
 
 Review the output before attaching it to a [bug report](https://github.com/riii111/harnexus/issues/new?template=bug-report.yml).

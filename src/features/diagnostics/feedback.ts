@@ -78,7 +78,7 @@ const args = parseOptions(process.argv.slice(2), {
 });
 if (args.isErr()) {
   process.stderr.write(
-    "usage: bun run feedback [--since 30m|2h|3d|<time>] [--until <duration or time>]\n",
+    "usage: harnexus feedback [--since 30m|2h|3d|<time>] [--until <duration or time>]\n",
   );
   process.exit(2);
 }
