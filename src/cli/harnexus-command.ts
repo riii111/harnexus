@@ -16,6 +16,9 @@ type Deps = {
 const NAME = "harnexus";
 
 const USAGE = `usage:
+  ${NAME} open-app [--standard]
+  ${NAME} doctor
+  ${NAME} feedback [--since TIME] [--until TIME]
   ${NAME} cloud (--link SESSION_OR_URL | --prompt-file FILE) [--project PROJECT_ID] [--title TITLE] [--model MODEL] [--thinking THINKING]
   ${NAME} call < REQUEST_JSON
 ${STATE_USAGE}`;
@@ -31,7 +34,7 @@ export const runHarnexus = async (
   if (command === "cloud") return cloud(rest, deps);
   if (command === "call") return call(rest, deps);
   if (command === "state") return runState(rest, deps);
-  return usageError("expected a subcommand: cloud, call, state");
+  return usageError("expected a subcommand: open-app, doctor, feedback, cloud, call, state");
 };
 
 const usageError = (message: string): CommandRun => ({
