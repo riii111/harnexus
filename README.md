@@ -4,6 +4,8 @@ Use Claude in the Codex App.
 
 <img width="445" height="511" alt="Claude chat in the Codex App" src="https://github.com/user-attachments/assets/c5424fe5-50a6-48b9-bc43-98259c427658" />
 
+Your ChatGPT chats, Codex projects, and Claude chats live in the same app. If you use [dots](https://openai.com/index/introducing-dots/), your dot can start and manage Codex tasks there too.
+
 Ask Claude to implement a change and have Codex review it in a separate chat. Open the review from the sidebar and keep talking to Codex there.
 
 ## Get started
@@ -32,7 +34,12 @@ To switch back, quit the app completely and run `bun run open-app --standard`. Y
 
 ![The Codex App connects through harnexus to the bundled Codex app-server and the Claude Agent SDK. Claude can use the app-server to create and message another chat.](docs/harnexus.svg)
 
-harnexus is a local app-server proxy. Claude uses the bundled Codex app-server to create chats, send messages, and read replies.
+harnexus is a local app-server proxy with four direct runtime dependencies. Through the bundled Codex app-server, Claude can:
+
+- Start a new Codex chat in your project.
+- Send a message to another thread and read its reply.
+
+Try a second opinion before you write any code: ask Claude to sketch a plan and have Codex look for a simpler approach.
 
 Claude chats run through Anthropic’s [official Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). harnexus checks your Claude Code login before sending a prompt and rejects API-key or third-party provider authentication. [Claude plan limits apply](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
 
