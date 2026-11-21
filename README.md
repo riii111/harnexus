@@ -13,17 +13,19 @@ Or try asking your ChatGPT dot to bring Claude in to review a plan.
 
 ## Get started
 
-harnexus is experimental and runs on macOS with the ChatGPT app and a signed-in Claude Code account.
-A macOS installer is not yet available.
+You can switch back to standard Codex at any time.
 
-With the harnexus CLI installed, quit the ChatGPT app completely and run:
+On macOS, sign in to Claude Code if you haven’t already.
+
+Quit the ChatGPT app completely, then open it with harnexus:
 
 ```sh
 harnexus open-app
 ```
 
 Start a new chat in your project and choose a Claude model.
-To return to standard Codex, quit the app completely and run `harnexus open-app --standard`.
+
+To switch back, quit the app completely and run `harnexus open-app --standard`.
 Your chats stay in place.
 
 ## How it works
@@ -76,22 +78,34 @@ Each worker session opens its own chat in the same project.
 - Claude Code permission rules still apply.
 - The app's **Approve for me** setting does not control Claude approvals.
 
-For manual approvals, quit the app completely and run:
+For manual approvals, quit the app and reopen with:
 
 ```sh
 HARNEXUS_PERMISSION_MODE=default harnexus open-app
 ```
 
+- Launch options persist until you rerun `harnexus open-app`; omitted options are cleared.
+
 ## Troubleshooting
 
-If Claude is missing or a chat will not start, quit the app completely and run `harnexus open-app` again.
-To check your setup, run `harnexus doctor`.
+harnexus is experimental and expects the app at `/Applications/ChatGPT.app`.
+Set `HARNEXUS_APP_PATH` if yours is elsewhere.
 
-To collect diagnostics from the last two hours, run:
+`open-app` configures the macOS launch environment and a LaunchAgent.
+`--standard` clears those settings and removes the LaunchAgent.
+
+If Claude is missing or a chat will not start, quit the app completely and run `harnexus open-app` again.
+
+Run diagnostics:
+
+```sh
+harnexus doctor
+```
+
+Collect diagnostics for a bug report:
 
 ```sh
 harnexus feedback --since 2h
 ```
 
 Review the output before attaching it to a [bug report](https://github.com/riii111/harnexus/issues/new?template=bug-report.yml).
-Run `harnexus --help` for the full command list.
