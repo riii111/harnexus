@@ -5,13 +5,12 @@ import { Result, TaggedError } from "better-result";
 
 import { readTextFileIfExists, removeFile } from "../../lib/fs.boundary.ts";
 import { readCommandOutput, runCommand } from "../../lib/process.boundary.ts";
+import { AGENT_LABEL, ownsAgent } from "./launchd-plan.ts";
 import {
-  AGENT_LABEL,
+  APP_ENV_NAMES,
   foreignVariables,
   ownedVariables,
-  ownsAgent,
-} from "./launchd-plan.ts";
-import { APP_ENV_NAMES } from "./open-app-plan.ts";
+} from "./open-app-plan.ts";
 
 class LaunchdReadFailed extends TaggedError("LaunchdReadFailed")<{
   message: string;

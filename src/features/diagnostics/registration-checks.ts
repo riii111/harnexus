@@ -1,8 +1,8 @@
+import { ownsAgent } from "../../infra/setup/launchd-plan.ts";
 import {
   foreignVariables,
   ownedVariables,
-  ownsAgent,
-} from "../../infra/setup/launchd-plan.ts";
+} from "../../infra/setup/open-app-plan.ts";
 import type { Check } from "./doctor-report.ts";
 
 export const legacyRegistrationCheck = (

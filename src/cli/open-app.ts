@@ -3,7 +3,11 @@ import { isAbsolute, join, resolve } from "node:path";
 import { parseProcesses } from "../features/diagnostics/doctor-report.ts";
 import { REPO } from "../features/diagnostics/repo.ts";
 import { clearLegacyLaunchd } from "../infra/setup/launchd.boundary.ts";
-import { isAppRunning, openArguments } from "../infra/setup/open-app-plan.ts";
+import {
+  isAppRunning,
+  openArguments,
+  openEnvironment,
+} from "../infra/setup/open-app-plan.ts";
 import {
   loadCallSocketPath,
   loadLogPath,
@@ -11,7 +15,7 @@ import {
   loadStatePath,
 } from "../lib/config.ts";
 import { checkAccess } from "../lib/fs.boundary.ts";
-import { readCommandOutput } from "../lib/process.boundary.ts";
+import { readCommandOutput, runCommand } from "../lib/process.boundary.ts";
 
 // Opens the app with harnexus for this launch only, or with --standard as the app normally runs; either way the app must be quit first, since it reads its environment only at start.
 const APP = resolve(
@@ -59,11 +63,12 @@ if (problem !== null) {
   process.exit(1);
 }
 
-const opened = await readCommandOutput(
+const opened = await runCommand(
   "/usr/bin/open",
   openArguments(paths, mode, process.env),
+  openEnvironment(mode, process.env),
 );
-if (opened.isErr()) {
+if (opened.isErr() || opened.value.status !== 0) {
   process.stderr.write(`harnexus: cannot open ${APP}\n`);
   process.exit(1);
 }

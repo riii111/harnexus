@@ -5,8 +5,9 @@ import {
   readCheckoutHead,
   readInstalledPackage,
 } from "../../infra/checkout.ts";
-import { ownedVariables, ownsAgent } from "../../infra/setup/launchd-plan.ts";
+import { ownsAgent } from "../../infra/setup/launchd-plan.ts";
 import { readLaunchd } from "../../infra/setup/launchd.boundary.ts";
+import { ownedVariables } from "../../infra/setup/open-app-plan.ts";
 import { parseOptions } from "../../lib/args.boundary.ts";
 import { loadLogPath, loadStatePath } from "../../lib/config.ts";
 import {
