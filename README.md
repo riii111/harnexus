@@ -9,7 +9,7 @@ Lightweight and secure, with few dependencies.
 Ask Claude to implement a change and have Codex review it in a separate chat.
 Open the review from the sidebar and keep talking to Codex there.
 
-Or try asking your dot to bring Claude in for a second opinion.
+Or try asking your ChatGPT dot to bring Claude in to review a plan.
 
 ## Get started
 
