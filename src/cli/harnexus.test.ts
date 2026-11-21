@@ -18,6 +18,18 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+test("open-app receives its options without the subcommand", async () => {
+  const run = await harnexus(["open-app", "--invalid-option"]);
+  expect(run.stderr).toBe("harnexus: unknown option --invalid-option\n");
+  expect(run.code).toBe(1);
+});
+
+test("feedback validates the time window before collecting diagnostics", async () => {
+  const run = await harnexus(["feedback", "--since", "1h", "--until", "2h"]);
+  expect(run.stderr).toContain("--since must come before --until");
+  expect(run.code).toBe(2);
+});
+
 describe("harnexus call", () => {
   test("asks for protocol 1 first, then sends the call with the caller's thread", async () => {
     const received = await fakeBridge((line) =>
