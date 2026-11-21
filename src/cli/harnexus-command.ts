@@ -34,7 +34,7 @@ export const runHarnexus = async (
   if (command === "cloud") return cloud(rest, deps);
   if (command === "call") return call(rest, deps);
   if (command === "state") return runState(rest, deps);
-  return usageError("expected a subcommand: open-app, doctor, feedback, cloud, call, state");
+  return usageError("expected a subcommand; see harnexus --help");
 };
 
 const usageError = (message: string): CommandRun => ({
