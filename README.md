@@ -11,29 +11,12 @@ Open the review from the sidebar and keep talking to Codex there.
 
 Or try asking your ChatGPT dot to bring Claude in to review a plan.
 
-## Get started
+## Availability
 
-Clone, install, and reopen your ChatGPT app.
-You can switch back to standard Codex at any time.
+harnexus is experimental and runs on macOS with the ChatGPT app and a signed-in Claude Code account.
+A macOS installer is not yet available.
 
-On macOS, sign in to Claude Code if you haven’t already, then run:
-
-```sh
-git clone https://github.com/riii111/harnexus.git
-cd harnexus
-bun install
-```
-
-Quit the ChatGPT app completely, then open it with harnexus:
-
-```sh
-bun run open-app
-```
-
-Start a new chat in your project and choose a Claude model.
-
-To switch back, quit the app completely and run `bun run open-app --standard`.
-Your chats stay in place.
+If you already have harnexus set up, start a new chat in your project and choose a Claude model.
 
 ## How it works
 
@@ -85,35 +68,6 @@ Each worker session opens its own chat in the same project.
 - Claude Code permission rules still apply.
 - The app's **Approve for me** setting does not control Claude approvals.
 
-For manual approvals, quit the app and reopen with:
+## Help
 
-```sh
-HARNEXUS_PERMISSION_MODE=default bun run open-app
-```
-
-- Launch options persist until you rerun `bun run open-app`; omitted options are cleared.
-
-## Troubleshooting
-
-harnexus is experimental and expects the app at `/Applications/ChatGPT.app`.
-Set `HARNEXUS_APP_PATH` if yours is elsewhere.
-
-`open-app` configures the macOS launch environment and a LaunchAgent.
-`--standard` clears those settings and removes the LaunchAgent.
-
-If Claude is missing or a chat will not start, quit the app completely and run `bun run open-app` again.
-Also rerun it after moving the harnexus folder or changing Bun's location.
-
-Run diagnostics:
-
-```sh
-bun run doctor
-```
-
-Collect diagnostics for a bug report:
-
-```sh
-bun run feedback --since 2h
-```
-
-Review the output before attaching it to a [bug report](https://github.com/riii111/harnexus/issues/new?template=bug-report.yml).
+If a chat will not start, [report the problem](https://github.com/riii111/harnexus/issues/new?template=bug-report.yml).
