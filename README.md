@@ -1,7 +1,6 @@
 # harnexus
 
-Use Claude in the Codex App.
-Work with Claude in the same ChatGPT app you already use for everyday chats and Codex projects.
+Give Claude a seat next to Codex in ChatGPT.
 
 Lightweight and secure, with few dependencies.
 
@@ -10,7 +9,7 @@ Lightweight and secure, with few dependencies.
 Ask Claude to implement a change and have Codex review it in a separate chat.
 Open the review from the sidebar and keep talking to Codex there.
 
-If you use [dots](https://openai.com/index/introducing-dots/), you can also ask your dot to start and manage Codex tasks in the same app.
+Or try asking your dot to bring Claude in for a second opinion.
 
 ## Get started
 
