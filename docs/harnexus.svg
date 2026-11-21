@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 480" role="img" aria-labelledby="title desc">
+  <title id="title">How harnexus connects Claude and Codex chats</title>
+  <desc id="desc">The Codex App connects to a local harnexus proxy. Codex chats use the bundled app-server. Claude chats use the Claude Agent SDK. Through harnexus, Claude can use the app-server to create and message a separate Codex chat that you can open from the sidebar.</desc>
+  <defs>
+    <marker id="olive" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M1 1 8 5 1 9" fill="none" stroke="#53633e" stroke-width="2"/></marker>
+    <marker id="rust" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M1 1 8 5 1 9" fill="none" stroke="#a4492d" stroke-width="2"/></marker>
+  </defs>
+  <rect width="900" height="480" rx="16" fill="#faf8f2"/>
+  <rect x="312" y="109" width="276" height="88" rx="14" fill="none" stroke="#53633e" stroke-width="2"/>
+  <g stroke="#53633e" stroke-width="3" fill="none" marker-start="url(#olive)" marker-end="url(#olive)">
+    <path d="M450 61V101"/>
+    <path d="M351 204 220 266"/>
+    <path d="M549 204 680 266"/>
+  </g>
+  <path d="M699 342V402H201V342" fill="none" stroke="#a4492d" stroke-width="3" stroke-dasharray="7 6" marker-end="url(#rust)"/>
+  <g text-anchor="middle" font-family="system-ui, sans-serif" fill="#252722">
+    <text x="450" y="46" font-size="30" font-weight="650">Official Codex App</text>
+    <text x="450" y="149" font-size="32" font-weight="700">harnexus</text>
+    <text x="450" y="178" font-size="19">Local app-server proxy</text>
+    <g font-size="24" font-weight="650">
+      <text x="201" y="299">Bundled Codex app-server</text>
+      <text x="699" y="299">Claude Agent SDK</text>
+    </g>
+    <g font-size="18">
+      <text x="201" y="327">Codex chats</text>
+      <text x="699" y="327">Existing Claude Code sign-in</text>
+    </g>
+    <text x="450" y="386" fill="#823a23" font-size="21" font-weight="600">Claude uses the Codex app-server</text>
+    <text x="450" y="440" font-size="19">Create a Codex chat, send a message, then follow it in the sidebar.</text>
+  </g>
+</svg>
