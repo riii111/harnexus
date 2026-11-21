@@ -1,16 +1,21 @@
 # harnexus
 
 Use Claude in the Codex App.
+Work with Claude in the same ChatGPT app you already use for everyday chats and Codex projects.
+
+Lightweight and secure, with few dependencies.
 
 <img width="445" height="511" alt="Claude chat in the Codex App" src="https://github.com/user-attachments/assets/c5424fe5-50a6-48b9-bc43-98259c427658" />
 
-Your ChatGPT chats, Codex projects, and Claude chats live in the same app. If you use [dots](https://openai.com/index/introducing-dots/), your dot can start and manage Codex tasks there too.
+Ask Claude to implement a change and have Codex review it in a separate chat.
+Open the review from the sidebar and keep talking to Codex there.
 
-Ask Claude to implement a change and have Codex review it in a separate chat. Open the review from the sidebar and keep talking to Codex there.
+If you use [dots](https://openai.com/index/introducing-dots/), you can also ask your dot to start and manage Codex tasks in the same app.
 
 ## Get started
 
-Clone, install, and reopen your ChatGPT app. You can switch back to standard Codex at any time.
+Clone, install, and reopen your ChatGPT app.
+You can switch back to standard Codex at any time.
 
 On macOS, sign in to Claude Code if you haven’t already, then run:
 
@@ -28,26 +33,33 @@ bun run open-app
 
 Start a new chat in your project and choose a Claude model.
 
-To switch back, quit the app completely and run `bun run open-app --standard`. Your chats stay in place.
+To switch back, quit the app completely and run `bun run open-app --standard`.
+Your chats stay in place.
 
 ## How it works
 
 ![The Codex App connects through harnexus to the bundled Codex app-server and the Claude Agent SDK. Claude can use the app-server to create and message another chat.](docs/harnexus.svg)
 
-harnexus is a local app-server proxy with four direct runtime dependencies. Through the bundled Codex app-server, Claude can:
+harnexus is a local app-server proxy.
+Through the bundled Codex app-server, Claude can:
 
 - Start a new Codex chat in your project.
 - Send a message to another thread and read its reply.
 
 Try a second opinion before you write any code: ask Claude to sketch a plan and have Codex look for a simpler approach.
 
-Claude chats run through Anthropic’s [official Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). harnexus checks your Claude Code login before sending a prompt and rejects API-key or third-party provider authentication. [Claude plan limits apply](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
+Claude chats run through Anthropic’s [official Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview).
+harnexus checks your Claude Code login before sending a prompt and rejects API-key or third-party provider authentication.
+
+[Claude plan limits apply](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
 
 ## Features
 
 ### Claude chats
 
-Use Codex in a separate chat or a side chat. Claude can archive chats when the work is done.
+Use Codex in a separate chat or a side chat.
+
+Claude can archive chats when the work is done.
 A chat that archives itself is archived after its reply, unless that turn is stopped or another message is waiting.
 
 ### In-app browser
@@ -84,12 +96,15 @@ HARNEXUS_PERMISSION_MODE=default bun run open-app
 
 ## Troubleshooting
 
-harnexus is experimental and expects the app at `/Applications/ChatGPT.app`. Set `HARNEXUS_APP_PATH` if yours is elsewhere.
+harnexus is experimental and expects the app at `/Applications/ChatGPT.app`.
+Set `HARNEXUS_APP_PATH` if yours is elsewhere.
 
-`open-app` configures the macOS launch environment and a LaunchAgent. `--standard` clears those settings and removes the LaunchAgent.
+`open-app` configures the macOS launch environment and a LaunchAgent.
+`--standard` clears those settings and removes the LaunchAgent.
 
 If Claude is missing or a chat will not start, quit the app completely and run `bun run open-app` again.
 Also rerun it after moving the harnexus folder or changing Bun's location.
+
 Run diagnostics:
 
 ```sh
