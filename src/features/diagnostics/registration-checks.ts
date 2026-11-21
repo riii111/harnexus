@@ -1,19 +1,17 @@
 import { ownsAgent } from "../../infra/setup/launchd-plan.ts";
-import {
-  foreignVariables,
-  ownedVariables,
-} from "../../infra/setup/open-app-plan.ts";
+import { splitVariables } from "../../infra/setup/open-app-plan.ts";
 import type { Check } from "./doctor-report.ts";
 
 export const legacyRegistrationCheck = (
   env: Record<string, string>,
   agent: string | null,
 ): Check => {
+  const split = splitVariables(env);
   const owned = [
-    ...ownedVariables(env),
+    ...split.owned,
     ...(ownsAgent(agent) ? ["the login LaunchAgent"] : []),
   ];
-  const foreign = foreignVariables(env);
+  const foreign = split.foreign;
   const kept =
     foreign.length > 0
       ? `; keeps ${foreign.join(", ")}, which another tool registered`
@@ -22,7 +20,7 @@ export const legacyRegistrationCheck = (
     ? {
         status: "warn",
         name: "Login-wide setup",
-        detail: `an earlier harnexus left ${owned.join(", ")}, so a launch from the Dock also runs harnexus; run harnexus open-app --standard to clear it${kept}`,
+        detail: `an earlier harnexus left ${owned.join(", ")}; run harnexus open-app --standard to clear it${kept}`,
       }
     : {
         status: "ok",

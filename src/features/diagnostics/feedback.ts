@@ -7,7 +7,7 @@ import {
 } from "../../infra/checkout.ts";
 import { ownsAgent } from "../../infra/setup/launchd-plan.ts";
 import { readLaunchd } from "../../infra/setup/launchd.boundary.ts";
-import { ownedVariables } from "../../infra/setup/open-app-plan.ts";
+import { splitVariables } from "../../infra/setup/open-app-plan.ts";
 import { parseOptions } from "../../lib/args.boundary.ts";
 import { loadLogPath, loadStatePath } from "../../lib/config.ts";
 import {
@@ -156,12 +156,12 @@ const facts: FeedbackFacts = {
     launchd:
       legacy === null
         ? "unreadable"
-        : ownedVariables(legacy.env).length > 0 || ownsAgent(legacy.agent)
+        : splitVariables(legacy.env).owned.length > 0 || ownsAgent(legacy.agent)
           ? "legacy"
           : "none",
     otherCheckout:
       legacy !== null &&
-      ownedVariables(legacy.env).includes("CODEX_CLI_PATH") &&
+      splitVariables(legacy.env).owned.includes("CODEX_CLI_PATH") &&
       legacy.env.CODEX_CLI_PATH !== LAUNCHER,
     settings: bridgeSettings(setup.env),
   },

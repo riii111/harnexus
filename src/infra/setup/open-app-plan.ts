@@ -49,18 +49,16 @@ export const APP_ENV_NAMES = [
 ] as const;
 
 // Another tool may point CODEX_CLI_PATH at its own launcher, so only a value naming this launcher counts as harnexus's.
-export const ownedVariables = (env: Record<string, string | undefined>) =>
-  APP_ENV_NAMES.filter(
+export const splitVariables = (env: Record<string, string | undefined>) => {
+  const present = APP_ENV_NAMES.filter((name) => env[name] !== undefined);
+  const owned = present.filter(
     (name) =>
-      env[name] !== undefined &&
-      (name !== "CODEX_CLI_PATH" || basename(env[name]) === LAUNCHER_FILE),
+      name !== "CODEX_CLI_PATH" || basename(env[name] ?? "") === LAUNCHER_FILE,
   );
-
-export const foreignVariables = (env: Record<string, string | undefined>) => {
-  const owned = ownedVariables(env);
-  return APP_ENV_NAMES.filter(
-    (name) => env[name] !== undefined && !owned.includes(name),
-  );
+  return {
+    owned,
+    foreign: present.filter((name) => !owned.includes(name)),
+  };
 };
 
 // open hands its own environment to the app, so a standard launch from a shell that ran harnexus would still go through the launcher.
@@ -69,7 +67,7 @@ export const openEnvironment = (
   env: Record<string, string | undefined>,
 ) => {
   if (mode === "harnexus") return env;
-  const owned: readonly string[] = ownedVariables(env);
+  const owned: readonly string[] = splitVariables(env).owned;
   return Object.fromEntries(
     Object.entries(env).filter(([name]) => !owned.includes(name)),
   );

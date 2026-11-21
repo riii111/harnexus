@@ -6,11 +6,7 @@ import { Result, TaggedError } from "better-result";
 import { readTextFileIfExists, removeFile } from "../../lib/fs.boundary.ts";
 import { readCommandOutput, runCommand } from "../../lib/process.boundary.ts";
 import { AGENT_LABEL, ownsAgent } from "./launchd-plan.ts";
-import {
-  APP_ENV_NAMES,
-  foreignVariables,
-  ownedVariables,
-} from "./open-app-plan.ts";
+import { APP_ENV_NAMES, splitVariables } from "./open-app-plan.ts";
 
 class LaunchdReadFailed extends TaggedError("LaunchdReadFailed")<{
   message: string;
@@ -38,14 +34,14 @@ export const clearLegacyLaunchd = (places: LaunchdPlaces = LOGIN_LAUNCHD) =>
       );
     const agent = ownsAgent(read.agent);
     if (agent) yield* Result.await(removeFile(agentPath(places)));
-    const variables = ownedVariables(read.env);
+    const { owned: variables, foreign: kept } = splitVariables(read.env);
     for (const name of variables) {
       yield* Result.await(
         readCommandOutput(places.launchctl, ["unsetenv", name]),
       );
     }
 
-    return Result.ok({ variables, agent, kept: foreignVariables(read.env) });
+    return Result.ok({ variables, agent, kept });
   });
 
 export const readLaunchd = (places: LaunchdPlaces = LOGIN_LAUNCHD) =>

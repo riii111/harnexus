@@ -409,7 +409,7 @@ const SETUP_SOURCE: Record<FeedbackFacts["setup"]["launchd"], Check> = {
     status: "warn",
     name: "Setup source",
     detail:
-      "an earlier harnexus registered the app's setup for the whole login, so a launch from the Dock also runs harnexus; run harnexus open-app --standard to clear it",
+      "an earlier harnexus left its setup registered for the whole login; run harnexus open-app --standard to clear it",
   },
   unreadable: {
     status: "warn",

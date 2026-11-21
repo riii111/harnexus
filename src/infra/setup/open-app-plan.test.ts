@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  foreignVariables,
   isAppRunning,
   openArguments,
   openEnvironment,
-  ownedVariables,
+  splitVariables,
 } from "./open-app-plan.ts";
 
 describe("openArguments", () => {
@@ -56,31 +55,14 @@ describe("openArguments", () => {
   });
 });
 
-describe("ownedVariables", () => {
-  test("takes every harnexus variable and a Codex CLI path naming this launcher even after the checkout is gone", () => {
+describe("splitVariables", () => {
+  test("leaves a Codex CLI path another tool registered out of what harnexus owns", () => {
     expect(
-      ownedVariables({
-        CODEX_CLI_PATH: "/deleted/harnexus/bin/harnexus-codex",
-        HARNEXUS_CODEX_PATH: "/codex",
-        HARNEXUS_CALL_SOCKET: "on",
+      splitVariables({
+        CODEX_CLI_PATH: "/opt/other/bin/codex-wrapper",
+        HARNEXUS_BUN_PATH: "/bun",
       }),
-    ).toEqual([
-      "CODEX_CLI_PATH",
-      "HARNEXUS_CODEX_PATH",
-      "HARNEXUS_CALL_SOCKET",
-    ]);
-  });
-
-  test("leaves a Codex CLI path another tool registered to it", () => {
-    const env = {
-      CODEX_CLI_PATH: "/opt/other/bin/codex-wrapper",
-      HARNEXUS_BUN_PATH: "/bun",
-    };
-
-    expect({
-      owned: ownedVariables(env),
-      foreign: foreignVariables(env),
-    }).toEqual({ owned: ["HARNEXUS_BUN_PATH"], foreign: ["CODEX_CLI_PATH"] });
+    ).toEqual({ owned: ["HARNEXUS_BUN_PATH"], foreign: ["CODEX_CLI_PATH"] });
   });
 });
 

@@ -255,7 +255,7 @@ describe("formatFeedback", () => {
     {
       name: "an earlier login-wide setup",
       launchd: "legacy" as const,
-      expected: "warn Setup source: an earlier harnexus registered",
+      expected: "warn Setup source: an earlier harnexus left its setup",
     },
     {
       name: "an unread launchd",
