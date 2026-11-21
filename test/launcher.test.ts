@@ -252,9 +252,24 @@ describe("startup fallback", () => {
     "uses standard Codex when bridge startup exceeds the readiness deadline",
     async () => {
       const { env } = setup({ HARNEXUS_BUN_PATH: hangingBun });
-      const result = await finish(
-        launch(["app-server"], env, { stdin: "deadline\n" }),
+      const launcher = join(dir, "bin", "short-deadline-codex");
+      const source = await Bun.file(LAUNCHER).text();
+      expect(source).toContain("->can_read(15)");
+      await writeFile(
+        launcher,
+        source.replace("->can_read(15)", "->can_read(0.1)"),
       );
+      await chmod(launcher, 0o755);
+      const proc = Bun.spawn([launcher, "app-server"], {
+        cwd: dir,
+        env,
+        stdin: new Blob(["deadline\n"]),
+        stdout: "pipe",
+        stderr: "pipe",
+        detached: true,
+      });
+      launched.push(proc);
+      const result = await finish(proc);
       expect(result).toMatchObject({ stdout: "deadline\n", exitCode: 0 });
       expect(result.stderr).toContain('"event":"standard_fallback"');
       expect(
