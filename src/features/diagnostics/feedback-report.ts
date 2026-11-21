@@ -190,11 +190,9 @@ export type FeedbackFacts = {
   bridges: { mine: readonly RunningBridge[]; others: number };
   loggedStarts: readonly LoggedStart[];
   setup: {
-    launchd: "registered" | "none" | "unreadable";
+    launchd: "legacy" | "none" | "unreadable";
     otherCheckout: boolean;
     settings: BridgeSettings;
-    bun: { path: string; version: string | null } | null;
-    pinnedBun: string | null;
   };
   app: {
     startedAtMs: number | null;
@@ -371,7 +369,7 @@ const setupChecks = (facts: FeedbackFacts): Check[] => {
       status: "warn",
       name: "Checkout",
       detail:
-        "the app was set up from another harnexus checkout; run bun run feedback there",
+        "the setup registered for the whole login points to another harnexus checkout; run harnexus open-app --standard to clear it",
     });
   checks.push({
     status: Object.values(setup.settings).includes("invalid") ? "warn" : "ok",
@@ -380,7 +378,6 @@ const setupChecks = (facts: FeedbackFacts): Check[] => {
       .map(([key, value]) => `${key}=${value}`)
       .join(" "),
   });
-  if (setup.bun !== null) checks.push(appBunCheck(setup.bun, setup.pinnedBun));
   // The app keeps the Codex CLI it started with, so a running bridge that met another version than the one installed means the app was updated while it ran.
   const older = app.runningCodex.filter(
     (version) => app.installedCodex !== null && version !== app.installedCodex,
@@ -402,40 +399,25 @@ const setupChecks = (facts: FeedbackFacts): Check[] => {
 };
 
 const SETUP_SOURCE: Record<FeedbackFacts["setup"]["launchd"], Check> = {
-  registered: {
+  none: {
     status: "ok",
     name: "Setup source",
-    detail: "the environment bun run open-app registered for the app",
+    detail:
+      "this shell's environment, which harnexus open-app hands to the app for one launch",
   },
-  none: {
+  legacy: {
     status: "warn",
     name: "Setup source",
     detail:
-      "nothing registered with launchd, so this shell's environment is shown; run bun run open-app",
+      "an earlier harnexus left its setup registered for the whole login; run harnexus open-app --standard to clear it",
   },
   unreadable: {
     status: "warn",
     name: "Setup source",
     detail:
-      "launchd could not be read, so this shell's environment is shown and the paths may not be the app's",
+      "launchd could not be read, so a setup an earlier harnexus registered for the whole login may remain",
   },
 };
-
-const appBunCheck = (
-  bun: { path: string; version: string | null },
-  pinned: string | null,
-): Check =>
-  bun.version === null
-    ? {
-        status: "fail",
-        name: "App's Bun",
-        detail: `cannot run ${bun.path}; the app falls back to standard Codex`,
-      }
-    : {
-        status: bun.version === pinned ? "ok" : "warn",
-        name: "App's Bun",
-        detail: `${bun.version} at ${bun.path}${bun.version === pinned ? "" : `, while harnexus pins ${pinned ?? "no version"}`}`,
-      };
 
 const logSection = ({ log, sinceMs }: FeedbackFacts): string[] => {
   if (log.state === "off")

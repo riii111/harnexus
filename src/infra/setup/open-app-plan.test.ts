@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { isAppRunning, openArguments } from "./open-app-plan.ts";
+import {
+  isAppRunning,
+  openArguments,
+  openEnvironment,
+  splitVariables,
+} from "./open-app-plan.ts";
 
 describe("openArguments", () => {
   test("opens the app with the launcher as its Codex CLI and the paths the launcher needs", () => {
@@ -47,6 +52,42 @@ describe("openArguments", () => {
     });
 
     expect(args).toEqual(["-a", "/Applications/ChatGPT.app"]);
+  });
+});
+
+describe("splitVariables", () => {
+  test("leaves a Codex CLI path another tool registered out of what harnexus owns", () => {
+    expect(
+      splitVariables({
+        CODEX_CLI_PATH: "/opt/other/bin/codex-wrapper",
+        HARNEXUS_BUN_PATH: "/bun",
+      }),
+    ).toEqual({ owned: ["HARNEXUS_BUN_PATH"], foreign: ["CODEX_CLI_PATH"] });
+  });
+});
+
+describe("openEnvironment", () => {
+  test("hands a standard launch none of the harnexus setup of the calling shell but keeps another tool's Codex CLI path", () => {
+    const env = openEnvironment("standard", {
+      PATH: "/usr/bin",
+      CODEX_CLI_PATH: "/work/harnexus/bin/harnexus-codex",
+      HARNEXUS_CODEX_PATH: "/codex",
+      HARNEXUS_BUN_PATH: "/bun",
+    });
+    const other = openEnvironment("standard", {
+      CODEX_CLI_PATH: "/opt/other/bin/codex-wrapper",
+    });
+
+    expect({ env, other }).toEqual({
+      env: { PATH: "/usr/bin" },
+      other: { CODEX_CLI_PATH: "/opt/other/bin/codex-wrapper" },
+    });
+  });
+
+  test("keeps the calling shell's environment for a harnexus launch", () => {
+    const shell = { PATH: "/usr/bin", HARNEXUS_LOG_PATH: "/tmp/h.log" };
+
+    expect(openEnvironment("harnexus", shell)).toEqual(shell);
   });
 });
 

@@ -1,3 +1,5 @@
+import { basename } from "node:path";
+
 type OpenAppPaths = {
   app: string;
   launcher: string;
@@ -5,7 +7,7 @@ type OpenAppPaths = {
   bun: string;
 };
 
-export const registeredEnvironment = (
+export const appEnvironment = (
   paths: OpenAppPaths,
   env: Record<string, string | undefined>,
 ): Record<string, string> => ({
@@ -29,12 +31,13 @@ export const openArguments = (
   paths.app,
   ...(mode === "standard"
     ? []
-    : Object.entries(registeredEnvironment(paths, env)).flatMap(
-        ([key, value]) => ["--env", `${key}=${value}`],
-      )),
+    : Object.entries(appEnvironment(paths, env)).flatMap(([key, value]) => [
+        "--env",
+        `${key}=${value}`,
+      ])),
 ];
 
-export const REGISTERED_ENV_NAMES = [
+export const APP_ENV_NAMES = [
   "CODEX_CLI_PATH",
   "HARNEXUS_CODEX_PATH",
   "HARNEXUS_BUN_PATH",
@@ -45,6 +48,31 @@ export const REGISTERED_ENV_NAMES = [
   "HARNEXUS_CALL_SOCKET",
 ] as const;
 
+// Another tool may point CODEX_CLI_PATH at its own launcher, so only a value naming this launcher counts as harnexus's.
+export const splitVariables = (env: Record<string, string | undefined>) => {
+  const present = APP_ENV_NAMES.filter((name) => env[name] !== undefined);
+  const owned = present.filter(
+    (name) =>
+      name !== "CODEX_CLI_PATH" || basename(env[name] ?? "") === LAUNCHER_FILE,
+  );
+  return {
+    owned,
+    foreign: present.filter((name) => !owned.includes(name)),
+  };
+};
+
+// open hands its own environment to the app, so a standard launch from a shell that ran harnexus would still go through the launcher.
+export const openEnvironment = (
+  mode: "harnexus" | "standard",
+  env: Record<string, string | undefined>,
+) => {
+  if (mode === "harnexus") return env;
+  const owned: readonly string[] = splitVariables(env).owned;
+  return Object.fromEntries(
+    Object.entries(env).filter(([name]) => !owned.includes(name)),
+  );
+};
+
 export const isAppRunning = <T extends { command: string }>(
   processes: readonly T[],
   app: string,
@@ -53,4 +81,5 @@ export const isAppRunning = <T extends { command: string }>(
   return processes.some(({ command }) => command.startsWith(binary));
 };
 
-const PASSED_ENV = REGISTERED_ENV_NAMES.slice(3);
+const PASSED_ENV = APP_ENV_NAMES.slice(3);
+const LAUNCHER_FILE = "harnexus-codex";

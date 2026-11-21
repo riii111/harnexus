@@ -1,40 +1,46 @@
 import { describe, expect, test } from "bun:test";
 
-import { launchAgent } from "../../infra/setup/launchd-plan.ts";
-import { registrationChecks } from "./registration-checks.ts";
+import { legacyRegistrationCheck } from "./registration-checks.ts";
 
-describe("registrationChecks", () => {
-  test("reports matching registration and login restoration", () => {
-    expect(
-      registrationChecks(ENV, ENV, launchAgent(ENV)).map(
-        ({ status }) => status,
-      ),
-    ).toEqual(["ok", "ok"]);
-  });
-  test("reports absent registration", () => {
-    expect(registrationChecks(ENV, {}, null)).toMatchObject([
-      { status: "warn", detail: "not registered; run bun run open-app" },
-      { status: "warn", detail: "not installed" },
-    ]);
-  });
-  test("names mismatched variables without exposing their values", () => {
-    const checks = registrationChecks(
-      ENV,
-      { ...ENV, HARNEXUS_UNVERIFIED_CODEX: "private-value" },
-      launchAgent({ ...ENV, HARNEXUS_UNVERIFIED_CODEX: "private-value" }),
-    );
-    expect(checks[0]).toMatchObject({
-      status: "warn",
-      detail:
-        "values differ from this checkout/shell: HARNEXUS_UNVERIFIED_CODEX",
+describe("legacyRegistrationCheck", () => {
+  test("reports nothing left when launchd holds no harnexus setup", () => {
+    expect(legacyRegistrationCheck({}, null)).toMatchObject({
+      status: "ok",
+      detail: "none; only harnexus open-app runs the app with harnexus",
     });
-    expect(checks[1]?.status).toBe("warn");
-    expect(JSON.stringify(checks)).not.toContain("private-value");
+  });
+
+  test("names what an earlier harnexus left without exposing values", () => {
+    const check = legacyRegistrationCheck(
+      { ...LEGACY_ENV, HARNEXUS_UNVERIFIED_CODEX: "private-value" },
+      AGENT,
+    );
+
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain(
+      "left CODEX_CLI_PATH, HARNEXUS_CODEX_PATH, HARNEXUS_UNVERIFIED_CODEX, the login LaunchAgent",
+    );
+    expect(check.detail).not.toContain("private-value");
+  });
+
+  test("keeps a Codex CLI path another tool registered out of the warning", () => {
+    const check = legacyRegistrationCheck(
+      { CODEX_CLI_PATH: "/opt/other/bin/codex-wrapper" },
+      null,
+    );
+
+    expect(check).toMatchObject({
+      status: "ok",
+      detail:
+        "none; only harnexus open-app runs the app with harnexus; keeps CODEX_CLI_PATH, which another tool registered",
+    });
   });
 });
 
-const ENV = {
-  CODEX_CLI_PATH: "/launcher",
+const LEGACY_ENV = {
+  CODEX_CLI_PATH: "/work/harnexus/bin/harnexus-codex",
   HARNEXUS_CODEX_PATH: "/codex",
-  HARNEXUS_BUN_PATH: "/bun",
 };
+
+const AGENT =
+  "<plist><dict><key>Label</key><string>com.harnexus.environment</string></dict></plist>";

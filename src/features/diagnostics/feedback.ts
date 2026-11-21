@@ -4,9 +4,10 @@ import { dirname, join } from "node:path";
 import {
   readCheckoutHead,
   readInstalledPackage,
-  versionOf,
 } from "../../infra/checkout.ts";
+import { ownsAgent } from "../../infra/setup/launchd-plan.ts";
 import { readLaunchd } from "../../infra/setup/launchd.boundary.ts";
+import { splitVariables } from "../../infra/setup/open-app-plan.ts";
 import { parseOptions } from "../../lib/args.boundary.ts";
 import { loadLogPath, loadStatePath } from "../../lib/config.ts";
 import {
@@ -20,7 +21,6 @@ import { isObject } from "../../lib/object.ts";
 import { readCommandOutput, runCommand } from "../../lib/process.boundary.ts";
 import { bridgeSettings, SDK_PACKAGE } from "./bridge-identity.ts";
 import {
-  CODEX_IN_APP,
   codexPathOf,
   DEFAULT_APP,
   type DoctorSetup,
@@ -108,7 +108,9 @@ process.stderr.write(
 );
 
 const launchdRead = await readLaunchd();
-const { setup, launchd } = appSetup(launchdRead);
+// open-app hands this shell's environment to the app for that launch only, so nothing else records the app's setup.
+const setup = shellSetup();
+const legacy = launchdRead.unwrapOr(null);
 const setupFacts = await collectSetupFacts(
   REPO,
   codexPathOf(setup),
@@ -117,7 +119,7 @@ const setupFacts = await collectSetupFacts(
 const processes = setupFacts.processes.unwrapOr([]);
 const bridges = findBridges(processes, REPO, now);
 const running = new Set(bridges.mine.map(({ pid }) => pid));
-const [doctor, head, dependencies, changes, macos, bun, codeChangedAt, log] =
+const [doctor, head, dependencies, changes, macos, codeChangedAt, log] =
   await Promise.all([
     doctorChecks(setup, setupFacts),
     readCheckoutHead(REPO),
@@ -128,7 +130,6 @@ const [doctor, head, dependencies, changes, macos, bun, codeChangedAt, log] =
           (read) => (read.isOk() ? read.value.trim() : null),
         )
       : null,
-    registeredBun(),
     newestCodeChange(),
     readAppLog(running),
   ]);
@@ -152,14 +153,17 @@ const facts: FeedbackFacts = {
   bridges,
   loggedStarts: log.starts.filter(({ pid }) => running.has(pid)),
   setup: {
-    launchd,
+    launchd:
+      legacy === null
+        ? "unreadable"
+        : splitVariables(legacy.env).owned.length > 0 || ownsAgent(legacy.agent)
+          ? "legacy"
+          : "none",
     otherCheckout:
-      setup.source === "launchd" &&
-      setup.env.CODEX_CLI_PATH !== undefined &&
-      setup.env.CODEX_CLI_PATH !== LAUNCHER,
+      legacy !== null &&
+      splitVariables(legacy.env).owned.includes("CODEX_CLI_PATH") &&
+      legacy.env.CODEX_CLI_PATH !== LAUNCHER,
     settings: bridgeSettings(setup.env),
-    bun,
-    pinnedBun: setupFacts.pinnedBun,
   },
   app: {
     // The app's main process keeps the Codex CLI and environment it started with until it quits.
@@ -196,35 +200,6 @@ process.exit(0);
 
 function optionText(value: unknown) {
   return typeof value === "string" ? value : undefined;
-}
-
-// The setup the app runs with, which is what open-app registered with launchd.
-function appSetup(read: Awaited<ReturnType<typeof readLaunchd>>): {
-  setup: DoctorSetup;
-  launchd: "registered" | "none" | "unreadable";
-} {
-  const shell = shellSetup();
-  if (read.isErr()) return { setup: shell, launchd: "unreadable" };
-  const env = read.value.env;
-  if (Object.keys(env).length === 0) return { setup: shell, launchd: "none" };
-  const codex = env.HARNEXUS_CODEX_PATH;
-  const suffix = `/${CODEX_IN_APP}`;
-  // A variable launchd lacks takes its default in the app rather than this shell's value.
-  return {
-    setup: {
-      env,
-      app: codex?.endsWith(suffix) ? codex.slice(0, -suffix.length) : shell.app,
-      source: "launchd",
-    },
-    launchd: "registered",
-  };
-}
-
-async function registeredBun() {
-  const path = setup.source === "launchd" ? setup.env.HARNEXUS_BUN_PATH : null;
-  if (path === undefined || path === null) return null;
-  const read = await readCommandOutput(path, ["--version"]);
-  return { path, version: read.isOk() ? versionOf(read.value.trim()) : null };
 }
 
 async function dependencyStates(

@@ -84,15 +84,10 @@ For manual approvals, quit the app and reopen with:
 HARNEXUS_PERMISSION_MODE=default harnexus open-app
 ```
 
-- Launch options persist until you rerun `harnexus open-app`; omitted options are cleared.
-
 ## Troubleshooting
 
 harnexus is experimental and expects the app at `/Applications/ChatGPT.app`.
 Set `HARNEXUS_APP_PATH` if yours is elsewhere.
-
-`open-app` configures the macOS launch environment and a LaunchAgent.
-`--standard` clears those settings and removes the LaunchAgent.
 
 If Claude is missing or a chat will not start, quit the app completely and run `harnexus open-app` again.
 

@@ -3,59 +3,53 @@ import { join } from "node:path";
 
 import { Result, TaggedError } from "better-result";
 
-import {
-  prepareDirectory,
-  readTextFileIfExists,
-  removeFile,
-  writeFileAtomic,
-} from "../../lib/fs.boundary.ts";
+import { readTextFileIfExists, removeFile } from "../../lib/fs.boundary.ts";
 import { readCommandOutput, runCommand } from "../../lib/process.boundary.ts";
-import {
-  AGENT_LABEL,
-  environmentCommands,
-  launchAgent,
-} from "./launchd-plan.ts";
-import { REGISTERED_ENV_NAMES } from "./open-app-plan.ts";
+import { AGENT_LABEL, ownsAgent } from "./launchd-plan.ts";
+import { APP_ENV_NAMES, splitVariables } from "./open-app-plan.ts";
 
 class LaunchdReadFailed extends TaggedError("LaunchdReadFailed")<{
   message: string;
 }> {}
 
-export const configureLaunchd = (
-  env: Record<string, string>,
-  standard: boolean,
-) =>
+export type LaunchdPlaces = { launchctl: string; agentDirectory: string };
+
+export const LOGIN_LAUNCHD: LaunchdPlaces = {
+  launchctl: "/bin/launchctl",
+  agentDirectory: join(homedir(), "Library", "LaunchAgents"),
+};
+
+// Removes what an earlier open-app registered for the whole login session, leaving variables another tool set.
+export const clearLegacyLaunchd = (places: LaunchdPlaces = LOGIN_LAUNCHD) =>
   Result.gen(async function* () {
-    // An already loaded one-shot job must not restore old values after --standard.
+    const read = yield* Result.await(readLaunchd(places));
+    // A loaded one-shot job would restore the old values at the next login even after its file is gone.
     const target = `gui/${process.getuid?.()}/${AGENT_LABEL}`;
     const loaded = yield* Result.await(
-      runCommand("/bin/launchctl", ["print", target], process.env),
+      runCommand(places.launchctl, ["print", target], process.env),
     );
     if (loaded.status === 0)
       yield* Result.await(
-        readCommandOutput("/bin/launchctl", ["bootout", target]),
+        readCommandOutput(places.launchctl, ["bootout", target]),
       );
-    if (standard) {
-      const existing = yield* Result.await(readTextFileIfExists(agentPath()));
-      if (existing !== null) yield* Result.await(removeFile(agentPath()));
-    } else {
-      yield* Result.await(prepareDirectory(agentDirectory()));
-      yield* Result.await(writeFileAtomic(agentPath(), launchAgent(env)));
+    const agent = ownsAgent(read.agent);
+    if (agent) yield* Result.await(removeFile(agentPath(places)));
+    const { owned: variables, foreign: kept } = splitVariables(read.env);
+    for (const name of variables) {
+      yield* Result.await(
+        readCommandOutput(places.launchctl, ["unsetenv", name]),
+      );
     }
 
-    for (const args of environmentCommands(standard ? {} : env)) {
-      yield* Result.await(readCommandOutput("/bin/launchctl", args));
-    }
-
-    return Result.ok();
+    return Result.ok({ variables, agent, kept });
   });
 
-export const readLaunchd = () =>
+export const readLaunchd = (places: LaunchdPlaces = LOGIN_LAUNCHD) =>
   Result.gen(async function* () {
     const env: Record<string, string> = {};
-    for (const name of REGISTERED_ENV_NAMES) {
+    for (const name of APP_ENV_NAMES) {
       const read = yield* Result.await(
-        runCommand("/bin/launchctl", ["getenv", name], process.env),
+        runCommand(places.launchctl, ["getenv", name], process.env),
       );
       if (read.status === 0 && read.stdout !== "")
         env[name] = read.stdout.replace(/\n$/, "");
@@ -67,9 +61,9 @@ export const readLaunchd = () =>
         );
     }
 
-    const agent = yield* Result.await(readTextFileIfExists(agentPath()));
+    const agent = yield* Result.await(readTextFileIfExists(agentPath(places)));
     return Result.ok({ env, agent });
   });
 
-const agentDirectory = () => join(homedir(), "Library", "LaunchAgents");
-const agentPath = () => join(agentDirectory(), `${AGENT_LABEL}.plist`);
+const agentPath = (places: LaunchdPlaces) =>
+  join(places.agentDirectory, `${AGENT_LABEL}.plist`);

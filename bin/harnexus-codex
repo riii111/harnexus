@@ -144,22 +144,23 @@ sub option_value {
   return undef;
 }
 
-# The App's browser helper starts these calls without the App's environment; only they may recover the Codex path from the login session's launchd registration, and the App's own app-server still fails when it is unset.
+# The App's browser helper starts these calls without the App's environment; only they may take the Codex bundled in the App that runs them, and the App's own app-server still fails when the path is unset.
 sub codex_path {
   my ($helper) = @_;
   return require_executable("HARNEXUS_CODEX_PATH") unless $helper;
-  return require_executable("HARNEXUS_CODEX_PATH", registered_codex_path());
+  return require_executable("HARNEXUS_CODEX_PATH", bundled_codex_path($helper));
 }
 
 sub browser_helper_call {
   my @args = @_;
-  return 0 if length($ENV{HARNEXUS_CODEX_PATH} // "");
+  return "" if length($ENV{HARNEXUS_CODEX_PATH} // "");
   my $at = first_positional(0, @args);
-  return 0 unless defined $at;
+  return "" unless defined $at;
   my $sandbox = $args[$at] eq "sandbox";
   my $app_server = join("\0", @args) eq join("\0", "app-server", "--listen", "stdio://");
-  return 0 unless $sandbox || $app_server;
-  return parent_executable() =~ m{/Contents/Resources/cua_node/bin/node_repl\z} ? 1 : 0;
+  return "" unless $sandbox || $app_server;
+  my $parent = parent_executable();
+  return $parent =~ m{/Contents/Resources/cua_node/bin/node_repl\z} ? $parent : "";
 }
 
 sub parent_executable {
@@ -170,12 +171,10 @@ sub parent_executable {
   return $path;
 }
 
-sub registered_codex_path {
-  open(my $launchctl, "-|", "/bin/launchctl", "getenv", "HARNEXUS_CODEX_PATH") or return "";
-  my $path = <$launchctl> // "";
-  close $launchctl;
-  $path =~ s/\n\z//;
-  return $path;
+sub bundled_codex_path {
+  my ($helper) = @_;
+  (my $app = $helper) =~ s{/Contents/Resources/cua_node/bin/node_repl\z}{};
+  return "$app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 }
 
 sub require_executable {
