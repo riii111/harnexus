@@ -1,62 +1,50 @@
 import { describe, expect, test } from "bun:test";
 
-import { environmentCommands, launchAgent } from "./launchd-plan.ts";
-import { registeredEnvironment } from "./open-app-plan.ts";
+import { foreignVariables, ownedVariables, ownsAgent } from "./launchd-plan.ts";
 
-describe("environmentCommands", () => {
-  test("clears stale optional settings and accepts only registered variable names", () => {
-    const commands = environmentCommands({
-      CODEX_CLI_PATH: "/work/launcher",
-      ANTHROPIC_API_KEY: "secret",
-    });
-    expect(commands).toContainEqual([
-      "setenv",
+describe("ownedVariables", () => {
+  test("takes every harnexus variable and a Codex CLI path naming this launcher even after the checkout is gone", () => {
+    expect(
+      ownedVariables({
+        CODEX_CLI_PATH: "/deleted/harnexus/bin/harnexus-codex",
+        HARNEXUS_CODEX_PATH: "/codex",
+        HARNEXUS_CALL_SOCKET: "on",
+      }),
+    ).toEqual([
       "CODEX_CLI_PATH",
-      "/work/launcher",
+      "HARNEXUS_CODEX_PATH",
+      "HARNEXUS_CALL_SOCKET",
     ]);
-    expect(commands).toContainEqual(["unsetenv", "HARNEXUS_PERMISSION_MODE"]);
-    expect(commands.flat()).not.toContain("secret");
   });
-  test("closes the call socket when open-app runs again without it", () => {
-    const commands = environmentCommands(
-      registeredEnvironment(
-        { app: "/app", launcher: "/launcher", codex: "/codex", bun: "/bun" },
-        {},
-      ),
-    );
 
-    expect(commands).toContainEqual(["unsetenv", "HARNEXUS_CALL_SOCKET"]);
-  });
-  test("unsets every owned variable when returning to standard", () => {
-    expect(environmentCommands({})).toEqual([
-      ["unsetenv", "CODEX_CLI_PATH"],
-      ["unsetenv", "HARNEXUS_CODEX_PATH"],
-      ["unsetenv", "HARNEXUS_BUN_PATH"],
-      ["unsetenv", "HARNEXUS_LOG_PATH"],
-      ["unsetenv", "HARNEXUS_STATE_PATH"],
-      ["unsetenv", "HARNEXUS_UNVERIFIED_CODEX"],
-      ["unsetenv", "HARNEXUS_PERMISSION_MODE"],
-      ["unsetenv", "HARNEXUS_CALL_SOCKET"],
-    ]);
+  test("leaves a Codex CLI path another tool registered to it", () => {
+    const env = {
+      CODEX_CLI_PATH: "/opt/other/bin/codex-wrapper",
+      HARNEXUS_BUN_PATH: "/bun",
+    };
+
+    expect({
+      owned: ownedVariables(env),
+      foreign: foreignVariables(env),
+    }).toEqual({ owned: ["HARNEXUS_BUN_PATH"], foreign: ["CODEX_CLI_PATH"] });
   });
 });
 
-describe("launchAgent", () => {
-  test("quotes paths for both shell and XML without saving credentials", () => {
-    const env = registeredEnvironment(
-      {
-        app: "/app",
-        launcher: "/a'b & <c>/$(touch nope)",
-        codex: "/codex",
-        bun: "/bun",
-      },
-      { ANTHROPIC_API_KEY: "secret", HARNEXUS_PERMISSION_MODE: "auto" },
-    );
-    const plist = launchAgent(env);
-    expect(plist).toContain(
-      "/a&apos;\\&apos;&apos;b &amp; &lt;c&gt;/$(touch nope)",
-    );
-    expect(plist).toContain("<key>RunAtLoad</key><true/>");
-    expect(plist).not.toContain("secret");
+describe("ownsAgent", () => {
+  test.each([
+    { name: "no file", agent: null, expected: false },
+    {
+      name: "a file with another label",
+      agent: "<key>Label</key><string>com.example.environment</string>",
+      expected: false,
+    },
+    {
+      name: "the label an earlier harnexus wrote",
+      agent:
+        "<dict>\n<key>Label</key><string>com.harnexus.environment</string>\n</dict>",
+      expected: true,
+    },
+  ])("tells $name as $expected", ({ agent, expected }) => {
+    expect(ownsAgent(agent)).toBe(expected);
   });
 });

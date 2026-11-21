@@ -5,7 +5,7 @@ type OpenAppPaths = {
   bun: string;
 };
 
-export const registeredEnvironment = (
+export const appEnvironment = (
   paths: OpenAppPaths,
   env: Record<string, string | undefined>,
 ): Record<string, string> => ({
@@ -29,12 +29,13 @@ export const openArguments = (
   paths.app,
   ...(mode === "standard"
     ? []
-    : Object.entries(registeredEnvironment(paths, env)).flatMap(
-        ([key, value]) => ["--env", `${key}=${value}`],
-      )),
+    : Object.entries(appEnvironment(paths, env)).flatMap(([key, value]) => [
+        "--env",
+        `${key}=${value}`,
+      ])),
 ];
 
-export const REGISTERED_ENV_NAMES = [
+export const APP_ENV_NAMES = [
   "CODEX_CLI_PATH",
   "HARNEXUS_CODEX_PATH",
   "HARNEXUS_BUN_PATH",
@@ -53,4 +54,4 @@ export const isAppRunning = <T extends { command: string }>(
   return processes.some(({ command }) => command.startsWith(binary));
 };
 
-const PASSED_ENV = REGISTERED_ENV_NAMES.slice(3);
+const PASSED_ENV = APP_ENV_NAMES.slice(3);

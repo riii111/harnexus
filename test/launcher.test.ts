@@ -10,17 +10,19 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const SOURCE_LAUNCHER = join(import.meta.dir, "..", "bin", "harnexus-codex");
 let LAUNCHER: string;
 const BUN = process.execPath;
 const TIMEOUT = 20_000;
-const NODE_REPL =
-  "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin/node_repl";
+const NODE_REPL_IN_APP = "Contents/Resources/cua_node/bin/node_repl";
+const CODEX_IN_APP =
+  "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 
 let dir: string;
 let fakeCodex: string;
+let fakeApp: string;
 let lingeringCodex: string;
 let stdioFlagsCodex: string;
 let hangingBun: string;
@@ -55,6 +57,13 @@ beforeAll(async () => {
   fakeCodex = join(dir, "codex.js");
   await writeFile(fakeCodex, FAKE_CODEX);
   await chmod(fakeCodex, 0o755);
+  fakeApp = join(dir, "ChatGPT.app");
+  await mkdir(dirname(join(fakeApp, CODEX_IN_APP)), { recursive: true });
+  await writeFile(join(fakeApp, CODEX_IN_APP), FAKE_CODEX);
+  await chmod(join(fakeApp, CODEX_IN_APP), 0o755);
+  const loopedCodex = join(dir, "Looped.app", CODEX_IN_APP);
+  await mkdir(dirname(loopedCodex), { recursive: true });
+  await symlink(LAUNCHER, loopedCodex);
   hangingBun = join(dir, "hung-bun");
   await writeFile(hangingBun, "#!/bin/sh\nexec /bin/sleep 30\n");
   await chmod(hangingBun, 0o755);
@@ -109,7 +118,7 @@ describe("browser helper without the App environment", () => {
       args: ["app-server", "--listen", "stdio://"],
     },
   ])(
-    "delegates $name to the Codex registered with launchd keeping args and exit code without the bridge",
+    "delegates $name to the Codex bundled in the App that runs the helper keeping args and exit code without the bridge or launchd",
     async ({ args }) => {
       const { env, reportPath } = setup({
         ...HELPER_ENV,
@@ -124,15 +133,16 @@ describe("browser helper without the App environment", () => {
       expect(report.argv).toEqual(args);
       expect(report.env).toEqual({ ...env, HARNEXUS_LAUNCHER_ACTIVE: "1" });
       expect(existsSync(env.FAKE_NOTIFICATION_REPORT as string)).toBe(false);
+      expect(existsSync(env.FAKE_LAUNCHCTL_REPORT as string)).toBe(false);
     },
     TIMEOUT,
   );
 
-  test.each<{ name: string; args: string[]; parent: string }>([
+  test.each<{ name: string; args: string[]; parent: () => string }>([
     {
       name: "app-server from the App",
       args: ["app-server", "--listen", "stdio://"],
-      parent: "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
+      parent: () => join(fakeApp, "Contents/MacOS/ChatGPT"),
     },
     {
       name: "app-server with extra arguments",
@@ -142,51 +152,49 @@ describe("browser helper without the App environment", () => {
         "stdio://",
         "--analytics-default-enabled",
       ],
-      parent: NODE_REPL,
+      parent: () => join(fakeApp, NODE_REPL_IN_APP),
     },
     {
       name: "app-server without a listen option",
       args: ["app-server"],
-      parent: NODE_REPL,
+      parent: () => join(fakeApp, NODE_REPL_IN_APP),
     },
     {
       name: "sandbox from another parent",
       args: ["sandbox"],
-      parent: "/bin/zsh",
+      parent: () => "/bin/zsh",
     },
-    { name: "an ordinary command", args: ["exec"], parent: NODE_REPL },
+    {
+      name: "an ordinary command",
+      args: ["exec"],
+      parent: () => join(fakeApp, NODE_REPL_IN_APP),
+    },
   ])(
-    "refuses $name when HARNEXUS_CODEX_PATH is unset even if launchd has it",
+    "refuses $name when HARNEXUS_CODEX_PATH is unset even if the App bundles Codex",
     async ({ args, parent }) => {
-      const { env } = setup({ ...HELPER_ENV, FAKE_PARENT_COMM: parent });
+      const { env } = setup({ ...HELPER_ENV, FAKE_PARENT_COMM: parent() });
 
       await expectRefused(args, env, "HARNEXUS_CODEX_PATH is not set");
     },
   );
 
   test.each([
-    { name: "empty", value: () => "", expected: "is not set" },
     {
-      name: "relative",
-      value: () => "codex.js",
-      expected: "must be an absolute path",
-    },
-    {
-      name: "not an existing file",
-      value: () => join(dir, "none"),
+      name: "missing from the App",
+      app: () => join(dir, "Bare.app"),
       expected: "is not an executable file",
     },
     {
       name: "the launcher itself",
-      value: () => LAUNCHER,
+      app: () => join(dir, "Looped.app"),
       expected: "points to the launcher itself",
     },
   ])(
-    "refuses sandbox when the launchd value is $name",
-    async ({ value, expected }) => {
+    "refuses sandbox when the bundled Codex is $name",
+    async ({ app, expected }) => {
       const { env } = setup({
         ...HELPER_ENV,
-        FAKE_LAUNCHCTL_VALUE: value(),
+        FAKE_PARENT_COMM: join(app(), NODE_REPL_IN_APP),
       });
 
       await expectRefused(["sandbox"], env, expected);
@@ -774,12 +782,11 @@ describe("refusals", () => {
   });
 });
 
-// Set lazily because fakeCodex exists only after beforeAll.
+// Set lazily because fakeApp exists only after beforeAll.
 const HELPER_ENV = {
   HARNEXUS_CODEX_PATH: undefined,
-  FAKE_PARENT_COMM: NODE_REPL,
-  get FAKE_LAUNCHCTL_VALUE() {
-    return fakeCodex;
+  get FAKE_PARENT_COMM() {
+    return join(fakeApp, NODE_REPL_IN_APP);
   },
 };
 
@@ -795,6 +802,7 @@ const setup = (overrides: Record<string, string | undefined> = {}) => {
     HARNEXUS_LOG_PATH: join(dir, `bridge-${reports}.log`),
     FAKE_CODEX_REPORT: reportPath,
     FAKE_NOTIFICATION_REPORT: `${reportPath}.notification`,
+    FAKE_LAUNCHCTL_REPORT: `${reportPath}.launchctl`,
     ...overrides,
   });
   for (const [key, value] of entries) {
@@ -1005,6 +1013,6 @@ printf '%s\\n' "$FAKE_PARENT_COMM"
 `;
 
 const FAKE_LAUNCHCTL = `#!/bin/sh
-[ "$1" = getenv ] && [ "$2" = HARNEXUS_CODEX_PATH ] || exit 2
-printf '%s\\n' "$FAKE_LAUNCHCTL_VALUE"
+printf '%s\\n' "$*" >> "$FAKE_LAUNCHCTL_REPORT"
+exit 2
 `;

@@ -3,7 +3,6 @@ import { dirname, join } from "node:path";
 import { claudeCliFile } from "../../infra/claude/cloud.ts";
 import { readClaudeLogin } from "../../infra/claude/session.ts";
 import { isVerifiedCodex } from "../../infra/codex/protocol/versions.ts";
-import { registeredEnvironment } from "../../infra/setup/open-app-plan.ts";
 import { openThreadStore } from "../../infra/thread-store.ts";
 import { loadLogPath, loadStatePath } from "../../lib/config.ts";
 import {
@@ -23,24 +22,22 @@ import {
   processChecks,
   refusedCheck,
 } from "./doctor-report.ts";
-import { registrationChecks } from "./registration-checks.ts";
+import { legacyRegistrationCheck } from "./registration-checks.ts";
 import { REPO } from "./repo.ts";
 import type { SetupFacts } from "./setup-facts.ts";
 
 // The checks change nothing but create the store's marker directory when it is missing, as the bridge does, so the command is safe while the app runs; nothing it prints holds conversation text or credentials.
 const LOG_TAIL_BYTES = 2 * 1024 * 1024;
 
-// The setup is this shell's for doctor, and the one the app was opened with for a feedback report.
+// The setup is this shell's, which harnexus open-app hands to the app for one launch.
 export type DoctorSetup = {
   env: Record<string, string | undefined>;
   app: string;
-  source: "shell" | "launchd";
 };
 
 export const shellSetup = (): DoctorSetup => ({
   env: process.env,
   app: process.env.HARNEXUS_APP_PATH || DEFAULT_APP,
-  source: "shell",
 });
 
 export const DEFAULT_APP = "/Applications/ChatGPT.app";
@@ -63,7 +60,7 @@ export const doctorChecks = async (
       claudeCloudCheck(setup).then((check) => [check]),
       stateChecks(setup),
       launcherCheck().then((check) => [check]),
-      launchdChecks(setup, facts.launchd),
+      [legacyCheck(facts.launchd)],
       facts.processes.isOk()
         ? processChecks(facts.processes.value, REPO)
         : [
@@ -180,7 +177,7 @@ async function stateChecks(setup: DoctorSetup): Promise<Check[]> {
       ? {
           status: "ok",
           name: "State file",
-          detail: `${path.value} is readable (as ${setup.source === "shell" ? "this shell's" : "the app's"} environment sets it)`,
+          detail: `${path.value} is readable (as this shell's environment sets it)`,
         }
       : {
           status: "fail",
@@ -257,25 +254,10 @@ async function readLogTail(path: string) {
   return read.isOk() ? read.value : null;
 }
 
-function launchdChecks(
-  setup: DoctorSetup,
-  read: SetupFacts["launchd"],
-): Check[] {
+function legacyCheck(read: SetupFacts["launchd"]): Check {
   if (read.isErr())
-    return [{ status: "fail", name: "launchd", detail: read.error.message }];
-  return registrationChecks(
-    registeredEnvironment(
-      {
-        app: setup.app,
-        launcher: join(REPO, "bin", "harnexus-codex"),
-        codex: codexPathOf(setup),
-        bun: process.execPath,
-      },
-      setup.env,
-    ),
-    read.value.env,
-    read.value.agent,
-  );
+    return { status: "fail", name: "launchd", detail: read.error.message };
+  return legacyRegistrationCheck(read.value.env, read.value.agent);
 }
 
 async function lastFallbackCheck(setup: DoctorSetup): Promise<Check> {

@@ -2,12 +2,8 @@ import { isAbsolute, join, resolve } from "node:path";
 
 import { parseProcesses } from "../features/diagnostics/doctor-report.ts";
 import { REPO } from "../features/diagnostics/repo.ts";
-import { configureLaunchd } from "../infra/setup/launchd.boundary.ts";
-import {
-  isAppRunning,
-  openArguments,
-  registeredEnvironment,
-} from "../infra/setup/open-app-plan.ts";
+import { clearLegacyLaunchd } from "../infra/setup/launchd.boundary.ts";
+import { isAppRunning, openArguments } from "../infra/setup/open-app-plan.ts";
 import {
   loadCallSocketPath,
   loadLogPath,
@@ -17,7 +13,7 @@ import {
 import { checkAccess } from "../lib/fs.boundary.ts";
 import { readCommandOutput } from "../lib/process.boundary.ts";
 
-// Opens the app with harnexus, or with --standard as the app normally runs; either way the app must be quit first, since it reads its environment only at start.
+// Opens the app with harnexus for this launch only, or with --standard as the app normally runs; either way the app must be quit first, since it reads its environment only at start.
 const APP = resolve(
   process.env.HARNEXUS_APP_PATH || "/Applications/ChatGPT.app",
 );
@@ -33,20 +29,33 @@ const paths = {
   bun: process.execPath,
 };
 
-const problem = await findProblem();
-if (problem !== null) {
-  process.stderr.write(`harnexus: ${problem}\n`);
+const unknown = flags.filter((flag) => flag !== "--standard");
+if (unknown.length > 0) {
+  process.stderr.write(`harnexus: unknown option ${unknown.join(" ")}\n`);
   process.exit(1);
 }
 
-const registered = await configureLaunchd(
-  registeredEnvironment(paths, process.env),
-  mode === "standard",
-);
-if (registered.isErr()) {
+// An earlier version's login-wide setup sends every Dock launch through harnexus, so it is cleared even when the running app refuses this run below.
+const cleared = await clearLegacyLaunchd();
+if (cleared.isErr()) {
   process.stderr.write(
-    `harnexus: ${registered.error.message}; session setup may be incomplete, rerun open-app\n`,
+    `harnexus: ${cleared.error.message}; cannot clear the login-wide setup an earlier harnexus registered, rerun open-app\n`,
   );
+  process.exit(1);
+}
+
+if (cleared.value.variables.length > 0 || cleared.value.agent)
+  process.stdout.write(
+    "Cleared the login-wide setup an earlier harnexus registered.\n",
+  );
+if (cleared.value.kept.length > 0)
+  process.stdout.write(
+    `Kept ${cleared.value.kept.join(", ")}, which another tool registered with launchd.\n`,
+  );
+
+const problem = await findProblem();
+if (problem !== null) {
+  process.stderr.write(`harnexus: ${problem}\n`);
   process.exit(1);
 }
 
@@ -62,13 +71,10 @@ if (opened.isErr()) {
 process.stdout.write(
   mode === "standard"
     ? `Opened ${APP} without harnexus. Run harnexus doctor to see that no bridge is left running.\n`
-    : `Opened ${APP} with harnexus. Run harnexus doctor to check the setup.\n`,
+    : `Opened ${APP} with harnexus until it quits; opened from the Dock or Finder it runs as usual. Run harnexus doctor to check the setup.\n`,
 );
 
 async function findProblem() {
-  const unknown = flags.filter((flag) => flag !== "--standard");
-  if (unknown.length > 0) return `unknown option ${unknown.join(" ")}`;
-
   const listed = await readCommandOutput("/bin/ps", [
     "-axo",
     "pid=,ppid=,command=",

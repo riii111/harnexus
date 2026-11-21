@@ -1,38 +1,32 @@
-import { launchAgent } from "../../infra/setup/launchd-plan.ts";
-import { REGISTERED_ENV_NAMES } from "../../infra/setup/open-app-plan.ts";
+import {
+  foreignVariables,
+  ownedVariables,
+  ownsAgent,
+} from "../../infra/setup/launchd-plan.ts";
 import type { Check } from "./doctor-report.ts";
 
-export const registrationChecks = (
-  expected: Record<string, string>,
-  actual: Record<string, string>,
+export const legacyRegistrationCheck = (
+  env: Record<string, string>,
   agent: string | null,
-): Check[] => {
-  const present = REGISTERED_ENV_NAMES.filter(
-    (name) => actual[name] !== undefined,
-  );
-  const mismatched = REGISTERED_ENV_NAMES.filter(
-    (name) => expected[name] !== actual[name],
-  );
-  return [
-    {
-      name: "launchd environment",
-      status: present.length === 0 || mismatched.length > 0 ? "warn" : "ok",
-      detail:
-        present.length === 0
-          ? "not registered; run bun run open-app"
-          : mismatched.length > 0
-            ? `values differ from this checkout/shell: ${mismatched.join(", ")}`
-            : "registered; values match this checkout/shell",
-    },
-    {
-      name: "Login LaunchAgent",
-      status: agent === launchAgent(expected) ? "ok" : "warn",
-      detail:
-        agent === null
-          ? "not installed"
-          : agent === launchAgent(expected)
-            ? "installed; restores this setup at login"
-            : "installed; contents differ from this checkout/shell",
-    },
+): Check => {
+  const owned = [
+    ...ownedVariables(env),
+    ...(ownsAgent(agent) ? ["the login LaunchAgent"] : []),
   ];
+  const foreign = foreignVariables(env);
+  const kept =
+    foreign.length > 0
+      ? `; keeps ${foreign.join(", ")}, which another tool registered`
+      : "";
+  return owned.length > 0
+    ? {
+        status: "warn",
+        name: "Login-wide setup",
+        detail: `an earlier harnexus left ${owned.join(", ")}, so a launch from the Dock also runs harnexus; run harnexus open-app --standard to clear it${kept}`,
+      }
+    : {
+        status: "ok",
+        name: "Login-wide setup",
+        detail: `none; only harnexus open-app runs the app with harnexus${kept}`,
+      };
 };

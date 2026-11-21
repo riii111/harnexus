@@ -239,26 +239,38 @@ describe("formatFeedback", () => {
     });
 
     expect(report).toContain(
-      "warn Checkout: the app was set up from another harnexus checkout",
+      "warn Checkout: the setup registered for the whole login points to another harnexus checkout",
     );
     expect(report).toContain(
       "warn App process: running since 2026-10-24T09:00:00Z; its bridges met Codex CLI 0.163.0-alpha.10.2 while 0.164.0 is installed",
     );
   });
 
-  test("tells an unread launchd from one with nothing registered", () => {
+  test.each([
+    {
+      name: "nothing left",
+      launchd: "none" as const,
+      expected: "ok   Setup source: this shell's environment",
+    },
+    {
+      name: "an earlier login-wide setup",
+      launchd: "legacy" as const,
+      expected: "warn Setup source: an earlier harnexus registered",
+    },
+    {
+      name: "an unread launchd",
+      launchd: "unreadable" as const,
+      expected: "warn Setup source: launchd could not be read",
+    },
+  ])("tells $name from the other setup sources", ({ launchd, expected }) => {
     const base = facts({});
-    const unread = formatFeedback({
+
+    const report = formatFeedback({
       ...base,
-      setup: { ...base.setup, launchd: "unreadable" },
-    });
-    const none = formatFeedback({
-      ...base,
-      setup: { ...base.setup, launchd: "none" },
+      setup: { ...base.setup, launchd },
     });
 
-    expect(unread).toContain("launchd could not be read");
-    expect(none).toContain("nothing registered with launchd");
+    expect(report).toContain(expected);
   });
 
   test("tells a log that starts after the window from one read only in part", () => {
@@ -324,7 +336,7 @@ const facts = (overrides: Partial<FeedbackFacts>): FeedbackFacts => ({
   bridges: { mine: [], others: 0 },
   loggedStarts: [],
   setup: {
-    launchd: "registered",
+    launchd: "none",
     otherCheckout: false,
     settings: {
       permissionMode: "auto",
@@ -333,8 +345,6 @@ const facts = (overrides: Partial<FeedbackFacts>): FeedbackFacts => ({
       logPath: "default",
       callSocket: "default",
     },
-    bun: { path: "/Users/me/.bun/bin/bun", version: "1.4.4" },
-    pinnedBun: "1.4.4",
   },
   app: { startedAtMs: null, installedCodex: null, runningCodex: [] },
   doctor: [],
