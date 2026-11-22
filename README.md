@@ -25,7 +25,7 @@ harnexus open-app
 
 Start a new chat in your project and choose a Claude model.
 
-To switch back, quit the app completely and run `harnexus open-app --standard`.
+To switch back, quit the app completely and reopen it from the Dock or Finder.
 Your chats stay in place.
 
 ## How it works
