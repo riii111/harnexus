@@ -1172,6 +1172,25 @@ describe("createCloudRuntime turns", () => {
     expect(turn.texts()).toEqual(["summary", "fine"]);
   });
 
+  test("resolves a picked skill in Cloud and recognizes the sent prompt", async () => {
+    const sent =
+      "$format-report (read ~/.claude/skills/format-report/SKILL.md) work";
+    const env = linked({
+      copies: [[prompt("p1", sent), endReply("a1", "done")]],
+      shown: null,
+    });
+    const turn = env.turn(
+      "[$format-report](/local/skills/format-report/SKILL.md) work",
+    );
+
+    await env.runtime.run(turn.running);
+
+    expect(env.sends.map((item) => item.text)).toEqual([sent]);
+    expect(turn.userTexts()).toEqual([]);
+    expect(turn.texts()).toEqual(["done"]);
+    expect(turn.outcome).toEqual({ status: "completed" });
+  });
+
   test("waits for the reply's text when a copy marks its thinking as the end of the turn", async () => {
     const env = linked({
       copies: [
@@ -1190,6 +1209,40 @@ describe("createCloudRuntime turns", () => {
 
     expect(turn.texts()).toEqual(["hello"]);
     expect(turn.outcome).toEqual({ status: "completed" });
+  });
+
+  test("recognizes a picked skill sent as a steer", async () => {
+    const sent =
+      "$format-report (read ~/.claude/skills/format-report/SKILL.md) work";
+    const env = linked({
+      copies: [
+        [prompt("p1", "first"), endReply("a1", "one")],
+        [
+          prompt("p1", "first"),
+          endReply("a1", "one"),
+          prompt("p2", sent),
+          endReply("a2", "done"),
+        ],
+      ],
+      shown: null,
+    });
+    const turn = env.turn("first");
+    const steered = createGate();
+    env.wait = () => steered.promise;
+    const running = env.runtime.run(turn.running);
+    await env.untilSent(1);
+
+    const refusal = await env.runtime.steer(turn.running, {
+      text: "[$format-report](/local/skills/format-report/SKILL.md) work",
+      images: [],
+    });
+    steered.open();
+    await running;
+
+    expect(refusal).toBeNull();
+    expect(env.sends.map((item) => item.text)).toEqual(["first", sent]);
+    expect(turn.userTexts()).toEqual([]);
+    expect(turn.texts()).toEqual(["one", "done"]);
   });
 
   test("waits for a message sent while it runs and shows a prompt typed elsewhere", async () => {

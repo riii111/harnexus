@@ -21,3 +21,10 @@ export const withoutSkillLinks = (text: string, name: string) =>
   text.replace(SKILL_LINK, (link, linked: string) =>
     linked === name ? "" : link,
   );
+
+export const cloudSkillPaths = (text: string) =>
+  text.replace(SKILL_LINK, (link, name: string) =>
+    /^[a-zA-Z0-9_-]+$/.test(name)
+      ? `$${name} (read ~/.claude/skills/${name}/SKILL.md)`
+      : link,
+  );
