@@ -21,7 +21,11 @@ import type {
 } from "../../turn/turn-runtime.ts";
 import { renderNotice } from "../../turn/turn.view.ts";
 import { sessionCommandTextOf } from "../runtime.ts";
-import { skillLinks, withoutSkillLinks } from "../skill-prompt.view.ts";
+import {
+  cloudSkillPaths,
+  skillLinks,
+  withoutSkillLinks,
+} from "../skill-prompt.view.ts";
 import { createTurnRecords } from "../turn-records.ts";
 import { type CloudChild, childSessionsIn } from "./children.ts";
 import {
@@ -545,7 +549,7 @@ export const createCloudRuntime = <Tag extends string>(
       return;
     }
 
-    const follow = newFollow(turn.input.text, cloud.shown);
+    const follow = newFollow(cloudSkillPaths(turn.input.text), cloud.shown);
     keep(threadId, { follow });
     try {
       await waitForReply(turn, follow, cloud.sessionId);
@@ -560,7 +564,11 @@ export const createCloudRuntime = <Tag extends string>(
   // Sends a turn's first message or a steer to the Cloud session and logs how it went.
   const sendMessage = async (turn: Turn, cloud: CloudLink, text: string) => {
     const startedAt = now();
-    const sent = await sendToCloud(cloud.sessionId, text, turn.record.worktree);
+    const sent = await sendToCloud(
+      cloud.sessionId,
+      cloudSkillPaths(text),
+      turn.record.worktree,
+    );
     if (sent.isOk()) {
       log({ event: "claude_cloud", step: "sent", ms: now() - startedAt });
     } else if (sent.error._tag === "CloudSendRejected") {
@@ -1310,11 +1318,11 @@ export const createCloudRuntime = <Tag extends string>(
     if (follow === null || follow.stop) return "steer_not_sent";
     if (input.images.length > 0) return "cloud_images";
     // Counted before it is sent, so a reply that arrives meanwhile does not end the turn before this message is answered.
-    follow.texts.push(input.text);
+    follow.texts.push(cloudSkillPaths(input.text));
     follow.sending += 1;
     const sent = await sendMessage(turn, cloud, input.text);
     follow.sending -= 1;
-    if (sent.isErr()) forget(follow, input.text);
+    if (sent.isErr()) forget(follow, cloudSkillPaths(input.text));
     if (sent.isErr() && sent.error._tag === "CloudSendRejected") {
       return "cloud_not_sent";
     }
